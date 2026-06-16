@@ -1,0 +1,2 @@
+scripts/test.sh                       eol=lf
+test/multiprocess/test_multiprocess.sh eol=lf

@@ -1,0 +1,30 @@
+# Build directories
+build/
+cmake-build-*/
+*.o
+*.a
+*.so
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+install_manifest.txt
+Makefile
+compile_commands.json
+
+# Test artifacts
+/tmp/mmap_test_*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Sanitizer output
+*.asan
+*.tsan
+vgcore.*
+core.*

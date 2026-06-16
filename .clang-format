@@ -1,0 +1,53 @@
+---
+Language:        C
+BasedOnStyle:    LLVM
+
+# Indentation
+IndentWidth:           4
+TabWidth:              4
+UseTab:                Never
+ContinuationIndentWidth: 4
+
+# Line length
+ColumnLimit:           100
+
+# Braces
+BreakBeforeBraces:     Linux
+
+# Alignment
+AlignConsecutiveAssignments:
+  Enabled:   true
+  AcrossComments: false
+AlignConsecutiveDeclarations:
+  Enabled:   false
+AlignTrailingComments:
+  Kind:      Always
+  OverEmptyLines: 1
+
+# Spaces
+SpaceBeforeParens:     ControlStatements
+SpaceInEmptyParentheses: false
+SpacesInParentheses:   false
+SpaceAfterCStyleCast:  false
+
+# Pointer alignment — match the codebase style: int32_t *ptr
+PointerAlignment:      Right
+
+# Include sorting
+SortIncludes:          CaseSensitive
+IncludeBlocks:         Regroup
+IncludeCategories:
+  # Project headers first
+  - Regex:    '^"(mmap_|file_|region|runtime|fixed_)'
+    Priority: 1
+  # System headers
+  - Regex:    '^<'
+    Priority: 2
+
+# Function calls
+AllowShortFunctionsOnASingleLine: None
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+
+# Comments
+ReflowComments:        false   # don't reflow — preserve carefully written comments
