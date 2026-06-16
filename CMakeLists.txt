@@ -54,6 +54,10 @@ if(MMAP_BUILD_TESTS)
     add_subdirectory(test)
 endif()
 
+# ── Examples / Benchmarks ────────────────────────────────────────────────
+add_executable(latency_bench examples/latency_bench.c)
+target_link_libraries(latency_bench PRIVATE mmap-c)
+
 # ── Summary ───────────────────────────────────────────────────────────────
 message(STATUS "")
 message(STATUS "mmap-c ${PROJECT_VERSION}")

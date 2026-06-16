@@ -24,6 +24,7 @@ add_library(mmap-c STATIC
     indexed_poller.c
     indexed_reader.c
     indexed_queue.c
+    queue_latency_probe.c
 )
 
 target_include_directories(mmap-c

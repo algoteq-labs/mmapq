@@ -1,15 +1,17 @@
 #ifndef MMAP_PLATFORM_H
 #define MMAP_PLATFORM_H
 
+#if defined(__linux__) && !defined(_GNU_SOURCE)
+#  define _GNU_SOURCE
+#endif
+
 /**
  * Platform detection and CPU hints.
  *
  * Supports Linux and macOS (including Apple Silicon / ARM64).
  *
- * _GNU_SOURCE is NOT defined here — it is set by the build system
- * (CMakeLists.txt: add_definitions(-D_GNU_SOURCE) on Linux,
- *  scripts/test.sh: -D_GNU_SOURCE in CFLAGS on Linux).
- * This avoids polluting user translation units that include this header.
+ * _GNU_SOURCE is defined above on Linux to expose pthread_setname_np,
+ * pthread_setaffinity_np and CPU_SET macros.
  *
  * CROSS-PROCESS ATOMICS:
  *   The queue uses lock-free atomics over MAP_SHARED mmap regions.
@@ -29,6 +31,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <sched.h>
 
 /**
  * spin_hint — yield the CPU pipeline during a spin-wait loop.
@@ -105,6 +108,28 @@ static inline void thread_set_name(pthread_t thread, const char *name)
     (void)thread;
     (void)name;
     /* macOS: thread sets its own name at startup inside runtime_thread_fn */
+#endif
+}
+
+/**
+ * thread_set_affinity — pin the current thread to a specific CPU core.
+ *
+ * Linux: uses pthread_setaffinity_np.
+ * macOS: thread pinning is not supported via standard pthread API;
+ *        this becomes a no-op.
+ *
+ * Returns 0 on success, or an error code.
+ */
+static inline int thread_set_affinity(int cpu_core)
+{
+#if defined(__linux__)
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+    CPU_SET(cpu_core, &cpuset);
+    return pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
+#else
+    (void)cpu_core;
+    return 0;
 #endif
 }
 
