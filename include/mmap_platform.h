@@ -112,25 +112,31 @@ static inline void thread_set_name(pthread_t thread, const char *name)
 }
 
 /**
- * thread_set_affinity — pin the current thread to a specific CPU core.
+ * thread_set_affinity_of — pin a specific thread to a specific CPU core.
  *
  * Linux: uses pthread_setaffinity_np.
- * macOS: thread pinning is not supported via standard pthread API;
- *        this becomes a no-op.
- *
- * Returns 0 on success, or an error code.
+ * macOS: no-op (not supported via standard API).
  */
-static inline int thread_set_affinity(int cpu_core)
+static inline int thread_set_affinity_of(pthread_t thread, int cpu_core)
 {
 #if defined(__linux__)
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
     CPU_SET(cpu_core, &cpuset);
-    return pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
+    return pthread_setaffinity_np(thread, sizeof(cpu_set_t), &cpuset);
 #else
+    (void)thread;
     (void)cpu_core;
     return 0;
 #endif
+}
+
+/**
+ * thread_set_affinity — pin the current thread to a specific CPU core.
+ */
+static inline int thread_set_affinity(int cpu_core)
+{
+    return thread_set_affinity_of(pthread_self(), cpu_core);
 }
 
 #endif /* MMAP_PLATFORM_H */

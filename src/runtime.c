@@ -505,6 +505,48 @@ int runtime_unregister(Runtime *rt, Executable *exec)
     return 1;
 }
 
+/* ═══════════════════════════════════════════════════════════════════════════
+ * Runtime affinity helper
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+typedef struct {
+    int        cpu_core;
+    Executable self_exec;
+} AffinityImpl;
+
+static int affinity_execute(Executable *self)
+{
+    AffinityImpl *impl = (AffinityImpl *)self->ctx;
+    thread_set_affinity(impl->cpu_core);
+    free(impl);
+    return -1; /* unregister self after one-shot */
+}
+
+static void affinity_close(Executable *self)
+{
+    (void)self;
+}
+
+int runtime_set_affinity(Runtime *rt, int cpu_core)
+{
+    MMAP_ASSERT(rt != NULL, "runtime_set_affinity: rt is NULL");
+
+    AffinityImpl *impl = calloc(1, sizeof(AffinityImpl));
+    if (impl == NULL) return -1;
+
+    impl->cpu_core          = cpu_core;
+    impl->self_exec.execute = affinity_execute;
+    impl->self_exec.close   = affinity_close;
+    impl->self_exec.ctx     = impl;
+
+    if (!runtime_register(rt, &impl->self_exec)) {
+        free(impl);
+        return -1;
+    }
+
+    return 0;
+}
+
 /* ── close ───────────────────────────────────────────────────────────────── */
 
 int runtime_is_closed(const Runtime *rt)

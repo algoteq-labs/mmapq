@@ -175,6 +175,16 @@ int runtime_unregister(Runtime *rt, Executable *exec);
 void runtime_unregister_and_wait(Runtime *rt, Executable *exec);
 
 /**
+ * Pin the background thread of this Runtime to a specific CPU core.
+ *
+ * May be called from any thread. If called before the Runtime thread
+ * has started, the affinity will be applied as soon as it starts.
+ *
+ * Returns 0 on success, or an error code.
+ */
+int runtime_set_affinity(Runtime *rt, int cpu_core);
+
+/**
  * Returns 1 if the Runtime is closed, 0 otherwise.
  */
 int runtime_is_closed(const Runtime *rt);

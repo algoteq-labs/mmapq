@@ -153,7 +153,6 @@ uint64_t queue_latency_probe_execute(QueueLatencyProbe *p)
     
     while (!p->response_received) {
         indexed_poller_poll(p->response_poller, client_handler, p);
-        spin_hint();
     }
     
     return monotonic_nanos() - start;
