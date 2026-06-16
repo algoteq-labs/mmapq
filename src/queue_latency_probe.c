@@ -6,6 +6,8 @@
 #include <pthread.h>
 #include <stdio.h>
 
+#include <stdatomic.h>
+
 #define SHUTDOWN_SEQ 0
 
 typedef struct {
@@ -29,8 +31,8 @@ struct QueueLatencyProbe {
     IndexedPoller   *request_poller;
     
     pthread_t        server_thread;
-    volatile int     shutdown_requested;
-    volatile int     response_received;
+    atomic_int       shutdown_requested;
+    atomic_int       response_received;
     uint32_t         current_request_seq;
     
     uint8_t         *msg_buffer;
@@ -50,7 +52,7 @@ static MessageHandlerDirective server_handler(
     
     if (hdr->instance_id == p->instance_id) {
         if (hdr->sequence == SHUTDOWN_SEQ) {
-            p->shutdown_requested = 1;
+            atomic_store_explicit(&p->shutdown_requested, 1, memory_order_relaxed);
         } else {
             /* Echo the request back to the response queue */
             indexed_appender_append(p->response_appender, data, length);
@@ -69,7 +71,7 @@ static void *server_thread_fn(void *arg)
         thread_set_affinity(p->server_cpu);
     }
     
-    while (!p->shutdown_requested) {
+    while (!atomic_load_explicit(&p->shutdown_requested, memory_order_relaxed)) {
         indexed_poller_poll(p->request_poller, server_handler, p);
     }
     
@@ -88,9 +90,14 @@ static MessageHandlerDirective client_handler(
     QueueLatencyProbe *p = (QueueLatencyProbe *)ctx;
     const LatencyHeader *hdr = (const LatencyHeader *)data;
     
+    /* 
+     * Signal that response is received. 
+     * memory_order_relaxed is sufficient here because payload visibility is 
+     * already guaranteed by the acquire-load inside indexed_poller_poll.
+     */
     if (hdr->instance_id == p->instance_id && 
         hdr->sequence == p->current_request_seq) {
-        p->response_received = 1;
+        atomic_store_explicit(&p->response_received, 1, memory_order_relaxed);
     }
     
     return HANDLER_ADVANCE;
@@ -144,7 +151,7 @@ void queue_latency_probe_move_to_end(QueueLatencyProbe *p)
 
 uint64_t queue_latency_probe_execute(QueueLatencyProbe *p)
 {
-    p->response_received = 0;
+    atomic_store_explicit(&p->response_received, 0, memory_order_relaxed);
     p->current_request_seq++;
     
     LatencyHeader *hdr = (LatencyHeader *)p->msg_buffer;
@@ -155,7 +162,7 @@ uint64_t queue_latency_probe_execute(QueueLatencyProbe *p)
     
     indexed_appender_append(p->request_appender, p->msg_buffer, p->message_size);
     
-    while (!p->response_received) {
+    while (!atomic_load_explicit(&p->response_received, memory_order_relaxed)) {
         indexed_poller_poll(p->response_poller, client_handler, p);
     }
     

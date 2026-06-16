@@ -92,7 +92,7 @@ static uintptr_t ro_map(FileMapper *self, int64_t position, int32_t length)
     }
     void *addr = mmap(NULL, (size_t)length,
                       PROT_READ,
-                      MAP_SHARED, impl->fd, (off_t)position);
+                      MAP_SHARED | MAP_POPULATE, impl->fd, (off_t)position);
     if (addr == MAP_FAILED) {
         return FILE_MAPPER_NULL_ADDRESS;
     }

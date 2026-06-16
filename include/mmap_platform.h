@@ -71,18 +71,13 @@ static inline void spin_hint(void)
 /**
  * monotonic_nanos — current time in nanoseconds from a monotonic clock.
  *
- * Linux: CLOCK_MONOTONIC_RAW — not subject to NTP adjustments.
- * macOS: CLOCK_MONOTONIC — _RAW is not available; MONOTONIC is equivalent
- *        for timeout purposes.
+ * Linux: CLOCK_MONOTONIC — uses VDSO for sub-100ns overhead.
+ * macOS: CLOCK_MONOTONIC.
  */
 static inline uint64_t monotonic_nanos(void)
 {
     struct timespec ts;
-#if defined(CLOCK_MONOTONIC_RAW)
-    clock_gettime(CLOCK_MONOTONIC_RAW, &ts);
-#else
     clock_gettime(CLOCK_MONOTONIC, &ts);
-#endif
     return (uint64_t)ts.tv_sec * UINT64_C(1000000000) + (uint64_t)ts.tv_nsec;
 }
 

@@ -173,9 +173,9 @@ static int64_t commit_header(IndexedAppender *a, int64_t payload_offset)
     ASSERT_HEADER_ALIGNED(hp);
     uint64_t expected    = HEADER_NULL;
 
-    while (!atomic_compare_exchange_strong_explicit(
+    while (__builtin_expect(!atomic_compare_exchange_strong_explicit(
                hp, &expected, header,
-               memory_order_acq_rel, memory_order_acquire)) {
+               memory_order_acq_rel, memory_order_acquire), 0)) {
         move_to_last_header(a);
 
         r = region_accessor_wrap(a->header_acc,

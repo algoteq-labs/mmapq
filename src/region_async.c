@@ -238,7 +238,7 @@ static const RegionStateOps *unmanaged_process(AsyncRegionImpl *impl)
 static WrapResult await_mapped(AsyncRegionImpl *impl, int64_t region_start_position)
 {
     const RegionStateOps *s = get_state(impl);
-    if (s == &MAPPED_OPS && impl->position == region_start_position) {
+    if (__builtin_expect(s == &MAPPED_OPS && impl->position == region_start_position, 1)) {
         return WRAP_SUCCESS;
     }
 

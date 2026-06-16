@@ -114,10 +114,15 @@ PollResult indexed_poller_poll(
 
     if (!poller_init(p)) return POLL_END_OF_STREAM;
 
-    int64_t start_index = queue_meta_start_index(p->queue_meta);
-
-    if (p->current_index < start_index) {
-        return POLL_ARCHIVED;
+    /* 
+     * Optimisation: non-archivable queues always start at 0.
+     * Caching this check saves overhead in the hot loop.
+     */
+    if (p->queue_meta->archivable) {
+        int64_t start_index = queue_meta_start_index(p->queue_meta);
+        if (p->current_index < start_index) {
+            return POLL_ARCHIVED;
+        }
     }
 
     /* Read header at current index — use sequential wrap to trigger premap */
@@ -127,6 +132,9 @@ PollResult indexed_poller_poll(
     if (header == HEADER_NULL) {
         return POLL_END_OF_STREAM;
     }
+
+    /* Prefetch the next header slot (64 bytes ahead due to cache-line isolation) */
+    __builtin_prefetch(p->header_buf.data + 64, 0, 3);
 
     /* Decode and read payload */
     uint8_t  appender_id     = header_appender_id(header);
@@ -139,8 +147,13 @@ PollResult indexed_poller_poll(
     MMAP_ASSERT(r == WRAP_SUCCESS,
         "indexed_poller_poll: failed to wrap payload — mapping timeout or corruption");
 
-    int32_t length;
-    memcpy(&length, p->payload_buf.data + PAYLOAD_LENGTH_OFFSET, sizeof(int32_t));
+    /* 
+     * Direct read of length field. 
+     * SAFE: This read occurs after the acquire-load of the header (header_read_sequential),
+     * ensuring the payload bytes and length field are visible to this thread.
+     * Alignment is guaranteed by INITIAL_PAYLOAD_POSITION (64).
+     */
+    int32_t length = *(const int32_t *)(p->payload_buf.data + PAYLOAD_LENGTH_OFFSET);
 
     MMAP_ASSERT(length > 0,
         "indexed_poller_poll: invalid payload length at committed header");
@@ -157,12 +170,14 @@ PollResult indexed_poller_poll(
         p->current_index++;
         return POLL_ADVANCED;
 
-    case HANDLER_RETREAT:
+    case HANDLER_RETREAT: {
+        int64_t start_index = queue_meta_start_index(p->queue_meta);
         if (p->current_index > start_index) {
             p->current_index--;
             return POLL_RETREATED;
         }
         return POLL_STOPPED;
+    }
 
     case HANDLER_STOP:
         return POLL_STOPPED;

@@ -106,7 +106,7 @@ RegionAccessor *fixed_size_region_create(
     /* Map the entire file permanently */
     void *addr = mmap(NULL, (size_t)size,
                       PROT_READ | PROT_WRITE,
-                      MAP_SHARED, fd, 0);
+                      MAP_SHARED | MAP_POPULATE, fd, 0);
     if (addr == MAP_FAILED) {
         MMAP_ASSERT(0, "fixed_size_region_create: mmap failed — "
                         "check file size and permissions");

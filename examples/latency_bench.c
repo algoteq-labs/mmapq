@@ -1,6 +1,7 @@
 #include "queue_latency_probe.h"
 #include "runtime.h"
 #include "mmap_platform.h"
+#include "mmap_stats.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -15,40 +16,6 @@
 #define DEFAULT_SERVER_CPU   7
 #define DEFAULT_MAPPER_CPU   9
 
-static int compare_u64(const void *a, const void *b)
-{
-    uint64_t v1 = *(const uint64_t *)a;
-    uint64_t v2 = *(const uint64_t *)b;
-    return (v1 < v2) ? -1 : (v1 > v2);
-}
-
-void print_stats(uint64_t *results, int count, uint64_t total_ns)
-{
-    qsort(results, (size_t)count, sizeof(uint64_t), compare_u64);
-    
-    double sum = 0;
-    for (int i = 0; i < count; i++) sum += (double)results[i];
-    double avg = sum / count;
-    double ops_per_sec = (double)count / ((double)total_ns / 1e9);
-    
-    printf("\nRound-Trip Latency Statistics (nanoseconds):\n");
-    printf("------------------------------------------\n");
-    printf("Iterations: %10d\n", count);
-    printf("Throughput: %10.2f ops/sec\n", ops_per_sec);
-    printf("Average:    %10.2f\n", avg);
-    printf("Min (p0):   %10lu\n", results[0]);
-    printf("Max (p100): %10lu\n", results[count - 1]);
-    printf("------------------------------------------\n");
-    printf("P50:        %10lu\n", results[(int)(count * 0.50)]);
-    printf("P90:        %10lu\n", results[(int)(count * 0.90)]);
-    printf("P95:        %10lu\n", results[(int)(count * 0.95)]);
-    printf("P99:        %10lu\n", results[(int)(count * 0.99)]);
-    printf("P99.9:      %10lu\n", results[(int)(count * 0.999)]);
-    printf("P99.99:     %10lu\n", results[(int)(count * 0.9999)]);
-    printf("P99.999:    %10lu\n", results[(int)(count * 0.99999)]);
-    printf("------------------------------------------\n\n");
-}
-
 int main(int argc, char *argv[])
 {
     int iterations = (argc > 1) ? atoi(argv[1]) : DEFAULT_ITERATIONS;
@@ -62,6 +29,13 @@ int main(int argc, char *argv[])
     printf("  Cores:  Client=%d, Server=%d, Mapper=%d\n", client_cpu, server_cpu, mapper_cpu);
     printf("  Config: Iterations=%d, Warmup=%d, MsgSize=%d\n", 
            iterations, warmup, msg_size);
+
+    /* Lock all current and future memory to prevent swapping and page faults */
+#if defined(__linux__)
+    if (mlockall(MCL_CURRENT | MCL_FUTURE) != 0) {
+        perror("mlockall failed (benchmark will continue without memory locking)");
+    }
+#endif
 
     Runtime *rt = runtime_region_mapper();
     if (mapper_cpu >= 0) {
@@ -95,7 +69,7 @@ int main(int argc, char *argv[])
     }
     uint64_t end_bench = monotonic_nanos();
 
-    print_stats(results, iterations, end_bench - start_bench);
+    mmap_stats_print(results, iterations, end_bench - start_bench, "Round-Trip Latency Statistics (nanoseconds):");
 
     queue_latency_probe_close(probe);
     
