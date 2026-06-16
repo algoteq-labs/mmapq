@@ -28,7 +28,7 @@ This C port extends the original mmap queue design with several critical feature
 
 ## Performance
 
-The `mmap-c` library is optimized to outperform traditional IPC mechanisms and even highly tuned JVM implementations. On isolated cores (e.g., physical cores 5, 7, and 9 on an Intel i7-12700H), `mmap-c` achieves the following round-trip latencies:
+The `mmap-c` library is optimized to outperform traditional IPC mechanisms and even highly tuned JVM implementations. On isolated cores (e.g., physical cores 5, 7, and 9 on an Intel i7-12700H) with Profile Guided Optimization (PGO) and system-level hardening, `mmap-c` achieves the following round-trip latencies:
 
 | Metric | Results (10M samples) | vs. Java (JMH) |
 | :--- | :--- | :--- |

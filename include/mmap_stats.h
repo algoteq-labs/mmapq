@@ -13,7 +13,7 @@ static inline int mmap_stats_compare_u64(const void *a, const void *b)
 {
     uint64_t v1 = *(const uint64_t *)a;
     uint64_t v2 = *(const uint64_t *)b;
-    return (v1 < v2) ? -1 : (v1 > v2);
+    return (v1 < v2) ? -1 : (v1 > v2) ? 1 : 0;
 }
 
 /**

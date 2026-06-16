@@ -8,7 +8,7 @@
 
 #include <stdatomic.h>
 
-#define SHUTDOWN_SEQ 0
+#define SHUTDOWN_SEQ 0  /* safe: current_request_seq starts at 0 and pre-increments */
 
 typedef struct {
     uint16_t instance_id;
@@ -173,9 +173,15 @@ void queue_latency_probe_close(QueueLatencyProbe *p)
 {
     if (p == NULL) return;
     
-    /* Signal server to shut down */
-    LatencyHeader hdr = { .instance_id = p->instance_id, .sequence = SHUTDOWN_SEQ };
-    indexed_appender_append(p->request_appender, &hdr, sizeof(hdr));
+    /* Signal server to shut down using a full-sized message for consistency */
+    uint8_t *shutdown_msg = calloc(1, (size_t)p->message_size);
+    if (shutdown_msg != NULL) {
+        LatencyHeader *hdr = (LatencyHeader *)shutdown_msg;
+        hdr->instance_id = p->instance_id;
+        hdr->sequence    = SHUTDOWN_SEQ;
+        indexed_appender_append(p->request_appender, shutdown_msg, p->message_size);
+        free(shutdown_msg);
+    }
     
     pthread_join(p->server_thread, NULL);
     
