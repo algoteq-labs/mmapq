@@ -45,6 +45,7 @@ void print_stats(uint64_t *results, int count, uint64_t total_ns)
     printf("P99:        %10lu\n", results[(int)(count * 0.99)]);
     printf("P99.9:      %10lu\n", results[(int)(count * 0.999)]);
     printf("P99.99:     %10lu\n", results[(int)(count * 0.9999)]);
+    printf("P99.999:    %10lu\n", results[(int)(count * 0.99999)]);
     printf("------------------------------------------\n\n");
 }
 

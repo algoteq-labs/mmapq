@@ -107,8 +107,12 @@ RegionAccessor *fixed_size_region_create(
     void *addr = mmap(NULL, (size_t)size,
                       PROT_READ | PROT_WRITE,
                       MAP_SHARED, fd, 0);
-    MMAP_ASSERT(addr != MAP_FAILED, "fixed_size_region_create: mmap failed — "
-                                     "check file size and permissions");
+    if (addr == MAP_FAILED) {
+        MMAP_ASSERT(0, "fixed_size_region_create: mmap failed — "
+                        "check file size and permissions");
+    }
+
+    huge_pages_hint(addr, (size_t)size);
 
     FixedSizeImpl *impl = calloc(1, sizeof(FixedSizeImpl));
     MMAP_ASSERT(impl != NULL, "fixed_size_region_create: out of memory");

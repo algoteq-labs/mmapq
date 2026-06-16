@@ -158,6 +158,8 @@ static uintptr_t rw_map(FileMapper *self, int64_t position, int32_t length)
         return FILE_MAPPER_NULL_ADDRESS;
     }
 
+    huge_pages_hint(addr, (size_t)length);
+
     /* Pre-touch newly extended pages */
     if (extended_bytes >= (int32_t)sizeof(int64_t)) {
         rw_pretouch((uintptr_t)addr, length,

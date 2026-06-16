@@ -32,6 +32,24 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <sched.h>
+#include <sys/mman.h>
+
+/**
+ * huge_pages_hint — advise the kernel to use huge pages for a mapped region.
+ *
+ * Linux: uses madvise with MADV_HUGEPAGE. Requires Transparent Huge Pages (THP)
+ *        to be enabled in the kernel (typically 'madvise' or 'always' mode).
+ * macOS: no-op (not supported via standard madvise).
+ */
+static inline void huge_pages_hint(void *addr, size_t length)
+{
+#if defined(__linux__) && defined(MADV_HUGEPAGE)
+    madvise(addr, length, MADV_HUGEPAGE);
+#else
+    (void)addr;
+    (void)length;
+#endif
+}
 
 /**
  * spin_hint — yield the CPU pipeline during a spin-wait loop.

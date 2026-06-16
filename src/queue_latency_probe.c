@@ -116,7 +116,11 @@ QueueLatencyProbe *queue_latency_probe_create(
     p->instance_id  = instance_id;
     p->message_size = message_size;
     p->server_cpu   = server_cpu;
-    p->msg_buffer   = calloc(1, (size_t)message_size);
+    
+    if (posix_memalign((void **)&p->msg_buffer, 64, (size_t)message_size) != 0) {
+        MMAP_ASSERT(0, "out of memory (msg_buffer)");
+    }
+    memset(p->msg_buffer, 0, (size_t)message_size);
     
     p->request_queue = indexed_queue_create_default(directory, request_name, runtime);
     p->response_queue = indexed_queue_create_default(directory, response_name, runtime);
