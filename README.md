@@ -20,7 +20,7 @@ MIT license.
 This C port extends the original mmap queue design with several critical features for low-latency production environments:
 
 *   **Deferred & Out-of-Order Commits**: Ability to append messages to the payload stream "uncommitted" and commit them to the shared index later. Commits can be performed in an order different from the physical insertion order.
-*   **False-Sharing-Proof Headers**: The header file layout is optimized for modern CPU cache architectures. It uses a non-linear striding algorithm where sequential indices are mapped to different cache lines (sectors). Sequential writes are physically separated by 512 bytes (8 cache lines), ensuring that concurrent appenders never contend for the same cache line.
+*   **False-Sharing-Proof Headers**: The header file layout is optimized for modern CPU cache architectures. It uses a non-linear striding algorithm where sequential indices are mapped to different cache lines (sectors). Sequential writes are physically separated by **512 bytes (8 cache lines)**, providing extreme hardware-level isolation and stability.
 *   **Safe Lifecycle Management**: Explicit and robust deregistration of ring regions from the background mapping thread. When a participant (appender, poller, or reader) is closed, its associated mapping tasks are safely drained from the runtime, preventing resource leaks and races.
 *   **High-Performance Runtimes**: Includes a flexible `Runtime` abstraction for executing background tasks (like region mapping) with customizable idle strategies (busy-spin, yield, backoff), mirroring the Java `tools4j` threading model.
 
@@ -71,6 +71,11 @@ Layout (sector=64, header=8b):
   index 64: byte offset 8      (Line 0, Word 1)
   index 65: byte offset 520    (Line 8, Word 1)
 ```
+
+Note: While the original design intended for a 64-byte (1 cache line) stride, benchmarking
+confirmed that a larger **512-byte (8 cache lines)** stride provides significantly better
+performance and tail stability on modern CPU architectures. The library maintains this
+optimized layout (matching the Algoteq Java implementation).
 
 The header is committed via a single atomic CAS. Readers acquire-load the
 header; the happens-before relationship with the appender's release-store

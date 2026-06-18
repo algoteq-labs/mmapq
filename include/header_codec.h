@@ -41,9 +41,9 @@
  *
  *   This implementation matches the tools4j/mmap and Algoteq Java implementations.
  *
- *   Constants:
+ *   Constants (for 8-byte headers and 64-byte cache lines):
  *     HEADER_LENGTH      = 8 bytes
- *     SECTOR_SIZE        = 64 bytes (one cache line)
+ *     SECTOR_SIZE        = 64 sectors (providing 64 cache lines of isolation)
  *     BLOCK_SIZE         = 4096 headers (64 * 64)
  *
  *   Forward Mapping (index -> position):
