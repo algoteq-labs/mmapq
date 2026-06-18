@@ -23,6 +23,8 @@ typedef struct QueueLatencyProbe QueueLatencyProbe;
  * response_name:  name of the response queue.
  * message_size:   size of messages in bytes (min 6 bytes for header).
  * server_cpu:     CPU core to pin the background server thread to.
+ * validate_on_server: if 1, the server verifies payload pattern.
+ * validate_on_client: if 1, the client verifies response payload pattern.
  * runtime:        region mapper runtime.
  */
 QueueLatencyProbe *queue_latency_probe_create(
@@ -32,7 +34,14 @@ QueueLatencyProbe *queue_latency_probe_create(
     const char *response_name,
     int32_t     message_size,
     int         server_cpu,
+    int         validate_on_server,
+    int         validate_on_client,
     Runtime    *runtime);
+
+/**
+ * Returns the total number of validation errors detected so far.
+ */
+int64_t queue_latency_probe_validation_errors(QueueLatencyProbe *probe);
 
 /**
  * Synchronise the probe with the current state of the queues by
