@@ -20,7 +20,7 @@ MIT license.
 This C port extends the original mmap queue design with several critical features for low-latency production environments:
 
 *   **Deferred & Out-of-Order Commits**: Ability to append messages to the payload stream "uncommitted" and commit them to the shared index later. Commits can be performed in an order different from the physical insertion order.
-*   **False-Sharing-Proof Headers**: The header file layout is optimized for modern CPU cache architectures. Each 8-byte header entry occupies its own 64-byte cache line (1:8 density), ensuring that concurrent appenders writing to adjacent indices never contend for the same cache line.
+*   **False-Sharing-Proof Headers**: The header file layout is optimized for modern CPU cache architectures. It uses a non-linear striding algorithm where sequential indices are mapped to different cache lines (sectors). Sequential writes are physically separated by 512 bytes (8 cache lines), ensuring that concurrent appenders never contend for the same cache line.
 *   **Safe Lifecycle Management**: Explicit and robust deregistration of ring regions from the background mapping thread. When a participant (appender, poller, or reader) is closed, its associated mapping tasks are safely drained from the runtime, preventing resource leaks and races.
 *   **High-Performance Runtimes**: Includes a flexible `Runtime` abstraction for executing background tasks (like region mapping) with customizable idle strategies (busy-spin, yield, backoff), mirroring the Java `tools4j` threading model.
 
@@ -51,19 +51,25 @@ To achieve these results, the following system-level configurations are recommen
 
 Each queue entry has an 8-byte header stored in a shared header file. To eliminate
 CPU cache contention (false sharing) between concurrent appenders, headers are
-laid out such that each 8-byte entry occupies its own 64-byte cache line:
+mapped using a non-linear striding algorithm that spreads sequential writes
+across different cache lines.
+
+Sequential indices are spread across 64 different cache lines (sectors), providing
+hardware-level isolation. After 64 indices, the mapping rotates back to the first
+cache line and shifts to the next 8-byte word.
 
 ```
 bits[63:56] = appenderId   (up to 256 concurrent appenders)
 bits[55:0]  = payloadPosition
 0           = NULL (not yet written)
 
-Layout:
-  index 0: byte offset 0
-  index 1: byte offset 64
+Layout (sector=64, header=8b):
+  index 0:  byte offset 0      (Line 0, Word 0)
+  index 1:  byte offset 512    (Line 8, Word 0)
   ...
-  index 7: byte offset 448
-  index 8: byte offset 512
+  index 63: byte offset 32256  (Line 504, Word 0)
+  index 64: byte offset 8      (Line 0, Word 1)
+  index 65: byte offset 520    (Line 8, Word 1)
 ```
 
 The header is committed via a single atomic CAS. Readers acquire-load the

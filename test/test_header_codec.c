@@ -61,51 +61,55 @@ void test_header_position_index_0(void)
 
 void test_header_position_index_1(void)
 {
-    /* index 1 -> block 0, slot 1 -> 0 * 512 + 1 * 64 = 64 */
-    TEST_ASSERT_EQUAL_INT64(64, header_position(1));
+    /* index 1 -> block 0, line 1, sector 0 -> (1 << 6) << 3 = 512 */
+    TEST_ASSERT_EQUAL_INT64(512, header_position(1));
 }
 
 void test_header_position_index_7(void)
 {
-    /* index 7 -> block 0, slot 7 -> 0 + 7 * 64 = 448 */
-    TEST_ASSERT_EQUAL_INT64(448, header_position(7));
+    /* index 7 -> block 0, line 7, sector 0 -> (7 << 6) << 3 = 3584 */
+    TEST_ASSERT_EQUAL_INT64(3584, header_position(7));
 }
 
 void test_header_position_index_8(void)
 {
-    /* index 8 -> block 1, slot 0 -> 1 * 512 + 0 = 512 */
-    TEST_ASSERT_EQUAL_INT64(512, header_position(8));
+    /* index 8 -> block 0, line 8, sector 0 -> (8 << 6) << 3 = 4096 */
+    TEST_ASSERT_EQUAL_INT64(4096, header_position(8));
 }
 
-void test_header_position_index_9(void)
+void test_header_position_index_64(void)
 {
-    /* index 9 -> block 1, slot 1 -> 512 + 64 = 576 */
-    TEST_ASSERT_EQUAL_INT64(576, header_position(9));
+    /* index 64 -> block 0, line 0, sector 1 -> (0 + 1) << 3 = 8 */
+    TEST_ASSERT_EQUAL_INT64(8, header_position(64));
 }
 
-void test_header_position_index_15(void)
+void test_header_position_index_4096(void)
 {
-    /* index 15 -> block 1, slot 7 -> 512 + 7*64 = 960 */
-    TEST_ASSERT_EQUAL_INT64(960, header_position(15));
+    /* index 4096 -> block 1, line 0, sector 0 -> (1 << 12) << 3 = 32768 */
+    TEST_ASSERT_EQUAL_INT64(32768, header_position(4096));
 }
 
-void test_header_position_index_16(void)
+void test_header_round_trip(void)
 {
-    /* index 16 -> block 2, slot 0 -> 2 * 512 = 1024 */
-    TEST_ASSERT_EQUAL_INT64(1024, header_position(16));
+    /* indexShouldBeInverseOfPosition from Java */
+    for (int64_t i = 0; i < 100000; i++) {
+        int64_t pos = header_position(i);
+        TEST_ASSERT_EQUAL_INT64_MESSAGE(i, header_index(pos), "Round-trip failed");
+    }
 }
 
 void test_adjacent_indices_different_cache_lines(void)
 {
     /*
      * The core false-sharing invariant: any two adjacent indices must land
-     * on different cache lines (distance >= CACHE_LINE_SIZE = 64).
+     * on different cache lines (distance >= 64).
+     * With the new striding layout, distance is actually 512 bytes.
      */
-    for (int64_t i = 0; i < 32; i++) {
+    for (int64_t i = 0; i < 63; i++) {
         int64_t pos_i   = header_position(i);
         int64_t pos_i1  = header_position(i + 1);
         int64_t distance = pos_i1 > pos_i ? pos_i1 - pos_i : pos_i - pos_i1;
-        TEST_ASSERT_GREATER_OR_EQUAL_INT64(CACHE_LINE_SIZE, distance);
+        TEST_ASSERT_EQUAL_INT64_MESSAGE(512, distance, "Adjacent indices should be 512 bytes apart");
     }
 }
 
@@ -151,16 +155,6 @@ void test_long_padding_skip_value(void)
 
 /* ── constants ───────────────────────────────────────────────────────────── */
 
-void test_slots_per_block(void)
-{
-    TEST_ASSERT_EQUAL_INT32(8, SLOTS_PER_BLOCK);
-}
-
-void test_bytes_per_block(void)
-{
-    TEST_ASSERT_EQUAL_INT32(512, BYTES_PER_BLOCK);
-}
-
 void test_initial_payload_position(void)
 {
     TEST_ASSERT_EQUAL_INT64(64, INITIAL_PAYLOAD_POSITION);
@@ -183,9 +177,9 @@ int main(void)
     RUN_TEST(test_header_position_index_1);
     RUN_TEST(test_header_position_index_7);
     RUN_TEST(test_header_position_index_8);
-    RUN_TEST(test_header_position_index_9);
-    RUN_TEST(test_header_position_index_15);
-    RUN_TEST(test_header_position_index_16);
+    RUN_TEST(test_header_position_index_64);
+    RUN_TEST(test_header_position_index_4096);
+    RUN_TEST(test_header_round_trip);
     RUN_TEST(test_adjacent_indices_different_cache_lines);
 
     RUN_TEST(test_short_padding_capacity_0);
@@ -196,8 +190,6 @@ int main(void)
     RUN_TEST(test_long_padding_positive_not_long);
     RUN_TEST(test_long_padding_skip_value);
 
-    RUN_TEST(test_slots_per_block);
-    RUN_TEST(test_bytes_per_block);
     RUN_TEST(test_initial_payload_position);
 
     return UNITY_END();

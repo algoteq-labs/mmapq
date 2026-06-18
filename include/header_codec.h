@@ -27,38 +27,43 @@
  *   Short padding: when remaining capacity at region end < 4 bytes,
  *                  skip to next region (no length field written).
  *
- * HEADER LAYOUT — false-sharing-aware:
+ * HEADER LAYOUT — false-sharing-proof non-linear mapping:
  *
- *   Each header entry occupies exactly one cache line slot so that
- *   adjacent appenders (consecutive indices) never share a cache line.
+ *   The layout uses a non-linear mapping strategy that spreads sequential indices
+ *   across different cache lines (sectors). This prevents "false sharing" and
+ *   reduces CPU contention when multiple threads are reading or writing adjacent
+ *   indices.
  *
- *   HEADER_SIZE     = 8 bytes
- *   CACHE_LINE_SIZE = 64 bytes
- *   SLOTS_PER_LINE  = 1  (one header per cache line)
- *   SLOTS_PER_BLOCK = CACHE_LINE_SIZE / HEADER_SIZE = 8
- *   BYTES_PER_BLOCK = CACHE_LINE_SIZE * SLOTS_PER_BLOCK = 512
+ *   Indices are organised into blocks of 4096 headers. Within each block,
+ *   sequential indices are mapped to different sectors (striding by 512 bytes)
+ *   until all 64 sectors have been touched. At that point, the mapping rotates
+ *   back to the next available 8-byte word within the first sector.
  *
- *   position(index):
- *     block = index / SLOTS_PER_BLOCK
- *     slot  = index % SLOTS_PER_BLOCK
- *     return block * BYTES_PER_BLOCK + slot * CACHE_LINE_SIZE
+ *   This implementation matches the tools4j/mmap and Algoteq Java implementations.
  *
- *   Examples:
- *     index 0 -> 0       index 1 -> 64      index 7 -> 448
- *     index 8 -> 512     index 9 -> 576     index 15 -> 960
+ *   Constants:
+ *     HEADER_LENGTH      = 8 bytes
+ *     SECTOR_SIZE        = 64 bytes (one cache line)
+ *     BLOCK_SIZE         = 4096 headers (64 * 64)
  *
- *   Appenders 0..7 each write to a different cache line within block 0.
- *   No two adjacent index writes share a cache line => zero false sharing.
+ *   Forward Mapping (index -> position):
+ *     block          = index / 4096
+ *     index_in_block = index % 4096
+ *     sector         = index_in_block / 64
+ *     word           = index_in_block % 64
+ *     position       = ((block * 4096) + (word * 64) + sector) * 8
  */
 
 /* ── Constants ───────────────────────────────────────────────────────────── */
 
 #define HEADER_SIZE              ((int32_t)8)
 #define HEADER_NULL              ((uint64_t)0)
-#define HEADER_OFFSET            ((int32_t)0)
-#define CACHE_LINE_SIZE          ((int32_t)64)
-#define SLOTS_PER_BLOCK          ((int32_t)(CACHE_LINE_SIZE / HEADER_SIZE))   /* 8 */
-#define BYTES_PER_BLOCK          ((int32_t)(CACHE_LINE_SIZE * SLOTS_PER_BLOCK)) /* 512 */
+
+#define HEADER_LENGTH_BITS       3   /* 8 bytes */
+#define HEADER_SECTOR_SIZE_BITS  6   /* 64 sectors/lines */
+#define HEADER_BLOCK_SIZE_BITS   12  /* 64 * 64 = 4096 headers per block */
+#define HEADER_SECTOR_MASK       63
+#define HEADER_BLOCK_MASK        4095
 
 #define PAYLOAD_LENGTH_OFFSET    ((int32_t)0)
 #define PAYLOAD_LENGTH_SIZE      ((int32_t)4)
@@ -126,16 +131,40 @@ static inline int64_t header_payload_position(uint64_t header)
 /**
  * header_position — compute the file byte offset for index in the header file.
  *
- * False-sharing-aware: adjacent indices land on different cache lines.
+ * Optimized non-linear mapping matching Java Layout.java.
  *
  * INVARIANT: index >= 0
  */
 static inline int64_t header_position(int64_t index)
 {
     MMAP_ASSERT(index >= 0, "header_position: index must be >= 0");
-    int64_t block = index / SLOTS_PER_BLOCK;
-    int64_t slot  = index % SLOTS_PER_BLOCK;
-    return block * BYTES_PER_BLOCK + slot * CACHE_LINE_SIZE;
+    const int64_t block = index >> HEADER_BLOCK_SIZE_BITS;
+    const int64_t index_in_block = index & HEADER_BLOCK_MASK;
+    const int64_t sector_in_block = index_in_block >> HEADER_SECTOR_SIZE_BITS;
+    const int64_t index_in_sector = index_in_block & HEADER_SECTOR_MASK;
+    return ((block << HEADER_BLOCK_SIZE_BITS) + 
+            (index_in_sector << HEADER_SECTOR_SIZE_BITS) + 
+            sector_in_block) << HEADER_LENGTH_BITS;
+}
+
+/**
+ * header_index — compute the index for a given file byte offset.
+ *
+ * Inverse of header_position. Used for testing and recovery.
+ *
+ * INVARIANT: position >= 0
+ */
+static inline int64_t header_index(int64_t position)
+{
+    MMAP_ASSERT(position >= 0, "header_index: position must be >= 0");
+    const int64_t val = position >> HEADER_LENGTH_BITS;
+    const int64_t block = val >> HEADER_BLOCK_SIZE_BITS;
+    const int64_t rem = val & HEADER_BLOCK_MASK;
+    const int64_t index_in_sector = rem >> HEADER_SECTOR_SIZE_BITS;
+    const int64_t sector_in_block = rem & HEADER_SECTOR_MASK;
+    return (block << HEADER_BLOCK_SIZE_BITS) + 
+           (sector_in_block << HEADER_SECTOR_SIZE_BITS) + 
+           index_in_sector;
 }
 
 /* ── Payload length field helpers ────────────────────────────────────────── */

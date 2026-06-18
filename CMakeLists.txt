@@ -55,6 +55,9 @@ if(MMAP_BUILD_TESTS)
 endif()
 
 # ── Examples / Benchmarks ────────────────────────────────────────────────
+add_executable(demo examples/demo.c)
+target_link_libraries(demo PRIVATE mmap-c)
+
 add_executable(latency_bench examples/latency_bench.c)
 target_link_libraries(latency_bench PRIVATE mmap-c)
 
