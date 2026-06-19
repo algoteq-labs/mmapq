@@ -38,12 +38,15 @@ blockSize   = sectorSize × sectorSize    (entries per block)
 
 block           = index / blockSize
 index_in_block  = index % blockSize
-sector_in_block = index_in_block / sectorSize
-word_in_sector  = index_in_block % sectorSize
+
+/* Transposing from horizontal walk to vertical walk to eliminate false sharing:
+ * using modulo for sector_index (fast stride) and division for word_index (slow shift). */
+sector_index    = index_in_block % sectorSize
+word_index      = index_in_block / sectorSize
 
 byte_offset = (block × blockSize
-               + word_in_sector × sectorSize
-               + sector_in_block) × 8
+               + sector_index × sectorSize
+               + word_index) × 8
 ```
 
 > **Read the worked table below before the formula, not the other way
@@ -69,19 +72,19 @@ Sequential indices land in a different row (sector / cache line) every
 single step; only after a full column is filled does the mapping return
 to row 0, now in the next column (word position):
 
-| idx | index_in_block | sector_in_block (row, idx÷8) | word_in_sector (col, idx mod 8) | byte_offset | cache line |
+| idx | index_in_block | sector_index (row, idx mod 8) | word_index (col, idx ÷ 8) | byte_offset | cache line |
 |----:|----:|----:|----:|----:|:--|
 | 0 | 0 | 0 | 0 | 0   | 0 ← new |
-| 1 | 1 | 0 | 1 | 64  | 1 ← new |
-| 2 | 2 | 0 | 2 | 128 | 2 ← new |
-| 3 | 3 | 0 | 3 | 192 | 3 ← new |
-| 7 | 7 | 0 | 7 | 448 | 7 ← new |
-| 8 | 8 | 1 | 0 | 8   | 0 — back to row 0, now column 1 |
+| 1 | 1 | 1 | 0 | 64  | 1 ← new |
+| 2 | 2 | 2 | 0 | 128 | 2 ← new |
+| 3 | 3 | 3 | 0 | 192 | 3 ← new |
+| 7 | 7 | 7 | 0 | 448 | 7 ← new |
+| 8 | 8 | 0 | 1 | 8   | 0 — back to row 0, now column 1 |
 | 9 | 9 | 1 | 1 | 72  | 1 — row 1, column 1 |
 
-`sector_in_block` is the **row** — which cache line. It changes every
+`sector_index` is the **row** — which cache line. It changes every
 index, which is what gives the false-sharing protection.
-`word_in_sector` is the **column** — the byte position within that cache
+`word_index` is the **column** — the byte position within that cache
 line. It only changes once every `sectorSize` indices.
 
 This is the mechanism that keeps concurrent appenders apart: as long as
@@ -203,24 +206,18 @@ correctness model.
 
 The current C implementation (`header_codec.h`, `header_position()` /
 `header_index()`) computes the **identical** byte offsets as the formula
-in §2 — verified term-for-term against the worked example above. The C
-variable names differ slightly from this document's:
+in §2 — verified term-for-term against the worked example above. 
 
 | This document | `header_codec.h` | Role |
 |---|---|---|
-| `sector_in_block` | `sector_in_block` | Row — selects the cache line |
-| `word_in_sector` | `index_in_sector` | Column — selects the byte position within that cache line |
+| `sector_index` | `sector_index` | Row — selects the cache line (Fast stride) |
+| `word_index` | `word_index` | Column — selects the byte position within that cache line (Slow shift) |
 
-**`index_in_sector` in the C code plays the exact same role as
-`word_in_sector` in this document — it is not swapped, inverted, or
-incorrect.** It is the same quantity (`index_in_block % sectorSize`)
-under a less descriptive name. If this is renamed for clarity in a future
-cleanup, the rename must preserve which term is multiplied by `sectorSize`
-in the formula (`word_in_sector × sectorSize` in §2's `byte_offset`
-expression) — renaming the *labels* without preserving *which label
-carries the multiplier* would silently invert the formula and corrupt the
-header file layout. Verify any such rename against the worked example in
-§2 before merging, the same way it was verified here.
+By using modulo for `sector_index` and division for `word_index`, the
+implementation transposes the traditional horizontal walk into a
+**vertical walk** across sectors. This ensure sequential writes land in
+different cache lines, effectively eliminating false sharing for concurrent
+appenders.
 
 ---
 

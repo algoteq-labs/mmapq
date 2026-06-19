@@ -55,9 +55,9 @@
  *   Forward Mapping (index -> position):
  *     block          = index / 4096
  *     index_in_block = index % 4096
- *     sector         = index_in_block / 64 (strides indices across lines)
- *     word           = index_in_block % 64 (rotates back with shift)
- *     position       = ((block * 4096) + (word * 64) + sector) * 8
+ *     sector_index   = index_in_block % 64 (fast stride across cache lines)
+ *     word_index     = index_in_block / 64 (slow shift within a line)
+ *     position       = ((block * 4096) + (sector_index * 64) + word_index) * 8
  */
 
 /* ── Constants ───────────────────────────────────────────────────────────── */
@@ -139,18 +139,25 @@ static inline int64_t header_payload_position(uint64_t header)
  *
  * Optimized non-linear mapping matching Java Layout.java.
  *
+ * Transposing from horizontal walk to vertical walk to eliminate false sharing:
+ * using modulo for sector_index (fast stride) and division for word_index (slow shift).
+ *
  * INVARIANT: index >= 0
  */
 static inline int64_t header_position(int64_t index)
 {
     MMAP_ASSERT(index >= 0, "header_position: index must be >= 0");
-    const int64_t block = index >> HEADER_BLOCK_SIZE_BITS;
+    const int64_t block          = index >> HEADER_BLOCK_SIZE_BITS;
     const int64_t index_in_block = index & HEADER_BLOCK_MASK;
-    const int64_t sector_in_block = index_in_block >> HEADER_SECTOR_SIZE_BITS;
-    const int64_t index_in_sector = index_in_block & HEADER_SECTOR_MASK;
+
+    /* Logical transposition: sector_index changes every step, providing 
+     * a 512-byte stride across different cache lines. */
+    const int64_t sector_index = index_in_block & HEADER_SECTOR_MASK; /* index % 64 */
+    const int64_t word_index   = index_in_block >> HEADER_SECTOR_SIZE_BITS; /* index / 64 */
+
     return ((block << HEADER_BLOCK_SIZE_BITS) + 
-            (index_in_sector << HEADER_SECTOR_SIZE_BITS) + 
-            sector_in_block) << HEADER_LENGTH_BITS;
+            (sector_index << HEADER_SECTOR_SIZE_BITS) + 
+            word_index) << HEADER_LENGTH_BITS;
 }
 
 /**
@@ -163,14 +170,17 @@ static inline int64_t header_position(int64_t index)
 static inline int64_t header_index(int64_t position)
 {
     MMAP_ASSERT(position >= 0, "header_index: position must be >= 0");
-    const int64_t val = position >> HEADER_LENGTH_BITS;
+    const int64_t val   = position >> HEADER_LENGTH_BITS;
     const int64_t block = val >> HEADER_BLOCK_SIZE_BITS;
-    const int64_t rem = val & HEADER_BLOCK_MASK;
-    const int64_t index_in_sector = rem >> HEADER_SECTOR_SIZE_BITS;
-    const int64_t sector_in_block = rem & HEADER_SECTOR_MASK;
+    const int64_t rem   = val & HEADER_BLOCK_MASK;
+
+    /* Inverse transposition */
+    const int64_t sector_index = rem >> HEADER_SECTOR_SIZE_BITS;
+    const int64_t word_index   = rem & HEADER_SECTOR_MASK;
+
     return (block << HEADER_BLOCK_SIZE_BITS) + 
-           (sector_in_block << HEADER_SECTOR_SIZE_BITS) + 
-           index_in_sector;
+           (word_index << HEADER_SECTOR_SIZE_BITS) + 
+           sector_index;
 }
 
 /* ── Payload length field helpers ────────────────────────────────────────── */
