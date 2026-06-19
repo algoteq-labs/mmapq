@@ -449,7 +449,7 @@ void test_uncommitted_append_and_commit(void)
 
     /* Append uncommitted — not visible to poller yet */
     int64_t offset = indexed_appender_append_uncommitted(a, "deferred", 8);
-    TEST_ASSERT_GREATER_THAN_INT64(0, offset);
+    TEST_ASSERT_EQUAL_INT64(INITIAL_PAYLOAD_POSITION, offset);
 
     PollCapture cap = { .directive = HANDLER_ADVANCE };
     PollResult r = indexed_poller_poll(p, capture_handler, &cap);

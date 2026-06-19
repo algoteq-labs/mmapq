@@ -143,13 +143,8 @@ PollResult indexed_poller_poll(
     MMAP_ASSERT(r == WRAP_SUCCESS,
         "indexed_poller_poll: failed to wrap payload — mapping timeout or corruption");
 
-    /* 
-     * Direct read of length field. 
-     * SAFE: This read occurs after the acquire-load of the header (header_read_sequential),
-     * ensuring the payload bytes and length field are visible to this thread.
-     * Alignment is guaranteed by INITIAL_PAYLOAD_POSITION (64).
-     */
-    int32_t length = *(const int32_t *)(p->payload_buf.data + PAYLOAD_LENGTH_OFFSET);
+    int32_t length;
+    memcpy(&length, p->payload_buf.data + PAYLOAD_LENGTH_OFFSET, sizeof(int32_t));
 
     MMAP_ASSERT(length > 0,
         "indexed_poller_poll: invalid payload length at committed header");

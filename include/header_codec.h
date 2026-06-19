@@ -27,10 +27,16 @@
  *   Short padding: when remaining capacity at region end < 4 bytes,
  *                  skip to next region (no length field written).
  *
+ *   Alignment contract (see doc/payload_alignment_design.md):
+ *     Regions are 8-byte and page aligned. Individual messages within a
+ *     region are packed densely and have no alignment guarantee. Consumers
+ *     must use offset-based accessors (like memcpy or flyweights) to read
+ *     fields safely.
+ *
  * HEADER LAYOUT — false-sharing-proof non-linear mapping:
  *
  *   The layout uses a non-linear mapping strategy that spreads sequential indices
- *   across different cache lines (sectors). This prevents "false sharing" and
+ *   across different sectors (cache lines). This prevents "false sharing" and
  *   reduces CPU contention when multiple threads are reading or writing adjacent
  *   indices.
  *
@@ -49,8 +55,8 @@
  *   Forward Mapping (index -> position):
  *     block          = index / 4096
  *     index_in_block = index % 4096
- *     sector         = index_in_block / 64
- *     word           = index_in_block % 64
+ *     sector         = index_in_block / 64 (strides indices across lines)
+ *     word           = index_in_block % 64 (rotates back with shift)
  *     position       = ((block * 4096) + (word * 64) + sector) * 8
  */
 
