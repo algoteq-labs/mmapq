@@ -22,9 +22,9 @@ struct IndexedAppender {
     char                *directory;
     char                *queue_name;
     uint8_t              appender_id;
-    int32_t              region_size;   /* cached — used for message size validation */
     AppenderIdPool      *id_pool;
     AppenderMeta        *appender_meta;
+    QueueMeta           *queue_meta;   /* Reconciled meta */
     QueueRegionAccessor *rw_acc;   /* RW header + RW payload (this appender) */
     RegionAccessor      *header_acc;
     RegionAccessor      *payload_acc;
@@ -114,7 +114,7 @@ static void write_padding_if_needed(IndexedAppender *a, int32_t length)
 
 static int64_t write_payload(IndexedAppender *a, const void *data, int32_t length)
 {
-    MMAP_ASSERT(length + PAYLOAD_LENGTH_SIZE <= a->region_size,
+    MMAP_ASSERT(length + PAYLOAD_LENGTH_SIZE <= queue_meta_region_size(a->queue_meta),
         "write_payload: message too large — must fit within one region. "
         "Increase region_size or reduce message size.");
     write_padding_if_needed(a, length);
@@ -326,7 +326,6 @@ static IndexedAppender *appender_create_internal(
     a->directory    = strdup(directory);
     a->queue_name   = strdup(queue_name);
     a->appender_id  = appender_id;
-    a->region_size  = region_size;
     a->id_pool      = id_pool;
     a->closed       = 0;
 
@@ -334,23 +333,40 @@ static IndexedAppender *appender_create_internal(
     a->current_header_position = INDEXED_APPENDER_NOT_INITIALISED;
     a->current_payload_position = INDEXED_APPENDER_NOT_INITIALISED;
 
+    /*
+     * Open (or create) the queue meta file.
+     * Appender is responsible for creating the meta file if it doesn't exist.
+     * reconciliation logic:
+     *   - If file is new: use parameters passed to create().
+     *   - If file exists: adopt its parameters and IGNORE create() args.
+     */
+    a->queue_meta = queue_meta_open_rw(directory, queue_name, 
+                                        QUEUE_META_INITIAL_START_INDEX,
+                                        region_size, max_file_size,
+                                        /* archivable = */ 0);
+    MMAP_ASSERT(a->queue_meta != NULL, "indexed_appender: failed to open/create queue meta");
+
+    /* Adopt contractual parameters from meta */
+    int32_t reconciled_region_size   = queue_meta_region_size(a->queue_meta);
+    int64_t reconciled_max_file_size = queue_meta_max_file_size(a->queue_meta);
+
     /* Open appender meta (creates file if new) */
     a->appender_meta = appender_meta_open_rw(directory, queue_name, appender_id);
     MMAP_ASSERT(a->appender_meta != NULL, "indexed_appender: failed to open appender meta");
 
     /* Create RW region accessors */
     a->rw_acc = queue_region_accessor_create_rw(
-        directory, queue_name, region_size, ring_size,
+        directory, queue_name, reconciled_region_size, ring_size,
         REGION_RING_ACCESSOR_DEFAULT_REGIONS_AHEAD,
-        max_file_size, timeout_ns, runtime, appender_id);
+        reconciled_max_file_size, timeout_ns, runtime, appender_id);
 
     a->header_acc  = queue_region_accessor_header(a->rw_acc);
     a->payload_acc = queue_region_accessor_payload(a->rw_acc, appender_id);
 
     /* Find where to resume appending */
     initialise_append_position(a, directory, queue_name,
-                                region_size, ring_size,
-                                max_file_size, timeout_ns, runtime);
+                                reconciled_region_size, ring_size,
+                                reconciled_max_file_size, timeout_ns, runtime);
 
     return a;
 }
@@ -545,6 +561,11 @@ void indexed_appender_close(IndexedAppender *a)
     if (a->appender_meta != NULL) {
         appender_meta_close(a->appender_meta);
         a->appender_meta = NULL;
+    }
+
+    if (a->queue_meta != NULL) {
+        queue_meta_close(a->queue_meta);
+        a->queue_meta = NULL;
     }
 
     if (a->rw_acc != NULL) {

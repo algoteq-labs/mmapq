@@ -15,10 +15,8 @@
 struct IndexedPoller {
     char                *directory;
     char                *queue_name;
-    int32_t              region_size;
     int                  ring_size;
     int                  regions_to_map_ahead;
-    int64_t              max_file_size;
     uint64_t             timeout_ns;
     Runtime             *runtime;
 
@@ -57,9 +55,11 @@ static int poller_init(IndexedPoller *p)
 
     p->ro_acc = queue_region_accessor_create_ro(
         p->directory, p->queue_name,
-        p->region_size, p->ring_size,
+        queue_meta_region_size(p->queue_meta),
+        p->ring_size,
         p->regions_to_map_ahead,
-        p->max_file_size, p->timeout_ns, p->runtime);
+        queue_meta_max_file_size(p->queue_meta),
+        p->timeout_ns, p->runtime);
 
     p->header_acc = queue_region_accessor_header(p->ro_acc);
 
@@ -74,9 +74,7 @@ static int poller_init(IndexedPoller *p)
 IndexedPoller *indexed_poller_create(
     const char *directory,
     const char *queue_name,
-    int32_t     region_size,
     int         ring_size,
-    int64_t     max_file_size,
     uint64_t    timeout_ns,
     Runtime    *runtime)
 {
@@ -89,10 +87,8 @@ IndexedPoller *indexed_poller_create(
 
     p->directory           = strdup(directory);
     p->queue_name          = strdup(queue_name);
-    p->region_size         = region_size;
     p->ring_size           = ring_size;
     p->regions_to_map_ahead = REGION_RING_ACCESSOR_DEFAULT_REGIONS_AHEAD;
-    p->max_file_size       = max_file_size;
     p->timeout_ns          = timeout_ns;
     p->runtime             = runtime;
     p->current_index       = QUEUE_META_INITIAL_START_INDEX;

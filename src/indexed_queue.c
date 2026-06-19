@@ -16,15 +16,15 @@
 struct IndexedQueue {
     char    *directory;
     char    *queue_name;
-    int32_t  region_size;
+    int32_t  region_size;   /* preferred/initial */
     int      ring_size;
     int      regions_to_map_ahead;
-    int64_t  max_file_size;
-    int64_t  start_index;
+    int64_t  max_file_size; /* preferred/initial */
+    int64_t  start_index;   /* initial */
     uint64_t timeout_ns;
     Runtime *runtime;
 
-    QueueMeta *queue_meta;   /* RW meta — owns queue lifecycle */
+    QueueMeta *queue_meta;   /* Lazily opened RO meta */
     int        closed;
 };
 
@@ -70,69 +70,31 @@ IndexedQueue *indexed_queue_create(
         "indexed_queue_create: max_file_size must be a multiple of region_size");
     MMAP_ASSERT(start_index >= 0,   "indexed_queue_create: start_index must be >= 0");
 
-    create_queue_directory(directory, queue_name);
-
     IndexedQueue *q = calloc(1, sizeof(IndexedQueue));
     MMAP_ASSERT(q != NULL, "indexed_queue_create: out of memory");
 
     q->directory            = strdup(directory);
     q->queue_name           = strdup(queue_name);
-    q->region_size          = region_size;   /* overwritten below from meta */
+    q->region_size          = region_size;
     q->ring_size            = ring_size;
     q->regions_to_map_ahead = regions_to_map_ahead;
-    q->max_file_size        = max_file_size; /* overwritten below from meta */
+    q->max_file_size        = max_file_size;
     q->start_index          = start_index;
     q->timeout_ns           = timeout_ns;
     q->runtime              = runtime;
     q->closed               = 0;
 
     /*
-     * Open (or create) the queue meta file.
-     * If the file does not exist, it is initialised with the given parameters.
-     * If it already exists, the existing configuration TAKES PRECEDENCE —
-     * region_size and max_file_size are read back from the meta file,
-     * ensuring all participants use the correct configuration regardless
-     * of what the caller supplied.
-     *
-     * archivable = 0 — archiving not supported in this C port.
-     */
-    q->queue_meta = queue_meta_open_rw(
-        directory, queue_name,
-        start_index, region_size, max_file_size,
-        /* archivable = */ 0);
-
-    MMAP_ASSERT(q->queue_meta != NULL,
-        "indexed_queue_create: failed to open/create queue meta");
-
-    /*
      * Validate cross-process atomic requirements at startup.
-     *
-     * This queue relies on lock-free atomics over MAP_SHARED mmap regions
-     * for the header CAS commit and the appender ID pool bitset.
-     * On Linux/x86 and Linux/ARM these are always lock-free for naturally
-     * aligned 8-byte and 4-byte values, but we assert it explicitly.
-     *
-     * Platform contract: Linux only, naturally aligned lock-free atomics
-     * shared through MAP_SHARED mmap. Not portable to platforms where
-     * atomic operations require kernel assistance (locks inside the atomic).
      */
     {
         _Atomic uint64_t test64 = 0;
         _Atomic uint32_t test32 = 0;
         MMAP_ASSERT(atomic_is_lock_free(&test64),
-            "indexed_queue_create: uint64_t atomics are not lock-free on this platform. "
-            "Cross-process header CAS requires lock-free 8-byte atomics.");
+            "indexed_queue_create: uint64_t atomics are not lock-free on this platform.");
         MMAP_ASSERT(atomic_is_lock_free(&test32),
-            "indexed_queue_create: uint32_t atomics are not lock-free on this platform. "
-            "Cross-process appender ID pool requires lock-free 4-byte atomics.");
+            "indexed_queue_create: uint32_t atomics are not lock-free on this platform.");
     }
-
-    /*
-     * Read actual configuration from meta — for a new queue this matches
-     * the supplied parameters; for an existing queue it is the original config.
-     */
-    q->region_size   = queue_meta_region_size(q->queue_meta);
-    q->max_file_size = queue_meta_max_file_size(q->queue_meta);
 
     return q;
 }
@@ -162,6 +124,8 @@ IndexedAppender *indexed_queue_create_appender(IndexedQueue *q)
     MMAP_ASSERT(q != NULL,  "indexed_queue_create_appender: queue is NULL");
     MMAP_ASSERT(!q->closed, "indexed_queue_create_appender: queue is closed");
 
+    create_queue_directory(q->directory, q->queue_name);
+
     return indexed_appender_create(
         q->directory, q->queue_name,
         q->region_size, q->ring_size,
@@ -174,6 +138,8 @@ IndexedAppender *indexed_queue_create_appender_with_id(
 {
     MMAP_ASSERT(q != NULL,  "indexed_queue_create_appender_with_id: queue is NULL");
     MMAP_ASSERT(!q->closed, "indexed_queue_create_appender_with_id: queue is closed");
+
+    create_queue_directory(q->directory, q->queue_name);
 
     return indexed_appender_create_with_id(
         q->directory, q->queue_name,
@@ -189,8 +155,7 @@ IndexedPoller *indexed_queue_create_poller(IndexedQueue *q)
 
     return indexed_poller_create(
         q->directory, q->queue_name,
-        q->region_size, q->ring_size,
-        q->max_file_size, q->timeout_ns, q->runtime);
+        q->ring_size, q->timeout_ns, q->runtime);
 }
 
 IndexedReader *indexed_queue_create_reader(IndexedQueue *q)
@@ -200,29 +165,39 @@ IndexedReader *indexed_queue_create_reader(IndexedQueue *q)
 
     return indexed_reader_create(
         q->directory, q->queue_name,
-        q->region_size, q->ring_size,
-        q->max_file_size, q->timeout_ns, q->runtime);
+        q->ring_size, q->timeout_ns, q->runtime);
 }
 
 /* ── Metadata ─────────────────────────────────────────────────────────────── */
 
+static void ensure_meta_open(IndexedQueue *q)
+{
+    if (q->queue_meta != NULL) return;
+    q->queue_meta = queue_meta_open_ro(q->directory, q->queue_name);
+}
+
 int32_t indexed_queue_region_size(const IndexedQueue *q)
 {
     MMAP_ASSERT(q != NULL, "indexed_queue_region_size: queue is NULL");
-    return q->region_size;
+    ensure_meta_open((IndexedQueue *)q);
+    return q->queue_meta ? queue_meta_region_size(q->queue_meta) : q->region_size;
 }
 
 int64_t indexed_queue_max_file_size(const IndexedQueue *q)
 {
     MMAP_ASSERT(q != NULL, "indexed_queue_max_file_size: queue is NULL");
-    return q->max_file_size;
+    ensure_meta_open((IndexedQueue *)q);
+    return q->queue_meta ? queue_meta_max_file_size(q->queue_meta) : q->max_file_size;
 }
 
 int64_t indexed_queue_start_index(const IndexedQueue *q)
 {
     MMAP_ASSERT(q != NULL, "indexed_queue_start_index: queue is NULL");
-    return queue_meta_start_index(q->queue_meta);
+    ensure_meta_open((IndexedQueue *)q);
+    return q->queue_meta ? queue_meta_start_index(q->queue_meta) : q->start_index;
 }
+
+/* ── indexed_queue_close ─────────────────────────────────────────────────── */
 
 /* ── indexed_queue_close ─────────────────────────────────────────────────── */
 

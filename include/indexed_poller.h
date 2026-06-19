@@ -89,15 +89,16 @@ typedef struct IndexedPoller IndexedPoller;
 /* ── Factory ─────────────────────────────────────────────────────────────── */
 
 /**
- * indexed_poller_create — create a new poller starting at startIndex.
+ * indexed_poller_create — create a new sequential poller.
  *
  * directory:    base queue directory
  * queue_name:   queue subdirectory name
- * region_size:  region size in bytes (must match existing queue)
  * ring_size:    number of regions in the ring
- * max_file_size: maximum rolled file size
  * timeout_ns:   mapping timeout in nanoseconds
  * runtime:      region mapper runtime
+ *
+ * Note: configuration parameters (region_size, max_file_size) are
+ * automatically discovered from the queue's metadata file.
  *
  * The poller begins at startIndex (typically 0 or the queue's current
  * start_index). Lazy init — region accessors are created on first use.
@@ -105,9 +106,7 @@ typedef struct IndexedPoller IndexedPoller;
 IndexedPoller *indexed_poller_create(
     const char *directory,
     const char *queue_name,
-    int32_t     region_size,
     int         ring_size,
-    int64_t     max_file_size,
     uint64_t    timeout_ns,
     Runtime    *runtime);
 

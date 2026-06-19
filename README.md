@@ -164,7 +164,7 @@ All three modes should report `15 passed, 0 failed`.
 // Create the background mapping thread
 Runtime *rt = runtime_region_mapper();
 
-// Open or create a queue
+// Open or prepare a queue (creator settings)
 IndexedQueue *q = indexed_queue_create(
     "/data/queues",              // directory
     "orders",                    // queue name
@@ -176,12 +176,12 @@ IndexedQueue *q = indexed_queue_create(
     5000000000ULL,               // mapping timeout (5 s)
     rt);
 
-// Append a message
+// Append a message (establishes queue_meta if new)
 IndexedAppender *a = indexed_queue_create_appender(q);
 const char *msg = "hello";
 int64_t idx = indexed_appender_append(a, msg, 5);
 
-// Poll messages
+// Poll messages (automatically discovers region_size from metadata)
 IndexedPoller *p = indexed_queue_create_poller(q);
 
 MessageHandlerDirective my_handler(int64_t index, uint8_t appender_id,
@@ -234,6 +234,7 @@ messages end-to-end.
 | `indexed_poller_move_to_end()` | Jump past the last entry |
 | `indexed_poller_move_to_start()` | Jump to the first entry |
 | `indexed_poller_move_to_index()` | Jump to a specific index |
+| `indexed_poller_create()` | Create a poller (discovers config from meta) |
 | `indexed_poller_close()` | Close the poller |
 
 The callback returns `HANDLER_ADVANCE`, `HANDLER_STOP`, or `HANDLER_RETREAT`.
@@ -246,6 +247,7 @@ The callback returns `HANDLER_ADVANCE`, `HANDLER_STOP`, or `HANDLER_RETREAT`.
 | `indexed_reader_read_first()` | Read the first entry |
 | `indexed_reader_read_last()` | Read the last committed entry |
 | `indexed_reader_last_index()` | Find the highest committed index |
+| `indexed_reader_create()` | Create a reader (discovers config from meta) |
 | `indexed_reader_close()` | Close the reader |
 
 ### Runtime

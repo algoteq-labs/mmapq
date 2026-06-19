@@ -537,6 +537,36 @@ void test_poller_exists(void)
     indexed_poller_close(p);
 }
 
+void test_poller_automatically_discovers_region_size(void)
+{
+    /* Phase 1: Create a queue with 8MB regions and write a message */
+    int32_t LARGE_REGION = 8 * 1024 * 1024;
+    IndexedQueue *q1 = indexed_queue_create(DIR, QUEUE, LARGE_REGION, RING_SZ, 1, 
+                                             LARGE_REGION * 16, 0, TIMEOUT_NS, rt);
+    IndexedAppender *a = indexed_queue_create_appender(q1);
+    indexed_appender_append(a, "hello", 5);
+    indexed_appender_close(a);
+    indexed_queue_close(q1);
+
+    /* Phase 2: Create a second queue instance with "wrong" default (4KB) */
+    IndexedQueue *q2 = indexed_queue_create(DIR, QUEUE, REGION_SZ, RING_SZ, 1,
+                                             MAX_FILE, 0, TIMEOUT_NS, rt);
+    
+    /* Verify metadata reported by q2 is correct (8MB) */
+    TEST_ASSERT_EQUAL_INT32(LARGE_REGION, indexed_queue_region_size(q2));
+
+    /* Create poller from q2 and poll the message */
+    IndexedPoller *p = indexed_queue_create_poller(q2);
+    PollCapture cap = { .directive = HANDLER_ADVANCE };
+    PollResult r = indexed_poller_poll(p, capture_handler, &cap);
+
+    TEST_ASSERT_EQUAL_INT(POLL_ADVANCED, r);
+    TEST_ASSERT_EQUAL_STRING("hello", cap.data);
+
+    indexed_poller_close(p);
+    indexed_queue_close(q2);
+}
+
 /* ── main ────────────────────────────────────────────────────────────────── */
 
 int main(void)
@@ -566,6 +596,8 @@ int main(void)
     RUN_TEST(test_uncommitted_iterator_finds_uncommitted);
     RUN_TEST(test_reader_entry_status);
     RUN_TEST(test_poller_exists);
+    
+    RUN_TEST(test_poller_automatically_discovers_region_size);
 
     return UNITY_END();
 }

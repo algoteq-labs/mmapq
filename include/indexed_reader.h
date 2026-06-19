@@ -72,20 +72,19 @@ typedef struct IndexedReader IndexedReader;
  *
  * directory:    base queue directory
  * queue_name:   queue subdirectory name
- * region_size:  region size in bytes (must match existing queue)
  * ring_size:    number of regions in the ring
- * max_file_size: maximum rolled file size
  * timeout_ns:   mapping timeout in nanoseconds
  * runtime:      region mapper runtime
+ *
+ * Note: configuration parameters (region_size, max_file_size) are
+ * automatically discovered from the queue's metadata file.
  *
  * Lazy init — region accessors created on first use.
  */
 IndexedReader *indexed_reader_create(
     const char *directory,
     const char *queue_name,
-    int32_t     region_size,
     int         ring_size,
-    int64_t     max_file_size,
     uint64_t    timeout_ns,
     Runtime    *runtime);
 

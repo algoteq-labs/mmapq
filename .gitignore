@@ -29,3 +29,8 @@ compile_commands.json
 vgcore.*
 core.*
 latency_bench
+echo_server
+interop_producer
+interop_consumer
+clock_bench
+demo

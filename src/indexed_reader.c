@@ -14,10 +14,8 @@
 struct IndexedReader {
     char                *directory;
     char                *queue_name;
-    int32_t              region_size;
     int                  ring_size;
     int                  regions_to_map_ahead;
-    int64_t              max_file_size;
     uint64_t             timeout_ns;
     Runtime             *runtime;
 
@@ -56,9 +54,11 @@ static int reader_init(IndexedReader *r)
 
     r->ro_acc = queue_region_accessor_create_ro(
         r->directory, r->queue_name,
-        r->region_size, r->ring_size,
+        queue_meta_region_size(r->queue_meta),
+        r->ring_size,
         r->regions_to_map_ahead,
-        r->max_file_size, r->timeout_ns, r->runtime);
+        queue_meta_max_file_size(r->queue_meta),
+        r->timeout_ns, r->runtime);
 
     r->header_acc = queue_region_accessor_header(r->ro_acc);
     return 1;
@@ -69,9 +69,7 @@ static int reader_init(IndexedReader *r)
 IndexedReader *indexed_reader_create(
     const char *directory,
     const char *queue_name,
-    int32_t     region_size,
     int         ring_size,
-    int64_t     max_file_size,
     uint64_t    timeout_ns,
     Runtime    *runtime)
 {
@@ -84,10 +82,8 @@ IndexedReader *indexed_reader_create(
 
     r->directory            = strdup(directory);
     r->queue_name           = strdup(queue_name);
-    r->region_size          = region_size;
     r->ring_size            = ring_size;
     r->regions_to_map_ahead = REGION_RING_ACCESSOR_DEFAULT_REGIONS_AHEAD;
-    r->max_file_size        = max_file_size;
     r->timeout_ns           = timeout_ns;
     r->runtime              = runtime;
     r->cached_last_index    = HEADER_NULL_INDEX;

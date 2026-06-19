@@ -62,21 +62,20 @@ typedef struct IndexedQueue IndexedQueue;
 /* ── Factory ─────────────────────────────────────────────────────────────── */
 
 /**
- * indexed_queue_create — open or create an indexed queue.
+ * indexed_queue_create — open an existing indexed queue or prepare for creation.
  *
  * directory:          base directory (e.g. "/data/queues")
  * queue_name:         name of the queue (becomes a subdirectory)
- * region_size:        region size in bytes (power of two, >= 4096)
+ * region_size:        preferred region size (used ONLY if creating a new queue)
  * ring_size:          regions in the ring (power of two, typically 4)
  * regions_to_map_ahead: premap count (typically 1)
- * max_file_size:      maximum rolled file size in bytes
- * start_index:        initial start index (0 for new queues)
+ * max_file_size:      preferred maximum file size (used ONLY if creating new)
+ * start_index:        initial start index (used ONLY if creating new)
  * timeout_ns:         mapping timeout in nanoseconds
  * runtime:            region mapper runtime (shared across all participants)
  *
- * Creates the queue directory if it does not exist.
- * Creates the meta file if it does not exist, using the given parameters.
- * If the meta file already exists, the existing configuration is used.
+ * Does NOT create the queue files or directory immediately. The queue is
+ * created when the first appender is created.
  *
  * Returns a heap-allocated IndexedQueue. Aborts on failure.
  */

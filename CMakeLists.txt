@@ -61,6 +61,9 @@ target_link_libraries(demo PRIVATE mmap-c)
 add_executable(latency_bench examples/latency_bench.c)
 target_link_libraries(latency_bench PRIVATE mmap-c)
 
+add_executable(echo_server examples/echo_server.c)
+target_link_libraries(echo_server PRIVATE mmap-c)
+
 # ── Summary ───────────────────────────────────────────────────────────────
 message(STATUS "")
 message(STATUS "mmap-c ${PROJECT_VERSION}")
