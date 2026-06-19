@@ -46,17 +46,48 @@ byte_offset = (block × blockSize
                + sector_in_block) × 8
 ```
 
-The effect of this formula: **sequential indices are distributed across
-all `sectorSize` sectors of a block before two of them ever land in the
-same sector.** Index 0 goes to sector 0; index 1 goes to sector 1; index
-`sectorSize - 1` goes to the last sector; only at index `sectorSize` does
-the mapping return to sector 0, at the *next* word position within it.
+> **Read the worked table below before the formula, not the other way
+> around.** Two people independently misread this formula by reasoning
+> about it abstractly instead of computing actual byte offsets — the
+> instinct to guess "which variable looks like it should be the sector"
+> from the shape of the formula alone is unreliable here. Trust the table.
+
+### Worked example (`sectorSize = 8`, for simple arithmetic)
+
+`blockSize = 8 × 8 = 64` headers per block, 64 bytes per sector (one cache line at this `sectorSize`).
+
+Picture the block as an 8×8 grid: **8 sectors (cache lines) as rows, 8 word
+positions as columns.** A naive "fill the array in storage order" layout
+would walk this grid **horizontally** — fill row 0 (sector 0) completely
+across all 8 columns, then move to row 1. That's the layout you'd get from
+a flat `index_in_block` mapping with no sectoring at all, and it's exactly
+what causes false sharing: indices 0–7 would all share cache line 0.
+
+This formula instead walks the grid **vertically** — fill column 0 down
+through all 8 rows (one index per sector) before moving to column 1.
+Sequential indices land in a different row (sector / cache line) every
+single step; only after a full column is filled does the mapping return
+to row 0, now in the next column (word position):
+
+| idx | index_in_block | sector_in_block (row, idx÷8) | word_in_sector (col, idx mod 8) | byte_offset | cache line |
+|----:|----:|----:|----:|----:|:--|
+| 0 | 0 | 0 | 0 | 0   | 0 ← new |
+| 1 | 1 | 0 | 1 | 64  | 1 ← new |
+| 2 | 2 | 0 | 2 | 128 | 2 ← new |
+| 3 | 3 | 0 | 3 | 192 | 3 ← new |
+| 7 | 7 | 0 | 7 | 448 | 7 ← new |
+| 8 | 8 | 1 | 0 | 8   | 0 — back to row 0, now column 1 |
+| 9 | 9 | 1 | 1 | 72  | 1 — row 1, column 1 |
+
+`sector_in_block` is the **row** — which cache line. It changes every
+index, which is what gives the false-sharing protection.
+`word_in_sector` is the **column** — the byte position within that cache
+line. It only changes once every `sectorSize` indices.
 
 This is the mechanism that keeps concurrent appenders apart: as long as
 the number of simultaneously active appenders does not exceed
-`sectorSize`, each one is writing to a distinct sector, and — because each
-sector spans `sectorSize × 8` bytes — to a distinct, non-overlapping
-region of cache lines.
+`sectorSize`, each one writes to a distinct row (cache line), and no two
+appenders ever share one.
 
 ---
 
@@ -168,7 +199,32 @@ correctness model.
 
 ---
 
-## 6. Summary
+## 6. Mapping this terminology onto `header_codec.h`
+
+The current C implementation (`header_codec.h`, `header_position()` /
+`header_index()`) computes the **identical** byte offsets as the formula
+in §2 — verified term-for-term against the worked example above. The C
+variable names differ slightly from this document's:
+
+| This document | `header_codec.h` | Role |
+|---|---|---|
+| `sector_in_block` | `sector_in_block` | Row — selects the cache line |
+| `word_in_sector` | `index_in_sector` | Column — selects the byte position within that cache line |
+
+**`index_in_sector` in the C code plays the exact same role as
+`word_in_sector` in this document — it is not swapped, inverted, or
+incorrect.** It is the same quantity (`index_in_block % sectorSize`)
+under a less descriptive name. If this is renamed for clarity in a future
+cleanup, the rename must preserve which term is multiplied by `sectorSize`
+in the formula (`word_in_sector × sectorSize` in §2's `byte_offset`
+expression) — renaming the *labels* without preserving *which label
+carries the multiplier* would silently invert the formula and corrupt the
+header file layout. Verify any such rename against the worked example in
+§2 before merging, the same way it was verified here.
+
+---
+
+## 7. Summary
 
 - `sectorSize` is a tunable parameter, not a fixed constant — 8, 64, 128,
   or any multiple of 8 that fits the header region budget are all
