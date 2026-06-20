@@ -13,7 +13,7 @@
 
 #define SHUTDOWN_SEQ 0
 
-typedef struct {
+typedef struct __attribute__((packed)) {
     uint16_t instance_id;
     uint32_t sequence;
 } LatencyHeader;
@@ -35,10 +35,9 @@ static MessageHandlerDirective echo_handler(
     
     if (hdr->sequence == SHUTDOWN_SEQ) {
         s->shutdown_requested = 1;
-    } else {
-        /* Echo the entire payload back to the response queue */
-        indexed_appender_append(s->response_appender, data, length);
     }
+    /* Echo the entire payload back to the response queue */
+    indexed_appender_append(s->response_appender, data, length);
     
     return HANDLER_ADVANCE;
 }

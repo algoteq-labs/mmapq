@@ -7,9 +7,11 @@
 /**
  * QueueLatencyProbe — high-performance request/response latency measurement tool.
  *
- * Encapsulates two queues (request and response) and a background server thread.
+ * Encapsulates two queues (request and response).
  * The client appends to 'request' and polls 'response'.
- * The server polls 'request' and appends to 'response'.
+ *
+ * This component is a pure client. An external server (C echo_server or Java EchoServer)
+ * must be running to receive requests and echo them back.
  */
 
 typedef struct QueueLatencyProbe QueueLatencyProbe;
@@ -22,8 +24,7 @@ typedef struct QueueLatencyProbe QueueLatencyProbe;
  * request_name:   name of the request queue.
  * response_name:  name of the response queue.
  * message_size:   size of messages in bytes (min 6 bytes for header).
- * server_cpu:     CPU core to pin the background server thread to.
- * validate_on_server: if 1, the server verifies payload pattern.
+ * validate_on_server: if 1, the client expects the server to verify pattern.
  * validate_on_client: if 1, the client verifies response payload pattern.
  * runtime:        region mapper runtime.
  */
@@ -33,7 +34,6 @@ QueueLatencyProbe *queue_latency_probe_create(
     const char *request_name,
     const char *response_name,
     int32_t     message_size,
-    int         server_cpu,
     int         validate_on_server,
     int         validate_on_client,
     Runtime    *runtime);
@@ -60,7 +60,8 @@ void queue_latency_probe_move_to_end(QueueLatencyProbe *probe);
 uint64_t queue_latency_probe_execute(QueueLatencyProbe *probe);
 
 /**
- * Close the probe and shut down the background server thread.
+ * Close the probe by sending a shutdown signal to the external server
+ * and waiting for a confirmed echo before closing resources.
  */
 void queue_latency_probe_close(QueueLatencyProbe *probe);
 

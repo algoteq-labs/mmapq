@@ -26,9 +26,11 @@ int main(int argc, char *argv[])
     int mapper_cpu = (argc > 6) ? atoi(argv[6]) : DEFAULT_MAPPER_CPU;
     int val_server = (argc > 7) ? atoi(argv[7]) : 0;
     int val_client = (argc > 8) ? atoi(argv[8]) : 0;
+    
+    (void)server_cpu; /* External server core is managed externally */
 
-    printf("Starting Round-Trip Latency Benchmark...\n");
-    printf("  Cores:  Client=%d, Server=%d, Mapper=%d\n", client_cpu, server_cpu, mapper_cpu);
+    printf("Starting Round-Trip Latency Benchmark (EXTERNAL SERVER MODE)...\n");
+    printf("  Cores:  Client=%d, Mapper=%d (Server expected on external core)\n", client_cpu, mapper_cpu);
     printf("  Config: Iterations=%d, Warmup=%d, MsgSize=%d\n", 
            iterations, warmup, msg_size);
     printf("  Validation: Server=%s, Client=%s\n", 
@@ -46,13 +48,15 @@ int main(int argc, char *argv[])
         runtime_set_affinity(rt, mapper_cpu);
     }
 
-    char name_req[256];
-    char name_res[256];
-    snprintf(name_req, sizeof(name_req), "req_%d", getpid());
-    snprintf(name_res, sizeof(name_res), "res_%d", getpid());
+    /* Use predictable names for interoperability */
+    const char *name_req = "req";
+    const char *name_res = "res";
+    const char *dir = "/tmp";
     
+    printf("  Queues: %s/%s (request) -> %s/%s (response)\n", dir, name_req, dir, name_res);
+
     QueueLatencyProbe *probe = queue_latency_probe_create(
-        1, "/tmp", name_req, name_res, msg_size, server_cpu, 
+        1, dir, name_req, name_res, msg_size,
         val_server, val_client, rt);
 
     /* Client Pinning */
@@ -61,6 +65,7 @@ int main(int argc, char *argv[])
     }
 
     printf("Warming up...\n");
+    queue_latency_probe_move_to_end(probe); /* Skip any stale messages */
     for (int i = 0; i < warmup; i++) {
         queue_latency_probe_execute(probe);
     }
@@ -83,10 +88,6 @@ int main(int argc, char *argv[])
 
     queue_latency_probe_close(probe);
     
-    char cmd[512];
-    snprintf(cmd, sizeof(cmd), "rm -rf /tmp/%s /tmp/%s", name_req, name_res);
-    if (system(cmd) != 0) {}
-
     free(results);
     return 0;
 }

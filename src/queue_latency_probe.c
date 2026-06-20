@@ -3,14 +3,13 @@
 #include "mmap_assert.h"
 #include <stdlib.h>
 #include <string.h>
-#include <pthread.h>
 #include <stdio.h>
 
 #include <stdatomic.h>
 
 #define SHUTDOWN_SEQ 0  /* safe: current_request_seq starts at 0 and pre-increments */
 
-typedef struct {
+typedef struct __attribute__((packed)) {
     uint16_t instance_id;
     uint32_t sequence;
 } LatencyHeader;
@@ -18,7 +17,6 @@ typedef struct {
 struct QueueLatencyProbe {
     uint16_t         instance_id;
     int32_t          message_size;
-    int              server_cpu;
     int              validate_on_server;
     int              validate_on_client;
     
@@ -28,12 +26,6 @@ struct QueueLatencyProbe {
     IndexedAppender *request_appender;
     IndexedPoller   *response_poller;
     
-    /* Server-side state */
-    IndexedAppender *response_appender;
-    IndexedPoller   *request_poller;
-    
-    pthread_t        server_thread;
-    atomic_int       shutdown_requested;
     atomic_int       response_received;
     uint32_t         current_request_seq;
     atomic_int_fast64_t validation_errors;
@@ -61,51 +53,6 @@ static int verify_payload_pattern(const uint8_t *data, int32_t length, uint32_t 
     return 1;
 }
 
-/* ── Server Handler ──────────────────────────────────────────────────────── */
-
-static MessageHandlerDirective server_handler(
-    int64_t     index,
-    uint8_t     appender_id,
-    const void *data,
-    int32_t     length,
-    void       *ctx)
-{
-    QueueLatencyProbe *p = (QueueLatencyProbe *)ctx;
-    const LatencyHeader *hdr = (const LatencyHeader *)data;
-    
-    if (hdr->instance_id == p->instance_id) {
-        if (hdr->sequence == SHUTDOWN_SEQ) {
-            atomic_store_explicit(&p->shutdown_requested, 1, memory_order_relaxed);
-        } else {
-            if (p->validate_on_server) {
-                if (!verify_payload_pattern(data, length, hdr->sequence)) {
-                    atomic_fetch_add_explicit(&p->validation_errors, 1, memory_order_relaxed);
-                }
-            }
-            /* Echo the request back to the response queue */
-            indexed_appender_append(p->response_appender, data, length);
-        }
-    }
-    
-    return HANDLER_ADVANCE;
-}
-
-static void *server_thread_fn(void *arg)
-{
-    QueueLatencyProbe *p = (QueueLatencyProbe *)arg;
-    
-    thread_set_name(pthread_self(), "latency-server");
-    if (p->server_cpu >= 0) {
-        thread_set_affinity(p->server_cpu);
-    }
-    
-    while (!atomic_load_explicit(&p->shutdown_requested, memory_order_relaxed)) {
-        indexed_poller_poll(p->request_poller, server_handler, p);
-    }
-    
-    return NULL;
-}
-
 /* ── Client Handler ──────────────────────────────────────────────────────── */
 
 static MessageHandlerDirective client_handler(
@@ -118,11 +65,6 @@ static MessageHandlerDirective client_handler(
     QueueLatencyProbe *p = (QueueLatencyProbe *)ctx;
     const LatencyHeader *hdr = (const LatencyHeader *)data;
     
-    /* 
-     * Signal that response is received. 
-     * memory_order_relaxed is sufficient here because payload visibility is 
-     * already guaranteed by the acquire-load inside indexed_poller_poll.
-     */
     if (hdr->instance_id == p->instance_id && 
         hdr->sequence == p->current_request_seq) {
         
@@ -146,7 +88,6 @@ QueueLatencyProbe *queue_latency_probe_create(
     const char *request_name,
     const char *response_name,
     int32_t     message_size,
-    int         server_cpu,
     int         validate_on_server,
     int         validate_on_client,
     Runtime    *runtime)
@@ -159,7 +100,6 @@ QueueLatencyProbe *queue_latency_probe_create(
     
     p->instance_id        = instance_id;
     p->message_size       = message_size;
-    p->server_cpu         = server_cpu;
     p->validate_on_server = validate_on_server;
     p->validate_on_client = validate_on_client;
     
@@ -174,13 +114,7 @@ QueueLatencyProbe *queue_latency_probe_create(
     p->request_appender = indexed_queue_create_appender(p->request_queue);
     p->response_poller  = indexed_queue_create_poller(p->response_queue);
     
-    /* Server components */
-    p->request_poller   = indexed_queue_create_poller(p->request_queue);
-    p->response_appender = indexed_queue_create_appender(p->response_queue);
-    
     atomic_store(&p->validation_errors, 0);
-    
-    pthread_create(&p->server_thread, NULL, server_thread_fn, p);
     
     return p;
 }
@@ -223,22 +157,26 @@ void queue_latency_probe_close(QueueLatencyProbe *p)
 {
     if (p == NULL) return;
     
-    /* Signal server to shut down using a full-sized message for consistency */
-    uint8_t *shutdown_msg = calloc(1, (size_t)p->message_size);
-    if (shutdown_msg != NULL) {
-        LatencyHeader *hdr = (LatencyHeader *)shutdown_msg;
-        hdr->instance_id = p->instance_id;
-        hdr->sequence    = SHUTDOWN_SEQ;
-        indexed_appender_append(p->request_appender, shutdown_msg, p->message_size);
-        free(shutdown_msg);
+    /* Confirmed shutdown: send shutdown signal and wait for echo */
+    atomic_store_explicit(&p->response_received, 0, memory_order_relaxed);
+    uint32_t previous_seq = p->current_request_seq;
+    p->current_request_seq = SHUTDOWN_SEQ;
+
+    LatencyHeader *hdr = (LatencyHeader *)p->msg_buffer;
+    hdr->instance_id = p->instance_id;
+    hdr->sequence    = SHUTDOWN_SEQ;
+    
+    indexed_appender_append(p->request_appender, p->msg_buffer, p->message_size);
+    
+    uint64_t timeout_at = monotonic_nanos() + 2000000000ULL; /* 2 seconds */
+    while (!atomic_load_explicit(&p->response_received, memory_order_relaxed) && 
+           monotonic_nanos() < timeout_at) {
+        indexed_poller_poll(p->response_poller, client_handler, p);
     }
-    
-    pthread_join(p->server_thread, NULL);
-    
+    p->current_request_seq = previous_seq;
+
     indexed_appender_close(p->request_appender);
     indexed_poller_close(p->response_poller);
-    indexed_appender_close(p->response_appender);
-    indexed_poller_close(p->request_poller);
     
     indexed_queue_close(p->request_queue);
     indexed_queue_close(p->response_queue);
