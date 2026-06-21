@@ -38,16 +38,9 @@
  */
 
 /*
- * The bitset needs 256/8 = 32 bytes of data, but fixed_size_region_create
- * requires a multiple of page_size() (4096 bytes on Linux, 16384 on macOS M1).
- * We use page_size() at runtime so this works on both platforms.
+ * The appender id pool file size must be 64 bytes for binary compatibility with Java.
  */
-#include "mmap_platform.h"
-static inline int32_t appender_id_pool_region_size(void)
-{
-    return (int32_t)page_size();
-}
-#define APPENDER_ID_POOL_REGION_SIZE  appender_id_pool_region_size()
+#define APPENDER_ID_POOL_REGION_SIZE  ((int32_t)64)
 #define APPENDER_ID_POOL_WORD_COUNT   ((int32_t)(MAX_APPENDERS / 32))
 #define APPENDER_ID_POOL_MAX_RETRIES  ((int32_t)100)
 #define APPENDER_ID_POOL_FILE_NAME    "appender_id_pool"

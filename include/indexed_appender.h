@@ -59,6 +59,7 @@ typedef struct IndexedAppender IndexedAppender;
  * max_file_size: maximum rolled file size
  * timeout_ns:  mapping timeout in nanoseconds
  * runtime:     region mapper runtime
+ * fixed_size_8bytes: if 1, use optimized 8-byte fixed-size mode.
  *
  * Acquires an appender ID from the pool, initialises append position
  * (including recovery scan), and eager-wraps RW regions.
@@ -72,7 +73,8 @@ IndexedAppender *indexed_appender_create(
     int         ring_size,
     int64_t     max_file_size,
     uint64_t    timeout_ns,
-    Runtime    *runtime);
+    Runtime    *runtime,
+    int         fixed_size_8bytes);
 
 /**
  * indexed_appender_create_with_id — create an appender with a specific ID.
@@ -88,7 +90,8 @@ IndexedAppender *indexed_appender_create_with_id(
     int64_t     max_file_size,
     uint64_t    timeout_ns,
     Runtime    *runtime,
-    uint8_t     appender_id);
+    uint8_t     appender_id,
+    int         fixed_size_8bytes);
 
 /* ── Append operations ───────────────────────────────────────────────────── */
 

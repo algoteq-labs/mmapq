@@ -318,7 +318,8 @@ static IndexedAppender *appender_create_internal(
     uint64_t        timeout_ns,
     Runtime        *runtime,
     AppenderIdPool *id_pool,
-    uint8_t         appender_id)
+    uint8_t         appender_id,
+    int             fixed_size_8bytes)
 {
     IndexedAppender *a = calloc(1, sizeof(IndexedAppender));
     MMAP_ASSERT(a != NULL, "indexed_appender: out of memory");
@@ -343,7 +344,8 @@ static IndexedAppender *appender_create_internal(
     a->queue_meta = queue_meta_open_rw(directory, queue_name, 
                                         QUEUE_META_INITIAL_START_INDEX,
                                         region_size, max_file_size,
-                                        /* archivable = */ 0);
+                                        /* archivable = */ 0,
+                                        fixed_size_8bytes);
     MMAP_ASSERT(a->queue_meta != NULL, "indexed_appender: failed to open/create queue meta");
 
     /* Adopt contractual parameters from meta */
@@ -365,8 +367,8 @@ static IndexedAppender *appender_create_internal(
 
     /* Find where to resume appending */
     initialise_append_position(a, directory, queue_name,
-                                reconciled_region_size, ring_size,
-                                reconciled_max_file_size, timeout_ns, runtime);
+                                 reconciled_region_size, ring_size,
+                                 reconciled_max_file_size, timeout_ns, runtime);
 
     return a;
 }
@@ -380,7 +382,8 @@ IndexedAppender *indexed_appender_create(
     int         ring_size,
     int64_t     max_file_size,
     uint64_t    timeout_ns,
-    Runtime    *runtime)
+    Runtime    *runtime,
+    int         fixed_size_8bytes)
 {
     MMAP_ASSERT(directory  != NULL, "indexed_appender_create: directory is NULL");
     MMAP_ASSERT(queue_name != NULL, "indexed_appender_create: queue_name is NULL");
@@ -392,8 +395,8 @@ IndexedAppender *indexed_appender_create(
     MMAP_ASSERT(id >= 0, "indexed_appender_create: appender ID pool exhausted");
 
     return appender_create_internal(directory, queue_name, region_size, ring_size,
-                                     max_file_size, timeout_ns, runtime,
-                                     pool, (uint8_t)id);
+                                      max_file_size, timeout_ns, runtime,
+                                      pool, (uint8_t)id, fixed_size_8bytes);
 }
 
 IndexedAppender *indexed_appender_create_with_id(
@@ -404,7 +407,8 @@ IndexedAppender *indexed_appender_create_with_id(
     int64_t     max_file_size,
     uint64_t    timeout_ns,
     Runtime    *runtime,
-    uint8_t     appender_id)
+    uint8_t     appender_id,
+    int         fixed_size_8bytes)
 {
     MMAP_ASSERT(directory  != NULL, "indexed_appender_create_with_id: directory is NULL");
     MMAP_ASSERT(queue_name != NULL, "indexed_appender_create_with_id: queue_name is NULL");
@@ -415,8 +419,8 @@ IndexedAppender *indexed_appender_create_with_id(
     MMAP_ASSERT(ok, "indexed_appender_create_with_id: requested appender_id already in use");
 
     return appender_create_internal(directory, queue_name, region_size, ring_size,
-                                     max_file_size, timeout_ns, runtime,
-                                     pool, appender_id);
+                                      max_file_size, timeout_ns, runtime,
+                                      pool, appender_id, fixed_size_8bytes);
 }
 
 /* ── indexed_appender_append ─────────────────────────────────────────────── */

@@ -78,11 +78,9 @@ RegionAccessor *fixed_size_region_create(
 {
     MMAP_ASSERT(file_path != NULL, "fixed_size_region_create: file_path is NULL");
     MMAP_ASSERT(size > 0,          "fixed_size_region_create: size must be > 0");
-    MMAP_ASSERT(size % page_size() == 0,
-        "fixed_size_region_create: size must be a multiple of page_size()");
 
     /* Open or create the backing file */
-    int fd = open(file_path, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+    int fd = open(file_path, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
     MMAP_ASSERT(fd >= 0, "fixed_size_region_create: failed to open/create file");
 
     /*
@@ -103,8 +101,14 @@ RegionAccessor *fixed_size_region_create(
         }
     }
 
-    /* Map the entire file permanently */
-    void *addr = mmap(NULL, (size_t)size,
+    /* 
+     * Map the file. mmap requires length to be a multiple of page size,
+     * but we only want to expose 'size' bytes to the caller.
+     */
+    long ps = page_size();
+    size_t map_len = (size_t)(((size + ps - 1) / ps) * ps);
+
+    void *addr = mmap(NULL, map_len,
                       PROT_READ | PROT_WRITE,
                       MAP_SHARED | MAP_POPULATE, fd, 0);
     if (addr == MAP_FAILED) {
@@ -112,7 +116,7 @@ RegionAccessor *fixed_size_region_create(
                         "check file size and permissions");
     }
 
-    huge_pages_hint(addr, (size_t)size);
+    huge_pages_hint(addr, map_len);
 
     FixedSizeImpl *impl = calloc(1, sizeof(FixedSizeImpl));
     MMAP_ASSERT(impl != NULL, "fixed_size_region_create: out of memory");
@@ -144,6 +148,10 @@ void fixed_size_region_destroy(RegionAccessor *acc)
 
     FixedSizeImpl *impl = (FixedSizeImpl *)acc->impl;
     if (impl != NULL) {
+        long ps = page_size();
+        size_t map_len = (size_t)(((impl->size + ps - 1) / ps) * ps);
+        munmap((void *)impl->address, map_len);
+        impl->address = 0;
         free(impl->file_path);
         free(impl);
     }

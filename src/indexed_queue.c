@@ -21,6 +21,7 @@ struct IndexedQueue {
     int      regions_to_map_ahead;
     int64_t  max_file_size; /* preferred/initial */
     int64_t  start_index;   /* initial */
+    int      fixed_size_8bytes; /* preferred/initial */
     uint64_t timeout_ns;
     Runtime *runtime;
 
@@ -35,7 +36,7 @@ static void create_queue_directory(const char *directory, const char *queue_name
     char path[4096];
     snprintf(path, sizeof(path), "%s/%s", directory, queue_name);
 
-    if (mkdir(path, 0755) != 0) {
+    if (mkdir(path, 0775) != 0) {
         if (errno != EEXIST) {
             MMAP_ASSERT(0, "indexed_queue_create: failed to create queue directory");
         }
@@ -54,7 +55,8 @@ IndexedQueue *indexed_queue_create(
     int64_t     max_file_size,
     int64_t     start_index,
     uint64_t    timeout_ns,
-    Runtime    *runtime)
+    Runtime    *runtime,
+    int         fixed_size_8bytes)
 {
     MMAP_ASSERT(directory  != NULL, "indexed_queue_create: directory is NULL");
     MMAP_ASSERT(queue_name != NULL, "indexed_queue_create: queue_name is NULL");
@@ -80,6 +82,7 @@ IndexedQueue *indexed_queue_create(
     q->regions_to_map_ahead = regions_to_map_ahead;
     q->max_file_size        = max_file_size;
     q->start_index          = start_index;
+    q->fixed_size_8bytes    = fixed_size_8bytes;
     q->timeout_ns           = timeout_ns;
     q->runtime              = runtime;
     q->closed               = 0;
@@ -106,6 +109,17 @@ IndexedQueue *indexed_queue_create_default(
     const char *queue_name,
     Runtime    *runtime)
 {
+    return indexed_queue_create_default_opt(directory, queue_name, runtime, 0);
+}
+
+/* ── indexed_queue_create_default_opt ────────────────────────────────────── */
+
+IndexedQueue *indexed_queue_create_default_opt(
+    const char *directory,
+    const char *queue_name,
+    Runtime    *runtime,
+    int         fixed_size_8bytes)
+{
     return indexed_queue_create(
         directory, queue_name,
         INDEXED_QUEUE_DEFAULT_REGION_SIZE,
@@ -114,7 +128,8 @@ IndexedQueue *indexed_queue_create_default(
         INDEXED_QUEUE_DEFAULT_MAX_FILE_SIZE,
         /* start_index = */ 0,
         INDEXED_QUEUE_DEFAULT_TIMEOUT_NS,
-        runtime);
+        runtime,
+        fixed_size_8bytes);
 }
 
 /* ── Participant factories ────────────────────────────────────────────────── */
@@ -129,7 +144,8 @@ IndexedAppender *indexed_queue_create_appender(IndexedQueue *q)
     return indexed_appender_create(
         q->directory, q->queue_name,
         q->region_size, q->ring_size,
-        q->max_file_size, q->timeout_ns, q->runtime);
+        q->max_file_size, q->timeout_ns, q->runtime,
+        q->fixed_size_8bytes);
 }
 
 IndexedAppender *indexed_queue_create_appender_with_id(
@@ -145,7 +161,8 @@ IndexedAppender *indexed_queue_create_appender_with_id(
         q->directory, q->queue_name,
         q->region_size, q->ring_size,
         q->max_file_size, q->timeout_ns, q->runtime,
-        appender_id);
+        appender_id,
+        q->fixed_size_8bytes);
 }
 
 IndexedPoller *indexed_queue_create_poller(IndexedQueue *q)
@@ -195,6 +212,13 @@ int64_t indexed_queue_start_index(const IndexedQueue *q)
     MMAP_ASSERT(q != NULL, "indexed_queue_start_index: queue is NULL");
     ensure_meta_open((IndexedQueue *)q);
     return q->queue_meta ? queue_meta_start_index(q->queue_meta) : q->start_index;
+}
+
+int indexed_queue_fixed_size_8bytes(const IndexedQueue *q)
+{
+    MMAP_ASSERT(q != NULL, "indexed_queue_fixed_size_8bytes: queue is NULL");
+    ensure_meta_open((IndexedQueue *)q);
+    return q->queue_meta ? queue_meta_fixed_size_8bytes(q->queue_meta) : q->fixed_size_8bytes;
 }
 
 /* ── indexed_queue_close ─────────────────────────────────────────────────── */

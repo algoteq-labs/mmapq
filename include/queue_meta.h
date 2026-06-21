@@ -20,7 +20,8 @@
  *   8  : start_index     (int64, volatile — atomic read when archivable)
  *   16 : max_file_size   (int64)
  *   24 : archivable      (uint8)
- *   25 : padding to 64 bytes
+ *   25 : fixed_size_8bytes (uint8)
+ *   26 : padding to 64 bytes
  *
  * start_index:
  *   Always QUEUE_META_INITIAL_START_INDEX (0) for non-archivable queues.
@@ -35,16 +36,9 @@
 #define QUEUE_META_SCHEMA_VERSION        ((int32_t)1)
 #define QUEUE_META_INITIAL_START_INDEX   ((int64_t)0)
 /*
- * The meta struct needs ~26 bytes of data, but fixed_size_region_create
- * requires a multiple of page_size() (4096 bytes on Linux, 16384 on macOS M1).
- * We use page_size() at runtime so this works on both platforms.
+ * The meta file size must be 64 bytes for binary compatibility with Java.
  */
-#include "mmap_platform.h"
-static inline int32_t queue_meta_encoded_length(void)
-{
-    return (int32_t)page_size();
-}
-#define QUEUE_META_ENCODED_LENGTH queue_meta_encoded_length()
+#define QUEUE_META_ENCODED_LENGTH        ((int32_t)64)
 
 /* Byte offsets within the meta region */
 #define QUEUE_META_SCHEMA_VERSION_OFFSET ((int32_t)0)
@@ -52,6 +46,7 @@ static inline int32_t queue_meta_encoded_length(void)
 #define QUEUE_META_START_INDEX_OFFSET    ((int32_t)8)   /* must be 8-byte aligned */
 #define QUEUE_META_MAX_FILE_SIZE_OFFSET  ((int32_t)16)
 #define QUEUE_META_ARCHIVABLE_OFFSET     ((int32_t)24)
+#define QUEUE_META_FIXED_SIZE_8BYTES_OFFSET ((int32_t)25)
 
 /**
  * QueueMeta — in-memory view of the queue configuration.
@@ -68,6 +63,7 @@ typedef struct {
     int32_t         region_size;    /* cached — written once at creation      */
     int64_t         max_file_size;  /* cached — written once at creation      */
     int             archivable;     /* cached — written once at creation      */
+    int             fixed_size_8bytes; /* cached — written once at creation   */
 } QueueMeta;
 
 /* ── Field accessors ─────────────────────────────────────────────────────── */
@@ -90,6 +86,11 @@ static inline int64_t queue_meta_max_file_size(const QueueMeta *m)
 static inline int queue_meta_archivable(const QueueMeta *m)
 {
     return m->archivable;
+}
+
+static inline int queue_meta_fixed_size_8bytes(const QueueMeta *m)
+{
+    return m->fixed_size_8bytes;
 }
 
 /**
@@ -143,7 +144,8 @@ QueueMeta *queue_meta_open_rw(
     int64_t     start_index,
     int32_t     region_size,
     int64_t     max_file_size,
-    int         archivable);
+    int         archivable,
+    int         fixed_size_8bytes);
 
 /**
  * queue_meta_open_ro — open the meta file for reading only.

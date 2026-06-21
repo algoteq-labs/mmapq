@@ -31,16 +31,9 @@
  */
 
 /*
- * The appender meta struct needs ~10 bytes of data, but fixed_size_region_create
- * requires a multiple of page_size() (4096 bytes on Linux, 16384 on macOS M1).
- * We use page_size() at runtime so this works on both platforms.
+ * The appender meta file size must be 64 bytes for binary compatibility with Java.
  */
-#include "mmap_platform.h"
-static inline int32_t appender_meta_encoded_length(void)
-{
-    return (int32_t)page_size();
-}
-#define APPENDER_META_ENCODED_LENGTH appender_meta_encoded_length()
+#define APPENDER_META_ENCODED_LENGTH ((int32_t)64)
 #define APPENDER_META_START_OFFSET_OFFSET  ((int32_t)0)
 #define APPENDER_META_APPENDER_ID_OFFSET   ((int32_t)8)
 

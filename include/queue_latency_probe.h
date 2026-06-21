@@ -36,7 +36,8 @@ QueueLatencyProbe *queue_latency_probe_create(
     int32_t     message_size,
     int         validate_on_server,
     int         validate_on_client,
-    Runtime    *runtime);
+    Runtime    *runtime,
+    int         fixed_size_8bytes);
 
 /**
  * Returns the total number of validation errors detected so far.

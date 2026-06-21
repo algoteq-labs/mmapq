@@ -797,7 +797,7 @@ Runtime *runtime_region_mapper(void)
     return runtime_get_instance(
         RUNTIME_ID_REGION_MAPPER,
         "region-mapper",
-        idle_strategy_busy_spin_create(),
+        idle_strategy_backoff_create(100, 10, UINT64_C(1000000)),
         RUNTIME_DEFAULT_CLOSE_TIMEOUT_NS);
 }
 

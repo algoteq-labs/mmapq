@@ -25,18 +25,8 @@ static void payload_file_path(const char *directory, const char *queue_name,
 /* ── Header file initialiser ─────────────────────────────────────────────── */
 
 /*
- * RW header file: initialise with 8 zero bytes on first creation.
- * Zeros = NULL_HEADER = unwritten entry. The file grows as needed via
- * ftruncate in the RW file mapper.
- *
  * RO header file: no initialisation — file must already exist.
  */
-static int header_init_rw(int fd, size_t size, void *ctx)
-{
-    (void)ctx;
-    /* ftruncate ensures the file is at least `size` bytes of zeros */
-    return ftruncate(fd, (off_t)size);
-}
 
 /* ── Create a RegionRingAccessor ─────────────────────────────────────────── */
 
@@ -112,7 +102,7 @@ QueueRegionAccessor *queue_region_accessor_create_rw(
 
     FileMapper *hdr_mapper = file_mapper_rolled_create(
         hdr_path, max_file_size, region_size,
-        header_init_rw, NULL,
+        file_init_none, NULL,
         MAP_MODE_READ_WRITE,
         ring_size + 2);  /* cache > ring_size */
 
@@ -133,7 +123,7 @@ QueueRegionAccessor *queue_region_accessor_create_rw(
 
     FileMapper *pay_mapper = file_mapper_rolled_create(
         pay_path, max_file_size, region_size,
-        file_init_zeros, NULL,
+        file_init_none, NULL,
         MAP_MODE_READ_WRITE,
         ring_size + 2);
 

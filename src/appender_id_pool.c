@@ -6,6 +6,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdatomic.h>
+#include <sys/mman.h>
 
 /* ── File path ───────────────────────────────────────────────────────────── */
 
@@ -143,6 +144,9 @@ int appender_id_pool_release(AppenderIdPool *pool, uint8_t id)
     } while (!atomic_compare_exchange_weak_explicit(
                  ap, &current, updated,
                  memory_order_acq_rel, memory_order_acquire));
+
+    /* Force sync to ensure bit clearance is persistent */
+    msync(pool->base, APPENDER_ID_POOL_REGION_SIZE, MS_SYNC);
 
     return 1;  /* released */
 }

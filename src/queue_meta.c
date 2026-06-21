@@ -26,6 +26,7 @@ typedef struct {
     int32_t region_size;
     int64_t max_file_size;
     int     archivable;
+    int     fixed_size_8bytes;
 } MetaInitCtx;
 
 static int meta_file_init(int fd, size_t size, void *ctx)
@@ -42,12 +43,14 @@ static int meta_file_init(int fd, size_t size, void *ctx)
     int64_t si     = mctx->start_index;
     int64_t mfs    = mctx->max_file_size;
     uint8_t arch   = (uint8_t)(mctx->archivable ? 1 : 0);
+    uint8_t fs8    = (uint8_t)(mctx->fixed_size_8bytes ? 1 : 0);
 
     if (pwrite(fd, &schema, sizeof(schema), QUEUE_META_SCHEMA_VERSION_OFFSET) < 0) return -1;
     if (pwrite(fd, &rs,     sizeof(rs),     QUEUE_META_REGION_SIZE_OFFSET)    < 0) return -1;
     if (pwrite(fd, &si,     sizeof(si),     QUEUE_META_START_INDEX_OFFSET)    < 0) return -1;
     if (pwrite(fd, &mfs,    sizeof(mfs),    QUEUE_META_MAX_FILE_SIZE_OFFSET)  < 0) return -1;
     if (pwrite(fd, &arch,   sizeof(arch),   QUEUE_META_ARCHIVABLE_OFFSET)     < 0) return -1;
+    if (pwrite(fd, &fs8,    sizeof(fs8),    QUEUE_META_FIXED_SIZE_8BYTES_OFFSET) < 0) return -1;
 
     return 0;
 }
@@ -59,6 +62,7 @@ static void meta_cache_fields(QueueMeta *m)
     memcpy(&m->region_size,   m->base + QUEUE_META_REGION_SIZE_OFFSET,   sizeof(int32_t));
     memcpy(&m->max_file_size, m->base + QUEUE_META_MAX_FILE_SIZE_OFFSET, sizeof(int64_t));
     m->archivable = (m->base[QUEUE_META_ARCHIVABLE_OFFSET] == 1) ? 1 : 0;
+    m->fixed_size_8bytes = (m->base[QUEUE_META_FIXED_SIZE_8BYTES_OFFSET] == 1) ? 1 : 0;
 }
 
 /* ── queue_meta_open_rw ──────────────────────────────────────────────────── */
@@ -69,7 +73,8 @@ QueueMeta *queue_meta_open_rw(
     int64_t     start_index,
     int32_t     region_size,
     int64_t     max_file_size,
-    int         archivable)
+    int         archivable,
+    int         fixed_size_8bytes)
 {
     MMAP_ASSERT(directory  != NULL, "queue_meta_open_rw: directory is NULL");
     MMAP_ASSERT(queue_name != NULL, "queue_meta_open_rw: queue_name is NULL");
@@ -84,6 +89,7 @@ QueueMeta *queue_meta_open_rw(
         .region_size  = region_size,
         .max_file_size = max_file_size,
         .archivable   = archivable,
+        .fixed_size_8bytes = fixed_size_8bytes,
     };
 
     RegionAccessor *region = fixed_size_region_create(

@@ -100,7 +100,7 @@ static int rw_init(SingleFileRwImpl *impl)
     /* Create file if it doesn't exist */
     int fd = open(impl->file_path,
                   O_RDWR | O_CREAT,
-                  S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+                  S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
     if (fd < 0) {
         MMAP_ASSERT(0, "rw_init: failed to open/create file");
         return 0;
