@@ -76,6 +76,11 @@ typedef struct RegionAccessor {
     void       (*close)         (struct RegionAccessor *self);
     int32_t    (*size)          (struct RegionAccessor *self);
     void       *impl;
+
+    /* Fast-path cache fields */
+    uint8_t   *active_address;
+    int64_t    active_base;
+    int64_t    active_end;
 } RegionAccessor;
 
 /* ── Convenience wrappers ────────────────────────────────────────────────── */
@@ -85,6 +90,11 @@ static inline WrapResult region_accessor_wrap(
     int64_t         position,
     Buffer         *buffer)
 {
+    if (__builtin_expect(position >= acc->active_base && position < acc->active_end, 1)) {
+        buffer->data = acc->active_address + (position - acc->active_base);
+        buffer->capacity = (int32_t)(acc->active_end - position);
+        return WRAP_SUCCESS;
+    }
     return acc->wrap(acc, position, buffer);
 }
 
@@ -93,6 +103,11 @@ static inline WrapResult region_accessor_wrap_no_premap(
     int64_t         position,
     Buffer         *buffer)
 {
+    if (__builtin_expect(position >= acc->active_base && position < acc->active_end, 1)) {
+        buffer->data = acc->active_address + (position - acc->active_base);
+        buffer->capacity = (int32_t)(acc->active_end - position);
+        return WRAP_SUCCESS;
+    }
     return acc->wrap_no_premap(acc, position, buffer);
 }
 

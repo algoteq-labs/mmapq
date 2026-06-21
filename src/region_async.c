@@ -300,6 +300,11 @@ static WrapResult async_wrap(RegionAccessor *self, int64_t position, Buffer *buf
     if (r == WRAP_SUCCESS) {
         buffer->data     = (uint8_t *)impl->address + region_offset;
         buffer->capacity = impl->region_size - region_offset;
+
+        /* Update fast-path cache */
+        self->active_address = buffer->data;
+        self->active_base    = position;
+        self->active_end     = position + buffer->capacity;
     }
     return r;
 }

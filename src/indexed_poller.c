@@ -129,8 +129,8 @@ PollResult indexed_poller_poll(
         return POLL_END_OF_STREAM;
     }
 
-    /* Prefetch the next header slot (64 bytes ahead due to cache-line isolation) */
-    __builtin_prefetch(p->header_buf.data + 64, 0, 3);
+    /* Prefetch the next header slot (512 bytes ahead due to vertical walk) */
+    __builtin_prefetch(p->header_buf.data + 512, 0, 3);
 
     /* Decode and read payload */
     uint8_t  appender_id     = header_appender_id(header);

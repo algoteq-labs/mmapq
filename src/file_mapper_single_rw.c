@@ -10,6 +10,7 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <errno.h>
+#include <stdatomic.h>
 
 /* ── Internal state ──────────────────────────────────────────────────────── */
 
@@ -76,14 +77,20 @@ static void rw_pretouch(uintptr_t addr, int32_t region_length,
     }
 
     long ps = page_size();
-    volatile int64_t *p = (volatile int64_t *)(addr + offset);
     int32_t remaining = extended_bytes;
+    uintptr_t current_addr = addr + offset;
 
     while (remaining >= (int32_t)sizeof(int64_t)) {
-        /* Read-modify-write: compare-and-set with itself (no-op) */
-        int64_t val = *p;
-        (void)val;  /* touch the page */
-        p       = (volatile int64_t *)((uint8_t *)p + ps);
+        _Atomic int64_t *p = (_Atomic int64_t *)current_addr;
+        int64_t expected = 0;
+        /* 
+         * Atomic CAS (0 -> 0) forces a Read-For-Ownership (RFO) and marks 
+         * the page as dirty in the hardware and kernel. This ensures the
+         * background thread takes the page fault and dirty-bit penalty.
+         */
+        atomic_compare_exchange_strong(p, &expected, 0);
+
+        current_addr += ps;
         remaining -= (int32_t)ps;
     }
     (void)region_length;

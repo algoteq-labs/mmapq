@@ -21,7 +21,7 @@ static void cleanup(void)
 void setUp(void)
 {
     cleanup();
-    mkdir("/tmp/mmap_test_id_pool_q", 0755);
+    mkdir("/tmp/mmap_test_id_pool_q", 0775);
     pool = appender_id_pool_open(DIR, QUEUE);
 }
 

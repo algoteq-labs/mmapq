@@ -21,7 +21,7 @@ static void cleanup(void)
 void setUp(void)
 {
     cleanup();
-    mkdir("/tmp/mmap_test_qmeta_q", 0755);
+    mkdir("/tmp/mmap_test_qmeta_q", 0775);
 }
 
 void tearDown(void)
@@ -32,7 +32,7 @@ void tearDown(void)
 
 void test_open_rw_creates_file(void)
 {
-    meta = queue_meta_open_rw(DIR, QUEUE, 0, 4096, 4096 * 256, 0);
+    meta = queue_meta_open_rw(DIR, QUEUE, 0, 4096, 4096 * 256, 0, 0);
     TEST_ASSERT_NOT_NULL(meta);
 
     char path[256];
@@ -44,20 +44,20 @@ void test_open_rw_creates_file(void)
 
 void test_open_rw_stores_region_size(void)
 {
-    meta = queue_meta_open_rw(DIR, QUEUE, 0, 8192, 8192 * 256, 0);
+    meta = queue_meta_open_rw(DIR, QUEUE, 0, 8192, 8192 * 256, 0, 0);
     TEST_ASSERT_EQUAL_INT32(8192, queue_meta_region_size(meta));
 }
 
 void test_open_rw_stores_max_file_size(void)
 {
     int64_t mfs = 4096LL * 512;
-    meta = queue_meta_open_rw(DIR, QUEUE, 0, 4096, mfs, 0);
+    meta = queue_meta_open_rw(DIR, QUEUE, 0, 4096, mfs, 0, 0);
     TEST_ASSERT_EQUAL_INT64(mfs, queue_meta_max_file_size(meta));
 }
 
 void test_open_rw_schema_version(void)
 {
-    meta = queue_meta_open_rw(DIR, QUEUE, 0, 4096, 4096 * 256, 0);
+    meta = queue_meta_open_rw(DIR, QUEUE, 0, 4096, 4096 * 256, 0, 0);
     TEST_ASSERT_EQUAL_INT32(QUEUE_META_SCHEMA_VERSION, queue_meta_schema_version(meta));
 }
 
@@ -69,7 +69,7 @@ void test_open_ro_returns_null_when_missing(void)
 
 void test_open_ro_reads_existing_file(void)
 {
-    meta = queue_meta_open_rw(DIR, QUEUE, 0, 4096, 4096 * 256, 0);
+    meta = queue_meta_open_rw(DIR, QUEUE, 0, 4096, 4096 * 256, 0, 0);
     queue_meta_close(meta);
     meta = NULL;
 
@@ -81,23 +81,23 @@ void test_open_ro_reads_existing_file(void)
 
 void test_start_index_zero_non_archivable(void)
 {
-    meta = queue_meta_open_rw(DIR, QUEUE, 0, 4096, 4096 * 256, 0);
+    meta = queue_meta_open_rw(DIR, QUEUE, 0, 4096, 4096 * 256, 0, 0);
     TEST_ASSERT_EQUAL_INT64(0, queue_meta_start_index(meta));
 }
 
 void test_archivable_false(void)
 {
-    meta = queue_meta_open_rw(DIR, QUEUE, 0, 4096, 4096 * 256, 0);
+    meta = queue_meta_open_rw(DIR, QUEUE, 0, 4096, 4096 * 256, 0, 0);
     TEST_ASSERT_EQUAL_INT(0, queue_meta_archivable(meta));
 }
 
 void test_reopen_rw_preserves_values(void)
 {
-    meta = queue_meta_open_rw(DIR, QUEUE, 0, 4096, 4096 * 256, 0);
+    meta = queue_meta_open_rw(DIR, QUEUE, 0, 4096, 4096 * 256, 0, 0);
     queue_meta_close(meta);
 
     /* Re-open with different params — existing values should be preserved */
-    meta = queue_meta_open_rw(DIR, QUEUE, 0, 8192, 8192 * 256, 0);
+    meta = queue_meta_open_rw(DIR, QUEUE, 0, 8192, 8192 * 256, 0, 0);
     /* File already existed — region_size from file is 4096, not 8192 */
     TEST_ASSERT_EQUAL_INT32(4096, queue_meta_region_size(meta));
 }

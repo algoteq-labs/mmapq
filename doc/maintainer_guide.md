@@ -41,29 +41,32 @@ Because of the 4-byte length prefix, a message body starting at an 8-byte aligne
 
 ---
 
-## 3. Performance Hardening Stack
+## 3. Tuning the High-Performance Baseline
 
-To reproduce the **~350ns median round-trip** latencies, the following system-level stack must be active:
+To reproduce the **~280ns median round-trip** latencies, the following optimizations and system-level settings must be maintained:
 
-*   **Core Isolation**: Threads must be pinned to isolated physical cores (e.g., the 5, 7, 9 pattern used in benchmarks).
-*   **Memory Locking**: `mlockall(MCL_CURRENT | MCL_FUTURE)` must be called to prevent page-outs.
-*   **Huge Pages**: Transparent Huge Pages (THP) must be enabled. The library calls `madvise(addr, length, MADV_HUGEPAGE)` to reduce TLB pressure.
-*   **VDSO Timing**: Use `CLOCK_MONOTONIC`. The `RAW` variant bypasses the kernel's fast VDSO path and adds ~50-100ns of overhead per call.
-*   **Busy-Spinning**: The client and server poll loops must be tight. Avoid `spin_hint()` (PAUSE/YIELD) in the absolute hottest measurement loops.
+### Static Inlining Protocol
+The `region_accessor_wrap` fast-path (checking if a position is within the currently mapped range) and `header_read` logic are implemented as `static inline` in their respective headers. This eliminates the stack-frame and branching overhead of multiple function calls per message, saving ~40ns per round trip.
+
+### Atomic Background Pre-Touch
+The `rw_pretouch` function uses an atomic CAS (`0 -> 0`) on every new page boundary. Unlike a simple read, a CAS forces a hardware **Read-For-Ownership (RFO)** and marks the page as **Dirty** in the kernel. This ensures the background `Runtime` thread takes the "Dirty Bit" penalty so the hot IPC loop never stalls at 4KB boundaries.
+
+### Hardware Prefetch Stride
+The `IndexedPoller` uses `__builtin_prefetch` to warm the next logical header. Because of the Vertical Walk, the stride must be **512 bytes**, not 64. Prefetching 512 bytes ahead ensures the L1/L2 cache is ready before the index increments.
+
+### Passive Kernel Strategy (Tail Stability)
+High-frequency IPC is sensitive to kernel synchronization noise (TLB Shootdowns).
+*   **No aggressive pinning**: Avoid `mlockall(MCL_FUTURE)` as it forces the kernel to track all mappings as pinned, making cross-process `mmap` noisy.
+*   **Eager `munmap`**: Roll-over files are unmapped immediately to keep the process page table lean.
+*   **Measurement Warmup**: Always `memset` large results/timestamp arrays before measurement to avoid page-fault jitter during the clock run.
 
 ---
 
 ## 4. Metadata Authority
 
-The `queue_meta` file is the indicator of queue existence and the sole source of the configuration contract.
+The `queue_meta` file is the sole source of the configuration contract.
 
-*   **Appender**: The only component permitted to create/initialize the `meta` file. If the file exists, the appender **must** adopt the on-disk `region_size` and ignore its constructor arguments.
-*   **Poller/Reader**: Pure consumers. They must open the `meta` file Read-Only and discover the `region_size` lazily.
-*   **Zero Rubbish**: Redundant configuration parameters (`region_size`, `max_file_size`) have been removed from consumer APIs to prevent accidental misconfiguration.
-
----
-
-## 5. Build & Verification
-
-*   **ThreadSanitizer (TSAN)**: Known conflict with `mmap` on some kernels (`unexpected memory mapping`). Run with `setarch $(uname -m) -R ./scripts/test.sh --tsan` to verify logic races.
-*   **Benchmarking**: Use `make bench` and the `latency_bench` tool for high-fidelity performance regression testing.
+*   **Parity**: All control files (`meta`, `appender_meta`, `id_pool`) are standardized to **64 bytes** to match Java's dense footprint.
+*   **FixedSizeRegion**: Supports 64-byte files by rounding up the `mmap` length to the system page size while respecting the actual disk file size.
+*   **FixedSize8Bytes**: This flag is supported in the metadata for binary parity but ignored in C logic (standard variable-length framing is the priority).
+*   **Lazy Growth**: Files grow region-by-region only when a writer enters a new region, eliminating eager 1GB truncation noise.

@@ -93,8 +93,9 @@ static int sync_unmap(Region *self)
 
 /* ── wrap shared logic ───────────────────────────────────────────────────── */
 
-static WrapResult sync_do_wrap(SyncRegionImpl *impl, int64_t position, Buffer *buffer)
+static WrapResult sync_do_wrap(RegionAccessor *self, int64_t position, Buffer *buffer)
 {
+    SyncRegionImpl *impl = (SyncRegionImpl *)self->impl;
     int32_t region_offset         = (int32_t)(position & (impl->region_size - 1));
     int64_t region_start_position = position - region_offset;
 
@@ -104,6 +105,12 @@ static WrapResult sync_do_wrap(SyncRegionImpl *impl, int64_t position, Buffer *b
         if (impl->current_position == region_start_position && impl->current_address != 0) {
             buffer->data     = (uint8_t *)impl->current_address + region_offset;
             buffer->capacity = impl->region_size - region_offset;
+
+            /* Update fast-path cache */
+            self->active_address = buffer->data;
+            self->active_base    = position;
+            self->active_end     = position + buffer->capacity;
+
             return WRAP_SUCCESS;
         }
 
@@ -128,6 +135,12 @@ static WrapResult sync_do_wrap(SyncRegionImpl *impl, int64_t position, Buffer *b
                 impl->beyond_file_size_counter = 0;
                 buffer->data     = (uint8_t *)addr + region_offset;
                 buffer->capacity = impl->region_size - region_offset;
+
+                /* Update fast-path cache */
+                self->active_address = buffer->data;
+                self->active_base    = position;
+                self->active_end     = position + buffer->capacity;
+
                 return WRAP_SUCCESS;
             }
 
@@ -157,14 +170,14 @@ static WrapResult sync_wrap(RegionAccessor *self, int64_t position, Buffer *buff
 {
     MMAP_ASSERT(self != NULL,   "sync_wrap: self is NULL");
     MMAP_ASSERT(buffer != NULL, "sync_wrap: buffer is NULL");
-    return sync_do_wrap(IMPL(self), position, buffer);
+    return sync_do_wrap(self, position, buffer);
 }
 
 static WrapResult sync_wrap_no_premap(RegionAccessor *self, int64_t position, Buffer *buffer)
 {
     MMAP_ASSERT(self != NULL,   "sync_wrap_no_premap: self is NULL");
     MMAP_ASSERT(buffer != NULL, "sync_wrap_no_premap: buffer is NULL");
-    return sync_do_wrap(IMPL(self), position, buffer);
+    return sync_do_wrap(self, position, buffer);
 }
 
 static void sync_close(RegionAccessor *self)

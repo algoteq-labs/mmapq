@@ -135,6 +135,11 @@ RegionAccessor *fixed_size_region_create(
     acc->size           = fixed_size;
     acc->impl           = impl;
 
+    /* Initialize fast-path cache */
+    acc->active_address = (uint8_t *)addr;
+    acc->active_base    = 0;
+    acc->active_end     = size;
+
     return acc;
 }
 

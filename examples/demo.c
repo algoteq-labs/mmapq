@@ -69,7 +69,7 @@ static MessageHandlerDirective consumer_handler(
     void       *ctx)
 {
     ConsumerCtx *c   = (ConsumerCtx *)ctx;
-    const Message *m = (const Message *)data;
+    Message m;
     (void)appender_id;
 
     /* Verify length */
@@ -80,20 +80,23 @@ static MessageHandlerDirective consumer_handler(
         return HANDLER_ADVANCE;
     }
 
+    /* Safe copy instead of unsafe cast to avoid alignment violations */
+    memcpy(&m, data, sizeof(Message));
+
     /* Verify sequence */
-    if (m->sequence != c->expected_sequence) {
+    if (m.sequence != c->expected_sequence) {
         fprintf(stderr, "ERROR: sequence gap — expected %ld got %ld at index %ld\n",
-                c->expected_sequence, m->sequence, index);
+                c->expected_sequence, m.sequence, index);
         c->errors++;
     }
 
     /* Measure latency */
     uint64_t now_ns  = monotonic_nanos();
-    uint64_t lat_ns  = now_ns - m->timestamp_ns;
+    uint64_t lat_ns  = now_ns - m.timestamp_ns;
     c->total_latency_ns += lat_ns;
     if (lat_ns > c->max_latency_ns) c->max_latency_ns = lat_ns;
 
-    c->expected_sequence = m->sequence + 1;
+    c->expected_sequence = m.sequence + 1;
     c->messages_received++;
 
     if (c->messages_received == MSG_COUNT) {
@@ -146,7 +149,7 @@ int main(void)
         QUEUE_DIR, QUEUE_NAME,
         REGION_SIZE, RING_SIZE, 1,
         MAX_FILE_SIZE, 0,
-        TIMEOUT_NS, rt);
+        TIMEOUT_NS, rt, 0);
 
     /* Create appender and poller */
     IndexedAppender *appender = indexed_queue_create_appender(q);

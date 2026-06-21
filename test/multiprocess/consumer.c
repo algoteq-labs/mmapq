@@ -52,7 +52,7 @@ static MessageHandlerDirective verify_handler(
     void       *ctx)
 {
     PollState        *s = (PollState *)ctx;
-    const TestMessage *m = (const TestMessage *)data;
+    TestMessage m;
 
     /* Length check */
     if (length != (int32_t)sizeof(TestMessage)) {
@@ -61,8 +61,11 @@ static MessageHandlerDirective verify_handler(
         return HANDLER_ADVANCE;
     }
 
+    /* Safe copy instead of unsafe cast to avoid alignment violations */
+    memcpy(&m, data, sizeof(TestMessage));
+
     /* Tag check */
-    if (strncmp(m->tag, "mmap-c-producer", 15) != 0) {
+    if (strncmp(m.tag, "mmap-c-producer", 15) != 0) {
         fprintf(stderr, "consumer: bad tag at index %ld\n", index);
         s->errors++;
         return HANDLER_ADVANCE;
@@ -70,28 +73,28 @@ static MessageHandlerDirective verify_handler(
 
     /* Per-appender sequence check */
     int64_t expected = s->expected_seq[appender_id];
-    if (m->sequence != expected) {
+    if (m.sequence != expected) {
         fprintf(stderr,
             "consumer: sequence gap for appender %d at index %ld — "
             "expected %ld got %ld\n",
-            appender_id, index, expected, m->sequence);
+            appender_id, index, expected, m.sequence);
         s->errors++;
-        s->expected_seq[appender_id] = m->sequence + 1;
+        s->expected_seq[appender_id] = m.sequence + 1;
         s->received++;
         return HANDLER_ADVANCE;
     }
 
     /* Checksum check */
-    uint32_t expected_cs = checksum_of(m->sequence);
-    if (m->checksum != expected_cs) {
+    uint32_t expected_cs = checksum_of(m.sequence);
+    if (m.checksum != expected_cs) {
         fprintf(stderr,
             "consumer: checksum mismatch at index %ld seq %ld appender %d — "
             "expected 0x%08x got 0x%08x\n",
-            index, m->sequence, appender_id, expected_cs, m->checksum);
+            index, m.sequence, appender_id, expected_cs, m.checksum);
         s->errors++;
     }
 
-    s->expected_seq[appender_id] = m->sequence + 1;
+    s->expected_seq[appender_id] = m.sequence + 1;
     s->received++;
     return HANDLER_ADVANCE;
 }

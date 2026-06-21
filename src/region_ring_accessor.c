@@ -86,6 +86,17 @@ static WrapResult ring_accessor_wrap(RegionAccessor *self, int64_t position, Buf
                 }
             }
         }
+
+        /* Update fast-path cache */
+        self->active_address = buffer->data;
+        self->active_base    = position;
+        if (impl->regions_to_map_ahead > 0 && impl->current_absolute_index != absolute_index) {
+            /* Premap not yet fired for this region — fast path only up to trigger point */
+            self->active_end = (absolute_index << impl->shift_for_region_size) + impl->premap_trigger_offset;
+        } else {
+            /* Premap already fired or not needed — fast path until end of region */
+            self->active_end = position + buffer->capacity;
+        }
     }
 
     return result;
@@ -104,7 +115,13 @@ static WrapResult ring_accessor_wrap_no_premap(RegionAccessor *self, int64_t pos
     int64_t absolute_index = position >> impl->shift_for_region_size;
     int     ring_slot      = (int)(absolute_index & impl->regions_length_mask);
 
-    return region_wrap_no_premap(impl->ring->regions[ring_slot], position, buffer);
+    WrapResult result = region_wrap_no_premap(impl->ring->regions[ring_slot], position, buffer);
+    if (result == WRAP_SUCCESS) {
+        self->active_address = buffer->data;
+        self->active_base    = position;
+        self->active_end     = position + buffer->capacity;
+    }
+    return result;
 }
 
 /* ── close ───────────────────────────────────────────────────────────────── */

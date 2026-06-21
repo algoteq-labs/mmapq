@@ -122,9 +122,6 @@ int main(int argc, char *argv[])
     printf("  Mode:   %s\n", external_server ? "EXTERNAL SERVER" : "INTERNAL SERVER");
     printf("  Validation: Server=%s, Client=%s\n", 
            val_server ? "ON" : "OFF", val_client ? "ON" : "OFF");
-    printf("  Mode:   %s\n", external_server ? "EXTERNAL SERVER" : "INTERNAL SERVER");
-    printf("  Validation: Server=%s, Client=%s\n", 
-           val_server ? "ON" : "OFF", val_client ? "ON" : "OFF");
 
     /* Lock all current and future memory to prevent swapping and page faults */
 #if defined(__linux__)
@@ -168,14 +165,18 @@ int main(int argc, char *argv[])
     }
 
     printf("Warming up...\n");
+    uint64_t *results = malloc(sizeof(uint64_t) * (size_t)iterations);
+    if (results != NULL) {
+        memset(results, 0, sizeof(uint64_t) * (size_t)iterations);
+    }
+
     queue_latency_probe_move_to_end(probe); /* Skip any stale messages */
     for (int i = 0; i < warmup; i++) {
         queue_latency_probe_execute(probe);
     }
 
     printf("Measuring...\n");
-    uint64_t *results = malloc(sizeof(uint64_t) * (size_t)iterations);
-    
+
     uint64_t start_bench = monotonic_nanos();
     for (int i = 0; i < iterations; i++) {
         results[i] = queue_latency_probe_execute(probe);
