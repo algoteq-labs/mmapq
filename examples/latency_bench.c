@@ -123,13 +123,6 @@ int main(int argc, char *argv[])
     printf("  Validation: Server=%s, Client=%s\n", 
            val_server ? "ON" : "OFF", val_client ? "ON" : "OFF");
 
-    /* Lock all current and future memory to prevent swapping and page faults */
-#if defined(__linux__)
-    if (mlockall(MCL_CURRENT | MCL_FUTURE) != 0) {
-        perror("mlockall failed (benchmark will continue without memory locking)");
-    }
-#endif
-
     Runtime *rt = runtime_region_mapper();
     if (mapper_cpu >= 0) {
         runtime_set_affinity(rt, mapper_cpu);

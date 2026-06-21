@@ -55,12 +55,6 @@ int main(int argc, char *argv[])
     int         cpu_core = (argc >= 5) ? atoi(argv[4]) : -1;
     int         mapper_cpu = (argc == 6) ? atoi(argv[5]) : -1;
 
-#if defined(__linux__)
-    if (mlockall(MCL_CURRENT | MCL_FUTURE) != 0) {
-        perror("mlockall failed (server will continue without memory locking)");
-    }
-#endif
-
     if (cpu_core >= 0) {
         if (thread_set_affinity(cpu_core) != 0) {
             perror("thread_set_affinity failed");

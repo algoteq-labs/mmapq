@@ -43,30 +43,73 @@ Because of the 4-byte length prefix, a message body starting at an 8-byte aligne
 
 ## 3. Tuning the High-Performance Baseline
 
-To reproduce the **~280ns median round-trip** latencies, the following optimizations and system-level settings must be maintained:
+To reproduce the **~280ns median round-trip** latencies, the following optimizations must be maintained:
 
 ### Static Inlining Protocol
-The `region_accessor_wrap` fast-path (checking if a position is within the currently mapped range) and `header_read` logic are implemented as `static inline` in their respective headers. This eliminates the stack-frame and branching overhead of multiple function calls per message, saving ~40ns per round trip.
+The `region_accessor_wrap` fast-path (address range check) and `header_read` logic are implemented as `static inline` in their respective headers. This eliminates the stack-frame and branching overhead of 3+ function calls per message, saving ~40ns per round trip.
 
 ### Atomic Background Pre-Touch
-The `rw_pretouch` function uses an atomic CAS (`0 -> 0`) on every new page boundary. Unlike a simple read, a CAS forces a hardware **Read-For-Ownership (RFO)** and marks the page as **Dirty** in the kernel. This ensures the background `Runtime` thread takes the "Dirty Bit" penalty so the hot IPC loop never stalls at 4KB boundaries.
+The `rw_pretouch` function uses an atomic CAS (`0 -> 0`) on every new page boundary. This forces a hardware **Read-For-Ownership (RFO)** and marks the page as **Dirty** in the background. This ensures the background `Runtime` thread takes the "Dirty Bit" penalty so the hot IPC loop never stalls at 4KB boundaries.
 
 ### Hardware Prefetch Stride
 The `IndexedPoller` uses `__builtin_prefetch` to warm the next logical header. Because of the Vertical Walk, the stride must be **512 bytes**, not 64. Prefetching 512 bytes ahead ensures the L1/L2 cache is ready before the index increments.
 
-### Passive Kernel Strategy (Tail Stability)
-High-frequency IPC is sensitive to kernel synchronization noise (TLB Shootdowns).
-*   **No aggressive pinning**: Avoid `mlockall(MCL_FUTURE)` as it forces the kernel to track all mappings as pinned, making cross-process `mmap` noisy.
-*   **Eager `munmap`**: Roll-over files are unmapped immediately to keep the process page table lean.
-*   **Measurement Warmup**: Always `memset` large results/timestamp arrays before measurement to avoid page-fault jitter during the clock run.
+### Measurement Memory Warmup
+Always `memset` any large results/timestamp arrays (e.g. 160MB for 20M iterations) before measurement. This ensures the benchmark process has fully paged-in its own memory, preventing recording jitter during the clock run.
+
+### System Configuration Requirements
+To achieve deterministic sub-300ns performance on Linux:
+*   **Core Isolation**: Use the `5, 7, 9` pattern. Pin the client loop to core 5, the server loop to core 7, and the background `Runtime` mapper to core 9.
+*   **Huge Pages**: Transparent Huge Pages (THP) should be enabled. The library calls `huge_pages_hint` (MADV_HUGEPAGE) on data segments to reduce TLB pressure.
+*   **VDSO Timing**: Use `CLOCK_MONOTONIC`. Bypassing the VDSO path can add ~50-100ns of overhead per clock read.
 
 ---
 
-## 4. Metadata Authority
+## 4. The Anti-Pattern Ledger (What *Not* to Optimize)
 
-The `queue_meta` file is the sole source of the configuration contract.
+During development, several aggressive optimizations were attempted and subsequently rolled back because they increased complexity without improving tail stability in multi-process environments.
 
-*   **Parity**: All control files (`meta`, `appender_meta`, `id_pool`) are standardized to **64 bytes** to match Java's dense footprint.
-*   **FixedSizeRegion**: Supports 64-byte files by rounding up the `mmap` length to the system page size while respecting the actual disk file size.
+### Anti-Pattern A: `mlockall(MCL_FUTURE)`
+*   **Theory**: Use `mlockall` to guarantee zero page faults.
+*   **Reality**: In multi-process IPC on non-RT kernels, this forces the kernel to track every page as "pinned," making every `mmap` call and growth event significantly heavier due to kernel-level synchronization.
+*   **Java Clue**: Java achieves 17µs stability **without** `mlockall` by being "quiet" and relying on user-space pre-touch.
+
+### Anti-Pattern B: Synchronous Eager Unmapping
+*   **Theory**: Call `munmap` and `close` the instant a rolled file is finished to keep the address space lean.
+*   **Reality**: Triggers synchronous kernel Inter-Processor Interrupts (IPIs) to all cores. This "Stop-the-World" event (TLB Shootdown) creates 2ms+ spikes.
+*   **Java Clue**: Java's GC handles unmapping lazily. During a benchmark, it never happens, so Java never triggers this kernel noise.
+
+### Anti-Pattern C: Aggressive `MAP_POPULATE`
+*   **Theory**: Force the kernel to synchronously warm up all memory during mapping.
+*   **Reality**: Takes heavy kernel locks and generates high noise.
+*   **Java Clue**: Java maps lazily and warms up pages via a simple user-space atomic CAS loop, which is much "quieter" for the kernel.
+
+---
+
+## 5. Metadata Authority
+
+The `meta` file is the sole source of the configuration contract.
+
+*   **Appender (Authoritative)**: The only component permitted to create or initialize the `meta` file. If the file exists, the appender **must** adopt the on-disk parameters and ignore its own constructor arguments.
+*   **Poller/Reader (Follower)**: Pure consumers. They must open the `meta` file Read-Only and discover configuration lazily from disk.
+*   **Parity**: All control files (`meta`, `appender_meta`, `id_pool`) are standardized to **64 bytes** (matching Java).
 *   **FixedSize8Bytes**: This flag is supported in the metadata for binary parity but ignored in C logic (standard variable-length framing is the priority).
-*   **Lazy Growth**: Files grow region-by-region only when a writer enters a new region, eliminating eager 1GB truncation noise.
+*   **Lazy Growth**: Files grow region-by-region (e.g. 4MB) only when a writer enters a new region. This matches Java's behavior and eliminates the massive filesystem journaling noise caused by eager 1GB truncation.
+*   **Permissions**: Standardized to **`0664`** (files) and **`0775`** (directories) for seamless cross-process and cross-language access.
+
+---
+
+## 6. Build & Verification
+
+### ThreadSanitizer (TSAN) Workaround
+TSAN has a known conflict with `mmap` on some kernels (`unexpected memory mapping`). To verify logic races without mapping failures, run with ASLR disabled:
+```bash
+setarch $(uname -m) -R ./scripts/test.sh --tsan
+```
+
+### Regression Benchmarking
+The sub-300ns baseline was verified using:
+```bash
+./latency_bench 20000000 100000 64 5 7 9
+```
+Always use at least 20M iterations to ensure all regions are mapped and the system has reached steady-state thermal/power levels.
