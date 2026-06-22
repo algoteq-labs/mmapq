@@ -39,6 +39,16 @@ Because of the 4-byte length prefix, a message body starting at an 8-byte aligne
 *   **Always** use `memcpy` to copy data into a local struct, or use an offset-based flyweight/codec.
 *   Modern compilers (GCC/Clang) optimize these `memcpy` calls into the same unaligned-load instructions that Java's `Unsafe` uses. There is **zero performance penalty** for this safety.
 
+**Correct Implementation Pattern:**
+```c
+static MessageHandlerDirective my_handler(int64_t index, uint8_t id, const void *data, int32_t length, void *ctx) {
+    MyStruct m; // Stack-aligned
+    memcpy(&m, data, sizeof(MyStruct)); // Optimized to unaligned-load by compiler
+    printf("Seq: %ld\n", m.sequence);
+    return HANDLER_ADVANCE;
+}
+```
+
 ---
 
 ## 3. Tuning the High-Performance Baseline
@@ -60,6 +70,7 @@ Always `memset` any large results/timestamp arrays (e.g. 160MB for 20M iteration
 ### System Configuration Requirements
 To achieve deterministic sub-300ns performance on Linux:
 *   **Core Isolation**: Use the `5, 7, 9` pattern. Pin the client loop to core 5, the server loop to core 7, and the background `Runtime` mapper to core 9.
+*   **External Process Rule**: When running client and server in separate processes, **never** pin multiple mappers to the same isolated core. If cores are scarce, it is better to let the mappers float on the OS housekeeping cores than to oversubscribe an isolated core, which triggers disruptive Inter-Processor Interrupt (IPI) noise.
 *   **Huge Pages**: Transparent Huge Pages (THP) should be enabled. The library calls `huge_pages_hint` (MADV_HUGEPAGE) on data segments to reduce TLB pressure.
 *   **VDSO Timing**: Use `CLOCK_MONOTONIC`. Bypassing the VDSO path can add ~50-100ns of overhead per clock read.
 
@@ -86,16 +97,33 @@ During development, several aggressive optimizations were attempted and subseque
 
 ---
 
-## 5. Metadata Authority
+## 5. Metadata & Protocol Authority
 
 The `meta` file is the sole source of the configuration contract.
 
+### Binary Layout (64-byte Meta File)
+| Offset | Type | Field | Description |
+| :--- | :--- | :--- | :--- |
+| 0 | int32 | schema_version | Currently version 1 |
+| 4 | int32 | region_size | Power of two, typically 4MB or 64MB |
+| 8 | int64 | start_index | Current logical start (atomic access) |
+| 16 | int64 | max_file_size | Maximum size of a single rolled file |
+| 24 | uint8 | archivable | Flag for archiving support |
+| 25 | uint8 | fixed_size_8bytes | Optimization flag (ignored in C implementation) |
+
+### Engagement Rules
 *   **Appender (Authoritative)**: The only component permitted to create or initialize the `meta` file. If the file exists, the appender **must** adopt the on-disk parameters and ignore its own constructor arguments.
 *   **Poller/Reader (Follower)**: Pure consumers. They must open the `meta` file Read-Only and discover configuration lazily from disk.
 *   **Parity**: All control files (`meta`, `appender_meta`, `id_pool`) are standardized to **64 bytes** (matching Java).
-*   **FixedSize8Bytes**: This flag is supported in the metadata for binary parity but ignored in C logic (standard variable-length framing is the priority).
 *   **Lazy Growth**: Files grow region-by-region (e.g. 4MB) only when a writer enters a new region. This matches Java's behavior and eliminates the massive filesystem journaling noise caused by eager 1GB truncation.
 *   **Permissions**: Standardized to **`0664`** (files) and **`0775`** (directories) for seamless cross-process and cross-language access.
+
+### Confirmed Shutdown Handshake
+To ensure clean exits in separate processes or languages, the following handshake must be implemented in all peers:
+1.  **Client**: Sends a message with `sequence = 0` (SHUTDOWN_SEQ).
+2.  **Server**: Receives `0`, sets internal shutdown flag, and **echoes the message back** to the response queue.
+3.  **Client**: Spin-waits for the echoed `0` response (with a 1-2s safety timeout).
+4.  **Result**: Confirms the server has processed the command and started its own cleanup. This prevents unmapping files while a peer is still touching them.
 
 ---
 
