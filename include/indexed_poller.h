@@ -59,9 +59,11 @@ typedef enum {
  * MessageHandlerDirective — returned by the message handler to control cursor.
  */
 typedef enum {
-    HANDLER_ADVANCE  = 0,  /* move cursor forward to next index */
-    HANDLER_STOP     = 1,  /* hold cursor at current index      */
-    HANDLER_RETREAT  = 2,  /* move cursor backward              */
+    HANDLER_ADVANCE       = 0,  /* move cursor forward to next index */
+    HANDLER_STOP          = 1,  /* hold cursor at current index      */
+    HANDLER_RETREAT       = 2,  /* move cursor backward              */
+    HANDLER_ADVANCE_BATCH = 3,  /* move cursor forward to next batch */
+    HANDLER_RETREAT_BATCH = 4,  /* move cursor backward to prev batch */
 } MessageHandlerDirective;
 
 /**

@@ -56,7 +56,7 @@ void setUp(void)
 
     FileMapper *fm = file_mapper_rolled_create(
         FILE_PREFIX, MAX_FILE, REGION_SIZE,
-        file_init_zeros, NULL, MAP_MODE_READ_WRITE, 6);
+        file_init_zeros, NULL, MAP_MODE_READ_WRITE, 6, 1);
 
     RegionRing *ring = region_ring_async_create(4, REGION_SIZE, fm, 2000000000ULL, rt);
     acc = region_ring_accessor_create(ring, REGION_SIZE, 1, 0.5);

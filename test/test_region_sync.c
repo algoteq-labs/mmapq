@@ -28,7 +28,7 @@ void setUp(void)
     cleanup_files();
     fm = file_mapper_rolled_create(
         FILE_PREFIX, MAX_FILE_SIZE, REGION_SIZE,
-        file_init_zeros, NULL, MAP_MODE_READ_WRITE, 4);
+        file_init_zeros, NULL, MAP_MODE_READ_WRITE, 4, 1);
     reg = region_sync_create(fm, REGION_SIZE, TIMEOUT_NS,
                               REGION_MAX_FILE_NOT_FOUND_ERRORS,
                               REGION_MAX_BEYOND_FILE_SIZE_ERRORS);

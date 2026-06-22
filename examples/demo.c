@@ -149,7 +149,7 @@ int main(void)
         QUEUE_DIR, QUEUE_NAME,
         REGION_SIZE, RING_SIZE, 1,
         MAX_FILE_SIZE, 0,
-        TIMEOUT_NS, rt, 0);
+        TIMEOUT_NS, rt, rt, 0);
 
     /* Create appender and poller */
     IndexedAppender *appender = indexed_queue_create_appender(q);

@@ -36,7 +36,7 @@ void setUp(void)
     fm = file_mapper_rolled_create(
         FILE_PREFIX, MAX_FILE_SIZE, REGION_SIZE,
         file_init_zeros, NULL, MAP_MODE_READ_WRITE,
-        RING_SIZE + 2);  /* cache > ring_size */
+        RING_SIZE + 2, 1);  /* cache > ring_size, check_file_size=1 */
 
     RegionRing *ring = region_ring_async_create(
         RING_SIZE, REGION_SIZE, fm, TIMEOUT_NS, rt);
