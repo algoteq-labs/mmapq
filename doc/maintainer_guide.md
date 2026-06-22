@@ -95,6 +95,11 @@ During development, several aggressive optimizations were attempted and subseque
 *   **Reality**: Takes heavy kernel locks and generates high noise.
 *   **Java Clue**: Java maps lazily and warms up pages via a simple user-space atomic CAS loop, which is much "quieter" for the kernel.
 
+### Anti-Pattern D: Early Parent Pinning (Affinity Inheritance)
+*   **Theory**: Pin the main thread to its isolated core as early as possible in `main()` to ensure the process starts correctly.
+*   **Reality**: On Linux, `pthread_create` inherits the parent's CPU affinity mask. If `main()` pins itself to Core 7 *before* spawning the `Runtime` mapper thread, the mapper is born hard-locked to `{7}`. If the mapper is then left "floating" (`-1`), it remains stuck on Core 7, directly preempting the hot IPC loop.
+*   **The Fix**: Always spawn child threads (Runtime, Echo Server, etc.) **before** pinning the main thread to a single isolated core. This ensures children inherit the full system affinity mask and can either float on housekeeping cores or pin themselves to their designated cores without conflict.
+
 ---
 
 ## 5. Metadata & Protocol Authority

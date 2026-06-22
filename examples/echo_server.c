@@ -55,12 +55,6 @@ int main(int argc, char *argv[])
     int         cpu_core = (argc >= 5) ? atoi(argv[4]) : -1;
     int         mapper_cpu = (argc == 6) ? atoi(argv[5]) : -1;
 
-    if (cpu_core >= 0) {
-        if (thread_set_affinity(cpu_core) != 0) {
-            perror("thread_set_affinity failed");
-        }
-    }
-
     printf("Echo Server started...\n");
     printf("  Queues: %s -> %s\n", req_name, res_name);
     if (cpu_core >= 0) printf("  Core:   %d\n", cpu_core);
@@ -69,6 +63,13 @@ int main(int argc, char *argv[])
     Runtime *rt = runtime_region_mapper();
     if (mapper_cpu >= 0) {
         runtime_set_affinity(rt, mapper_cpu);
+    }
+    
+    /* Pin main thread AFTER spawning the mapper to prevent affinity inheritance */
+    if (cpu_core >= 0) {
+        if (thread_set_affinity(cpu_core) != 0) {
+            perror("thread_set_affinity failed");
+        }
     }
     
     IndexedQueue *q_req = indexed_queue_create_default(dir, req_name, rt);
