@@ -26,6 +26,7 @@ typedef struct {
     void            *initialiser_ctx;
     MapMode          mode;
     int              max_cache_size;
+    int              check_file_size;
 
     FileCacheEntry  *cache;        /* array of max_cache_size entries          */
     int              cache_count;  /* number of entries currently in cache     */
@@ -120,7 +121,7 @@ static FileCacheEntry *cache_get_or_open(RolledImpl *impl, int file_index)
             file_name,
             impl->initialiser,
             impl->initialiser_ctx,
-            /* check_file_size = */ 1);
+            impl->check_file_size);
     } else {
         mapper = file_mapper_single_rw_create(
             file_name,
@@ -241,7 +242,8 @@ FileMapper *file_mapper_rolled_create(
     FileInitialiser  initialiser,
     void            *initialiser_ctx,
     MapMode          mode,
-    int              max_cache_size)
+    int              max_cache_size,
+    int              check_file_size)
 {
     MMAP_ASSERT(file_prefix != NULL,   "file_mapper_rolled_create: file_prefix is NULL");
     MMAP_ASSERT(max_file_size > 0,     "file_mapper_rolled_create: max_file_size must be > 0");
@@ -260,6 +262,7 @@ FileMapper *file_mapper_rolled_create(
     impl->initialiser_ctx  = initialiser_ctx;
     impl->mode             = mode;
     impl->max_cache_size   = max_cache_size;
+    impl->check_file_size  = check_file_size;
     impl->cache_count      = 0;
     impl->insert_tick      = 0;
 

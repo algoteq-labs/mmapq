@@ -44,8 +44,8 @@ static MessageHandlerDirective echo_handler(
 
 int main(int argc, char *argv[])
 {
-    if (argc < 4 || argc > 6) {
-        fprintf(stderr, "usage: %s <directory> <request_queue> <response_queue> [cpu_core] [mapper_cpu]\n", argv[0]);
+    if (argc < 4) {
+        fprintf(stderr, "usage: %s <directory> <request_queue> <response_queue> [cpu_core] [mapper_cpu] [--sync]\n", argv[0]);
         return 1;
     }
 
@@ -53,16 +53,26 @@ int main(int argc, char *argv[])
     const char *req_name = argv[2];
     const char *res_name = argv[3];
     int         cpu_core = (argc >= 5) ? atoi(argv[4]) : -1;
-    int         mapper_cpu = (argc == 6) ? atoi(argv[5]) : -1;
+    int         mapper_cpu = (argc >= 6) ? atoi(argv[5]) : -1;
+
+    int use_sync = 0;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--sync") == 0 || strcmp(argv[i], "-s") == 0) {
+            use_sync = 1;
+        }
+    }
 
     printf("Echo Server started...\n");
-    printf("  Queues: %s -> %s\n", req_name, res_name);
+    printf("  Queues: %s -> %s (%s)\n", req_name, res_name, use_sync ? "SYNCHRONOUS" : "ASYNCHRONOUS");
     if (cpu_core >= 0) printf("  Core:   %d\n", cpu_core);
-    if (mapper_cpu >= 0) printf("  Mapper: %d\n", mapper_cpu);
+    if (!use_sync && mapper_cpu >= 0) printf("  Mapper: %d\n", mapper_cpu);
 
-    Runtime *rt = runtime_region_mapper();
-    if (mapper_cpu >= 0) {
-        runtime_set_affinity(rt, mapper_cpu);
+    Runtime *rt = NULL;
+    if (!use_sync) {
+        rt = runtime_region_mapper();
+        if (mapper_cpu >= 0) {
+            runtime_set_affinity(rt, mapper_cpu);
+        }
     }
     
     /* Pin main thread AFTER spawning the mapper to prevent affinity inheritance */

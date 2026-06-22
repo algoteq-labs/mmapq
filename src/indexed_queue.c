@@ -60,7 +60,6 @@ IndexedQueue *indexed_queue_create(
 {
     MMAP_ASSERT(directory  != NULL, "indexed_queue_create: directory is NULL");
     MMAP_ASSERT(queue_name != NULL, "indexed_queue_create: queue_name is NULL");
-    MMAP_ASSERT(runtime    != NULL, "indexed_queue_create: runtime is NULL");
     MMAP_ASSERT(region_size > 0,    "indexed_queue_create: region_size must be > 0");
     MMAP_ASSERT((region_size & (region_size - 1)) == 0,
         "indexed_queue_create: region_size must be a power of two");

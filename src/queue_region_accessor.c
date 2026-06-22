@@ -39,8 +39,12 @@ static RegionAccessor *make_ring_accessor(
     uint64_t    timeout_ns,
     Runtime    *runtime)
 {
-    RegionRing *ring = region_ring_async_create(
-        ring_size, region_size, mapper, timeout_ns, runtime);
+    RegionRing *ring;
+    if (runtime == NULL) {
+        ring = region_ring_sync_create(ring_size, region_size, mapper, timeout_ns);
+    } else {
+        ring = region_ring_async_create(ring_size, region_size, mapper, timeout_ns, runtime);
+    }
 
     return region_ring_accessor_create(
         ring, region_size, regions_to_map_ahead, premap_ratio);
@@ -90,7 +94,6 @@ QueueRegionAccessor *queue_region_accessor_create_rw(
 {
     MMAP_ASSERT(directory  != NULL, "queue_region_accessor_create_rw: directory is NULL");
     MMAP_ASSERT(queue_name != NULL, "queue_region_accessor_create_rw: queue_name is NULL");
-    MMAP_ASSERT(runtime    != NULL, "queue_region_accessor_create_rw: runtime is NULL");
 
     QueueRegionAccessor *acc = acc_alloc(directory, queue_name, region_size,
                                           ring_size, regions_to_map_ahead,
@@ -104,7 +107,8 @@ QueueRegionAccessor *queue_region_accessor_create_rw(
         hdr_path, max_file_size, region_size,
         file_init_none, NULL,
         MAP_MODE_READ_WRITE,
-        ring_size + 2);  /* cache > ring_size */
+        ring_size + 2,
+        /* check_file_size = */ 1);  /* cache > ring_size */
 
     /*
      * Writer premap ratio = QUEUE_RW_PREMAP_RATIO (0.0):
@@ -125,7 +129,8 @@ QueueRegionAccessor *queue_region_accessor_create_rw(
         pay_path, max_file_size, region_size,
         file_init_none, NULL,
         MAP_MODE_READ_WRITE,
-        ring_size + 2);
+        ring_size + 2,
+        /* check_file_size = */ 1);
 
     acc->payload[appender_id].accessor = make_ring_accessor(
         pay_mapper, region_size, ring_size,
@@ -150,7 +155,6 @@ QueueRegionAccessor *queue_region_accessor_create_ro(
 {
     MMAP_ASSERT(directory  != NULL, "queue_region_accessor_create_ro: directory is NULL");
     MMAP_ASSERT(queue_name != NULL, "queue_region_accessor_create_ro: queue_name is NULL");
-    MMAP_ASSERT(runtime    != NULL, "queue_region_accessor_create_ro: runtime is NULL");
 
     QueueRegionAccessor *acc = acc_alloc(directory, queue_name, region_size,
                                           ring_size, regions_to_map_ahead,
@@ -164,7 +168,8 @@ QueueRegionAccessor *queue_region_accessor_create_ro(
         hdr_path, max_file_size, region_size,
         file_init_none, NULL,
         MAP_MODE_READ_ONLY,
-        ring_size + 2);
+        ring_size + 2,
+        /* check_file_size = */ 1);
 
     /*
      * Reader premap ratio = QUEUE_RO_PREMAP_RATIO (0.5):
@@ -201,11 +206,13 @@ RegionAccessor *queue_region_accessor_payload(QueueRegionAccessor *acc,
      * Note: header availability implies payload file exists and can be
      * mapped without file-size checks (mirrors Java CHECK_FILE_SIZE_FALSE).
      */
+    int check_file_size = acc->read_only ? 0 : 1;
     FileMapper *pay_mapper = file_mapper_rolled_create(
         pay_path, acc->max_file_size, acc->region_size,
         file_init_none, NULL,
         mode,
-        acc->ring_size + 2);
+        acc->ring_size + 2,
+        check_file_size);
 
     double premap_ratio = acc->read_only
         ? QUEUE_RO_PREMAP_RATIO

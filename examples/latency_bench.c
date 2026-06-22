@@ -109,9 +109,20 @@ int main(int argc, char *argv[])
     int val_client = (argc > 8) ? atoi(argv[8]) : 0;
     
     int external_server = 0;
+    int use_sync        = 0;
+    const char *dir     = "/tmp";
+
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--external") == 0 || strcmp(argv[i], "-e") == 0) {
             external_server = 1;
+        }
+        if (strcmp(argv[i], "--sync") == 0 || strcmp(argv[i], "-s") == 0) {
+            use_sync = 1;
+        }
+        if (strcmp(argv[i], "--dir") == 0 || strcmp(argv[i], "-d") == 0) {
+            if (i + 1 < argc) {
+                dir = argv[++i];
+            }
         }
     }
 
@@ -119,19 +130,22 @@ int main(int argc, char *argv[])
     printf("  Cores:  Client=%d, Mapper=%d\n", client_cpu, mapper_cpu);
     printf("  Config: Iterations=%d, Warmup=%d, MsgSize=%d\n", 
            iterations, warmup, msg_size);
-    printf("  Mode:   %s\n", external_server ? "EXTERNAL SERVER" : "INTERNAL SERVER");
+    printf("  Mode:   %s (%s)\n", external_server ? "EXTERNAL SERVER" : "INTERNAL SERVER",
+                                   use_sync ? "SYNCHRONOUS" : "ASYNCHRONOUS");
     printf("  Validation: Server=%s, Client=%s\n", 
            val_server ? "ON" : "OFF", val_client ? "ON" : "OFF");
 
-    Runtime *rt = runtime_region_mapper();
-    if (mapper_cpu >= 0) {
-        runtime_set_affinity(rt, mapper_cpu);
+    Runtime *rt = NULL;
+    if (!use_sync) {
+        rt = runtime_region_mapper();
+        if (mapper_cpu >= 0) {
+            runtime_set_affinity(rt, mapper_cpu);
+        }
     }
 
     /* Use predictable names for interoperability */
     const char *name_req = "request";
     const char *name_res = "response";
-    const char *dir = "/tmp";
     
     printf("  Queues: %s/%s (request) -> %s/%s (response)\n", dir, name_req, dir, name_res);
 

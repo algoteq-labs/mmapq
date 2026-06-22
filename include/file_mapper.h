@@ -134,7 +134,8 @@ FileMapper *file_mapper_rolled_create(
     FileInitialiser  initialiser,
     void            *initialiser_ctx,
     MapMode          mode,
-    int              max_cache_size);
+    int              max_cache_size,
+    int              check_file_size);
 
 /**
  * Destroy a FileMapper and free all associated memory.
