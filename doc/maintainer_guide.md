@@ -84,21 +84,24 @@ During development, several aggressive optimizations were attempted and subseque
 *   **Theory**: Use `mlockall` to guarantee zero page faults.
 *   **Reality**: In multi-process IPC on non-RT kernels, this forces the kernel to track every page as "pinned," making every `mmap` call and growth event significantly heavier due to kernel-level synchronization.
 *   **Java Clue**: Java achieves 17µs stability **without** `mlockall` by being "quiet" and relying on user-space pre-touch.
+*   **Current code status**: `mlockall` is absent from the codebase. ✓
 
 ### Anti-Pattern B: Synchronous Eager Unmapping
 *   **Theory**: Call `munmap` and `close` the instant a rolled file is finished to keep the address space lean.
 *   **Reality**: Triggers synchronous kernel Inter-Processor Interrupts (IPIs) to all cores. This "Stop-the-World" event (TLB Shootdown) creates 2ms+ spikes.
 *   **Java Clue**: Java's GC handles unmapping lazily. During a benchmark, it never happens, so Java never triggers this kernel noise.
+*   **Current code status**: The `munmap` call inside `map_req_process` (`region_async.c`) is **not** an instance of this anti-pattern. It is a deliberate fused "unmap old region, map new region" single processing step for a slot transitioning directly from one valid mapping to the next. The anti-pattern is standalone eager unmapping of a region with nothing immediately following it. The dedicated `UNMAP_REQUESTED` state handles that case (triggered only at `close()` time), keeping standalone unmaps off the hot path. Do not conflate the two.
 
-### Anti-Pattern C: Aggressive `MAP_POPULATE`
-*   **Theory**: Force the kernel to synchronously warm up all memory during mapping.
-*   **Reality**: Takes heavy kernel locks and generates high noise.
-*   **Java Clue**: Java maps lazily and warms up pages via a simple user-space atomic CAS loop, which is much "quieter" for the kernel.
+### Anti-Pattern C: Aggressive `MAP_POPULATE` — Removing It
+*   **Theory**: Remove `MAP_POPULATE` from `mmap` calls to let the kernel map lazily and avoid heavy locks during mapping.
+*   **Reality**: Removing `MAP_POPULATE` was tried and **made latency worse**. Without it, the kernel only allocates virtual address space during `mmap` — when the hot reader thread enters a new region for the first time it takes ~1,000 page faults synchronously on the critical path (one per 4KB page in a 4MB region).
+*   **Java Clue**: Java warms pages via a user-space atomic CAS pre-touch loop. The C port achieves the equivalent via `rw_pretouch` (writer side) and `MAP_POPULATE` (mapper thread, reader side). Both keep the hot path page-fault-free.
+*   **Current code status**: `MAP_POPULATE` is **present and intentional** at all three `mmap` call sites (`file_mapper_single_rw.c`, `file_mapper_single_ro.c`, `fixed_size_region.c`). The background `Runtime` mapper thread absorbs all page-fault cost asynchronously, keeping the hot poll/append loop clean. Do not remove it.
 
 ### Anti-Pattern D: Early Parent Pinning (Affinity Inheritance)
 *   **Theory**: Pin the main thread to its isolated core as early as possible in `main()` to ensure the process starts correctly.
-*   **Reality**: On Linux, `pthread_create` inherits the parent's CPU affinity mask. If `main()` pins itself to Core 7 *before* spawning the `Runtime` mapper thread, the mapper is born hard-locked to `{7}`. If the mapper is then left "floating" (`-1`), it remains stuck on Core 7, directly preempting the hot IPC loop.
-*   **The Fix**: Always spawn child threads (Runtime, Echo Server, etc.) **before** pinning the main thread to a single isolated core. This ensures children inherit the full system affinity mask and can either float on housekeeping cores or pin themselves to their designated cores without conflict.
+*   **Reality**: On Linux, `pthread_create` inherits the parent's CPU affinity mask. If `main()` pins itself to Core 7 *before* spawning the `Runtime` mapper thread, the mapper is born hard-locked to `{7}`. If the mapper is then left "floating" (`-1`), it remains stuck on Core 7, directly preempting the hot IPC loop on every scheduler quantum (1–4ms on a non-RT kernel). The symptom is distinctive: p50–p99.99 identical to single-process results, only p99.999 exploding to 2–3ms.
+*   **The Fix**: Always spawn child threads (Runtime, Echo Server, etc.) **before** pinning the main thread to a single isolated core. This ensures children inherit the full system affinity mask and can either float on housekeeping cores or be independently pinned without conflict. This ordering is already correct in `latency_bench.c` and has been applied to `echo_server.c`.
 
 ---
 
