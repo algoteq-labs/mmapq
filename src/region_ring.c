@@ -249,6 +249,7 @@ RegionRing *region_ring_async_create(
     mapping_impl->exec.ctx     = mapping_impl;
 
     int ok = runtime_register(runtime, &mapping_impl->exec);
+    (void)ok;
     MMAP_ASSERT(ok, "region_ring_async_create: failed to register with runtime — is it closed?");
 
     /* Create async ring impl */

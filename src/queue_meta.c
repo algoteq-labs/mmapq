@@ -102,6 +102,7 @@ QueueMeta *queue_meta_open_rw(
 
     Buffer buf = {0};
     WrapResult r = region_accessor_wrap(region, 0, &buf);
+    (void)r;
     MMAP_ASSERT(r == WRAP_SUCCESS, "queue_meta_open_rw: failed to wrap meta region");
 
     QueueMeta *m = calloc(1, sizeof(QueueMeta));

@@ -76,6 +76,7 @@ static void write_padding_if_needed(IndexedAppender *a, int32_t length)
     WrapResult r = region_accessor_wrap(a->payload_acc,
                                          a->current_payload_position,
                                          &a->payload_buf);
+    (void)r;
     MMAP_ASSERT(r == WRAP_SUCCESS,
         "indexed_appender: failed to wrap payload for padding check");
 
@@ -149,6 +150,7 @@ static void move_to_last_header(IndexedAppender *a)
         WrapResult r = region_accessor_wrap(a->header_acc,
                                              a->current_header_position,
                                              &a->header_buf);
+        (void)r;
         MMAP_ASSERT(r == WRAP_SUCCESS,
             "indexed_appender: failed to wrap header while scanning for null slot");
 
@@ -166,6 +168,7 @@ static int64_t commit_header(IndexedAppender *a, int64_t payload_offset)
     WrapResult r = region_accessor_wrap(a->header_acc,
                                          a->current_header_position,
                                          &a->header_buf);
+    (void)r;
     MMAP_ASSERT(r == WRAP_SUCCESS,
         "indexed_appender: failed to wrap header for commit");
 
@@ -269,6 +272,7 @@ static void initialise_append_position(IndexedAppender *a,
             int32_t len = payload_walk_advance(a->queue_name,
                                                 &probing, &msg_off,
                                                 ro_payload, &ro_buf);
+            (void)len;
             MMAP_ASSERT(len > 0,
                 "initialise_append_position: committed message has zero length");
 
@@ -299,10 +303,12 @@ static void initialise_append_position(IndexedAppender *a,
      */
     WrapResult r;
     r = region_accessor_wrap(a->header_acc, a->current_header_position, &a->header_buf);
+    (void)r;
     MMAP_ASSERT(r == WRAP_SUCCESS,
         "initialise_append_position: failed to eager-wrap header region");
 
     r = region_accessor_wrap(a->payload_acc, a->current_payload_position, &a->payload_buf);
+    (void)r;
     MMAP_ASSERT(r == WRAP_SUCCESS,
         "initialise_append_position: failed to eager-wrap payload region");
 }
@@ -416,6 +422,7 @@ IndexedAppender *indexed_appender_create_with_id(
 
     AppenderIdPool *pool = appender_id_pool_open(directory, queue_name);
     int ok = appender_id_pool_try_acquire(pool, appender_id);
+    (void)ok;
     MMAP_ASSERT(ok, "indexed_appender_create_with_id: requested appender_id already in use");
 
     return appender_create_internal(directory, queue_name, region_size, ring_size,

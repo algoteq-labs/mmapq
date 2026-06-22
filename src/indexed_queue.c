@@ -93,6 +93,8 @@ IndexedQueue *indexed_queue_create(
     {
         _Atomic uint64_t test64 = 0;
         _Atomic uint32_t test32 = 0;
+        (void)test64;
+        (void)test32;
         MMAP_ASSERT(atomic_is_lock_free(&test64),
             "indexed_queue_create: uint64_t atomics are not lock-free on this platform.");
         MMAP_ASSERT(atomic_is_lock_free(&test32),

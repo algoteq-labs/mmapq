@@ -106,6 +106,7 @@ static void scan_committed_ranges(UncommittedPayloadIterator *it)
             payload_iterator_init(it->inner, header_offset, PAYLOAD_ITERATOR_NOT_SET);
 
             int ok = payload_iterator_advance(it->inner);
+            (void)ok;
             MMAP_ASSERT(ok,
                 "scan_committed_ranges: failed to advance at first committed offset");
             MMAP_ASSERT(it->inner->current_message_offset == header_offset,
@@ -121,6 +122,7 @@ static void scan_committed_ranges(UncommittedPayloadIterator *it)
 
             payload_iterator_init(it->inner, header_offset, PAYLOAD_ITERATOR_NOT_SET);
             int ok = payload_iterator_advance(it->inner);
+            (void)ok;
             MMAP_ASSERT(ok,
                 "scan_committed_ranges: failed to advance at new range start");
             MMAP_ASSERT(it->inner->current_message_offset == header_offset,

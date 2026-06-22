@@ -140,6 +140,7 @@ PollResult indexed_poller_poll(
         queue_region_accessor_payload(p->ro_acc, appender_id);
 
     WrapResult r = region_accessor_wrap(payload_acc, payload_position, &p->payload_buf);
+    (void)r;
     MMAP_ASSERT(r == WRAP_SUCCESS,
         "indexed_poller_poll: failed to wrap payload — mapping timeout or corruption");
 

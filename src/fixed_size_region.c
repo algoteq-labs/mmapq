@@ -95,6 +95,7 @@ RegionAccessor *fixed_size_region_create(
             struct stat st;
             if (fstat(fd, &st) == 0 && st.st_size == 0) {
                 int ok = initialiser(fd, (size_t)size, initialiser_ctx);
+                (void)ok;
                 MMAP_ASSERT(ok == 0, "fixed_size_region_create: initialiser failed");
             }
             flock(fd, LOCK_UN);

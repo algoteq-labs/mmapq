@@ -40,6 +40,7 @@ AppenderIdPool *appender_id_pool_open(
 
     Buffer buf = {0};
     WrapResult r = region_accessor_wrap(region, 0, &buf);
+    (void)r;
     MMAP_ASSERT(r == WRAP_SUCCESS, "appender_id_pool_open: failed to wrap region");
 
     AppenderIdPool *pool = calloc(1, sizeof(AppenderIdPool));

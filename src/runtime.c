@@ -720,6 +720,7 @@ void runtime_unregister_and_wait(Runtime *rt, Executable *exec)
 
     /* Register the helper — it will run on the runtime thread */
     int ok = runtime_register(rt, &impl.self_exec);
+    (void)ok;
     MMAP_ASSERT(ok, "runtime_unregister_and_wait: failed to register helper");
 
     /* Spin until the runtime thread signals completion */
