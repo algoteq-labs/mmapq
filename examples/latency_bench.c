@@ -73,8 +73,8 @@ static void *internal_server_thread_fn(void *arg)
         runtime_set_affinity(rt, a->mapper_cpu);
     }
     
-    IndexedQueue *q_req = indexed_queue_create_default(a->dir, a->req, rt);
-    IndexedQueue *q_res = indexed_queue_create_default(a->dir, a->res, rt);
+    IndexedQueue *q_req = indexed_queue_create_default(a->dir, a->req, rt, rt);
+    IndexedQueue *q_res = indexed_queue_create_default(a->dir, a->res, rt, rt);
     
     IndexedPoller   *poller   = indexed_queue_create_poller(q_req);
     IndexedAppender *appender = indexed_queue_create_appender(q_res);
@@ -110,6 +110,7 @@ int main(int argc, char *argv[])
     
     int external_server = 0;
     int use_sync        = 0;
+    int use_mixed       = 0;
     const char *dir     = "/tmp";
 
     for (int i = 1; i < argc; i++) {
@@ -119,6 +120,9 @@ int main(int argc, char *argv[])
         if (strcmp(argv[i], "--sync") == 0 || strcmp(argv[i], "-s") == 0) {
             use_sync = 1;
         }
+        if (strcmp(argv[i], "--mixed") == 0 || strcmp(argv[i], "-m") == 0) {
+            use_mixed = 1;
+        }
         if (strcmp(argv[i], "--dir") == 0 || strcmp(argv[i], "-d") == 0) {
             if (i + 1 < argc) {
                 dir = argv[++i];
@@ -126,21 +130,32 @@ int main(int argc, char *argv[])
         }
     }
 
+    const char *mode_str = "ASYNCHRONOUS";
+    if (use_sync) mode_str = "SYNCHRONOUS";
+    if (use_mixed) mode_str = "MIXED (Async-Write, Sync-Read)";
+
     printf("Starting Round-Trip Latency Benchmark...\n");
     printf("  Cores:  Client=%d, Mapper=%d\n", client_cpu, mapper_cpu);
     printf("  Config: Iterations=%d, Warmup=%d, MsgSize=%d\n", 
            iterations, warmup, msg_size);
     printf("  Mode:   %s (%s)\n", external_server ? "EXTERNAL SERVER" : "INTERNAL SERVER",
-                                   use_sync ? "SYNCHRONOUS" : "ASYNCHRONOUS");
+                                   mode_str);
     printf("  Validation: Server=%s, Client=%s\n", 
            val_server ? "ON" : "OFF", val_client ? "ON" : "OFF");
 
-    Runtime *rt = NULL;
-    if (!use_sync) {
-        rt = runtime_region_mapper();
-        if (mapper_cpu >= 0) {
-            runtime_set_affinity(rt, mapper_cpu);
-        }
+    Runtime *write_rt = NULL;
+    Runtime *read_rt  = NULL;
+
+    if (use_sync) {
+        /* Both NULL */
+    } else if (use_mixed) {
+        write_rt = runtime_region_mapper();
+        read_rt  = NULL;
+        if (mapper_cpu >= 0) runtime_set_affinity(write_rt, mapper_cpu);
+    } else {
+        write_rt = runtime_region_mapper();
+        read_rt  = write_rt;
+        if (mapper_cpu >= 0) runtime_set_affinity(write_rt, mapper_cpu);
     }
 
     /* Use predictable names for interoperability */
@@ -164,7 +179,7 @@ int main(int argc, char *argv[])
 
     QueueLatencyProbe *probe = queue_latency_probe_create(
         1, dir, name_req, name_res, msg_size,
-        val_server, val_client, rt, 0);
+        val_server, val_client, write_rt, read_rt, 0);
 
     /* Client Pinning */
     if (client_cpu >= 0) {

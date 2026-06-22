@@ -44,7 +44,7 @@ void setUp(void)
     q  = indexed_queue_create(DIR, QUEUE,
                                REGION_SZ, RING_SZ, 1,
                                MAX_FILE, 0,
-                               TIMEOUT_NS, rt, 0);
+                               TIMEOUT_NS, rt, rt, 0);
 }
 
 void tearDown(void)
@@ -542,7 +542,7 @@ void test_poller_automatically_discovers_region_size(void)
     /* Phase 1: Create a queue with 8MB regions and write a message */
     int32_t LARGE_REGION = 8 * 1024 * 1024;
     IndexedQueue *q1 = indexed_queue_create(DIR, QUEUE, LARGE_REGION, RING_SZ, 1, 
-                                             LARGE_REGION * 16, 0, TIMEOUT_NS, rt, 0);
+                                             LARGE_REGION * 16, 0, TIMEOUT_NS, rt, rt, 0);
     IndexedAppender *a = indexed_queue_create_appender(q1);
     indexed_appender_append(a, "hello", 5);
     indexed_appender_close(a);
@@ -550,7 +550,7 @@ void test_poller_automatically_discovers_region_size(void)
 
     /* Phase 2: Create a second queue instance with "wrong" default (4KB) */
     IndexedQueue *q2 = indexed_queue_create(DIR, QUEUE, REGION_SZ, RING_SZ, 1,
-                                             MAX_FILE, 0, TIMEOUT_NS, rt, 0);
+                                             MAX_FILE, 0, TIMEOUT_NS, rt, rt, 0);
     
     /* Verify metadata reported by q2 is correct (8MB) */
     TEST_ASSERT_EQUAL_INT32(LARGE_REGION, indexed_queue_region_size(q2));

@@ -88,19 +88,21 @@ IndexedQueue *indexed_queue_create(
     int64_t     max_file_size,
     int64_t     start_index,
     uint64_t    timeout_ns,
-    Runtime    *runtime,
+    Runtime    *write_runtime,
+    Runtime    *read_runtime,
     int         fixed_size_8bytes);
 
 /**
  * indexed_queue_create_default — create with default parameters.
  *
  * Uses INDEXED_QUEUE_DEFAULT_* constants.
- * runtime must be provided — typically runtime_region_mapper().
+ * runtimes must be provided — typically runtime_region_mapper() or NULL.
  */
 IndexedQueue *indexed_queue_create_default(
     const char *directory,
     const char *queue_name,
-    Runtime    *runtime);
+    Runtime    *write_runtime,
+    Runtime    *read_runtime);
 
 /**
  * indexed_queue_create_default_opt — create with default parameters and options.
@@ -108,7 +110,8 @@ IndexedQueue *indexed_queue_create_default(
 IndexedQueue *indexed_queue_create_default_opt(
     const char *directory,
     const char *queue_name,
-    Runtime    *runtime,
+    Runtime    *write_runtime,
+    Runtime    *read_runtime,
     int         fixed_size_8bytes);
 
 /* ── Participant factories ────────────────────────────────────────────────── */

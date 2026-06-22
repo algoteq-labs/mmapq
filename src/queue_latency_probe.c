@@ -90,7 +90,8 @@ QueueLatencyProbe *queue_latency_probe_create(
     int32_t     message_size,
     int         validate_on_server,
     int         validate_on_client,
-    Runtime    *runtime,
+    Runtime    *write_runtime,
+    Runtime    *read_runtime,
     int         fixed_size_8bytes)
 {
     MMAP_ASSERT(message_size >= (int32_t)sizeof(LatencyHeader), 
@@ -109,8 +110,8 @@ QueueLatencyProbe *queue_latency_probe_create(
     }
     memset(p->msg_buffer, 0, (size_t)message_size);
     
-    p->request_queue = indexed_queue_create_default_opt(directory, request_name, runtime, fixed_size_8bytes);
-    p->response_queue = indexed_queue_create_default_opt(directory, response_name, runtime, fixed_size_8bytes);
+    p->request_queue = indexed_queue_create_default_opt(directory, request_name, write_runtime, read_runtime, fixed_size_8bytes);
+    p->response_queue = indexed_queue_create_default_opt(directory, response_name, write_runtime, read_runtime, fixed_size_8bytes);
     
     p->request_appender = indexed_queue_create_appender(p->request_queue);
     p->response_poller  = indexed_queue_create_poller(p->response_queue);

@@ -36,7 +36,8 @@ QueueLatencyProbe *queue_latency_probe_create(
     int32_t     message_size,
     int         validate_on_server,
     int         validate_on_client,
-    Runtime    *runtime,
+    Runtime    *write_runtime,
+    Runtime    *read_runtime,
     int         fixed_size_8bytes);
 
 /**

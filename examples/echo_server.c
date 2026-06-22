@@ -56,23 +56,39 @@ int main(int argc, char *argv[])
     int         mapper_cpu = (argc >= 6) ? atoi(argv[5]) : -1;
 
     int use_sync = 0;
+    int use_mixed = 0;
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--sync") == 0 || strcmp(argv[i], "-s") == 0) {
             use_sync = 1;
         }
+        if (strcmp(argv[i], "--mixed") == 0 || strcmp(argv[i], "-m") == 0) {
+            use_mixed = 1;
+        }
     }
 
+    const char *mode_str = "ASYNCHRONOUS";
+    if (use_sync) mode_str = "SYNCHRONOUS";
+    if (use_mixed) mode_str = "MIXED (Sync-Read, Async-Write)";
+
     printf("Echo Server started...\n");
-    printf("  Queues: %s -> %s (%s)\n", req_name, res_name, use_sync ? "SYNCHRONOUS" : "ASYNCHRONOUS");
+    printf("  Queues: %s -> %s (%s)\n", req_name, res_name, mode_str);
     if (cpu_core >= 0) printf("  Core:   %d\n", cpu_core);
     if (!use_sync && mapper_cpu >= 0) printf("  Mapper: %d\n", mapper_cpu);
 
-    Runtime *rt = NULL;
-    if (!use_sync) {
-        rt = runtime_region_mapper();
-        if (mapper_cpu >= 0) {
-            runtime_set_affinity(rt, mapper_cpu);
-        }
+    Runtime *write_rt = NULL;
+    Runtime *read_rt  = NULL;
+
+    if (use_sync) {
+        /* Both NULL */
+    } else if (use_mixed) {
+        /* Server: Read is Sync (NULL), Write is Async (rt) */
+        write_rt = runtime_region_mapper();
+        read_rt  = NULL;
+        if (mapper_cpu >= 0) runtime_set_affinity(write_rt, mapper_cpu);
+    } else {
+        write_rt = runtime_region_mapper();
+        read_rt  = write_rt;
+        if (mapper_cpu >= 0) runtime_set_affinity(write_rt, mapper_cpu);
     }
     
     /* Pin main thread AFTER spawning the mapper to prevent affinity inheritance */
@@ -82,8 +98,8 @@ int main(int argc, char *argv[])
         }
     }
     
-    IndexedQueue *q_req = indexed_queue_create_default(dir, req_name, rt);
-    IndexedQueue *q_res = indexed_queue_create_default(dir, res_name, rt);
+    IndexedQueue *q_req = indexed_queue_create_default(dir, req_name, write_rt, read_rt);
+    IndexedQueue *q_res = indexed_queue_create_default(dir, res_name, write_rt, read_rt);
     
     IndexedPoller   *poller   = indexed_queue_create_poller(q_req);
     IndexedAppender *appender = indexed_queue_create_appender(q_res);
