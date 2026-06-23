@@ -153,16 +153,16 @@ PollResult indexed_poller_poll(
     const void *data = p->payload_buf.data + PAYLOAD_DATA_OFFSET;
 
     /* Call handler */
-    MessageHandlerDirective directive =
+    NextMove directive =
         handler(p->current_index, appender_id, data, length, ctx);
 
     /* Apply directive */
     switch (directive) {
-    case HANDLER_ADVANCE:
+    case NEXT_ADVANCE:
         p->current_index++;
         return POLL_ADVANCED;
 
-    case HANDLER_RETREAT: {
+    case NEXT_RETREAT: {
         int64_t start_index = queue_meta_start_index(p->queue_meta);
         if (p->current_index > start_index) {
             p->current_index--;
@@ -171,7 +171,7 @@ PollResult indexed_poller_poll(
         return POLL_STOPPED;
     }
 
-    case HANDLER_STOP:
+    case NEXT_STOP:
         return POLL_STOPPED;
 
     default:

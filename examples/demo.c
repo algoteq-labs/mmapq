@@ -61,7 +61,7 @@ typedef struct {
     int            done;       /* set to 1 when MSG_COUNT messages consumed */
 } ConsumerCtx;
 
-static MessageHandlerDirective consumer_handler(
+static NextMove consumer_handler(
     int64_t     index,
     uint8_t     appender_id,
     const void *data,
@@ -77,7 +77,7 @@ static MessageHandlerDirective consumer_handler(
         fprintf(stderr, "ERROR: unexpected message length %d at index %ld\n",
                 length, index);
         c->errors++;
-        return HANDLER_ADVANCE;
+        return NEXT_ADVANCE;
     }
 
     /* Safe copy instead of unsafe cast to avoid alignment violations */
@@ -103,7 +103,7 @@ static MessageHandlerDirective consumer_handler(
         c->done = 1;
     }
 
-    return HANDLER_ADVANCE;
+    return NEXT_ADVANCE;
 }
 
 static void *consumer_thread_fn(void *arg)

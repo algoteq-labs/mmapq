@@ -15,7 +15,7 @@
  * Typical usage patterns:
  *   - Loop until POLL_BATCH_END_OF_STREAM: consume all available messages
  *   - Time-sliced polling: call poll() a fixed number of times per tick
- *   - Reverse scan: use BATCH_NEXT_RETREAT_BATCH to locate historical batches
+ *   - Reverse scan: use BATCH_RETREAT_BATCH to locate historical batches
  *
  * The poller maintains its cursor across calls — batch_index and message_index
  * persist between invocations. Use the move_to_* functions to reposition.
@@ -40,25 +40,25 @@ typedef enum {
      * If at the last message, advance to the next batch (index++, message_index=0).
      * Equivalent to Java NextMove.ADVANCE.
      */
-    BATCH_NEXT_ADVANCE,
+    BATCH_ADVANCE,
 
     /**
      * Skip any remaining messages in the current batch and advance to the next batch.
      * Equivalent to Java NextMove.ADVANCE_BATCH.
      */
-    BATCH_NEXT_ADVANCE_BATCH,
+    BATCH_ADVANCE_BATCH,
 
     /**
      * Stop at the current message. The same message will be offered again on the
      * next poll() call. Equivalent to Java NextMove.STOP.
      */
-    BATCH_NEXT_STOP,
+    BATCH_STOP,
 
     /**
      * Move to the previous batch index. Useful for reverse scans, such as
      * locating the most recent snapshot. Equivalent to Java NextMove.RETREAT_BATCH.
      */
-    BATCH_NEXT_RETREAT_BATCH
+    BATCH_RETREAT_BATCH
 } BatchNextMove;
 
 /**
@@ -83,20 +83,20 @@ typedef enum {
 
     /**
      * One message was processed and the cursor advanced to the next batch
-     * (either because the batch ended or BATCH_NEXT_ADVANCE_BATCH was returned).
+     * (either because the batch ended or BATCH_ADVANCE_BATCH was returned).
      * Mirrors Java Result.ADVANCED_BATCH.
      */
     POLL_BATCH_ADVANCED_BATCH,
 
     /**
-     * The handler returned BATCH_NEXT_STOP. The cursor remains at the current
+     * The handler returned BATCH_STOP. The cursor remains at the current
      * message; the same message will be offered on the next poll().
      * Mirrors Java Result.STOPPED.
      */
     POLL_BATCH_STOPPED,
 
     /**
-     * The handler returned BATCH_NEXT_RETREAT_BATCH and the cursor moved to
+     * The handler returned BATCH_RETREAT_BATCH and the cursor moved to
      * the previous batch index. Mirrors Java Result.RETREATED_BATCH.
      */
     POLL_BATCH_RETREATED_BATCH,

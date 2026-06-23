@@ -88,7 +88,7 @@ void test_batch_append_and_poll_three_messages(void)
     int64_t off = mutable_batch_complete(b);
     indexed_batch_appender_commit_batch(a, off);
 
-    BatchPollCapture cap = { .directive = BATCH_NEXT_ADVANCE };
+    BatchPollCapture cap = { .directive = BATCH_ADVANCE };
 
     /* msg0 */
     BatchPollResult pr = indexed_batch_poller_poll(p, capture_handler, &cap);
@@ -135,7 +135,7 @@ void test_batch_multiple_batches_polled_in_order(void)
     mutable_batch_append(b, "b1m0", 4);
     indexed_batch_appender_commit_batch(a, mutable_batch_complete(b));
 
-    BatchPollCapture cap = { .directive = BATCH_NEXT_ADVANCE };
+    BatchPollCapture cap = { .directive = BATCH_ADVANCE };
 
     /* batch 0, msg 0 */
     BatchPollResult pr = indexed_batch_poller_poll(p, capture_handler, &cap);

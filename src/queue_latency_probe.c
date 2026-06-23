@@ -55,7 +55,7 @@ static int verify_payload_pattern(const uint8_t *data, int32_t length, uint32_t 
 
 /* ── Client Handler ──────────────────────────────────────────────────────── */
 
-static MessageHandlerDirective client_handler(
+static NextMove client_handler(
     int64_t     index,
     uint8_t     appender_id,
     const void *data,
@@ -77,7 +77,7 @@ static MessageHandlerDirective client_handler(
         atomic_store_explicit(&p->response_received, 1, memory_order_relaxed);
     }
     
-    return HANDLER_ADVANCE;
+    return NEXT_ADVANCE;
 }
 
 /* ── Public API ──────────────────────────────────────────────────────────── */

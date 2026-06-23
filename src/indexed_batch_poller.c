@@ -111,7 +111,7 @@ BatchPollResult indexed_batch_poller_poll(IndexedBatchPoller *p, BatchMessageHan
         ctx);
 
     switch (move) {
-        case BATCH_NEXT_ADVANCE:
+        case BATCH_ADVANCE:
             if (!batch_iterator_advance(p->current_iterator)) {
                 p->current_batch_index++;
                 p->current_iterator = NULL;
@@ -119,12 +119,12 @@ BatchPollResult indexed_batch_poller_poll(IndexedBatchPoller *p, BatchMessageHan
             }
             return POLL_BATCH_ADVANCED_MESSAGE;
 
-        case BATCH_NEXT_ADVANCE_BATCH:
+        case BATCH_ADVANCE_BATCH:
             p->current_batch_index++;
             p->current_iterator = NULL;
             return POLL_BATCH_ADVANCED_BATCH;
 
-        case BATCH_NEXT_RETREAT_BATCH:
+        case BATCH_RETREAT_BATCH:
             if (p->current_batch_index > start_idx) {
                 p->current_batch_index--;
                 p->current_iterator = NULL;
@@ -132,7 +132,7 @@ BatchPollResult indexed_batch_poller_poll(IndexedBatchPoller *p, BatchMessageHan
             }
             return POLL_BATCH_STOPPED;
 
-        case BATCH_NEXT_STOP:
+        case BATCH_STOP:
             return POLL_BATCH_STOPPED;
 
         default:

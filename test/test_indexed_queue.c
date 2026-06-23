@@ -61,10 +61,10 @@ typedef struct {
     int64_t  index;
     uint8_t  appender_id;
     int      call_count;
-    MessageHandlerDirective directive;
+    NextMove directive;
 } PollCapture;
 
-static MessageHandlerDirective capture_handler(
+static NextMove capture_handler(
     int64_t index, uint8_t appender_id,
     const void *data, int32_t length, void *ctx)
 {
@@ -93,7 +93,7 @@ void test_append_and_poll_single_message(void)
     int64_t idx = indexed_appender_append(a, msg, (int32_t)strlen(msg));
     TEST_ASSERT_EQUAL_INT64(0, idx);
 
-    PollCapture cap = { .directive = HANDLER_ADVANCE };
+    PollCapture cap = { .directive = NEXT_ADVANCE };
     PollResult r = indexed_poller_poll(p, capture_handler, &cap);
 
     TEST_ASSERT_EQUAL_INT(POLL_ADVANCED, r);
@@ -109,7 +109,7 @@ void test_poll_end_of_stream_when_empty(void)
 {
     IndexedPoller *p = indexed_queue_create_poller(q);
 
-    PollCapture cap = { .directive = HANDLER_ADVANCE };
+    PollCapture cap = { .directive = NEXT_ADVANCE };
     PollResult r = indexed_poller_poll(p, capture_handler, &cap);
 
     TEST_ASSERT_EQUAL_INT(POLL_END_OF_STREAM, r);
@@ -132,7 +132,7 @@ void test_append_multiple_and_poll_all(void)
     }
 
     for (int i = 0; i < n; i++) {
-        PollCapture cap = { .directive = HANDLER_ADVANCE };
+        PollCapture cap = { .directive = NEXT_ADVANCE };
         PollResult r = indexed_poller_poll(p, capture_handler, &cap);
         TEST_ASSERT_EQUAL_INT(POLL_ADVANCED, r);
         TEST_ASSERT_EQUAL_INT64(i, cap.index);
@@ -140,7 +140,7 @@ void test_append_multiple_and_poll_all(void)
     }
 
     /* Next poll should be end of stream */
-    PollCapture cap = { .directive = HANDLER_ADVANCE };
+    PollCapture cap = { .directive = NEXT_ADVANCE };
     TEST_ASSERT_EQUAL_INT(POLL_END_OF_STREAM,
         indexed_poller_poll(p, capture_handler, &cap));
 
@@ -234,7 +234,7 @@ void test_poller_move_to_end(void)
     indexed_poller_move_to_end(p);
     TEST_ASSERT_EQUAL_INT64(3, indexed_poller_current_index(p));
 
-    PollCapture cap = { .directive = HANDLER_ADVANCE };
+    PollCapture cap = { .directive = NEXT_ADVANCE };
     TEST_ASSERT_EQUAL_INT(POLL_END_OF_STREAM,
         indexed_poller_poll(p, capture_handler, &cap));
 
@@ -281,7 +281,7 @@ void test_poller_handler_stop(void)
 
     indexed_appender_append(a, "stop_me", 7);
 
-    PollCapture cap = { .directive = HANDLER_STOP };
+    PollCapture cap = { .directive = NEXT_STOP };
     PollResult r = indexed_poller_poll(p, capture_handler, &cap);
 
     TEST_ASSERT_EQUAL_INT(POLL_STOPPED, r);
@@ -300,12 +300,12 @@ void test_poller_handler_retreat(void)
     indexed_appender_append(a, "b", 1);
 
     /* Advance to index 1 */
-    PollCapture cap = { .directive = HANDLER_ADVANCE };
+    PollCapture cap = { .directive = NEXT_ADVANCE };
     indexed_poller_poll(p, capture_handler, &cap);
     TEST_ASSERT_EQUAL_INT64(1, indexed_poller_current_index(p));
 
     /* Retreat */
-    cap.directive = HANDLER_RETREAT;
+    cap.directive = NEXT_RETREAT;
     PollResult r = indexed_poller_poll(p, capture_handler, &cap);
     TEST_ASSERT_EQUAL_INT(POLL_RETREATED, r);
     TEST_ASSERT_EQUAL_INT64(0, indexed_poller_current_index(p));
@@ -322,7 +322,7 @@ void test_poller_retreat_at_start_stays(void)
     indexed_appender_append(a, "x", 1);
 
     /* Retreat from index 0 — should stop, not go negative */
-    PollCapture cap = { .directive = HANDLER_RETREAT };
+    PollCapture cap = { .directive = NEXT_RETREAT };
     PollResult r = indexed_poller_poll(p, capture_handler, &cap);
     TEST_ASSERT_EQUAL_INT(POLL_STOPPED, r);
     TEST_ASSERT_EQUAL_INT64(0, indexed_poller_current_index(p));
@@ -350,7 +350,7 @@ void test_multiple_appenders_interleaved(void)
     uint8_t id1 = indexed_appender_id(a1);
 
     for (int i = 0; i < 4; i++) {
-        PollCapture cap = { .directive = HANDLER_ADVANCE };
+        PollCapture cap = { .directive = NEXT_ADVANCE };
         PollResult r = indexed_poller_poll(p, capture_handler, &cap);
         TEST_ASSERT_EQUAL_INT(POLL_ADVANCED, r);
 
@@ -389,7 +389,7 @@ void test_large_message_sequence_crossing_regions(void)
 
     /* Poll all messages and verify first byte */
     for (int i = 0; i < count; i++) {
-        PollCapture cap = { .directive = HANDLER_ADVANCE };
+        PollCapture cap = { .directive = NEXT_ADVANCE };
         PollResult r = indexed_poller_poll(p, capture_handler, &cap);
         TEST_ASSERT_EQUAL_INT_MESSAGE(POLL_ADVANCED, r, "expected ADVANCED");
         TEST_ASSERT_EQUAL_INT32(1000, cap.length);
@@ -430,7 +430,7 @@ void test_appender_recovers_position_after_close(void)
     const char *expected[] = { "msg_0", "msg_1", "msg_2", "msg_3" };
 
     for (int i = 0; i < 4; i++) {
-        PollCapture cap = { .directive = HANDLER_ADVANCE };
+        PollCapture cap = { .directive = NEXT_ADVANCE };
         PollResult r = indexed_poller_poll(p, capture_handler, &cap);
         TEST_ASSERT_EQUAL_INT(POLL_ADVANCED, r);
         TEST_ASSERT_EQUAL_STRING(expected[i], cap.data);
@@ -451,7 +451,7 @@ void test_uncommitted_append_and_commit(void)
     int64_t offset = indexed_appender_append_uncommitted(a, "deferred", 8);
     TEST_ASSERT_EQUAL_INT64(INITIAL_PAYLOAD_POSITION, offset);
 
-    PollCapture cap = { .directive = HANDLER_ADVANCE };
+    PollCapture cap = { .directive = NEXT_ADVANCE };
     PollResult r = indexed_poller_poll(p, capture_handler, &cap);
     TEST_ASSERT_EQUAL_INT(POLL_END_OF_STREAM, r);  /* not visible */
 
@@ -557,7 +557,7 @@ void test_poller_automatically_discovers_region_size(void)
 
     /* Create poller from q2 and poll the message */
     IndexedPoller *p = indexed_queue_create_poller(q2);
-    PollCapture cap = { .directive = HANDLER_ADVANCE };
+    PollCapture cap = { .directive = NEXT_ADVANCE };
     PollResult r = indexed_poller_poll(p, capture_handler, &cap);
 
     TEST_ASSERT_EQUAL_INT(POLL_ADVANCED, r);

@@ -44,7 +44,7 @@ typedef struct {
     int      errors;
 } PollState;
 
-static MessageHandlerDirective verify_handler(
+static NextMove verify_handler(
     int64_t     index,
     uint8_t     appender_id,
     const void *data,
@@ -58,7 +58,7 @@ static MessageHandlerDirective verify_handler(
     if (length != (int32_t)sizeof(TestMessage)) {
         fprintf(stderr, "consumer: wrong length %d at index %ld\n", length, index);
         s->errors++;
-        return HANDLER_ADVANCE;
+        return NEXT_ADVANCE;
     }
 
     /* Safe copy instead of unsafe cast to avoid alignment violations */
@@ -68,7 +68,7 @@ static MessageHandlerDirective verify_handler(
     if (strncmp(m.tag, "mmap-c-producer", 15) != 0) {
         fprintf(stderr, "consumer: bad tag at index %ld\n", index);
         s->errors++;
-        return HANDLER_ADVANCE;
+        return NEXT_ADVANCE;
     }
 
     /* Per-appender sequence check */
@@ -81,7 +81,7 @@ static MessageHandlerDirective verify_handler(
         s->errors++;
         s->expected_seq[appender_id] = m.sequence + 1;
         s->received++;
-        return HANDLER_ADVANCE;
+        return NEXT_ADVANCE;
     }
 
     /* Checksum check */
@@ -96,7 +96,7 @@ static MessageHandlerDirective verify_handler(
 
     s->expected_seq[appender_id] = m.sequence + 1;
     s->received++;
-    return HANDLER_ADVANCE;
+    return NEXT_ADVANCE;
 }
 
 int main(int argc, char *argv[])

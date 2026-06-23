@@ -59,7 +59,7 @@ static BatchNextMove client_handler(int64_t b_idx, int32_t m_idx, int32_t m_cnt,
         }
         atomic_store(&p->response_received, 1);
     }
-    return BATCH_NEXT_ADVANCE;
+    return BATCH_ADVANCE;
 }
 
 BatchQueueLatencyProbe *batch_queue_latency_probe_create(

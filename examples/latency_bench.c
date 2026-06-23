@@ -32,7 +32,7 @@ typedef struct {
     volatile int     shutdown_requested;
 } InternalServerCtx;
 
-static MessageHandlerDirective internal_echo_handler(
+static NextMove internal_echo_handler(
     int64_t     index,
     uint8_t     appender_id,
     const void *data,
@@ -48,7 +48,7 @@ static MessageHandlerDirective internal_echo_handler(
     /* Echo the entire payload back to the response queue */
     indexed_appender_append(s->response_appender, data, length);
     
-    return HANDLER_ADVANCE;
+    return NEXT_ADVANCE;
 }
 
 typedef struct {

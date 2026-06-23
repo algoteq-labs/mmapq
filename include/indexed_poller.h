@@ -56,13 +56,13 @@ typedef enum {
 /* ── Message handler ─────────────────────────────────────────────────────── */
 
 /**
- * MessageHandlerDirective — returned by the message handler to control cursor.
+ * NextMove — returned by the message handler to control cursor.
  */
 typedef enum {
-    HANDLER_ADVANCE = 0,  /* move cursor forward to next index  */
-    HANDLER_STOP    = 1,  /* hold cursor at current index       */
-    HANDLER_RETREAT = 2,  /* move cursor backward               */
-} MessageHandlerDirective;
+    NEXT_ADVANCE = 0,  /* move cursor forward to next index  */
+    NEXT_STOP    = 1,  /* hold cursor at current index       */
+    NEXT_RETREAT = 2,  /* move cursor backward               */
+} NextMove;
 
 /**
  * MessageHandler — callback invoked for each message by poll().
@@ -75,7 +75,7 @@ typedef enum {
  *
  * Returns a directive controlling cursor movement.
  */
-typedef MessageHandlerDirective (*MessageHandler)(
+typedef NextMove (*MessageHandler)(
     int64_t     index,
     uint8_t     appender_id,
     const void *data,

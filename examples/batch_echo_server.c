@@ -35,7 +35,7 @@ static BatchNextMove echo_handler(int64_t b_idx, int32_t m_idx, int32_t m_cnt, c
     int64_t off = mutable_batch_complete(b);
     indexed_batch_appender_commit_batch(s->response_appender, off);
 
-    return BATCH_NEXT_ADVANCE;
+    return BATCH_ADVANCE;
 }
 
 int main(int argc, char *argv[])
