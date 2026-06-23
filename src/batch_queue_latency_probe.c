@@ -47,7 +47,7 @@ static int verify_payload_pattern(const uint8_t *data, int32_t length, uint32_t 
     return 1;
 }
 
-static MessageHandlerDirective client_handler(int64_t b_idx, int32_t m_idx, int32_t m_cnt, const void *data, int32_t length, void *ctx)
+static BatchNextMove client_handler(int64_t b_idx, int32_t m_idx, int32_t m_cnt, const void *data, int32_t length, void *ctx)
 {
     BatchQueueLatencyProbe *p = (BatchQueueLatencyProbe *)ctx;
     LatencyHeader hdr;
@@ -59,7 +59,7 @@ static MessageHandlerDirective client_handler(int64_t b_idx, int32_t m_idx, int3
         }
         atomic_store(&p->response_received, 1);
     }
-    return HANDLER_ADVANCE;
+    return BATCH_NEXT_ADVANCE;
 }
 
 BatchQueueLatencyProbe *batch_queue_latency_probe_create(

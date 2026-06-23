@@ -21,7 +21,7 @@ typedef struct {
     volatile int          shutdown_requested;
 } ServerCtx;
 
-static MessageHandlerDirective echo_handler(int64_t b_idx, int32_t m_idx, int32_t m_cnt, const void *data, int32_t length, void *ctx)
+static BatchNextMove echo_handler(int64_t b_idx, int32_t m_idx, int32_t m_cnt, const void *data, int32_t length, void *ctx)
 {
     ServerCtx *s = (ServerCtx *)ctx;
     const LatencyHeader *hdr = (const LatencyHeader *)data;
@@ -35,7 +35,7 @@ static MessageHandlerDirective echo_handler(int64_t b_idx, int32_t m_idx, int32_
     int64_t off = mutable_batch_complete(b);
     indexed_batch_appender_commit_batch(s->response_appender, off);
 
-    return HANDLER_ADVANCE;
+    return BATCH_NEXT_ADVANCE;
 }
 
 int main(int argc, char *argv[])

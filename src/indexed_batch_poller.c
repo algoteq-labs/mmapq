@@ -102,7 +102,7 @@ BatchPollResult indexed_batch_poller_poll(IndexedBatchPoller *p, BatchMessageHan
         MMAP_ASSERT(0, "batch_poller: iterator should have current message");
     }
 
-    MessageHandlerDirective move = handler(
+    BatchNextMove move = handler(
         p->current_batch_index,
         p->current_iterator->current_msg_index,
         p->current_iterator->message_count,
@@ -111,7 +111,7 @@ BatchPollResult indexed_batch_poller_poll(IndexedBatchPoller *p, BatchMessageHan
         ctx);
 
     switch (move) {
-        case HANDLER_ADVANCE:
+        case BATCH_NEXT_ADVANCE:
             if (!batch_iterator_advance(p->current_iterator)) {
                 p->current_batch_index++;
                 p->current_iterator = NULL;
@@ -119,13 +119,12 @@ BatchPollResult indexed_batch_poller_poll(IndexedBatchPoller *p, BatchMessageHan
             }
             return POLL_BATCH_ADVANCED_MESSAGE;
 
-        case HANDLER_ADVANCE_BATCH:
+        case BATCH_NEXT_ADVANCE_BATCH:
             p->current_batch_index++;
             p->current_iterator = NULL;
             return POLL_BATCH_ADVANCED_BATCH;
 
-        case HANDLER_RETREAT:
-        case HANDLER_RETREAT_BATCH:
+        case BATCH_NEXT_RETREAT_BATCH:
             if (p->current_batch_index > start_idx) {
                 p->current_batch_index--;
                 p->current_iterator = NULL;
@@ -133,7 +132,7 @@ BatchPollResult indexed_batch_poller_poll(IndexedBatchPoller *p, BatchMessageHan
             }
             return POLL_BATCH_STOPPED;
 
-        case HANDLER_STOP:
+        case BATCH_NEXT_STOP:
             return POLL_BATCH_STOPPED;
 
         default:

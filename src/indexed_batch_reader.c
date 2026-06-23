@@ -92,13 +92,13 @@ static void reader_fill_context(IndexedBatchReader *r, int64_t index, BatchReadi
     memset(&ctx->batch_iterator, 0, sizeof(BatchPayloadIterator));
 
     if (!reader_init(r)) {
-        ctx->status = ENTRY_END_OF_STREAM;
+        ctx->status = BATCH_ENTRY_END_OF_STREAM;
         return;
     }
 
     int64_t start = queue_meta_start_index(r->queue_meta);
     if (index < start) {
-        ctx->status = ENTRY_ARCHIVED;
+        ctx->status = BATCH_ENTRY_ARCHIVED;
         return;
     }
 
@@ -109,7 +109,7 @@ static void reader_fill_context(IndexedBatchReader *r, int64_t index, BatchReadi
      */
     uint64_t header = header_read(r->header_acc, &r->header_buf, index, r->queue_name);
     if (header == HEADER_NULL) {
-        ctx->status = ENTRY_END_OF_STREAM;
+        ctx->status = BATCH_ENTRY_END_OF_STREAM;
         return;
     }
 
@@ -128,7 +128,7 @@ static void reader_fill_context(IndexedBatchReader *r, int64_t index, BatchReadi
 
     ctx->batch_offset  = payload_position;
     ctx->message_count = message_count;
-    ctx->status        = ENTRY_AVAILABLE;
+    ctx->status        = BATCH_ENTRY_AVAILABLE;
 }
 
 BatchReadingContext *indexed_batch_reader_read(
@@ -174,7 +174,7 @@ BatchReadingContext *indexed_batch_reader_read_last(
         ctx->index         = HEADER_NULL_INDEX;
         ctx->batch_offset  = -1;
         ctx->message_count = 0;
-        ctx->status        = ENTRY_END_OF_STREAM;
+        ctx->status        = BATCH_ENTRY_END_OF_STREAM;
         memset(&ctx->batch_iterator, 0, sizeof(BatchPayloadIterator));
         return ctx;
     }
@@ -212,17 +212,17 @@ int64_t indexed_batch_reader_start_index(IndexedBatchReader *r)
     return queue_meta_start_index(r->queue_meta);
 }
 
-EntryStatus indexed_batch_reader_entry_status(IndexedBatchReader *r, int64_t index)
+BatchEntryStatus indexed_batch_reader_entry_status(IndexedBatchReader *r, int64_t index)
 {
     MMAP_ASSERT(r != NULL,  "indexed_batch_reader_entry_status: reader is NULL");
     MMAP_ASSERT(!r->closed, "indexed_batch_reader_entry_status: reader is closed");
 
-    if (!reader_init(r)) return ENTRY_END_OF_STREAM;
-    if (index < queue_meta_start_index(r->queue_meta)) return ENTRY_ARCHIVED;
+    if (!reader_init(r)) return BATCH_ENTRY_END_OF_STREAM;
+    if (index < queue_meta_start_index(r->queue_meta)) return BATCH_ENTRY_ARCHIVED;
 
     return header_found(r->header_acc, &r->header_buf, index, r->queue_name)
-        ? ENTRY_AVAILABLE
-        : ENTRY_END_OF_STREAM;
+        ? BATCH_ENTRY_AVAILABLE
+        : BATCH_ENTRY_END_OF_STREAM;
 }
 
 void indexed_batch_reader_close(IndexedBatchReader *r)

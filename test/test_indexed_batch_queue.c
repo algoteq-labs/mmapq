@@ -54,10 +54,10 @@ typedef struct {
     int32_t message_index;
     int32_t message_count;
     int     call_count;
-    MessageHandlerDirective directive;
+    BatchNextMove directive;
 } BatchPollCapture;
 
-static MessageHandlerDirective capture_handler(
+static BatchNextMove capture_handler(
     int64_t batch_index, int32_t message_index, int32_t message_count,
     const void *data, int32_t length, void *ctx)
 {
@@ -88,7 +88,7 @@ void test_batch_append_and_poll_three_messages(void)
     int64_t off = mutable_batch_complete(b);
     indexed_batch_appender_commit_batch(a, off);
 
-    BatchPollCapture cap = { .directive = HANDLER_ADVANCE };
+    BatchPollCapture cap = { .directive = BATCH_NEXT_ADVANCE };
 
     /* msg0 */
     BatchPollResult pr = indexed_batch_poller_poll(p, capture_handler, &cap);
@@ -135,7 +135,7 @@ void test_batch_multiple_batches_polled_in_order(void)
     mutable_batch_append(b, "b1m0", 4);
     indexed_batch_appender_commit_batch(a, mutable_batch_complete(b));
 
-    BatchPollCapture cap = { .directive = HANDLER_ADVANCE };
+    BatchPollCapture cap = { .directive = BATCH_NEXT_ADVANCE };
 
     /* batch 0, msg 0 */
     BatchPollResult pr = indexed_batch_poller_poll(p, capture_handler, &cap);
@@ -185,7 +185,7 @@ void test_reader_read_by_index(void)
 
     /* read batch 0 */
     indexed_batch_reader_read(r, 0, &ctx);
-    TEST_ASSERT_EQUAL_INT(ENTRY_AVAILABLE, ctx.status);
+    TEST_ASSERT_EQUAL_INT(BATCH_ENTRY_AVAILABLE, ctx.status);
     TEST_ASSERT_EQUAL_INT64(0, ctx.index);
     TEST_ASSERT_EQUAL_INT(2, ctx.message_count);
 
@@ -200,7 +200,7 @@ void test_reader_read_by_index(void)
 
     /* read batch 1 */
     indexed_batch_reader_read(r, 1, &ctx);
-    TEST_ASSERT_EQUAL_INT(ENTRY_AVAILABLE, ctx.status);
+    TEST_ASSERT_EQUAL_INT(BATCH_ENTRY_AVAILABLE, ctx.status);
     TEST_ASSERT_EQUAL_INT(3, ctx.message_count);
 
     TEST_ASSERT_TRUE(batch_iterator_advance(&ctx.batch_iterator));
@@ -234,12 +234,12 @@ void test_reader_read_first_and_last(void)
     BatchReadingContext ctx;
 
     indexed_batch_reader_read_first(r, &ctx);
-    TEST_ASSERT_EQUAL_INT(ENTRY_AVAILABLE, ctx.status);
+    TEST_ASSERT_EQUAL_INT(BATCH_ENTRY_AVAILABLE, ctx.status);
     TEST_ASSERT_EQUAL_INT64(0, ctx.index);
     TEST_ASSERT_EQUAL_INT(1, ctx.message_count);
 
     indexed_batch_reader_read_last(r, &ctx);
-    TEST_ASSERT_EQUAL_INT(ENTRY_AVAILABLE, ctx.status);
+    TEST_ASSERT_EQUAL_INT(BATCH_ENTRY_AVAILABLE, ctx.status);
     TEST_ASSERT_EQUAL_INT64(1, ctx.index);
     TEST_ASSERT_EQUAL_INT(2, ctx.message_count);
 
@@ -258,7 +258,7 @@ void test_reader_end_of_stream_when_empty(void)
 
     BatchReadingContext ctx;
     indexed_batch_reader_read_last(r, &ctx);
-    TEST_ASSERT_EQUAL_INT(ENTRY_END_OF_STREAM, ctx.status);
+    TEST_ASSERT_EQUAL_INT(BATCH_ENTRY_END_OF_STREAM, ctx.status);
     TEST_ASSERT_EQUAL_INT64(HEADER_NULL_INDEX, ctx.index);
 
     indexed_batch_reader_close(r);

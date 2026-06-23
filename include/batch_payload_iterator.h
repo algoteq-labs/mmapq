@@ -7,49 +7,75 @@
 #include "header_codec.h"
 
 /**
- * BatchPayloadIterator — zero-copy flyweight iterator over a single batch in an indexed queue.
+ * BatchPayloadIterator — zero-copy flyweight iterator over a single batch
+ * in the payload region of an indexed queue.
  *
- * framing (per batch):
- *   +0: int32_t message_count
- *   +4: framed messages...
+ * Wire format (per batch in the payload stream):
  *
- * Each message within the batch has the standard framing:
- *   +0: int32_t length
- *   +4: payload bytes...
+ *   Offset  Size  Field
+ *   ------  ----  -----
+ *   +0      4     int32 message_count   — number of messages in the batch
+ *   +4      ...   framed messages, each:
+ *                   +0  4  int32 length   — payload byte count
+ *                   +4  N  payload bytes
  *
- * Reusable and designed to be embedded inside Poller/Appender for zero allocation.
+ * The iterator provides sequential, zero-copy access to messages. It holds a
+ * flyweight Buffer into the mapped payload region — the data pointer returned
+ * by batch_iterator_current_data() is valid only until the next call to
+ * batch_iterator_advance() or any re-wrap of the underlying region.
+ *
+ * batch_iterator_current_data() and batch_iterator_current_length() are only
+ * valid after a successful call to batch_iterator_advance() (returns 1).
+ *
+ * WARNING: The iterator struct is designed to be embedded inside pollers,
+ * appenders, and reading contexts to achieve zero heap allocation per message.
+ * The payload_acc and queue_name fields must be set by the owning object
+ * before calling batch_iterator_init().
+ *
+ * Mirrors Java IBatch / BatchPayloadIterator.
  */
 
+/** Offset of the message count field at the start of each batch. */
 #define BATCH_MSG_COUNT_OFFSET    ((int32_t)0)
+
+/** Size in bytes of the message count field. */
 #define BATCH_MSG_COUNT_SIZE      ((int32_t)4)
+
+/** Offset of the first message within the batch (immediately after count). */
 #define BATCH_FIRST_MSG_OFFSET    ((int32_t)4)
 
+/** Sentinel value returned by batch_iterator_probe_batch when no valid batch found. */
 #define BATCH_ITERATOR_INVALID_POSITION ((int64_t)-1)
 
 typedef struct {
-    const char     *queue_name;
-    RegionAccessor *payload_acc;
-    Buffer          payload_buf;
-    
+    const char     *queue_name;   /* for diagnostic messages */
+    RegionAccessor *payload_acc;  /* payload region — set by owning object */
+    Buffer          payload_buf;  /* flyweight view into mapped region */
+
     /* Current batch state */
-    int64_t         batch_offset;
-    int32_t         message_count;
-    
-    /* Cursor state */
-    int32_t         current_msg_index;
-    int64_t         current_msg_offset;
-    int32_t         current_msg_length;
-    int64_t         next_message_position;
-    
-    int             exhausted;
+    int64_t         batch_offset;    /* absolute payload offset of this batch */
+    int32_t         message_count;   /* total messages in the batch */
+
+    /* Cursor state — valid after a successful batch_iterator_advance() */
+    int32_t         current_msg_index;     /* zero-based index of current message */
+    int64_t         current_msg_offset;    /* absolute payload offset of current message */
+    int32_t         current_msg_length;    /* payload bytes in current message */
+    int64_t         next_message_position; /* absolute offset of the next message */
+
+    int             exhausted; /* 1 after all messages have been visited */
 } BatchPayloadIterator;
 
 /**
- * batch_iterator_init — initialize iterator for a known batch.
+ * Initialise the iterator for a known batch.
  *
- * batch_offset: absolute offset in the payload stream where the batch begins.
- * message_count: total messages in the batch (if known, else pass -1 to read from disk).
- * start_msg_index: index to start iteration from (typically 0).
+ * Must be called before advancing. payload_acc and queue_name must already
+ * be set by the owning object.
+ *
+ * @param it               the iterator to initialise
+ * @param batch_offset     absolute payload offset where the batch begins
+ * @param message_count    total messages in the batch; pass -1 to read from disk
+ * @param start_msg_index  zero-based message index to start iteration from
+ * @return @p it (for chaining)
  */
 BatchPayloadIterator *batch_iterator_init(
     BatchPayloadIterator *it,
@@ -58,24 +84,44 @@ BatchPayloadIterator *batch_iterator_init(
     int32_t               start_msg_index);
 
 /**
- * batch_iterator_read_message_count — read count from batch head on disk.
+ * Read the message count from the batch header on disk.
+ *
+ * Used during initialisation when the count is not already known (e.g.
+ * in the reader after looking up the header entry).
+ *
+ * @param it           the iterator (payload_acc must be set)
+ * @param batch_offset absolute payload offset of the batch to probe
+ * @return the message count, or -1 if the region cannot be mapped
  */
 int32_t batch_iterator_read_message_count(BatchPayloadIterator *it, int64_t batch_offset);
 
 /**
- * batch_iterator_probe_batch — check if a valid batch exists at offset.
- * Returns the resolved batch offset, or BATCH_ITERATOR_INVALID_POSITION.
+ * Check whether a valid batch exists at @p offset, skipping short-padding markers.
+ *
+ * Used during initialisation of the append position on restart to locate
+ * the last committed batch without scanning all headers.
+ *
+ * @param it      the iterator
+ * @param offset  payload offset to probe
+ * @return the resolved batch offset, or BATCH_ITERATOR_INVALID_POSITION if none found
  */
 int64_t batch_iterator_probe_batch(BatchPayloadIterator *it, int64_t offset);
 
 /**
- * batch_iterator_advance — move to the next message in the batch.
- * Returns 1 if successful, 0 if exhausted.
+ * Advance to the next message in the batch.
+ *
+ * On the first call after batch_iterator_init(), moves to message 0 (or
+ * start_msg_index if non-zero). On subsequent calls, moves to the next message.
+ *
+ * After a successful call, batch_iterator_current_data() and
+ * batch_iterator_current_length() return valid values for the current message.
+ *
+ * @return 1 if advanced successfully; 0 if the batch is exhausted
  */
 int batch_iterator_advance(BatchPayloadIterator *it);
 
 /**
- * batch_iterator_has_current — true if advance() was successful.
+ * Return 1 if the iterator is positioned on a valid message (advance() returned 1).
  */
 static inline int batch_iterator_has_current(const BatchPayloadIterator *it)
 {
@@ -83,7 +129,12 @@ static inline int batch_iterator_has_current(const BatchPayloadIterator *it)
 }
 
 /**
- * batch_iterator_current_data — pointer to current message payload.
+ * Return a pointer to the current message's payload bytes.
+ *
+ * Flyweight — valid only until the next batch_iterator_advance() call or
+ * any re-wrap of the underlying region. Do not retain across iterations.
+ *
+ * Only valid after a successful batch_iterator_advance() call.
  */
 static inline const void *batch_iterator_current_data(const BatchPayloadIterator *it)
 {
@@ -91,7 +142,9 @@ static inline const void *batch_iterator_current_data(const BatchPayloadIterator
 }
 
 /**
- * batch_iterator_current_length — length of current message payload.
+ * Return the byte count of the current message's payload.
+ *
+ * Only valid after a successful batch_iterator_advance() call.
  */
 static inline int32_t batch_iterator_current_length(const BatchPayloadIterator *it)
 {
@@ -99,7 +152,10 @@ static inline int32_t batch_iterator_current_length(const BatchPayloadIterator *
 }
 
 /**
- * batch_iterator_exhaust — skip all remaining messages in the batch.
+ * Skip all remaining messages in the batch, leaving the iterator exhausted.
+ *
+ * Used by the poller when BATCH_NEXT_ADVANCE_BATCH is returned, to position
+ * the next_message_position at the start of the following batch.
  */
 void batch_iterator_exhaust(BatchPayloadIterator *it);
 
