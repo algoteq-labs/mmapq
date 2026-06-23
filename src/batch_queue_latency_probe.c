@@ -151,6 +151,12 @@ void batch_queue_latency_probe_send_shutdown(BatchQueueLatencyProbe *p)
 void batch_queue_latency_probe_close(BatchQueueLatencyProbe *p)
 {
     if (!p) return;
+
+    /* Confirmed shutdown handshake — send shutdown signal and wait for echo.
+     * Mirrors queue_latency_probe_close() behaviour. Works for both internal
+     * and external server — the server exits on receiving sequence=0. */
+    batch_queue_latency_probe_send_shutdown(p);
+
     indexed_batch_appender_close(p->request_appender);
     indexed_batch_poller_close(p->response_poller);
     indexed_batch_queue_close(p->request_queue);

@@ -19,75 +19,108 @@ MIT license.
 
 This C port extends the original mmap queue design with several critical features for low-latency production environments:
 
-*   **Deferred & Out-of-Order Commits**: Ability to append messages to the payload stream "uncommitted" and commit them to the shared index later. Commits can be performed in an order different from the physical insertion order.
-*   **False-Sharing-Proof Headers**: The header file layout is optimized for modern CPU cache architectures. It uses a non-linear striding algorithm where sequential indices are mapped to different **Sectors**. Sequential writes are physically separated by **512 bytes (8 cache lines)**, providing extreme hardware-level isolation and stability.
-*   **Safe Lifecycle Management**: Explicit and robust deregistration of ring regions from the background mapping thread. When a participant (appender, poller, or reader) is closed, its associated mapping tasks are safely drained from the runtime, preventing resource leaks and races.
-*   **High-Performance Runtimes**: Includes a flexible `Runtime` abstraction for executing background tasks (like region mapping) with customizable idle strategies (busy-spin, yield, backoff), mirroring the Java `tools4j` threading model.
+*   **Deferred & Out-of-Order Commits**: Append messages to the payload stream uncommitted and commit them to the shared index later, in an order different from physical insertion order. Enables UDP resequencing and pipelined writes.
+*   **False-Sharing-Proof Headers**: The header file uses a non-linear striding algorithm — a **vertical walk** — that maps sequential indices to different cache lines. Sequential writes are physically separated by **512 bytes (8 cache lines)**, providing hardware-level isolation between concurrent appenders.
+*   **Batch Queue**: A first-class batch layer (`IndexedBatchAppender`, `IndexedBatchPoller`, `IndexedBatchReader`) that groups multiple messages under a single atomic commit. Wire-format compatible with the Algoteq Java batch queue implementation.
+*   **Safe Lifecycle Management**: Explicit deregistration of ring regions from the background mapping thread. When a participant is closed, its mapping tasks are safely drained, preventing resource leaks and races.
+*   **High-Performance Runtimes**: A flexible `Runtime` abstraction for background tasks (region mapping, metrics aggregation) with customisable idle strategies (busy-spin, yield, backoff).
 
 ---
 
 ## Performance
 
-The `mmap-c` library is optimized to outperform traditional IPC mechanisms and even highly tuned JVM implementations. On isolated cores (e.g., physical cores 5, 7, and 9 on an Intel i7-12700H) with Profile Guided Optimization (PGO) and system-level hardening, `mmap-c` achieves the following round-trip latencies:
+On isolated cores (physical cores 5, 7, 9 on an Intel i7-12700H) with
+Transparent Huge Pages enabled:
 
-| Metric | Results (10M samples) | vs. Java (JMH) |
-| :--- | :--- | :--- |
-| **Median (P50)** | **353 ns** | **~17% faster** (vs 428ns) |
-| **P90** | **440 ns** | **~15% faster** (vs 520ns) |
-| **P99.9** | **5.2 µs** | **~40% faster** (vs 8.8µs) |
-| **Max (P100)** | **184 µs** | **~2.7x more stable** (vs 497µs) |
-| **Throughput** | **~2.1 Million ops/sec** | **Superior** |
+### Single-message queue — roundtrip to echo server in external process , 20M iterations
 
-### Best Practices for Low Latency
-To achieve these results, the following system-level configurations are recommended:
-1.  **Core Isolation**: Use `isolcpus` or `cset` to reserve cores for the client, server, and region mapper.
-2.  **Memory Locking**: Use `mlockall` (enabled in the benchmark) to prevent page-outs and swap jitter.
-3.  **Transparent Huge Pages (THP)**: The library uses `MADV_HUGEPAGE` to reduce TLB pressure, which is critical for stable tail latencies.
-4.  **VDSO Clock**: Ensure `CLOCK_MONOTONIC` is used (default) to utilize the kernel's fast VDSO path for timing.
+| Percentile |  C (this library) | Java (JMH, same machine) |
+|:-----------|------------------:|-------------------------:|
+| min (p0)   |        **182 ns** |                   265 ns |
+| p50        |        **284 ns** |                   380 ns |
+| p90        |        **333 ns** |                   429 ns |
+| p99        |        **396 ns** |                   591 ns |
+| p99.9      |       **1869 ns** |                 6,792 ns |
+| p99.99     |       **7411 ns** |                16,533 ns |
+| p99.999    |      **14984 ns** |                15,090 ns |
+| throughput | **3.2 M ops/sec** |           2.41 M ops/sec |
+
+### Batch queue — roundtrip to echo server in external process, 20M iterations
+
+| Percentile |  C (this library) |
+|:-----------|------------------:|
+| min (p0)   |        **196 ns** |
+| p50        |        **296 ns** |
+| p90        |        **348 ns** |
+| p95        |        **368 ns** |
+| p99        |        **422 ns** |
+| p99.9      |       **2030 ns** |
+| p99.99     |       **7313 ns** |
+| p99.999    |      **14895 ns** |
+| throughput |   **3 M ops/sec** |
+
+### System configuration for best results
+
+1. **Core isolation** — kernel boot parameter `isolcpus=5,7,9` (or equivalent) to reserve cores for the client loop, server loop, and region mapper.
+2. **Transparent Huge Pages** — the library calls `madvise(MADV_HUGEPAGE)` on mapped regions to reduce TLB pressure.
+3. **VDSO clock** — use `CLOCK_MONOTONIC` (the library default) to bypass the syscall overhead on timing.
+4. **Thread affinity** — always spawn background threads *before* pinning the calling thread; see Anti-Pattern D in `doc/maintainer_guide.md`.
 
 ---
 
 ## Design
 
-Each queue entry has an 8-byte header stored in a shared header file. To eliminate
-CPU cache contention (false sharing) between concurrent appenders, headers are
-mapped using a non-linear striding algorithm that transposes the memory walk
-from horizontal to **vertical** across different cache lines.
+### Header layout — the vertical walk
 
-Sequential indices are spread across 64 different **Sectors** (each spanning 8 cache lines), providing
-hardware-level isolation. After 64 indices, the mapping rotates back to the first
-sector and shifts to the next 8-byte word.
+Each queue entry has an 8-byte header in a shared header file. To
+eliminate false sharing between concurrent appenders, headers use a
+non-linear striding algorithm that transposes the memory walk from
+horizontal to **vertical** across cache lines.
 
 ```
-bits[63:56] = appenderId   (up to 256 concurrent appenders)
-bits[55:0]  = payloadPosition
-0           = NULL (not yet written)
+Layout (sectorSize=64, header=8 bytes):
 
-Layout (sectorSize=64, header=8b):
-  index 0:  byte offset 0      (Sector 0, Word 0)
-  index 1:  byte offset 512    (Sector 1, Word 0) — The Vertical Stride
+  index 0  →  byte offset 0      (sector 0, word 0)
+  index 1  →  byte offset 512    (sector 1, word 0)  ← new cache line
+  index 2  →  byte offset 1024   (sector 2, word 0)  ← new cache line
   ...
-  index 63: byte offset 32256  (Sector 63, Word 0)
-  index 64: byte offset 8      (Sector 0, Word 1) — The Horizontal Shift
-  index 65: byte offset 520    (Sector 1, Word 1)
+  index 63 →  byte offset 32256  (sector 63, word 0)
+  index 64 →  byte offset 8      (sector 0, word 1)  ← back to sector 0
+
+Sequential indices land on a new cache line every step.
+Only after 64 indices does the mapping return to a previous sector,
+now at the next 8-byte word within it.
 ```
 
-Note: While the original design intended for a 64-byte (1 cache line) stride, benchmarking
-confirmed that a larger **512-byte (8 cache lines)** stride provides significantly better
-performance and tail stability on modern CPU architectures. The library maintains this
-optimized layout (matching the Algoteq Java implementation).
+The header encodes appender ID and payload position in a single 64-bit
+word committed via atomic CAS:
 
-The header is committed via a single atomic CAS. Readers acquire-load the
-header; the happens-before relationship with the appender's release-store
-guarantees payload visibility. No locks, no kernel calls on the hot path.
+```
+bits[63:56] = appenderId   (0–255, up to 256 concurrent appenders)
+bits[55:0]  = payloadPosition
+0           = HEADER_NULL (slot not yet written)
+```
 
-Payload is written to a per-appender file before the header is committed.
-An entry is only visible to consumers after its header CAS succeeds.
+### Payload framing
 
-Region mapping is async: a background thread (`runtime_region_mapper`)
-maps and unmaps file regions in advance. Writers request premap immediately
-on entering a new region (ratio 0.0); readers request premap at the halfway
-point (ratio 0.5). Sync regions are also supported for testing.
+Each message in the payload file is framed as `[int32 length][payload bytes]`.
+Batch entries add a `[int32 message_count]` prefix before the first message.
+The format is binary-compatible with the Java Algoteq batch queue implementations.
+
+### Visibility and commit
+
+A message is **visible** to consumers the instant the header CAS succeeds.
+The atomic release-store on the appender side and the acquire-load on the
+reader side establish the happens-before relationship that guarantees
+payload visibility — no locks, no kernel calls on the hot path.
+
+### Async region mapping
+
+A background thread (`runtime_region_mapper`) maps and unmaps file regions
+in advance. Writers trigger premap at the start of each region (ratio 0.0);
+readers trigger premap at the halfway point (ratio 0.5). The writer
+extends the file with `ftruncate` and pre-touches pages via atomic CAS to
+absorb dirty-bit penalties before the hot loop reaches the new region.
 
 ### File layout
 
@@ -95,24 +128,14 @@ point (ratio 0.5). Sync regions are also supported for testing.
 <directory>/<queue_name>/
   meta                  queue config (region_size, max_file_size, schema version)
   header                shared header file — one 8-byte entry per queue index
-  payload_N             per-appender payload file (N = appender ID)
-  appender_meta_N       per-appender start_offset (for future archiving)
-  appender_id_pool      CAS bitset — allocates appender IDs (0-255)
+  payload_N             per-appender payload file (N = appender ID, 0–255)
+  appender_meta_N       per-appender start_offset (for archiving)
+  appender_id_pool      CAS bitset — allocates appender IDs
 ```
 
-All files are plain OS files. The format remains binary-compatible with the
-original Java tools4j/mmap implementation — a Java producer and C consumer
-(or vice versa) can share the same queue directory.
-
-### Visibility vs durability
-
-**Visibility** is provided by the atomic header commit. Once the CAS
-succeeds, any reader that acquire-loads the header will see the payload.
-
-**Persistence** is best-effort mmap/page-cache. After a process crash,
-page-cache usually preserves data. After an OS crash or power loss,
-there is no guarantee without an explicit msync/fsync durability mode
-(not currently implemented).
+All files are plain OS files. The format is binary-compatible with the
+Java implementation — a Java producer and C consumer (or vice versa) can
+share the same queue directory.
 
 ---
 
@@ -121,8 +144,12 @@ there is no guarantee without an explicit msync/fsync durability mode
 Requires: Linux, gcc, pthread.
 
 ```bash
-# Build directly with an application
-gcc -std=gnu11 -O2 -D_GNU_SOURCE -I include src/*.c examples/demo.c -o demo -pthread -lm
+# Build the static library and all binaries
+make
+
+# Or build specific targets
+make bench echo_server          # single-message benchmark tools
+make batch_bench batch_echo_server  # batch benchmark tools
 ```
 
 CMake is also supported (used by the test suite):
@@ -133,27 +160,55 @@ cmake ..
 make -j$(nproc)
 ```
 
-To build and run the latency benchmark:
-```bash
-make bench
-./latency_bench <iterations> <warmup> <msg_size> <client_cpu> <server_cpu> <mapper_cpu>
-```
-
 ---
 
 ## Running the tests
 
 ```bash
-./scripts/test.sh            # normal build + tests
-./scripts/test.sh --asan     # AddressSanitizer (leak + memory error detection)
-./scripts/test.sh --tsan     # ThreadSanitizer (data race detection)
+./scripts/test.sh            # normal build + tests (16 passed, 0 failed)
+./scripts/test.sh --asan     # AddressSanitizer
+./scripts/test.sh --tsan     # ThreadSanitizer (run with ASLR disabled: setarch $(uname -m) -R ...)
 ```
 
-All three modes should report `15 passed, 0 failed`.
+---
+
+## Running the benchmarks
+
+```bash
+# Single-message queue — internal + external (async) + external (sync)
+make bench-suite
+
+# Batch queue — same three configurations
+make batch-bench-suite
+```
+
+Or run individual configurations manually:
+
+```bash
+# Single-message, internal server
+./latency_bench 20000000 100000 64 5 7 9
+
+# Single-message, external server
+./echo_server /tmp request response 7 9 &
+./latency_bench 20000000 100000 64 5 7 9 --external
+
+# Batch queue, external server
+./batch_echo_server /tmp request response 7 9 &
+./batch_latency_bench 20000000 100000 64 5 7 9 --external
+```
+
+Arguments: `<iterations> <warmup> <msg_size> <client_cpu> <server_cpu> <mapper_cpu>`
+
+Override benchmark defaults via environment variables:
+```bash
+BENCH_ITER=5000000 BENCH_MAPPER=11 ./scripts/bench.sh
+```
 
 ---
 
 ## Quick start
+
+### Single-message queue
 
 ```c
 #include "indexed_queue.h"
@@ -161,113 +216,135 @@ All three modes should report `15 passed, 0 failed`.
 #include "indexed_poller.h"
 #include "runtime.h"
 
-// Create the background mapping thread
+/* Background region-mapper thread (singleton) */
 Runtime *rt = runtime_region_mapper();
 
-// Open or prepare a queue (creator settings)
-IndexedQueue *q = indexed_queue_create(
-    "/data/queues",              // directory
-    "orders",                    // queue name
-    4096 * 1024,                 // region size (4 MB)
-    4,                           // ring size
-    1,                           // regions to map ahead
-    (int64_t)4096 * 1024 * 256, // max file size (1 GB)
-    0,                           // start index
-    5000000000ULL,               // mapping timeout (5 s)
-    rt);
+/* Open or create a queue */
+IndexedQueue *q = indexed_queue_create_default("/tmp", "orders", rt, rt);
 
-// Append a message (establishes queue_meta if new)
+/* Append a message */
 IndexedAppender *a = indexed_queue_create_appender(q);
-const char *msg = "hello";
-int64_t idx = indexed_appender_append(a, msg, 5);
+int64_t idx = indexed_appender_append(a, "hello", 5);
 
-// Poll messages (automatically discovers region_size from metadata)
+/* Poll messages */
 IndexedPoller *p = indexed_queue_create_poller(q);
 
-MessageHandlerDirective my_handler(int64_t index, uint8_t appender_id,
-                                   const void *data, int32_t length,
-                                   void *ctx) {
+static NextMove my_handler(int64_t index, uint8_t appender_id,
+                            const void *data, int32_t length, void *ctx) {
     printf("[%ld] %.*s\n", index, length, (const char *)data);
-    return HANDLER_ADVANCE;
+    return NEXT_ADVANCE;
 }
 
 PollResult r = indexed_poller_poll(p, my_handler, NULL);
 
-// Always close participants before the queue
+/* Close participants before the queue */
 indexed_appender_close(a);
 indexed_poller_close(p);
 indexed_queue_close(q);
 ```
 
-See `examples/demo.c` for a complete producer/consumer running 1,000,000
-messages end-to-end.
+### Batch queue
+
+```c
+#include "indexed_batch_queue.h"
+
+Runtime *rt = runtime_region_mapper();
+IndexedBatchQueue *q = indexed_batch_queue_create_default("/tmp", "events", rt, rt);
+
+/* Append a batch of three messages */
+IndexedBatchAppender *a = indexed_batch_queue_create_appender(q);
+MutableBatch *b = indexed_batch_appender_start_batch(a);
+mutable_batch_append(b, "msg0", 4);
+mutable_batch_append(b, "msg1", 4);
+mutable_batch_append(b, "msg2", 4);
+int64_t batch_idx = indexed_batch_appender_commit_batch(a, mutable_batch_complete(b));
+
+/* Poll one message at a time */
+IndexedBatchPoller *p = indexed_batch_queue_create_poller(q);
+
+static BatchNextMove my_batch_handler(int64_t batch_index, int32_t msg_index,
+                                       int32_t msg_count, const void *data,
+                                       int32_t length, void *ctx) {
+    printf("batch[%ld] msg[%d/%d]: %.*s\n",
+           batch_index, msg_index, msg_count, length, (const char *)data);
+    return BATCH_ADVANCE;
+}
+
+BatchPollResult r = indexed_batch_poller_poll(p, my_batch_handler, NULL);
+
+indexed_batch_appender_close(a);
+indexed_batch_poller_close(p);
+indexed_batch_queue_close(q);
+```
+
+See `examples/demo.c` for a complete single-message producer/consumer.
 
 ---
 
 ## API overview
 
-### Queue lifecycle
+### Single-message queue
 
 | Function | Description |
 |---|---|
-| `indexed_queue_create()` | Open or create a queue |
-| `indexed_queue_create_default()` | Create with default parameters |
-| `indexed_queue_create_appender()` | Create an appender |
-| `indexed_queue_create_poller()` | Create a sequential poller |
+| `indexed_queue_create_default()` | Open or create a queue with default parameters |
+| `indexed_queue_create()` | Open or create a queue with explicit parameters |
+| `indexed_queue_create_appender()` | Create a producer |
+| `indexed_queue_create_poller()` | Create a sequential consumer |
 | `indexed_queue_create_reader()` | Create a random-access reader |
 | `indexed_queue_close()` | Close the queue |
-
-### Appender
-
-| Function | Description |
-|---|---|
 | `indexed_appender_append()` | Write and commit a message |
 | `indexed_appender_append_uncommitted()` | Write without committing |
 | `indexed_appender_commit()` | Commit a previously written payload |
-| `indexed_appender_close()` | Close and release the appender ID |
-
-### Poller (sequential cursor)
-
-| Function | Description |
-|---|---|
 | `indexed_poller_poll()` | Process one message via callback |
 | `indexed_poller_move_to_end()` | Jump past the last entry |
-| `indexed_poller_move_to_start()` | Jump to the first entry |
 | `indexed_poller_move_to_index()` | Jump to a specific index |
-| `indexed_poller_create()` | Create a poller (discovers config from meta) |
-| `indexed_poller_close()` | Close the poller |
+| `indexed_reader_read()` | Read entry at a specific index |
+| `indexed_reader_read_last()` | Read the last committed entry |
 
-The callback returns `HANDLER_ADVANCE`, `HANDLER_STOP`, or `HANDLER_RETREAT`.
+The poll callback returns `NEXT_ADVANCE`, `NEXT_STOP`, or `NEXT_RETREAT`.
 
-### Reader (random access)
+### Batch queue
 
 | Function | Description |
 |---|---|
-| `indexed_reader_read()` | Read entry at a specific index |
-| `indexed_reader_read_first()` | Read the first entry |
-| `indexed_reader_read_last()` | Read the last committed entry |
-| `indexed_reader_last_index()` | Find the highest committed index |
-| `indexed_reader_create()` | Create a reader (discovers config from meta) |
-| `indexed_reader_close()` | Close the reader |
+| `indexed_batch_queue_create_default()` | Open or create a batch queue |
+| `indexed_batch_queue_create_appender()` | Create a batch producer |
+| `indexed_batch_queue_create_poller()` | Create a batch sequential consumer |
+| `indexed_batch_queue_create_reader()` | Create a batch random-access reader |
+| `indexed_batch_appender_start_batch()` | Begin a new batch |
+| `mutable_batch_append()` | Add a message to an in-progress batch |
+| `mutable_batch_complete()` | Finalise the batch |
+| `indexed_batch_appender_commit_batch()` | Commit the batch atomically |
+| `indexed_batch_poller_poll()` | Process one message via callback |
+| `indexed_batch_reader_read()` | Read a batch at a specific index |
+| `indexed_batch_reader_read_last()` | Read the last committed batch |
+
+The batch poll callback returns `BATCH_ADVANCE`, `BATCH_ADVANCE_BATCH`,
+`BATCH_STOP`, or `BATCH_RETREAT_BATCH`.
 
 ### Runtime
 
 | Function | Description |
 |---|---|
 | `runtime_region_mapper()` | Get the singleton background mapping thread |
+| `runtime_set_affinity()` | Pin the runtime thread to a CPU core |
 | `runtime_create()` | Create a named runtime with a custom idle strategy |
-| `runtime_register()` | Register an executable (any thread) |
-| `runtime_unregister_and_wait()` | Unregister and block until confirmed (any thread) |
 | `runtime_close()` | Stop the runtime thread |
-| `runtime_destroy()` | Free all resources |
+
+---
+
+## Documentation
+
+*   `doc/header_layout_design.md` — full derivation of the vertical walk, worked example, and verification trace
+*   `doc/maintainer_guide.md` — anti-pattern ledger, performance tuning baseline, thread affinity rules, metadata protocol
 
 ---
 
 ## Platform
 
-Linux only. Requires naturally aligned lock-free atomics over MAP_SHARED
-mmap — guaranteed on x86-64 and ARM64. Validated at startup via
-`atomic_is_lock_free()`.
+Linux only. Requires naturally aligned lock-free atomics over `MAP_SHARED`
+mmap — guaranteed on x86-64 and ARM64.
 
 ---
 

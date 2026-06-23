@@ -191,13 +191,13 @@ int main(int argc, char *argv[])
 
     mmap_stats_print(results, iterations, elapsed, "Batch Round-Trip Latency Statistics (nanoseconds):");
 
+    batch_queue_latency_probe_close(probe);
+    free(results);
+
     if (!external_server) {
-        batch_queue_latency_probe_send_shutdown(probe);
         pthread_join(server_thread, NULL);
         printf("  Internal Server stopped.\n");
     }
 
-    batch_queue_latency_probe_close(probe);
-    free(results);
     return 0;
 }

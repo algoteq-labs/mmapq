@@ -17,7 +17,7 @@ SRCS    = $(wildcard src/*.c)
 OBJS    = $(SRCS:.c=.o)
 LIB     = libmmap_queue.a
 
-.PHONY: all demo bench echo_server batch_bench batch_echo_server interop test test-asan test-tsan test-multi clean
+.PHONY: all demo bench echo_server batch_bench batch_echo_server bench-suite batch-bench-suite interop test test-asan test-tsan test-multi clean
 
 all: $(LIB) demo bench echo_server batch_bench batch_echo_server
 
@@ -46,6 +46,14 @@ batch_bench: $(LIB)
 batch_echo_server: $(LIB)
 	$(CC) $(CFLAGS) examples/batch_echo_server.c -L. -lmmap_queue $(LDFLAGS) -o batch_echo_server
 	@echo "built: batch_echo_server"
+
+bench-suite: bench echo_server
+	@echo "Running single-message queue benchmark suite..."
+	@bash scripts/bench.sh
+
+batch-bench-suite: batch_bench batch_echo_server
+	@echo "Running batch queue benchmark suite..."
+	@bash scripts/batch_bench.sh
 
 test: $(LIB)
 	@bash scripts/test.sh
