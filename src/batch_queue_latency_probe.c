@@ -125,6 +125,29 @@ uint64_t batch_queue_latency_probe_execute(BatchQueueLatencyProbe *p)
 
 int64_t batch_queue_latency_probe_validation_errors(BatchQueueLatencyProbe *p) { return atomic_load(&p->validation_errors); }
 
+void batch_queue_latency_probe_send_shutdown(BatchQueueLatencyProbe *p)
+{
+    if (!p) return;
+
+    atomic_store(&p->response_received, 0);
+    uint32_t previous_seq   = p->current_request_seq;
+    p->current_request_seq  = SHUTDOWN_SEQ;
+
+    LatencyHeader *hdr = (LatencyHeader *)p->msg_buffer;
+    hdr->instance_id = p->instance_id;
+    hdr->sequence    = SHUTDOWN_SEQ;
+
+    MutableBatch *b = indexed_batch_appender_start_batch(p->request_appender);
+    mutable_batch_append(b, p->msg_buffer, p->message_size);
+    indexed_batch_appender_commit_batch(p->request_appender, mutable_batch_complete(b));
+
+    uint64_t timeout_at = monotonic_nanos() + 2000000000ULL; /* 2 seconds */
+    while (!atomic_load(&p->response_received) && monotonic_nanos() < timeout_at)
+        indexed_batch_poller_poll(p->response_poller, client_handler, p);
+
+    p->current_request_seq = previous_seq;
+}
+
 void batch_queue_latency_probe_close(BatchQueueLatencyProbe *p)
 {
     if (!p) return;
