@@ -5,8 +5,7 @@
  * The appender writes 1,000,000 messages; the poller reads them all.
  *
  * Build:
- *   gcc -std=gnu11 -O2 -I include src/SOURCES examples/demo.c -o demo -pthread -lm
- *   (replace SOURCES with *.c or list individual files)
+ *   make demo
  *
  * Run:
  *   ./demo
@@ -19,7 +18,6 @@
 #include "indexed_queue.h"
 #include "indexed_appender.h"
 #include "indexed_poller.h"
-#include "indexed_reader.h"
 #include "runtime.h"
 #include "mmap_platform.h"
 
@@ -36,7 +34,7 @@
 #define QUEUE_NAME       "mmap_demo_queue"
 #define REGION_SIZE      (4096 * 1024)        /* 4 MB per region          */
 #define RING_SIZE        4
-#define MAX_FILE_SIZE    ((int64_t)REGION_SIZE * 256)  /* 1 GB max         */
+#define MAX_FILE_SIZE    ((int64_t)REGION_SIZE * 256)  /* ~1 GB max        */
 #define TIMEOUT_NS       5000000000ULL         /* 5 second mapping timeout */
 #define MSG_COUNT        1000000
 #define REPORT_INTERVAL  100000
@@ -113,7 +111,10 @@ static void *consumer_thread_fn(void *arg)
     while (!ctx->done) {
         PollResult r = indexed_poller_poll(ctx->poller, consumer_handler, ctx);
         if (r == POLL_END_OF_STREAM) {
-            /* No message yet — spin */
+            /* Spin-wait until the producer writes one.
+             * Burns CPU intentionally for minimum latency.
+             * Use a sleeping poller or idle strategy in
+             * throughput-oriented applications. */
             spin_hint();
         }
     }
@@ -147,9 +148,11 @@ int main(void)
     /* Create the queue */
     IndexedQueue *q = indexed_queue_create(
         QUEUE_DIR, QUEUE_NAME,
-        REGION_SIZE, RING_SIZE, 1,
+        REGION_SIZE, RING_SIZE,
+        1,            /* regions_to_map_ahead — async premap depth */
         MAX_FILE_SIZE, 0,
-        TIMEOUT_NS, rt, rt, 0);
+        TIMEOUT_NS, rt, rt,
+        0);           /* fixed_size_8bytes */
 
     /* Create appender and poller */
     IndexedAppender *appender = indexed_queue_create_appender(q);
@@ -171,7 +174,10 @@ int main(void)
     pthread_t consumer;
     pthread_create(&consumer, NULL, consumer_thread_fn, &ctx);
 
-    /* Produce messages */
+    /* Produce messages
+     * produce_start: wall time when production began (after consumer thread
+     * is ready).  produce_end: wall time when the last message was committed.
+     * consume_end: wall time when the last message was delivered. */
     printf("producing %d messages...\n", MSG_COUNT);
     uint64_t produce_start = monotonic_nanos();
 
@@ -183,7 +189,8 @@ int main(void)
         msg.sequence     = i;
         msg.timestamp_ns = monotonic_nanos();
 
-        indexed_appender_append(appender, &msg, sizeof(msg));
+        int64_t idx = indexed_appender_append(appender, &msg, sizeof(msg));
+        (void)idx; /* commit succeeded — idx is the assigned queue index */
 
         if ((i + 1) % REPORT_INTERVAL == 0) {
             printf("  produced %d / %d\n", i + 1, MSG_COUNT);
@@ -218,7 +225,7 @@ int main(void)
     printf("  last index:           %ld\n",    indexed_appender_current_index(appender) - 1);
     printf("──────────────────────────────────────────────────\n");
 
-    if (ctx.errors == 0 && ctx.messages_received == MSG_COUNT) {
+    if (ctx.errors == 0 && ctx.messages_received == (int64_t)MSG_COUNT) {
         printf("OK — all messages received in order\n");
     } else {
         printf("FAIL — errors=%d received=%ld/%d\n",
@@ -231,5 +238,5 @@ int main(void)
     indexed_queue_close(q);
     cleanup();
 
-    return (ctx.errors == 0 && ctx.messages_received == MSG_COUNT) ? 0 : 1;
+    return (ctx.errors == 0 && ctx.messages_received == (int64_t)MSG_COUNT) ? 0 : 1;
 }
