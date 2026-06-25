@@ -19,6 +19,7 @@
 struct IndexedArchiver {
     char        *directory;
     char        *queue_name;
+    int          ring_size;
     Runtime     *runtime;
 
     /* Lazy-initialised on first use */
@@ -46,7 +47,7 @@ static QueueMeta *ro_init(IndexedArchiver *a)
     a->ro_acc = queue_region_accessor_create_ro(
         a->directory, a->queue_name,
         queue_meta_region_size(a->ro_meta),
-        4,   /* ring_size */
+        a->ring_size,
         0,   /* regions_to_map_ahead — sync, no background mapper needed */
         queue_meta_max_file_size(a->ro_meta),
         10000000000ULL, a->runtime);
@@ -57,7 +58,13 @@ static QueueMeta *ro_init(IndexedArchiver *a)
 /* Note: rw_meta is opened with the current on-disk values — the start_index
  * argument is only used when creating a brand-new file (st.st_size == 0).
  * Since the meta file already exists by the time rw_meta() is called,
- * all fields are adopted from disk. */
+ * all fields are adopted from disk.
+ *
+ * Dual mapping: ro_meta and rw_meta are two MAP_SHARED views of the same file.
+ * Linux guarantees coherence across MAP_SHARED mappings of the same page — a
+ * write through rw_meta is immediately visible via ro_meta on all cores.
+ * queue_meta_set_start_index(rwm, index) writes atomically; the next
+ * queue_meta_start_index() read through ro_meta will see the new value. */
 static QueueMeta *rw_meta_open(IndexedArchiver *a)
 {
     if (a->rw_meta) return a->rw_meta;
@@ -88,16 +95,19 @@ static AppenderMeta *get_appender_meta(IndexedArchiver *a, uint8_t id)
 IndexedArchiver *indexed_archiver_create(
     const char *directory,
     const char *queue_name,
+    int         ring_size,
     Runtime    *runtime)
 {
     MMAP_ASSERT(directory  != NULL, "indexed_archiver_create: directory is NULL");
     MMAP_ASSERT(queue_name != NULL, "indexed_archiver_create: queue_name is NULL");
+    MMAP_ASSERT(ring_size > 0,      "indexed_archiver_create: ring_size must be > 0");
 
     IndexedArchiver *a = calloc(1, sizeof(IndexedArchiver));
     MMAP_ASSERT(a != NULL, "indexed_archiver_create: out of memory");
 
     a->directory  = strdup(directory);
     a->queue_name = strdup(queue_name);
+    a->ring_size  = ring_size;
     a->runtime    = runtime;
     return a;
 }
@@ -196,7 +206,10 @@ void indexed_archiver_archive_up_to_index(IndexedArchiver *a, int64_t index)
 
         int64_t headers_in_file = max_file_size / HEADER_SIZE;
 
-        /* Collect file indices using O(1) bitsets — no heap allocation needed. */
+        /* Collect file indices using O(1) bitsets — no heap allocation needed.
+         * ~128 KB stack allocation (256 * 512 byte FileIndexSet + 256 * 8 byte positions).
+         * This function is called infrequently (archiving, never on hot path), so the
+         * large frame is acceptable. */
         FileIndexSet hdr_files;
         FileIndexSet pay_files[MAX_APPENDERS]; /* 256 * 512 bytes = 128 KB stack */
         int64_t first_positions[MAX_APPENDERS];
@@ -302,7 +315,7 @@ int indexed_archiver_archivable_files(
     MMAP_ASSERT(m != NULL, "archivable_files: queue not created yet");
 
     int64_t start = queue_meta_start_index(m);
-    if (start == 0) return 0;
+    if (start <= QUEUE_META_INITIAL_START_INDEX) return 0;
 
     int64_t max_file_size   = queue_meta_max_file_size(m);
     int64_t headers_in_file = max_file_size / HEADER_SIZE;
@@ -314,9 +327,9 @@ int indexed_archiver_archivable_files(
         char path[4096];
         snprintf(path, sizeof(path), "%s/%s/header_%d",
                  a->directory, a->queue_name, i);
+        /* Caller must free each returned string */
         if (queue_file_exists(path))
             paths_out[count++] = strdup(path);
-            /* Caller must free each returned string */
     }
 
     /* Fully covered payload files: files whose byte range < start_offset */

@@ -199,7 +199,7 @@ IndexedArchiver *indexed_queue_create_archiver(IndexedQueue *q)
     MMAP_ASSERT(!q->closed, "indexed_queue_create_archiver: queue is closed");
 
     return indexed_archiver_create(
-        q->directory, q->queue_name, q->read_runtime);
+        q->directory, q->queue_name, q->ring_size, q->read_runtime);
 }
 
 /* ── Metadata ─────────────────────────────────────────────────────────────── */

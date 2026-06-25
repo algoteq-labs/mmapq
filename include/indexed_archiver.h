@@ -41,12 +41,14 @@ typedef struct IndexedArchiver IndexedArchiver;
  *
  * @param directory   path to the directory containing queue files
  * @param queue_name  logical name of the queue
+ * @param ring_size   number of simultaneously mapped regions (must be >= 2)
  * @param runtime     background region-mapper runtime for header access
  * @return a new archiver; never NULL (asserts on allocation failure)
  */
 IndexedArchiver *indexed_archiver_create(
     const char *directory,
     const char *queue_name,
+    int         ring_size,
     Runtime    *runtime);
 
 /* ── Archiving ───────────────────────────────────────────────────────────── */

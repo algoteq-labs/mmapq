@@ -2,6 +2,7 @@
 #define QUEUE_FILES_H
 
 #include <stdint.h>
+#include <string.h>
 
 /**
  * queue_files — shared file-system utilities for the queue archiver layer.
@@ -55,9 +56,13 @@ typedef struct {
 
 static inline void file_index_set_clear(FileIndexSet *s)
 {
-    for (int i = 0; i < FILE_INDEX_SET_WORDS; i++) s->bits[i] = 0;
+    memset(s->bits, 0, sizeof(s->bits));
 }
 
+/**
+ * Provided for API completeness — test whether index @p idx is set.
+ * Currently unused internally; callers may use it for querying archived ranges.
+ */
 static inline int file_index_set_test(const FileIndexSet *s, int idx)
 {
     if (idx < 0 || idx >= FILE_INDEX_SET_MAX) return 0;

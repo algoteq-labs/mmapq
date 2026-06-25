@@ -53,7 +53,13 @@ static QueueMeta *ro_init(IndexedBatchArchiver *a)
 
 /* Note: start_index arg is only used when creating a brand-new meta file.
  * Since the meta already exists when rw_meta_open() is called, all fields
- * are adopted from disk; the passed value is ignored. */
+ * are adopted from disk; the passed value is ignored.
+ *
+ * Dual mapping: ro_meta and rw_meta are two MAP_SHARED views of the same file.
+ * Linux guarantees coherence across MAP_SHARED mappings of the same page — a
+ * write through rw_meta is immediately visible via ro_meta on all cores.
+ * queue_meta_set_start_index(rwm, index) writes atomically; the next
+ * queue_meta_start_index() read through ro_meta will see the new value. */
 static QueueMeta *rw_meta_open(IndexedBatchArchiver *a)
 {
     if (a->rw_meta) return a->rw_meta;
@@ -195,7 +201,10 @@ void indexed_batch_archiver_archive_up_to_index(IndexedBatchArchiver *a, int64_t
     } else {
         /* ── Backward archiving (undo) ─────────────────────────────────── */
 
-        /* Collect file indices using O(1) bitsets — avoids large stack arrays. */
+        /* Collect file indices using O(1) bitsets — no heap allocation needed.
+         * ~128 KB stack allocation (256 * 512 byte FileIndexSet + 256 * 8 byte positions).
+         * This function is called infrequently (archiving, never on hot path), so the
+         * large frame is acceptable. */
         FileIndexSet hdr_files;
         FileIndexSet pay_files[MAX_APPENDERS]; /* 256 * 512 bytes = 128 KB stack */
         int64_t first_positions[MAX_APPENDERS];
@@ -223,16 +232,16 @@ void indexed_batch_archiver_archive_up_to_index(IndexedBatchArchiver *a, int64_t
             /* Track all payload files spanned by this batch's messages */
             BatchPayloadIterator *it = get_iterator(a, aid);
             int32_t msg_count = batch_iterator_read_message_count(it, pos);
-            if (msg_count > 0) {
-                batch_iterator_init(it, pos, msg_count, 0);
-                /* Record the file containing the batch header itself */
-                file_index_set_set(&pay_files[aid], (int)(pos / max_file_size));
-                /* Record files spanned by each message's end offset */
-                while (batch_iterator_advance(it)) {
-                    int64_t msg_end = batch_iterator_next_payload_position(it);
-                    file_index_set_set(&pay_files[aid],
-                                       (int)(msg_end / max_file_size));
-                }
+            MMAP_ASSERT(msg_count > 0,
+                "batch_archive_up_to_index: committed batch has zero or negative msg count");
+            batch_iterator_init(it, pos, msg_count, 0);
+            /* Record the file containing the batch header itself */
+            file_index_set_set(&pay_files[aid], (int)(pos / max_file_size));
+            /* Record files spanned by each message's end offset */
+            while (batch_iterator_advance(it)) {
+                int64_t msg_end = batch_iterator_next_payload_position(it);
+                file_index_set_set(&pay_files[aid],
+                                   (int)(msg_end / max_file_size));
             }
         }
 
@@ -313,7 +322,7 @@ int indexed_batch_archiver_archivable_files(
     MMAP_ASSERT(m != NULL, "batch_archivable_files: queue not created yet");
 
     int64_t start = queue_meta_start_index(m);
-    if (start == 0) return 0;
+    if (start <= QUEUE_META_INITIAL_START_INDEX) return 0;
 
     int64_t max_file_size   = queue_meta_max_file_size(m);
     int64_t headers_in_file = max_file_size / HEADER_SIZE;
@@ -325,9 +334,9 @@ int indexed_batch_archiver_archivable_files(
         char path[4096];
         snprintf(path, sizeof(path), "%s/%s/header_%d",
                  a->directory, a->queue_name, i);
+        /* Caller must free each returned string */
         if (queue_file_exists(path))
             paths_out[count++] = strdup(path);
-            /* Caller must free each returned string */
     }
 
     /* Fully covered payload files per appender */
