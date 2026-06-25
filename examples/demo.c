@@ -151,8 +151,7 @@ int main(void)
         REGION_SIZE, RING_SIZE,
         1,            /* regions_to_map_ahead — async premap depth */
         MAX_FILE_SIZE, 0,
-        TIMEOUT_NS, rt, rt,
-        0);           /* fixed_size_8bytes */
+        TIMEOUT_NS, rt, rt);
 
     /* Create appender and poller */
     IndexedAppender *appender = indexed_queue_create_appender(q);

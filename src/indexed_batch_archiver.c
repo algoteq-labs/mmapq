@@ -67,8 +67,7 @@ static QueueMeta *rw_meta_open(IndexedBatchArchiver *a)
         queue_meta_start_index(a->ro_meta),
         queue_meta_region_size(a->ro_meta),
         queue_meta_max_file_size(a->ro_meta),
-        queue_meta_archivable(a->ro_meta),
-        queue_meta_fixed_size_8bytes(a->ro_meta));
+        queue_meta_archivable(a->ro_meta));
     return a->rw_meta;
 }
 

@@ -34,7 +34,7 @@ static IndexedBatchAppender *create_archivable_batch_appender(void)
     mkdir(dir_path, 0775);
 
     QueueMeta *m = queue_meta_open_rw(DIR, QUEUE, 0,
-        REGION_SZ, MAX_FILE, /* archivable= */ 1, /* fixed_size= */ 0);
+        REGION_SZ, MAX_FILE, /* archivable= */ 1);
     TEST_ASSERT_NOT_NULL(m);
     queue_meta_close(m);
 

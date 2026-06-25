@@ -144,8 +144,7 @@ QueueMeta *queue_meta_open_rw(
     int64_t     start_index,
     int32_t     region_size,
     int64_t     max_file_size,
-    int         archivable,
-    int         fixed_size_8bytes);
+    int         archivable);
 
 /**
  * queue_meta_open_ro — open the meta file for reading only.

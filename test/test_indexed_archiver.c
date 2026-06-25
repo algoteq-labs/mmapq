@@ -38,12 +38,12 @@ static IndexedAppender *create_archivable_appender(void)
     mkdir(dir_path, 0775);
 
     QueueMeta *m = queue_meta_open_rw(DIR, QUEUE, 0,
-        REGION_SZ, MAX_FILE, /* archivable= */ 1, /* fixed_size= */ 0);
+        REGION_SZ, MAX_FILE, /* archivable= */ 1);
     TEST_ASSERT_NOT_NULL(m);
     queue_meta_close(m);
 
     return indexed_appender_create(DIR, QUEUE, REGION_SZ, RING_SZ,
-        MAX_FILE, TIMEOUT, rt, /* fixed_size_8bytes= */ 0);
+        MAX_FILE, TIMEOUT, rt);
 }
 
 static NextMove poll_advance(int64_t idx, uint8_t aid,

@@ -90,8 +90,7 @@ IndexedQueue *indexed_queue_create(
     int64_t     start_index,
     uint64_t    timeout_ns,
     Runtime    *write_runtime,
-    Runtime    *read_runtime,
-    int         fixed_size_8bytes);
+    Runtime    *read_runtime);
 
 /**
  * indexed_queue_create_default — create with default parameters.
@@ -112,8 +111,7 @@ IndexedQueue *indexed_queue_create_default_opt(
     const char *directory,
     const char *queue_name,
     Runtime    *write_runtime,
-    Runtime    *read_runtime,
-    int         fixed_size_8bytes);
+    Runtime    *read_runtime);
 
 /* ── Participant factories ────────────────────────────────────────────────── */
 
@@ -179,11 +177,6 @@ int64_t indexed_queue_max_file_size(const IndexedQueue *q);
  * indexed_queue_start_index — current start index (0 for non-archivable queues).
  */
 int64_t indexed_queue_start_index(const IndexedQueue *q);
-
-/**
- * indexed_queue_fixed_size_8bytes — configured fixed_size_8bytes flag.
- */
-int indexed_queue_fixed_size_8bytes(const IndexedQueue *q);
 
 /* ── Lifecycle ───────────────────────────────────────────────────────────── */
 

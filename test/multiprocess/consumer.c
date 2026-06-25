@@ -129,7 +129,7 @@ int main(int argc, char *argv[])
             dir, name,
             REGION_SIZE, RING_SIZE, 1,
             MAX_FILE_SIZE, 0,
-            TIMEOUT_NS, rt);
+            TIMEOUT_NS, rt, rt);
 
         if (q == NULL) {
             if (monotonic_nanos() >= deadline_ns) {

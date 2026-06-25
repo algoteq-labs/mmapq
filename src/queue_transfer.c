@@ -286,7 +286,7 @@ static int64_t do_import(
     IndexedQueue *q = indexed_queue_create(
         directory, queue_name,
         region_size, 4, 1, max_file_size, start_index,
-        10000000000ULL, wrt, rrt, fixed_size);
+        10000000000ULL, wrt, rrt);
 
     if (!q) return -1;
 
@@ -417,8 +417,7 @@ int64_t queue_transfer_copy(
 
     IndexedQueue *q = indexed_queue_create(dest_dir, dest_queue,
         queue_meta_region_size(qm), 4, 1, queue_meta_max_file_size(qm),
-        dest_start, 10000000000ULL, write_rt, read_rt,
-        queue_meta_fixed_size_8bytes(qm));
+        dest_start, 10000000000ULL, write_rt, read_rt);
 
     if (!q) return -1;
 

@@ -73,8 +73,7 @@ IndexedAppender *indexed_appender_create(
     int         ring_size,
     int64_t     max_file_size,
     uint64_t    timeout_ns,
-    Runtime    *runtime,
-    int         fixed_size_8bytes);
+    Runtime    *runtime);
 
 /**
  * indexed_appender_create_with_id — create an appender with a specific ID.
@@ -90,8 +89,7 @@ IndexedAppender *indexed_appender_create_with_id(
     int64_t     max_file_size,
     uint64_t    timeout_ns,
     Runtime    *runtime,
-    uint8_t     appender_id,
-    int         fixed_size_8bytes);
+    uint8_t     appender_id);
 
 /* ── Append operations ───────────────────────────────────────────────────── */
 

@@ -22,7 +22,6 @@ struct IndexedQueue {
     int      regions_to_map_ahead;
     int64_t  max_file_size; /* preferred/initial */
     int64_t  start_index;   /* initial */
-    int      fixed_size_8bytes; /* preferred/initial */
     uint64_t timeout_ns;
     Runtime *write_runtime;
     Runtime *read_runtime;
@@ -58,8 +57,7 @@ IndexedQueue *indexed_queue_create(
     int64_t     start_index,
     uint64_t    timeout_ns,
     Runtime    *write_runtime,
-    Runtime    *read_runtime,
-    int         fixed_size_8bytes)
+    Runtime    *read_runtime)
 {
     MMAP_ASSERT(directory  != NULL, "indexed_queue_create: directory is NULL");
     MMAP_ASSERT(queue_name != NULL, "indexed_queue_create: queue_name is NULL");
@@ -84,7 +82,6 @@ IndexedQueue *indexed_queue_create(
     q->regions_to_map_ahead = regions_to_map_ahead;
     q->max_file_size        = max_file_size;
     q->start_index          = start_index;
-    q->fixed_size_8bytes    = fixed_size_8bytes;
     q->timeout_ns           = timeout_ns;
     q->write_runtime        = write_runtime;
     q->read_runtime         = read_runtime;
@@ -115,7 +112,7 @@ IndexedQueue *indexed_queue_create_default(
     Runtime    *write_runtime,
     Runtime    *read_runtime)
 {
-    return indexed_queue_create_default_opt(directory, queue_name, write_runtime, read_runtime, 0);
+    return indexed_queue_create_default_opt(directory, queue_name, write_runtime, read_runtime);
 }
 
 /* ── indexed_queue_create_default_opt ────────────────────────────────────── */
@@ -124,8 +121,7 @@ IndexedQueue *indexed_queue_create_default_opt(
     const char *directory,
     const char *queue_name,
     Runtime    *write_runtime,
-    Runtime    *read_runtime,
-    int         fixed_size_8bytes)
+    Runtime    *read_runtime)
 {
     return indexed_queue_create(
         directory, queue_name,
@@ -136,8 +132,7 @@ IndexedQueue *indexed_queue_create_default_opt(
         /* start_index = */ 0,
         INDEXED_QUEUE_DEFAULT_TIMEOUT_NS,
         write_runtime,
-        read_runtime,
-        fixed_size_8bytes);
+        read_runtime);
 }
 
 /* ── Participant factories ────────────────────────────────────────────────── */
@@ -152,8 +147,7 @@ IndexedAppender *indexed_queue_create_appender(IndexedQueue *q)
     return indexed_appender_create(
         q->directory, q->queue_name,
         q->region_size, q->ring_size,
-        q->max_file_size, q->timeout_ns, q->write_runtime,
-        q->fixed_size_8bytes);
+        q->max_file_size, q->timeout_ns, q->write_runtime);
 }
 
 IndexedAppender *indexed_queue_create_appender_with_id(
@@ -169,8 +163,7 @@ IndexedAppender *indexed_queue_create_appender_with_id(
         q->directory, q->queue_name,
         q->region_size, q->ring_size,
         q->max_file_size, q->timeout_ns, q->write_runtime,
-        appender_id,
-        q->fixed_size_8bytes);
+        appender_id);
 }
 
 IndexedPoller *indexed_queue_create_poller(IndexedQueue *q)
@@ -229,13 +222,6 @@ int64_t indexed_queue_start_index(const IndexedQueue *q)
     MMAP_ASSERT(q != NULL, "indexed_queue_start_index: queue is NULL");
     ensure_meta_open((IndexedQueue *)q);
     return q->queue_meta ? queue_meta_start_index(q->queue_meta) : q->start_index;
-}
-
-int indexed_queue_fixed_size_8bytes(const IndexedQueue *q)
-{
-    MMAP_ASSERT(q != NULL, "indexed_queue_fixed_size_8bytes: queue is NULL");
-    ensure_meta_open((IndexedQueue *)q);
-    return q->queue_meta ? queue_meta_fixed_size_8bytes(q->queue_meta) : q->fixed_size_8bytes;
 }
 
 /* ── indexed_queue_close ─────────────────────────────────────────────────── */

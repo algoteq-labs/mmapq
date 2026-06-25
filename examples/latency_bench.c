@@ -179,7 +179,7 @@ int main(int argc, char *argv[])
 
     QueueLatencyProbe *probe = queue_latency_probe_create(
         1, dir, name_req, name_res, msg_size,
-        val_server, val_client, write_rt, read_rt, 0);
+        val_server, val_client, write_rt, read_rt);
 
     /* Client Pinning */
     if (client_cpu >= 0) {

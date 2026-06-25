@@ -153,7 +153,7 @@ IndexedBatchAppender *indexed_batch_appender_create(
     a->id_pool    = appender_id_pool_open(directory, queue_name);
     a->appender_id = (uint8_t)appender_id_pool_acquire(a->id_pool);
 
-    a->queue_meta = queue_meta_open_rw(directory, queue_name, 0, region_size, max_file_size, 0, 0);
+    a->queue_meta = queue_meta_open_rw(directory, queue_name, 0, region_size, max_file_size, 0);
     int32_t rec_reg = queue_meta_region_size(a->queue_meta);
     int64_t rec_max = queue_meta_max_file_size(a->queue_meta);
 

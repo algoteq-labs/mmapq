@@ -26,7 +26,6 @@ typedef struct {
     int32_t region_size;
     int64_t max_file_size;
     int     archivable;
-    int     fixed_size_8bytes;
 } MetaInitCtx;
 
 static int meta_file_init(int fd, size_t size, void *ctx)
@@ -43,7 +42,7 @@ static int meta_file_init(int fd, size_t size, void *ctx)
     int64_t si     = mctx->start_index;
     int64_t mfs    = mctx->max_file_size;
     uint8_t arch   = (uint8_t)(mctx->archivable ? 1 : 0);
-    uint8_t fs8    = (uint8_t)(mctx->fixed_size_8bytes ? 1 : 0);
+    uint8_t fs8    = 0;  /* C implementation does not support fixed_size_8bytes */
 
     if (pwrite(fd, &schema, sizeof(schema), QUEUE_META_SCHEMA_VERSION_OFFSET) < 0) return -1;
     if (pwrite(fd, &rs,     sizeof(rs),     QUEUE_META_REGION_SIZE_OFFSET)    < 0) return -1;
@@ -73,8 +72,7 @@ QueueMeta *queue_meta_open_rw(
     int64_t     start_index,
     int32_t     region_size,
     int64_t     max_file_size,
-    int         archivable,
-    int         fixed_size_8bytes)
+    int         archivable)
 {
     MMAP_ASSERT(directory  != NULL, "queue_meta_open_rw: directory is NULL");
     MMAP_ASSERT(queue_name != NULL, "queue_meta_open_rw: queue_name is NULL");
@@ -89,7 +87,6 @@ QueueMeta *queue_meta_open_rw(
         .region_size  = region_size,
         .max_file_size = max_file_size,
         .archivable   = archivable,
-        .fixed_size_8bytes = fixed_size_8bytes,
     };
 
     RegionAccessor *region = fixed_size_region_create(
@@ -111,6 +108,10 @@ QueueMeta *queue_meta_open_rw(
     m->region = region;
     m->base   = buf.data;
     meta_cache_fields(m);
+
+    MMAP_ASSERT(m->fixed_size_8bytes == 0,
+        "C implementation does not support fixed_size_8bytes mode. "
+        "Queue was created by Java with fixed-size 8-byte mode enabled.");
 
     return m;
 }
@@ -158,6 +159,10 @@ QueueMeta *queue_meta_open_ro(
     m->region = region;
     m->base   = buf.data;
     meta_cache_fields(m);
+
+    MMAP_ASSERT(m->fixed_size_8bytes == 0,
+        "C implementation does not support fixed_size_8bytes mode. "
+        "Queue was created by Java with fixed-size 8-byte mode enabled.");
 
     return m;
 }
