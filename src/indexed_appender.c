@@ -393,7 +393,6 @@ IndexedAppender *indexed_appender_create(
 {
     MMAP_ASSERT(directory  != NULL, "indexed_appender_create: directory is NULL");
     MMAP_ASSERT(queue_name != NULL, "indexed_appender_create: queue_name is NULL");
-    MMAP_ASSERT(runtime    != NULL, "indexed_appender_create: runtime is NULL");
 
     /* Acquire an ID from the pool — pool is opened here and owned by the appender */
     AppenderIdPool *pool = appender_id_pool_open(directory, queue_name);
@@ -418,7 +417,6 @@ IndexedAppender *indexed_appender_create_with_id(
 {
     MMAP_ASSERT(directory  != NULL, "indexed_appender_create_with_id: directory is NULL");
     MMAP_ASSERT(queue_name != NULL, "indexed_appender_create_with_id: queue_name is NULL");
-    MMAP_ASSERT(runtime    != NULL, "indexed_appender_create_with_id: runtime is NULL");
 
     AppenderIdPool *pool = appender_id_pool_open(directory, queue_name);
     int ok = appender_id_pool_try_acquire(pool, appender_id);

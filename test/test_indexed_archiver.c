@@ -73,7 +73,7 @@ void test_archiver_start_index_initially_zero(void)
     indexed_appender_append(a, "hello", 5);
     indexed_appender_close(a);
 
-    IndexedArchiver *arch = indexed_archiver_create(DIR, QUEUE, rt);
+    IndexedArchiver *arch = indexed_archiver_create(DIR, QUEUE, 4, rt);
     TEST_ASSERT_EQUAL_INT64(0, indexed_archiver_start_index(arch));
     TEST_ASSERT_EQUAL_INT(1, indexed_archiver_archivable(arch));
     indexed_archiver_close(arch);
@@ -89,7 +89,7 @@ void test_archiver_archive_forward_updates_start_index(void)
     }
     indexed_appender_close(a);
 
-    IndexedArchiver *arch = indexed_archiver_create(DIR, QUEUE, rt);
+    IndexedArchiver *arch = indexed_archiver_create(DIR, QUEUE, 4, rt);
     indexed_archiver_archive_up_to_index(arch, 3);
     TEST_ASSERT_EQUAL_INT64(3, indexed_archiver_start_index(arch));
     indexed_archiver_close(arch);
@@ -118,7 +118,7 @@ void test_archiver_poller_returns_archived_below_start_index(void)
     indexed_poller_move_to_index(p, 0);
 
     /* Archive entries 0..2 — now start_index = 3 */
-    IndexedArchiver *arch = indexed_archiver_create(DIR, QUEUE, rt);
+    IndexedArchiver *arch = indexed_archiver_create(DIR, QUEUE, 4, rt);
     indexed_archiver_archive_up_to_index(arch, 3);
     indexed_archiver_close(arch);
 
@@ -157,7 +157,7 @@ void test_archiver_start_offset_advances_after_archive(void)
     }
     indexed_appender_close(a);
 
-    IndexedArchiver *arch = indexed_archiver_create(DIR, QUEUE, rt);
+    IndexedArchiver *arch = indexed_archiver_create(DIR, QUEUE, 4, rt);
     int64_t before = 0;
     int ok = indexed_archiver_start_offset(arch, appender_id, &before);
     TEST_ASSERT_EQUAL_INT(1, ok);
@@ -178,7 +178,7 @@ void test_archiver_archivable_files_none_at_start_zero(void)
     indexed_appender_append(a, "x", 1);
     indexed_appender_close(a);
 
-    IndexedArchiver *arch = indexed_archiver_create(DIR, QUEUE, rt);
+    IndexedArchiver *arch = indexed_archiver_create(DIR, QUEUE, 4, rt);
     char *paths[64];
     int n = indexed_archiver_archivable_files(arch, paths, 64);
     TEST_ASSERT_EQUAL_INT(0, n);
@@ -195,7 +195,7 @@ void test_archiver_backward_unarchive(void)
     }
     indexed_appender_close(a);
 
-    IndexedArchiver *arch = indexed_archiver_create(DIR, QUEUE, rt);
+    IndexedArchiver *arch = indexed_archiver_create(DIR, QUEUE, 4, rt);
     indexed_archiver_archive_up_to_index(arch, 3);
     TEST_ASSERT_EQUAL_INT64(3, indexed_archiver_start_index(arch));
 
@@ -211,7 +211,7 @@ void test_archiver_noop_when_index_equals_start(void)
     indexed_appender_append(a, "x", 1);
     indexed_appender_close(a);
 
-    IndexedArchiver *arch = indexed_archiver_create(DIR, QUEUE, rt);
+    IndexedArchiver *arch = indexed_archiver_create(DIR, QUEUE, 4, rt);
     indexed_archiver_archive_up_to_index(arch, 0); /* no-op */
     TEST_ASSERT_EQUAL_INT64(0, indexed_archiver_start_index(arch));
     indexed_archiver_close(arch);

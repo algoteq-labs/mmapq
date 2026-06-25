@@ -75,7 +75,6 @@ IndexedReader *indexed_reader_create(
 {
     MMAP_ASSERT(directory  != NULL, "indexed_reader_create: directory is NULL");
     MMAP_ASSERT(queue_name != NULL, "indexed_reader_create: queue_name is NULL");
-    MMAP_ASSERT(runtime    != NULL, "indexed_reader_create: runtime is NULL");
 
     IndexedReader *r = calloc(1, sizeof(IndexedReader));
     MMAP_ASSERT(r != NULL, "indexed_reader_create: out of memory");
@@ -239,6 +238,27 @@ EntryStatus indexed_reader_entry_status(IndexedReader *r, int64_t index)
     return header_found(r->header_acc, &r->header_buf, index, r->queue_name)
         ? ENTRY_AVAILABLE
         : ENTRY_END_OF_STREAM;
+}
+
+/* ── Accessors ─────────────────────────────────────────────────────────────── */
+
+QueueMeta *indexed_reader_queue_meta(IndexedReader *r)
+{
+    MMAP_ASSERT(r != NULL, "indexed_reader_queue_meta: reader is NULL");
+    reader_init(r);
+    return r->queue_meta;
+}
+
+const char *indexed_reader_directory(IndexedReader *r)
+{
+    MMAP_ASSERT(r != NULL, "indexed_reader_directory: reader is NULL");
+    return r->directory;
+}
+
+const char *indexed_reader_queue_name(IndexedReader *r)
+{
+    MMAP_ASSERT(r != NULL, "indexed_reader_queue_name: reader is NULL");
+    return r->queue_name;
 }
 
 /* ── indexed_reader_close ────────────────────────────────────────────────── */

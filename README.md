@@ -20,9 +20,19 @@ MIT license.
 This C port extends the original mmap queue design with several critical features for low-latency production environments:
 
 *   **Deferred & Out-of-Order Commits**: Append messages to the payload stream uncommitted and commit them to the shared index later, in an order different from physical insertion order. Enables UDP resequencing and pipelined writes.
+
 *   **False-Sharing-Proof Headers**: The header file uses a non-linear striding algorithm — a **vertical walk** — that maps sequential indices to different cache lines. Sequential writes are physically separated by **512 bytes (8 cache lines)**, providing hardware-level isolation between concurrent appenders.
+
 *   **Batch Queue**: A first-class batch layer (`IndexedBatchAppender`, `IndexedBatchPoller`, `IndexedBatchReader`) that groups multiple messages under a single atomic commit. Wire-format compatible with the Algoteq Java batch queue implementation.
+
+*   **Queue Archiving**: `IndexedArchiver` / `IndexedBatchArchiver` advances the queue's logical `start_index`, pruning per-appender payload offsets without deleting physical files. Supports both forward archiving (prune entries at the head) and backward undo (restore previously archived entries). Discover which files are fully covered by the archive boundary and safe to delete, compress, or migrate to cold storage.
+
+*   **Linearised Export / Import**: `QueueTransfer` / `BatchQueueTransfer` serialises queue contents into a portable stream format for backup, migration, or chunked upload to object storage (e.g. S3). Supports optional include/exclude filters via callback, configurable chunk size for splitting large exports, and cross-format import (batch stream → normal queue, normal stream → batch queue).
+
+*   **Mixed Runtime**: Independent `write_runtime` and `read_runtime` parameters allow asynchronous writer mapping (background thread absorbs `ftruncate` and page-zeroing overhead) while keeping the reader fully synchronous on its hot core — achieving the minimum possible steady-state latency without sacrificing tail stability.
+
 *   **Safe Lifecycle Management**: Explicit deregistration of ring regions from the background mapping thread. When a participant is closed, its mapping tasks are safely drained, preventing resource leaks and races.
+
 *   **High-Performance Runtimes**: A flexible `Runtime` abstraction for background tasks (region mapping, metrics aggregation) with customisable idle strategies (busy-spin, yield, backoff).
 
 ---
@@ -122,13 +132,91 @@ readers trigger premap at the halfway point (ratio 0.5). The writer
 extends the file with `ftruncate` and pre-touches pages via atomic CAS to
 absorb dirty-bit penalties before the hot loop reaches the new region.
 
-### File layout
+---
+
+## Production Features
+
+### Queue Archiving
+
+Long-running queues accumulate entries over weeks or months. Archiving
+logically prunes old entries by advancing the queue's `start_index` without
+physically deleting data.
+
+**Forward archiving** (`index > current start_index`):
+Scans headers backwards from `index - 1` to the current start, identifies
+the last committed payload position per appender, advances past each message
+(or exhausts the batch), and writes the new start offsets to per-appender
+metadata. Finally, commits the new `start_index` atomically in the queue
+meta — all `poll()` / `read()` calls immediately see the boundary.
+
+**Backward archiving / undo** (`index < current start_index`):
+Restores access to previously archived entries by scanning headers
+forward, validating that all required header and payload files still exist
+on disk, and rolling back the per-appender start offsets.
+
+**Archivable file discovery** (`archivable_files()`):
+Returns the set of header and payload files fully covered by the current
+archive boundary — safe to delete, compress, or migrate to cold storage.
+
+Typical usage in production:
+1. Hourly: call `archiveUpToIndex()` to log the archive boundary.
+2. Call `archivableFiles()` to list fully covered files.
+3. Upload those files to S3 or Glacier.
+4. Delete local copies once confirmed uploaded.
+
+### Export / Import (QueueTransfer)
+
+Export flattens queue data into a portable stream format for backup,
+migration, or chunked replay. Each stream begins with a 64-byte metadata
+header (schema version, region size, max file size, start index, entry
+count, archivable flag) followed by framed entries.
+
+**Chunked export** splits a large export into multiple files of
+approximately `N` MB each. Each chunk is a complete, self-contained stream
+with its own header and embedded index range in the file name
+(`base_path_start-end`). Chunks can be uploaded independently to object
+storage and downloaded on demand during replay.
+
+**Import** reads a stream and reconstructs the queue. Supports all four
+cross-over combinations:
+
+| Import function | Stream format | Destination | Behaviour |
+|:---|---|---|---|
+| `queue_transfer_import` | flat (single-message) | normal queue | Direct append |
+| `queue_transfer_import_batch_stream` | batched | normal queue | Flatten batches |
+| `batch_queue_transfer_import` | batched | batch queue | Direct batch commit |
+| `batch_queue_transfer_import_flat_stream` | flat | batch queue | 1-msg batches |
+
+**Start index mode** controls how the stream's `start_index` metadata is
+interpreted:
+- **REBASE** (default): start index resets to 0.
+- **PRESERVE**: start index matches the source range — useful for exact
+  replica restoration and replay systems that track position by index.
+
+**Filters**: Optional include/exclude callbacks allow selective export,
+import, or copy by content or position.
+
+Typical usage in production:
+1. Every hour, export the queue with chunked export (`chunk_size_mb=64`).
+2. Upload each chunk file to S3.
+3. On restart: download the relevant chunks, import with PRESERVE mode,
+   and replay to the point of interest.
+
+---
+
+## File layout
 
 ```
 <directory>/<queue_name>/
-  meta                  queue config (region_size, max_file_size, schema version)
-  header                shared header file — one 8-byte entry per queue index
-  payload_N             per-appender payload file (N = appender ID, 0–255)
+  meta                  queue config (region_size, max_file_size, schema version, start_index, archivable flag)
+  header                shared header file — one 8-byte entry per queue index (single file, non-archivable)
+  header_0              rolled header files — N = 0, 1, 2... (archivable queues)
+  header_1
+  ...
+  payload_N             per-appender payload file (N = appender ID, 0–255) (single file, non-archivable)
+  payload_N_0           rolled per-appender payload files (archivable queues)
+  payload_N_1
+  ...
   appender_meta_N       per-appender start_offset (for archiving)
   appender_id_pool      CAS bitset — allocates appender IDs
 ```
@@ -165,7 +253,7 @@ make -j$(nproc)
 ## Running the tests
 
 ```bash
-./scripts/test.sh            # normal build + tests (16 passed, 0 failed)
+./scripts/test.sh            # normal build + tests (19 passed, 0 failed)
 ./scripts/test.sh --asan     # AddressSanitizer
 ./scripts/test.sh --tsan     # ThreadSanitizer (run with ASLR disabled: setarch $(uname -m) -R ...)
 ```
@@ -292,6 +380,7 @@ See `examples/demo.c` for a complete single-message producer/consumer.
 | `indexed_queue_create_appender()` | Create a producer |
 | `indexed_queue_create_poller()` | Create a sequential consumer |
 | `indexed_queue_create_reader()` | Create a random-access reader |
+| `indexed_queue_create_archiver()` | Create an archiver |
 | `indexed_queue_close()` | Close the queue |
 | `indexed_appender_append()` | Write and commit a message |
 | `indexed_appender_append_uncommitted()` | Write without committing |
@@ -301,6 +390,9 @@ See `examples/demo.c` for a complete single-message producer/consumer.
 | `indexed_poller_move_to_index()` | Jump to a specific index |
 | `indexed_reader_read()` | Read entry at a specific index |
 | `indexed_reader_read_last()` | Read the last committed entry |
+| `indexed_archiver_archive_up_to_index()` | Archive entries up to an index |
+| `indexed_archiver_archivable_files()` | List files safe to delete/archive |
+| `indexed_archiver_print_summary()` | Print queue file layout summary |
 
 The poll callback returns `NEXT_ADVANCE`, `NEXT_STOP`, or `NEXT_RETREAT`.
 
@@ -312,6 +404,7 @@ The poll callback returns `NEXT_ADVANCE`, `NEXT_STOP`, or `NEXT_RETREAT`.
 | `indexed_batch_queue_create_appender()` | Create a batch producer |
 | `indexed_batch_queue_create_poller()` | Create a batch sequential consumer |
 | `indexed_batch_queue_create_reader()` | Create a batch random-access reader |
+| `indexed_batch_queue_create_archiver()` | Create a batch archiver |
 | `indexed_batch_appender_start_batch()` | Begin a new batch |
 | `mutable_batch_append()` | Add a message to an in-progress batch |
 | `mutable_batch_complete()` | Finalise the batch |
@@ -319,9 +412,29 @@ The poll callback returns `NEXT_ADVANCE`, `NEXT_STOP`, or `NEXT_RETREAT`.
 | `indexed_batch_poller_poll()` | Process one message via callback |
 | `indexed_batch_reader_read()` | Read a batch at a specific index |
 | `indexed_batch_reader_read_last()` | Read the last committed batch |
+| `indexed_batch_archiver_archive_up_to_index()` | Archive batches up to an index |
+| `indexed_batch_archiver_archivable_files()` | List files safe to delete/archive |
 
 The batch poll callback returns `BATCH_ADVANCE`, `BATCH_ADVANCE_BATCH`,
 `BATCH_STOP`, or `BATCH_RETREAT_BATCH`.
+
+### Export / Import (QueueTransfer)
+
+| Function | Description |
+|---|---|
+| `queue_transfer_export()` | Export queue entries to a flat stream |
+| `queue_transfer_export_chunked()` | Export split into ~N MB chunk files |
+| `queue_transfer_import()` | Import flat stream into a normal queue |
+| `queue_transfer_import_batch_stream()` | Import batch stream into a normal queue (flatten) |
+| `queue_transfer_copy()` | Copy entries directly between queues |
+| `batch_queue_transfer_export()` | Export batch queue entries to a batched stream |
+| `batch_queue_transfer_export_chunked()` | Batch export split into ~N MB chunk files |
+| `batch_queue_transfer_import()` | Import batched stream into a batch queue |
+| `batch_queue_transfer_import_flat_stream()` | Import flat stream into a batch queue (1-msg batches) |
+| `batch_queue_transfer_copy()` | Copy batches directly between queues |
+
+All export/copy functions support optional include/exclude filter callbacks
+and `REBASE` / `PRESERVE` start index mode.
 
 ### Runtime
 

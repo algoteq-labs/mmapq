@@ -24,6 +24,7 @@ TESTS=(
     test_queue_meta
     test_payload_walk
     test_indexed_queue
+    test_queue_transfer
     test_indexed_archiver
     test_indexed_batch_queue
     test_indexed_batch_archiver

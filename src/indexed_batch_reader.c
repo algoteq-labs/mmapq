@@ -225,6 +225,24 @@ BatchEntryStatus indexed_batch_reader_entry_status(IndexedBatchReader *r, int64_
         : BATCH_ENTRY_END_OF_STREAM;
 }
 
+/* ── Accessors ─────────────────────────────────────────────────────────────── */
+
+QueueMeta *indexed_batch_reader_queue_meta(IndexedBatchReader *r)
+{
+    if (!reader_init(r)) return NULL;
+    return r->queue_meta;
+}
+
+const char *indexed_batch_reader_directory(IndexedBatchReader *r)
+{
+    return r->directory;
+}
+
+const char *indexed_batch_reader_queue_name(IndexedBatchReader *r)
+{
+    return r->queue_name;
+}
+
 void indexed_batch_reader_close(IndexedBatchReader *r)
 {
     if (r == NULL || r->closed) return;

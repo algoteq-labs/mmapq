@@ -1,0 +1,98 @@
+#ifndef EXPORT_META_H
+#define EXPORT_META_H
+
+#include <stdint.h>
+#include <string.h>
+
+/**
+ * ExportMeta — 64-byte metadata header for a flat (single-message) queue export stream.
+ *
+ * A flat queue export stream consists of:
+ *   [ExportMeta header: 64 bytes]
+ *   [entry: uint16 appender_id][int32 payload_length][uint8 payload...] ... (× total_entries)
+ *
+ * All multi-byte fields are in native byte order.  Since the primary target
+ * platforms are Linux x86-64 and ARM64 (both little-endian), this is compatible
+ * with the Java export format without byte swapping.
+ *
+ * FIELD LAYOUT (mirrors Java QueueExportMeta.ENCODED_LENGTH):
+ *   Offset  Size  Field
+ *   0       4     schema_version
+ *   4       4     region_size
+ *   8       8     start_index        (8-byte aligned for ARM volatile access)
+ *   16      8     max_file_size
+ *   24      8     total_entries
+ *   32      1     archivable
+ *   33      1     fixed_size_8bytes
+ *   34      30    reserved/padding
+ *   Total:  64 bytes (one cache line)
+ */
+
+#define EXPORT_META_SIZE                 64
+
+#define EXPORT_META_SCHEMA_VERSION_OFF   0
+#define EXPORT_META_SCHEMA_VERSION_SIZE  4
+#define EXPORT_META_REGION_SIZE_OFF      4
+#define EXPORT_META_REGION_SIZE_SIZE     4
+#define EXPORT_META_START_INDEX_OFF      8
+#define EXPORT_META_START_INDEX_SIZE     8
+#define EXPORT_META_MAX_FILE_SIZE_OFF    16
+#define EXPORT_META_MAX_FILE_SIZE_SIZE   8
+#define EXPORT_META_TOTAL_ENTRIES_OFF    24
+#define EXPORT_META_TOTAL_ENTRIES_SIZE   8
+#define EXPORT_META_ARCHIVABLE_OFF       32
+#define EXPORT_META_FIXED_SIZE_OFF       33
+#define EXPORT_META_PAYLOAD_START        34  /* first byte after fixed fields */
+#define EXPORT_META_PAYLOAD_SIZE         (EXPORT_META_SIZE - EXPORT_META_PAYLOAD_START)
+
+typedef struct {
+    int32_t schema_version;     
+    int32_t region_size;        
+    int64_t start_index;        
+    int64_t max_file_size;      
+    int64_t total_entries;      
+    uint8_t archivable;         
+    uint8_t fixed_size_8bytes;  
+    uint8_t reserved[EXPORT_META_PAYLOAD_SIZE];
+} ExportMeta;
+
+/** Initialise an ExportMeta to all zeros. */
+static inline void export_meta_init(ExportMeta *m)
+{
+    memset(m, 0, sizeof(ExportMeta));
+}
+
+/**
+ * Encode @p m into the 64-byte buffer @p out.
+ * @param m    source metadata struct
+ * @param out  caller-owned buffer of at least EXPORT_META_SIZE bytes
+ */
+static inline void export_meta_encode(const ExportMeta *m, uint8_t *out)
+{
+    memcpy(out + EXPORT_META_SCHEMA_VERSION_OFF, &m->schema_version, EXPORT_META_SCHEMA_VERSION_SIZE);
+    memcpy(out + EXPORT_META_REGION_SIZE_OFF,    &m->region_size,    EXPORT_META_REGION_SIZE_SIZE);
+    memcpy(out + EXPORT_META_START_INDEX_OFF,    &m->start_index,    EXPORT_META_START_INDEX_SIZE);
+    memcpy(out + EXPORT_META_MAX_FILE_SIZE_OFF,  &m->max_file_size,  EXPORT_META_MAX_FILE_SIZE_SIZE);
+    memcpy(out + EXPORT_META_TOTAL_ENTRIES_OFF,  &m->total_entries,  EXPORT_META_TOTAL_ENTRIES_SIZE);
+    out[EXPORT_META_ARCHIVABLE_OFF] = m->archivable;
+    out[EXPORT_META_FIXED_SIZE_OFF] = m->fixed_size_8bytes;
+}
+
+/**
+ * Decode the 64-byte buffer @p in into @p m.
+ * @param in  caller-owned buffer of at least EXPORT_META_SIZE bytes
+ * @param m   destination metadata struct
+ */
+static inline void export_meta_decode(const uint8_t *in, ExportMeta *m)
+{
+    memcpy(&m->schema_version, in + EXPORT_META_SCHEMA_VERSION_OFF, EXPORT_META_SCHEMA_VERSION_SIZE);
+    memcpy(&m->region_size,    in + EXPORT_META_REGION_SIZE_OFF,    EXPORT_META_REGION_SIZE_SIZE);
+    memcpy(&m->start_index,    in + EXPORT_META_START_INDEX_OFF,    EXPORT_META_START_INDEX_SIZE);
+    memcpy(&m->max_file_size,  in + EXPORT_META_MAX_FILE_SIZE_OFF,  EXPORT_META_MAX_FILE_SIZE_SIZE);
+    memcpy(&m->total_entries,  in + EXPORT_META_TOTAL_ENTRIES_OFF,  EXPORT_META_TOTAL_ENTRIES_SIZE);
+    m->archivable        = in[EXPORT_META_ARCHIVABLE_OFF];
+    m->fixed_size_8bytes = in[EXPORT_META_FIXED_SIZE_OFF];
+    memset(m->reserved, 0, EXPORT_META_PAYLOAD_SIZE);
+}
+
+#endif /* EXPORT_META_H */

@@ -80,7 +80,6 @@ IndexedPoller *indexed_poller_create(
 {
     MMAP_ASSERT(directory  != NULL, "indexed_poller_create: directory is NULL");
     MMAP_ASSERT(queue_name != NULL, "indexed_poller_create: queue_name is NULL");
-    MMAP_ASSERT(runtime    != NULL, "indexed_poller_create: runtime is NULL");
 
     IndexedPoller *p = calloc(1, sizeof(IndexedPoller));
     MMAP_ASSERT(p != NULL, "indexed_poller_create: out of memory");

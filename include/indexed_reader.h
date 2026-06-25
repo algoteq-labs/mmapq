@@ -5,6 +5,7 @@
 #include "region_accessor.h"
 #include "runtime.h"
 #include "mmap_assert.h"
+#include "queue_meta.h"
 
 /**
  * IndexedReader — random access reader for the indexed queue.
@@ -149,6 +150,22 @@ static inline int indexed_reader_has_entry(IndexedReader *r, int64_t index)
 {
     return indexed_reader_entry_status(r, index) == ENTRY_AVAILABLE;
 }
+
+/**
+ * indexed_reader_queue_meta — returns the reader's QueueMeta after lazy init,
+ * or NULL if the queue does not exist.
+ */
+QueueMeta *indexed_reader_queue_meta(IndexedReader *r);
+
+/**
+ * indexed_reader_directory — returns the base directory string.
+ */
+const char *indexed_reader_directory(IndexedReader *r);
+
+/**
+ * indexed_reader_queue_name — returns the queue name string.
+ */
+const char *indexed_reader_queue_name(IndexedReader *r);
 
 /* ── Lifecycle ───────────────────────────────────────────────────────────── */
 
