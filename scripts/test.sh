@@ -24,7 +24,9 @@ TESTS=(
     test_queue_meta
     test_payload_walk
     test_indexed_queue
+    test_indexed_archiver
     test_indexed_batch_queue
+    test_indexed_batch_archiver
 )
 
 CFLAGS="-std=gnu11 -g -O0 -D_GNU_SOURCE -I include"

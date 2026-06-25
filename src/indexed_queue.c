@@ -1,4 +1,5 @@
 #include "indexed_queue.h"
+#include "indexed_archiver.h"
 #include "queue_meta.h"
 #include "appender_id_pool.h"
 #include "mmap_assert.h"
@@ -190,6 +191,15 @@ IndexedReader *indexed_queue_create_reader(IndexedQueue *q)
     return indexed_reader_create(
         q->directory, q->queue_name,
         q->ring_size, q->timeout_ns, q->read_runtime);
+}
+
+IndexedArchiver *indexed_queue_create_archiver(IndexedQueue *q)
+{
+    MMAP_ASSERT(q != NULL,  "indexed_queue_create_archiver: queue is NULL");
+    MMAP_ASSERT(!q->closed, "indexed_queue_create_archiver: queue is closed");
+
+    return indexed_archiver_create(
+        q->directory, q->queue_name, q->read_runtime);
 }
 
 /* ── Metadata ─────────────────────────────────────────────────────────────── */

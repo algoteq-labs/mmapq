@@ -159,4 +159,18 @@ static inline int32_t batch_iterator_current_length(const BatchPayloadIterator *
  */
 void batch_iterator_exhaust(BatchPayloadIterator *it);
 
+/**
+ * Return the byte offset immediately after the last message in the batch.
+ *
+ * Valid after batch_iterator_exhaust() or after batch_iterator_advance()
+ * returns 0. This is the position where the next batch begins in the
+ * payload stream.
+ *
+ * Mirrors Java BatchPayloadIterator.nextPayloadPosition().
+ */
+static inline int64_t batch_iterator_next_payload_position(const BatchPayloadIterator *it)
+{
+    return it->next_message_position;
+}
+
 #endif /* BATCH_PAYLOAD_ITERATOR_H */

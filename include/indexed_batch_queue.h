@@ -5,6 +5,7 @@
 #include "indexed_batch_appender.h"
 #include "indexed_batch_poller.h"
 #include "indexed_batch_reader.h"
+#include "indexed_batch_archiver.h"
 #include "runtime.h"
 
 /**
@@ -122,6 +123,17 @@ IndexedBatchReader *indexed_batch_queue_create_reader(IndexedBatchQueue *q);
  * those must be closed independently. After this call the queue pointer
  * must not be used.
  */
+/**
+ * indexed_batch_queue_create_archiver — create a batch archiver for this queue.
+ *
+ * The queue must have been created with archivable=1.
+ * The archiver must be closed independently with indexed_batch_archiver_close().
+ *
+ * @param q  the queue (must not be closed, must be archivable)
+ * @return a new batch archiver
+ */
+IndexedBatchArchiver *indexed_batch_queue_create_archiver(IndexedBatchQueue *q);
+
 void indexed_batch_queue_close(IndexedBatchQueue *q);
 
 #endif /* INDEXED_BATCH_QUEUE_H */

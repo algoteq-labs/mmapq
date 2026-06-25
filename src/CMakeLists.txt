@@ -25,12 +25,16 @@ add_library(mmap-c STATIC
     indexed_reader.c
     indexed_queue.c
     queue_latency_probe.c
+    # Archiver layer
+    queue_files.c
+    indexed_archiver.c
     # Batch queue layer
     batch_payload_iterator.c
     batch_queue_latency_probe.c
     indexed_batch_appender.c
     indexed_batch_poller.c
     indexed_batch_reader.c
+    indexed_batch_archiver.c
     indexed_batch_queue.c
 )
 

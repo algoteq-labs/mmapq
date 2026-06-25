@@ -34,7 +34,7 @@ Transparent Huge Pages enabled:
 
 ### Single-message queue — roundtrip to echo server in external process , 20M iterations
 
-| Percentile |  C (this library) | Java (JMH, same machine) |
+| Percentile | C (this library) | Java (JMH, same machine) |
 |:-----------|------------------:|-------------------------:|
 | min (p0)   |        **182 ns** |                   265 ns |
 | p50        |        **284 ns** |                   380 ns |

@@ -1,5 +1,6 @@
 #include "indexed_batch_queue.h"
 #include "indexed_batch_reader.h"
+#include "indexed_batch_archiver.h"
 #include "indexed_queue.h"
 #include "queue_meta.h"
 #include "mmap_assert.h"
@@ -100,6 +101,14 @@ IndexedBatchReader *indexed_batch_queue_create_reader(IndexedBatchQueue *q)
 {
     MMAP_ASSERT(!q->closed, "queue closed");
     return indexed_batch_reader_create(q->directory, q->queue_name, q->ring_size, q->timeout_ns, q->read_runtime);
+}
+
+IndexedBatchArchiver *indexed_batch_queue_create_archiver(IndexedBatchQueue *q)
+{
+    MMAP_ASSERT(q != NULL,  "indexed_batch_queue_create_archiver: queue is NULL");
+    MMAP_ASSERT(!q->closed, "indexed_batch_queue_create_archiver: queue is closed");
+    return indexed_batch_archiver_create(
+        q->directory, q->queue_name, q->ring_size, q->read_runtime);
 }
 
 void indexed_batch_queue_close(IndexedBatchQueue *q)

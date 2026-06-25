@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include "indexed_appender.h"
+#include "indexed_archiver.h"
 #include "indexed_poller.h"
 #include "indexed_reader.h"
 #include "queue_meta.h"
@@ -147,6 +148,20 @@ IndexedPoller *indexed_queue_create_poller(IndexedQueue *q);
  * Close with indexed_reader_close() before indexed_queue_close().
  */
 IndexedReader *indexed_queue_create_reader(IndexedQueue *q);
+
+/**
+ * indexed_queue_create_archiver — create an archiver for this queue.
+ *
+ * The queue must have been created with archivable=1. Use the archiver to
+ * advance the start index, update per-appender start offsets, and obtain
+ * the list of files that can be safely deleted or moved.
+ *
+ * The archiver must be closed independently with indexed_archiver_close().
+ *
+ * @param q  the queue (must not be closed, must be archivable)
+ * @return a new archiver; asserts if the queue is not archivable
+ */
+IndexedArchiver *indexed_queue_create_archiver(IndexedQueue *q);
 
 /* ── Metadata ─────────────────────────────────────────────────────────────── */
 
