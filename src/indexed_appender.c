@@ -71,19 +71,17 @@ static int64_t appender_start_index_fn(void *ctx)
 
 /* ── Write padding at region boundary ───────────────────────────────────── */
 
-static void write_padding_if_needed(IndexedAppender *a, int32_t length)
+static int write_padding_if_needed(IndexedAppender *a, int32_t length)
 {
     WrapResult r = region_accessor_wrap(a->payload_acc,
                                          a->current_payload_position,
                                          &a->payload_buf);
-    (void)r;
-    MMAP_ASSERT(r == WRAP_SUCCESS,
-        "indexed_appender: failed to wrap payload for padding check");
+    if (r != WRAP_SUCCESS) return -1;
 
     int32_t capacity = a->payload_buf.capacity;
 
     if (capacity >= length + PAYLOAD_LENGTH_SIZE) {
-        return;  /* enough space — no padding needed */
+        return 0;  /* enough space — no padding needed */
     }
 
     /*
@@ -107,18 +105,19 @@ static void write_padding_if_needed(IndexedAppender *a, int32_t length)
     r = region_accessor_wrap(a->payload_acc,
                               a->current_payload_position,
                               &a->payload_buf);
-    MMAP_ASSERT(r == WRAP_SUCCESS,
-        "indexed_appender: failed to wrap payload after padding");
+    if (r != WRAP_SUCCESS) return -1;
+    return 0;
 }
 
 /* ── Write payload bytes ─────────────────────────────────────────────────── */
 
-static int64_t write_payload(IndexedAppender *a, const void *data, int32_t length)
+static int write_payload(IndexedAppender *a, const void *data, int32_t length,
+                          int64_t *out_offset)
 {
     MMAP_ASSERT(length + PAYLOAD_LENGTH_SIZE <= queue_meta_region_size(a->queue_meta),
         "write_payload: message too large — must fit within one region. "
         "Increase region_size or reduce message size.");
-    write_padding_if_needed(a, length);
+    if (write_padding_if_needed(a, length)) return -1;
 
     int64_t payload_offset = a->current_payload_position;
 
@@ -130,19 +129,14 @@ static int64_t write_payload(IndexedAppender *a, const void *data, int32_t lengt
 
     a->current_payload_position += PAYLOAD_LENGTH_SIZE + length;
 
-    return payload_offset;
+    *out_offset = payload_offset;
+    return 0;
 }
 
 /* ── CAS header commit ───────────────────────────────────────────────────── */
 
-static void move_to_last_header(IndexedAppender *a)
+static int move_to_last_header(IndexedAppender *a)
 {
-    /*
-     * Another appender committed at our current index — scan forward to
-     * find the next NULL_HEADER slot.
-     * This is the cold path (MPMC contention). For single-appender-per-lane
-     * use (the common case) this never executes.
-     */
     while (1) {
         a->current_index++;
         a->current_header_position = header_position(a->current_index);
@@ -150,27 +144,23 @@ static void move_to_last_header(IndexedAppender *a)
         WrapResult r = region_accessor_wrap(a->header_acc,
                                              a->current_header_position,
                                              &a->header_buf);
-        (void)r;
-        MMAP_ASSERT(r == WRAP_SUCCESS,
-            "indexed_appender: failed to wrap header while scanning for null slot");
+        if (r != WRAP_SUCCESS) return -1;
 
         _Atomic uint64_t *hp = (_Atomic uint64_t *)a->header_buf.data;
         if (atomic_load_explicit(hp, memory_order_acquire) == HEADER_NULL) {
-            return;
+            return 0;
         }
     }
 }
 
-static int64_t commit_header(IndexedAppender *a, int64_t payload_offset)
+static int commit_header(IndexedAppender *a, int64_t payload_offset, int64_t *out_index)
 {
     uint64_t header = header_encode(a->appender_id, payload_offset);
 
     WrapResult r = region_accessor_wrap(a->header_acc,
                                          a->current_header_position,
                                          &a->header_buf);
-    (void)r;
-    MMAP_ASSERT(r == WRAP_SUCCESS,
-        "indexed_appender: failed to wrap header for commit");
+    if (r != WRAP_SUCCESS) return -1;
 
     _Atomic uint64_t *hp = (_Atomic uint64_t *)a->header_buf.data;
     ASSERT_HEADER_ALIGNED(hp);
@@ -179,23 +169,22 @@ static int64_t commit_header(IndexedAppender *a, int64_t payload_offset)
     while (__builtin_expect(!atomic_compare_exchange_strong_explicit(
                hp, &expected, header,
                memory_order_acq_rel, memory_order_acquire), 0)) {
-        move_to_last_header(a);
+        if (move_to_last_header(a)) return -1;
 
         r = region_accessor_wrap(a->header_acc,
                                   a->current_header_position,
                                   &a->header_buf);
-        MMAP_ASSERT(r == WRAP_SUCCESS,
-            "indexed_appender: failed to wrap header after advancing to null slot");
+        if (r != WRAP_SUCCESS) return -1;
 
         hp       = (_Atomic uint64_t *)a->header_buf.data;
         expected = HEADER_NULL;
     }
 
-    int64_t committed_index  = a->current_index;
+    *out_index = a->current_index;
     a->current_index++;
     a->current_header_position = header_position(a->current_index);
 
-    return committed_index;
+    return 0;
 }
 
 /* ── Initialise append position after (re)start ──────────────────────────── */
@@ -436,8 +425,12 @@ int64_t indexed_appender_append(
     MMAP_ASSERT(data   != NULL, "indexed_appender_append: data is NULL");
     MMAP_ASSERT(length > 0,     "indexed_appender_append: length must be > 0");
 
-    int64_t payload_offset = write_payload(a, data, length);
-    return commit_header(a, payload_offset);
+    int64_t payload_offset;
+    if (write_payload(a, data, length, &payload_offset)) return -1;
+
+    int64_t committed;
+    if (commit_header(a, payload_offset, &committed)) return -1;
+    return committed;
 }
 
 /* ── indexed_appender_append_uncommitted ─────────────────────────────────── */
@@ -452,7 +445,9 @@ int64_t indexed_appender_append_uncommitted(
     MMAP_ASSERT(data   != NULL, "indexed_appender_append_uncommitted: data is NULL");
     MMAP_ASSERT(length > 0,     "indexed_appender_append_uncommitted: length must be > 0");
 
-    return write_payload(a, data, length);
+    int64_t payload_offset;
+    if (write_payload(a, data, length, &payload_offset)) return -1;
+    return payload_offset;
 }
 
 /* ── indexed_appender_commit ─────────────────────────────────────────────── */
@@ -466,7 +461,9 @@ int64_t indexed_appender_commit(
     MMAP_ASSERT(payload_offset > 0,
         "indexed_appender_commit: payload_offset must be > 0");
 
-    return commit_header(a, payload_offset);
+    int64_t committed;
+    if (commit_header(a, payload_offset, &committed)) return -1;
+    return committed;
 }
 
 /* ── Iterators ───────────────────────────────────────────────────────────── */

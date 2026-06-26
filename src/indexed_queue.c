@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdatomic.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <errno.h>
@@ -27,7 +28,7 @@ struct IndexedQueue {
     Runtime *read_runtime;
 
     QueueMeta *queue_meta;   /* Lazily opened RO meta */
-    int        closed;
+    atomic_int closed;
 };
 
 /* ── Directory creation ──────────────────────────────────────────────────── */
@@ -85,7 +86,7 @@ IndexedQueue *indexed_queue_create(
     q->timeout_ns           = timeout_ns;
     q->write_runtime        = write_runtime;
     q->read_runtime         = read_runtime;
-    q->closed               = 0;
+    atomic_store(&q->closed, 0);
 
     /*
      * Validate cross-process atomic requirements at startup.
@@ -140,7 +141,8 @@ IndexedQueue *indexed_queue_create_default_opt(
 IndexedAppender *indexed_queue_create_appender(IndexedQueue *q)
 {
     MMAP_ASSERT(q != NULL,  "indexed_queue_create_appender: queue is NULL");
-    MMAP_ASSERT(!q->closed, "indexed_queue_create_appender: queue is closed");
+    MMAP_ASSERT(!atomic_load_explicit(&q->closed, memory_order_relaxed),
+        "indexed_queue_create_appender: queue is closed");
 
     create_queue_directory(q->directory, q->queue_name);
 
@@ -155,7 +157,8 @@ IndexedAppender *indexed_queue_create_appender_with_id(
     uint8_t       appender_id)
 {
     MMAP_ASSERT(q != NULL,  "indexed_queue_create_appender_with_id: queue is NULL");
-    MMAP_ASSERT(!q->closed, "indexed_queue_create_appender_with_id: queue is closed");
+    MMAP_ASSERT(!atomic_load_explicit(&q->closed, memory_order_relaxed),
+        "indexed_queue_create_appender_with_id: queue is closed");
 
     create_queue_directory(q->directory, q->queue_name);
 
@@ -169,7 +172,8 @@ IndexedAppender *indexed_queue_create_appender_with_id(
 IndexedPoller *indexed_queue_create_poller(IndexedQueue *q)
 {
     MMAP_ASSERT(q != NULL,  "indexed_queue_create_poller: queue is NULL");
-    MMAP_ASSERT(!q->closed, "indexed_queue_create_poller: queue is closed");
+    MMAP_ASSERT(!atomic_load_explicit(&q->closed, memory_order_relaxed),
+        "indexed_queue_create_poller: queue is closed");
 
     return indexed_poller_create(
         q->directory, q->queue_name,
@@ -179,7 +183,8 @@ IndexedPoller *indexed_queue_create_poller(IndexedQueue *q)
 IndexedReader *indexed_queue_create_reader(IndexedQueue *q)
 {
     MMAP_ASSERT(q != NULL,  "indexed_queue_create_reader: queue is NULL");
-    MMAP_ASSERT(!q->closed, "indexed_queue_create_reader: queue is closed");
+    MMAP_ASSERT(!atomic_load_explicit(&q->closed, memory_order_relaxed),
+        "indexed_queue_create_reader: queue is closed");
 
     return indexed_reader_create(
         q->directory, q->queue_name,
@@ -189,7 +194,8 @@ IndexedReader *indexed_queue_create_reader(IndexedQueue *q)
 IndexedArchiver *indexed_queue_create_archiver(IndexedQueue *q)
 {
     MMAP_ASSERT(q != NULL,  "indexed_queue_create_archiver: queue is NULL");
-    MMAP_ASSERT(!q->closed, "indexed_queue_create_archiver: queue is closed");
+    MMAP_ASSERT(!atomic_load_explicit(&q->closed, memory_order_relaxed),
+        "indexed_queue_create_archiver: queue is closed");
 
     return indexed_archiver_create(
         q->directory, q->queue_name, q->ring_size, q->read_runtime);
@@ -230,8 +236,8 @@ int64_t indexed_queue_start_index(const IndexedQueue *q)
 
 void indexed_queue_close(IndexedQueue *q)
 {
-    if (q == NULL || q->closed) return;
-    q->closed = 1;
+    if (q == NULL || atomic_load_explicit(&q->closed, memory_order_relaxed)) return;
+    atomic_store_explicit(&q->closed, 1, memory_order_release);
 
     if (q->queue_meta != NULL) {
         queue_meta_close(q->queue_meta);

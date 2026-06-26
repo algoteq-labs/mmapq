@@ -51,6 +51,7 @@ typedef enum {
     POLL_STOPPED,         /* message processed; cursor held                     */
     POLL_RETREATED,       /* message processed; cursor moved backward           */
     POLL_ARCHIVED,        /* current index is below startIndex                  */
+    POLL_ERROR,           /* mapping timeout or I/O failure                      */
 } PollResult;
 
 /* ── Message handler ─────────────────────────────────────────────────────── */
@@ -119,7 +120,11 @@ IndexedPoller *indexed_poller_create(
  *          to the handler is a flyweight — do not cache the pointer.
  * ctx:     passed to handler.
  *
- * Returns a PollResult describing what happened.
+ * Returns a PollResult describing what happened:
+ *   POLL_ADVANCED, POLL_STOPPED, POLL_RETREATED on success;
+ *   POLL_END_OF_STREAM if no message yet;
+ *   POLL_ARCHIVED if currentIndex is below startIndex;
+ *   POLL_ERROR on mapping timeout.
  */
 PollResult indexed_poller_poll(
     IndexedPoller *p,

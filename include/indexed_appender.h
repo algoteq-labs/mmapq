@@ -99,8 +99,8 @@ IndexedAppender *indexed_appender_create_with_id(
  * data:   pointer to message payload bytes
  * length: payload byte count (must be <= region_size - 4)
  *
- * Returns the queue index at which the message was committed.
- * Aborts on mapping failure.
+ * Returns the queue index at which the message was committed,
+ * or -1 on mapping timeout.
  */
 int64_t indexed_appender_append(
     IndexedAppender *a,
@@ -113,8 +113,9 @@ int64_t indexed_appender_append(
  * Writes the payload to the payload file but does NOT write the header.
  * The message is invisible to pollers and readers until commit() is called.
  *
- * Returns the payload offset (position of the 4-byte length prefix).
- * This offset must be passed to indexed_appender_commit() later.
+ * Returns the payload offset (position of the 4-byte length prefix),
+ * or -1 on mapping timeout. The offset must be passed to
+ * indexed_appender_commit() later.
  *
  * Use case: UDP resequencing — append as packets arrive, commit when
  * the sequence is gapless.
@@ -130,7 +131,8 @@ int64_t indexed_appender_append_uncommitted(
  * payload_offset: the value returned by indexed_appender_append_uncommitted().
  *
  * Writes the header, making the message visible to pollers and readers.
- * Returns the queue index assigned to this message.
+ * Returns the queue index assigned to this message,
+ * or -1 on mapping timeout.
  *
  * CONTRACT: Not idempotent. Committing the same offset twice will cause
  * the message to appear twice to consumers. Each offset must be committed

@@ -126,9 +126,7 @@ static void reader_fill_context(IndexedReader *r, int64_t index, ReadingContext 
         queue_region_accessor_payload(r->ro_acc, appender_id);
 
     WrapResult wr = region_accessor_wrap(payload_acc, payload_position, &r->payload_buf);
-    (void)wr;
-    MMAP_ASSERT(wr == WRAP_SUCCESS,
-        "indexed_reader: failed to wrap payload — mapping timeout");
+    if (wr != WRAP_SUCCESS) { ctx->status = ENTRY_ERROR; return; }
 
     int32_t length;
     memcpy(&length, r->payload_buf.data + PAYLOAD_LENGTH_OFFSET, sizeof(int32_t));

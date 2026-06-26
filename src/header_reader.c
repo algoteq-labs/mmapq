@@ -28,15 +28,15 @@ uint64_t header_read(
         return atomic_load_explicit(p, memory_order_acquire);
     }
 
-    if (r == WRAP_FILE_NOT_FOUND || r == WRAP_BEYOND_FILE_SIZE) {
-        /* Queue not yet that large — treat as unwritten */
+    if (r == WRAP_FILE_NOT_FOUND || r == WRAP_BEYOND_FILE_SIZE || r == WRAP_MAP_TIMED_OUT) {
+        /* Queue not yet accessible — treat as unwritten */
         return HEADER_NULL;
     }
 
-    /* MAP_TIMED_OUT or WRAP_UNWRAPPED — fatal */
+    /* WRAP_UNWRAPPED — fatal */
     MMAP_ASSERT(0,
         "header_read: FATAL — unexpected wrap result. "
-        "This indicates a mapping timeout or region corruption.");
+        "This indicates region corruption.");
     return HEADER_NULL;  /* unreachable */
 }
 
@@ -44,6 +44,8 @@ uint64_t header_read(
  * header_read_sequential — like header_read but uses wrap() to trigger
  * premap of the next region. Use for sequential pollers advancing forward.
  * Use header_read for random-access readers and search algorithms.
+ *
+ * Returns HEADER_NULL on mapping timeout (caller should retry).
  */
 uint64_t header_read_sequential(
     RegionAccessor *header_accessor,
@@ -61,13 +63,13 @@ uint64_t header_read_sequential(
         return atomic_load_explicit(p, memory_order_acquire);
     }
 
-    if (r == WRAP_FILE_NOT_FOUND || r == WRAP_BEYOND_FILE_SIZE) {
+    if (r == WRAP_FILE_NOT_FOUND || r == WRAP_BEYOND_FILE_SIZE || r == WRAP_MAP_TIMED_OUT) {
         return HEADER_NULL;
     }
 
     MMAP_ASSERT(0,
         "header_read_sequential: FATAL — unexpected wrap result. "
-        "This indicates a mapping timeout or region corruption.");
+        "This indicates region corruption.");
     return HEADER_NULL;
 }
 

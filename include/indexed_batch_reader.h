@@ -60,7 +60,13 @@ typedef enum {
      * longer accessible. Its index is below start_index().
      * Mirrors Java EntryStatus.ARCHIVED.
      */
-    BATCH_ENTRY_ARCHIVED
+    BATCH_ENTRY_ARCHIVED,
+
+    /**
+     * A mapping or I/O error occurred. The application should retry.
+     * Mirrors Java EntryStatus.ERROR.
+     */
+    BATCH_ENTRY_ERROR
 } BatchEntryStatus;
 
 /**
@@ -125,6 +131,7 @@ IndexedBatchReader *indexed_batch_reader_create(
  * If the batch is not available, ctx->status indicates why:
  *   BATCH_ENTRY_END_OF_STREAM — index beyond the last committed batch
  *   BATCH_ENTRY_ARCHIVED      — index below start_index()
+ *   BATCH_ENTRY_ERROR         — mapping timeout or I/O failure
  *
  * @param r      the reader
  * @param index  zero-based batch index to read (must be >= 0)

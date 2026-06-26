@@ -201,8 +201,17 @@ int runtime_is_closed(const Runtime *rt);
 void runtime_close(Runtime *rt);
 
 /**
+ * Clone a Runtime, incrementing its internal reference count.
+ * The caller must call runtime_destroy() to release the reference.
+ * Safe to call from any thread.
+ */
+Runtime *runtime_clone(Runtime *rt);
+
+/**
  * Destroy the Runtime and free all memory.
  * Calls runtime_close() if not already closed.
+ * If the Runtime was cloned, only decrements the reference count;
+ * the underlying Runtime is freed when the last reference is released.
  * After destroy(), the pointer must not be used.
  */
 void runtime_destroy(Runtime *rt);

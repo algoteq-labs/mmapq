@@ -43,6 +43,7 @@ typedef enum {
     ENTRY_AVAILABLE,     /* entry exists and is readable                    */
     ENTRY_END_OF_STREAM, /* entry not yet written (index beyond last)       */
     ENTRY_ARCHIVED,      /* entry was archived (index below startIndex)     */
+    ENTRY_ERROR,         /* mapping timeout or I/O failure                   */
 } EntryStatus;
 
 /* ── ReadingContext ──────────────────────────────────────────────────────── */
@@ -101,7 +102,7 @@ IndexedReader *indexed_reader_create(
  * ctx must remain valid for the duration of the call. The reader does NOT
  * take ownership — the caller allocates and owns the ReadingContext.
  *
- * Aborts on mapping timeout.
+ * On mapping timeout, ctx->status is set to ENTRY_ERROR.
  */
 ReadingContext *indexed_reader_read(
     IndexedReader  *r,

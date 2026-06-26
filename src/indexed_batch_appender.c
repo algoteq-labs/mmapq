@@ -39,29 +39,30 @@ struct IndexedBatchAppender {
 
 /* ── Internal Helpers ────────────────────────────────────────────────────── */
 
-static void wrap_payload_or_fail(IndexedBatchAppender *a, int64_t position)
+static int wrap_payload_or_fail(IndexedBatchAppender *a, int64_t position)
 {
     WrapResult r = region_accessor_wrap(a->payload_acc, position, &a->payload_buf);
-    (void)r;
-    MMAP_ASSERT(r == WRAP_SUCCESS, "indexed_batch_appender: failed to wrap payload");
+    if (r != WRAP_SUCCESS) return -1;
+    return 0;
 }
 
-static void ensure_space_for_batch_header(IndexedBatchAppender *a)
+static int ensure_space_for_batch_header(IndexedBatchAppender *a)
 {
-    wrap_payload_or_fail(a, a->current_payload_position);
+    if (wrap_payload_or_fail(a, a->current_payload_position)) return -1;
     if (a->payload_buf.capacity < BATCH_MSG_COUNT_SIZE) {
         a->current_payload_position += a->payload_buf.capacity;
-        wrap_payload_or_fail(a, a->current_payload_position);
+        if (wrap_payload_or_fail(a, a->current_payload_position)) return -1;
     }
+    return 0;
 }
 
-static void write_padding_if_needed(IndexedBatchAppender *a, int32_t length)
+static int write_padding_if_needed(IndexedBatchAppender *a, int32_t length)
 {
-    wrap_payload_or_fail(a, a->current_payload_position);
+    if (wrap_payload_or_fail(a, a->current_payload_position)) return -1;
     int32_t cap = a->payload_buf.capacity;
     int32_t total_needed = length + PAYLOAD_LENGTH_SIZE;
 
-    if (cap >= total_needed) return;
+    if (cap >= total_needed) return 0;
 
     /* Write long padding if there is space for it */
     if (cap > PAYLOAD_LENGTH_SIZE) {
@@ -70,7 +71,8 @@ static void write_padding_if_needed(IndexedBatchAppender *a, int32_t length)
     }
 
     a->current_payload_position += cap;
-    wrap_payload_or_fail(a, a->current_payload_position);
+    if (wrap_payload_or_fail(a, a->current_payload_position)) return -1;
+    return 0;
 }
 
 static int64_t skip_to_end_of_stream(IndexedBatchAppender *a, int64_t offset)
@@ -175,7 +177,7 @@ IndexedBatchAppender *indexed_batch_appender_create(
 MutableBatch *indexed_batch_appender_start_batch(IndexedBatchAppender *a)
 {
     MMAP_ASSERT(!a->closed, "appender closed");
-    ensure_space_for_batch_header(a);
+    if (ensure_space_for_batch_header(a)) return NULL;
 
     a->current_batch.appender      = a;
     a->current_batch.batch_offset  = a->current_payload_position;
@@ -188,22 +190,21 @@ MutableBatch *indexed_batch_appender_start_batch(IndexedBatchAppender *a)
 int64_t mutable_batch_complete(MutableBatch *b)
 {
     IndexedBatchAppender *a = b->appender;
-    wrap_payload_or_fail(a, b->batch_offset);
+    if (wrap_payload_or_fail(a, b->batch_offset)) return -1;
     memcpy(a->payload_buf.data + BATCH_MSG_COUNT_OFFSET, &b->message_count, sizeof(int32_t));
     return b->batch_offset;
 }
 
-static void move_to_last_header(IndexedBatchAppender *a)
+static int move_to_last_header(IndexedBatchAppender *a)
 {
     while (1) {
         a->current_index++;
         a->current_header_position = header_position(a->current_index);
         WrapResult r = region_accessor_wrap(a->header_acc, a->current_header_position, &a->header_buf);
-        (void)r;
-        MMAP_ASSERT(r == WRAP_SUCCESS, "batch_appender: failed to wrap header");
+        if (r != WRAP_SUCCESS) return -1;
 
         _Atomic uint64_t *hp = (_Atomic uint64_t *)a->header_buf.data;
-        if (atomic_load_explicit(hp, memory_order_acquire) == HEADER_NULL) return;
+        if (atomic_load_explicit(hp, memory_order_acquire) == HEADER_NULL) return 0;
     }
 }
 
@@ -211,17 +212,15 @@ int64_t indexed_batch_appender_commit_batch(IndexedBatchAppender *a, int64_t bat
 {
     uint64_t header = header_encode(a->appender_id, batch_offset);
     WrapResult r = region_accessor_wrap(a->header_acc, a->current_header_position, &a->header_buf);
-    (void)r;
-    MMAP_ASSERT(r == WRAP_SUCCESS, "batch_appender: failed to wrap header");
+    if (r != WRAP_SUCCESS) return -1;
 
     _Atomic uint64_t *hp = (_Atomic uint64_t *)a->header_buf.data;
     uint64_t expected = HEADER_NULL;
 
     while (__builtin_expect(!atomic_compare_exchange_strong_explicit(hp, &expected, header, memory_order_acq_rel, memory_order_acquire), 0)) {
-        move_to_last_header(a);
+        if (move_to_last_header(a)) return -1;
         r = region_accessor_wrap(a->header_acc, a->current_header_position, &a->header_buf);
-        (void)r;
-        MMAP_ASSERT(r == WRAP_SUCCESS, "batch_appender: failed to re-wrap header");
+        if (r != WRAP_SUCCESS) return -1;
         hp = (_Atomic uint64_t *)a->header_buf.data;
         expected = HEADER_NULL;
     }
@@ -232,10 +231,20 @@ int64_t indexed_batch_appender_commit_batch(IndexedBatchAppender *a, int64_t bat
     return idx;
 }
 
+void indexed_batch_appender_discard_batch(IndexedBatchAppender *a, int64_t batch_offset)
+{
+    WrapResult r = region_accessor_wrap(a->payload_acc, batch_offset, &a->payload_buf);
+    if (r != WRAP_SUCCESS) return;  /* cannot rollback on timeout */
+
+    int32_t zero = 0;
+    memcpy(a->payload_buf.data + BATCH_MSG_COUNT_OFFSET, &zero, sizeof(int32_t));
+    a->current_payload_position = batch_offset;
+}
+
 int32_t mutable_batch_append(MutableBatch *b, const void *data, int32_t length)
 {
     IndexedBatchAppender *a = b->appender;
-    write_padding_if_needed(a, length);
+    if (write_padding_if_needed(a, length)) return -1;
     memcpy(a->payload_buf.data + PAYLOAD_LENGTH_OFFSET, &length, sizeof(int32_t));
     memcpy(a->payload_buf.data + PAYLOAD_DATA_OFFSET, data, (size_t)length);
     a->current_payload_position += PAYLOAD_LENGTH_SIZE + length;
@@ -245,7 +254,7 @@ int32_t mutable_batch_append(MutableBatch *b, const void *data, int32_t length)
 int32_t mutable_batch_append_reserved(MutableBatch *b, int32_t length, void **out_data)
 {
     IndexedBatchAppender *a = b->appender;
-    write_padding_if_needed(a, length);
+    if (write_padding_if_needed(a, length)) return -1;
     memcpy(a->payload_buf.data + PAYLOAD_LENGTH_OFFSET, &length, sizeof(int32_t));
     *out_data = a->payload_buf.data + PAYLOAD_DATA_OFFSET;
     a->current_payload_position += PAYLOAD_LENGTH_SIZE + length;

@@ -293,6 +293,8 @@ struct Runtime {
      * finished iterating the previous list snapshot.
      */
     _Atomic(FreeNode *) free_list;
+
+    atomic_int refcount;  /* reference count for safe sharing */
 };
 
 /* ── Deferred free helpers ───────────────────────────────────────────────── */
@@ -416,6 +418,7 @@ Runtime *runtime_create(
     rt->on_close_ctx     = on_close_ctx;
 
     atomic_store(&rt->closed,       0);
+    atomic_store(&rt->refcount,     1);
     atomic_store(&rt->thread_done,  0);
     atomic_store(&rt->thread_started, 0);
     atomic_store(&rt->free_list, NULL);
@@ -591,9 +594,19 @@ void runtime_close(Runtime *rt)
     }
 }
 
+Runtime *runtime_clone(Runtime *rt)
+{
+    MMAP_ASSERT(rt != NULL, "runtime_clone: rt is NULL");
+    __atomic_fetch_add(&rt->refcount, 1, __ATOMIC_RELAXED);
+    return rt;
+}
+
 void runtime_destroy(Runtime *rt)
 {
     if (rt == NULL) return;
+    if (    __atomic_fetch_sub(&rt->refcount, 1, __ATOMIC_ACQ_REL) > 1) {
+        return;  /* other references still alive */
+    }
     runtime_close(rt);
 
     ExecList *list = atomic_load(&rt->exec_list);

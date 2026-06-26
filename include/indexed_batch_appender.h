@@ -87,7 +87,8 @@ IndexedBatchAppender *indexed_batch_appender_create(
  *
  * Only one batch may be in progress at a time per appender.
  *
- * @return pointer to the appender-owned MutableBatch; valid until commit or close
+ * @return pointer to the appender-owned MutableBatch (valid until commit or close),
+ *         or NULL on mapping timeout
  */
 MutableBatch *indexed_batch_appender_start_batch(IndexedBatchAppender *a);
 
@@ -97,8 +98,8 @@ MutableBatch *indexed_batch_appender_start_batch(IndexedBatchAppender *a);
  * After calling this, no further appends may be made to the batch.
  *
  * @param b  the in-progress batch
- * @return the payload offset of the completed batch, to be passed to
- *         indexed_batch_appender_commit_batch()
+ * @return the payload offset of the completed batch (to be passed to
+ *         indexed_batch_appender_commit_batch()), or -1 on mapping timeout
  */
 int64_t mutable_batch_complete(MutableBatch *b);
 
@@ -110,9 +111,28 @@ int64_t mutable_batch_complete(MutableBatch *b);
  *
  * @param a            the appender
  * @param batch_offset the value returned by mutable_batch_complete()
- * @return the zero-based index of the committed batch
+ * @return the zero-based index of the committed batch,
+ *         or -1 on mapping timeout
  */
 int64_t indexed_batch_appender_commit_batch(IndexedBatchAppender *a, int64_t batch_offset);
+
+/**
+ * Discard an in-progress batch without committing it.
+ *
+ * Resets the appender's payload write position to @p batch_offset,
+ * effectively undoing all appends made since the corresponding
+ * indexed_batch_appender_start_batch() call. A zero message count is
+ * written at the batch offset so recovery scanners skip past it.
+ *
+ * Safe to call when the batch was started but never completed, or after
+ * mutable_batch_complete() was called but before commit. Not needed when
+ * commit succeeds — the batch is then permanent.
+ *
+ * @param a            the appender
+ * @param batch_offset the value returned by mutable_batch_complete(),
+ *                     or the offset from start_batch if never completed
+ */
+void indexed_batch_appender_discard_batch(IndexedBatchAppender *a, int64_t batch_offset);
 
 /* ── Message append ──────────────────────────────────────────────────────── */
 
@@ -126,7 +146,8 @@ int64_t indexed_batch_appender_commit_batch(IndexedBatchAppender *a, int64_t bat
  * @param b      the in-progress batch
  * @param data   pointer to the message payload
  * @param length number of bytes to write (not including the length prefix)
- * @return the zero-based index of the newly appended message within the batch
+ * @return the zero-based index of the newly appended message within the batch,
+ *         or -1 on mapping timeout
  */
 int32_t mutable_batch_append(MutableBatch *b, const void *data, int32_t length);
 
@@ -142,7 +163,8 @@ int32_t mutable_batch_append(MutableBatch *b, const void *data, int32_t length);
  * @param length   number of payload bytes to reserve
  * @param out_data set to a pointer to the reserved payload region on return;
  *                 valid until the next append, region remap, or close
- * @return the zero-based index of the reserved message slot within the batch
+ * @return the zero-based index of the reserved message slot within the batch,
+ *         or -1 on mapping timeout
  */
 int32_t mutable_batch_append_reserved(MutableBatch *b, int32_t length, void **out_data);
 

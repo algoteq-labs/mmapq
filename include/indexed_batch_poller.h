@@ -106,7 +106,13 @@ typedef enum {
      * accessible. The poller remains at the same index.
      * Mirrors Java Result.ARCHIVED.
      */
-    POLL_BATCH_ARCHIVED
+    POLL_BATCH_ARCHIVED,
+
+    /**
+     * A mapping or I/O error occurred. The application should retry or log.
+     * Mirrors Java Result.ERROR.
+     */
+    POLL_BATCH_ERROR
 } BatchPollResult;
 
 /**
