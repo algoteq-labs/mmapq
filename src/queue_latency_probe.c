@@ -62,6 +62,7 @@ static NextMove client_handler(
     int32_t     length,
     void       *ctx)
 {
+    (void)index; (void)appender_id;
     QueueLatencyProbe *p = (QueueLatencyProbe *)ctx;
     const LatencyHeader *hdr = (const LatencyHeader *)data;
     

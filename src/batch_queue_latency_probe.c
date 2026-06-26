@@ -49,6 +49,7 @@ static int verify_payload_pattern(const uint8_t *data, int32_t length, uint32_t 
 
 static BatchNextMove client_handler(int64_t b_idx, int32_t m_idx, int32_t m_cnt, const void *data, int32_t length, void *ctx)
 {
+    (void)b_idx; (void)m_idx; (void)m_cnt;
     BatchQueueLatencyProbe *p = (BatchQueueLatencyProbe *)ctx;
     LatencyHeader hdr;
     memcpy(&hdr, data, sizeof(LatencyHeader));

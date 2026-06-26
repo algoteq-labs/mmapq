@@ -279,6 +279,7 @@ static int64_t do_import(
     int is_batch_stream,
     Runtime *wrt, Runtime *rrt)
 {
+    (void)archivable; (void)fixed_size;
     char dpath[4096];
     snprintf(dpath, sizeof(dpath), "%s/%s", directory, queue_name);
     create_dir(dpath);
