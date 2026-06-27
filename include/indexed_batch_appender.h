@@ -134,6 +134,23 @@ int64_t indexed_batch_appender_commit_batch(IndexedBatchAppender *a, int64_t bat
  */
 void indexed_batch_appender_discard_batch(IndexedBatchAppender *a, int64_t batch_offset);
 
+/**
+ * Convenience: start, append, complete, and commit a single-message batch
+ * in one call.
+ *
+ * Equivalent to:
+ *   MutableBatch *b = indexed_batch_appender_start_batch(a);
+ *   mutable_batch_append(b, data, length);
+ *   int64_t off = mutable_batch_complete(b);
+ *   return indexed_batch_appender_commit_batch(a, off);
+ *
+ * @param a      the appender
+ * @param data   pointer to the message payload
+ * @param length number of bytes to write
+ * @return the zero-based index of the committed batch, or -1 on error
+ */
+int64_t indexed_batch_appender_echo_append(IndexedBatchAppender *a, const void *data, int32_t length);
+
 /* ── Message append ──────────────────────────────────────────────────────── */
 
 /**

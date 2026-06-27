@@ -241,6 +241,16 @@ void indexed_batch_appender_discard_batch(IndexedBatchAppender *a, int64_t batch
     a->current_payload_position = batch_offset;
 }
 
+int64_t indexed_batch_appender_echo_append(IndexedBatchAppender *a, const void *data, int32_t length)
+{
+    MutableBatch *b = indexed_batch_appender_start_batch(a);
+    if (!b) return -1;
+    if (mutable_batch_append(b, data, length) < 0) return -1;
+    int64_t off = mutable_batch_complete(b);
+    if (off < 0) return -1;
+    return indexed_batch_appender_commit_batch(a, off);
+}
+
 int32_t mutable_batch_append(MutableBatch *b, const void *data, int32_t length)
 {
     IndexedBatchAppender *a = b->appender;
