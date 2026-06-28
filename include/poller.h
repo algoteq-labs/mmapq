@@ -4,6 +4,16 @@
 #include <stdint.h>
 
 /**
+ * Shared poller types — used by both IndexedPoller (single-message) and
+ * IndexedBatchPoller (batch).  Extracted into a separate header to break the
+ * dependency between the two poller layers: neither includes the other, both
+ * include this one.
+ *
+ * NextMove — returned by the handler to control cursor movement.
+ * PollResult — returned by poll() to describe what happened.
+ */
+
+/**
  * NextMove — returned by the poll handler to control cursor movement.
  *
  * Shared by both IndexedPoller (single-message) and IndexedBatchPoller (batch).

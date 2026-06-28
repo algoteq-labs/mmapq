@@ -117,23 +117,24 @@ IndexedBatchReader *indexed_batch_queue_create_reader(IndexedBatchQueue *q);
 /* ── Lifecycle ────────────────────────────────────────────────────────────── */
 
 /**
+ * Create a batch archiver for this queue.
+ *
+ * The queue meta file must have been created with the archivable flag set
+ * (via queue_meta_open_rw with archivable=1). The archiver must be closed
+ * independently with indexed_batch_archiver_close().
+ *
+ * @param q  the queue (must not be closed)
+ * @return a new batch archiver
+ */
+IndexedBatchArchiver *indexed_batch_queue_create_archiver(IndexedBatchQueue *q);
+
+/**
  * Close the queue and release its configuration resources.
  *
  * Does not close appenders, pollers, or readers created from this queue —
  * those must be closed independently. After this call the queue pointer
  * must not be used.
  */
-/**
- * indexed_batch_queue_create_archiver — create a batch archiver for this queue.
- *
- * The queue must have been created with archivable=1.
- * The archiver must be closed independently with indexed_batch_archiver_close().
- *
- * @param q  the queue (must not be closed, must be archivable)
- * @return a new batch archiver
- */
-IndexedBatchArchiver *indexed_batch_queue_create_archiver(IndexedBatchQueue *q);
-
 void indexed_batch_queue_close(IndexedBatchQueue *q);
 
 #endif /* INDEXED_BATCH_QUEUE_H */
