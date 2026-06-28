@@ -2,6 +2,7 @@
 #define INDEXED_POLLER_H
 
 #include <stdint.h>
+#include "poller.h"
 #include "region_accessor.h"
 #include "runtime.h"
 #include "mmap_assert.h"
@@ -43,27 +44,7 @@
  *   Not thread-safe. One IndexedPoller per thread.
  */
 
-/* ── Poll result ─────────────────────────────────────────────────────────── */
-
-typedef enum {
-    POLL_END_OF_STREAM,   /* no message at current index; will retry next call */
-    POLL_ADVANCED,        /* message processed; cursor moved forward            */
-    POLL_STOPPED,         /* message processed; cursor held                     */
-    POLL_RETREATED,       /* message processed; cursor moved backward           */
-    POLL_ARCHIVED,        /* current index is below startIndex                  */
-    POLL_ERROR,           /* mapping timeout or I/O failure                      */
-} PollResult;
-
 /* ── Message handler ─────────────────────────────────────────────────────── */
-
-/**
- * NextMove — returned by the message handler to control cursor.
- */
-typedef enum {
-    NEXT_ADVANCE = 0,  /* move cursor forward to next index  */
-    NEXT_STOP    = 1,  /* hold cursor at current index       */
-    NEXT_RETREAT = 2,  /* move cursor backward               */
-} NextMove;
 
 /**
  * MessageHandler — callback invoked for each message by poll().

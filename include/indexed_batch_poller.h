@@ -2,146 +2,85 @@
 #define INDEXED_BATCH_POLLER_H
 
 #include <stdint.h>
+#include "poller.h"
 #include "runtime.h"
+#include "indexed_batch_reader.h"
 
 /**
- * IndexedBatchPoller — sequential poller for an indexed, batched message queue.
+ * IndexedBatchPoller — sequential batch consumer.
  *
- * Provides message-at-a-time delivery from committed batches. For each call to
- * indexed_batch_poller_poll(), one message in the current batch is delivered to
- * a BatchMessageHandler. The handler's returned BatchNextMove controls how the
- * poller advances its cursor.
+ * Delivers one complete batch per poll() call. The handler receives the
+ * batch index and a BatchReadingContext containing a BatchPayloadIterator
+ * positioned before the first message. The handler calls
+ * batch_iterator_advance() to iterate messages, then returns a NextMove
+ * directive to control cursor movement.
  *
- * Typical usage patterns:
- *   - Loop until POLL_BATCH_END_OF_STREAM: consume all available messages
- *   - Time-sliced polling: call poll() a fixed number of times per tick
- *   - Reverse scan: use BATCH_RETREAT_BATCH to locate historical batches
+ * This is a per-batch poller — the atomic unit of delivery is a batch,
+ * matching the atomic unit of commit. There is no per-message granularity.
+ * Consumers that need per-message random access should use IndexedBatchReader.
  *
- * The poller maintains its cursor across calls — batch_index and message_index
- * persist between invocations. Use the move_to_* functions to reposition.
+ * POLL OPERATION:
+ *   1. If queue not yet created → POLL_END_OF_STREAM.
+ *   2. If currentBatchIndex < startIndex → POLL_ARCHIVED.
+ *   3. Read header at currentBatchIndex.
+ *   4. If NULL_HEADER → POLL_END_OF_STREAM.
+ *   5. Decode appenderId + payloadPosition from header.
+ *   6. Read message count from payload, init iterator before message 0.
+ *   7. Populate BatchReadingContext with batch info + iterator.
+ *   8. Call handler(batch_index, &context, ctx).
+ *   9. Apply the returned directive:
+ *        NEXT_ADVANCE  → currentBatchIndex++
+ *        NEXT_STOP     → cursor held
+ *        NEXT_RETREAT  → currentBatchIndex-- (if > startIndex)
+ *  10. Return the poll result.
  *
- * Thread safety: one poller per consumer. Must not be shared across threads.
+ * CURSOR POSITIONING:
+ *   move_to_index():               jump to a specific batch index
+ *   move_to_end():                 jump past the last committed batch
+ *   move_to_last_existing_batch(): jump to the last committed batch
+ *   move_to_start():               jump to the earliest unarchived batch
  *
- * Mirrors Java IIndexedBatchPoller. BatchNextMove mirrors IBatchMessageHandler.NextMove.
- * Both are defined here independently of IndexedPoller — the batch and single-message
- * layers are parallel, not layered.
+ * THREAD CONFINEMENT:
+ *   Not thread-safe. One IndexedBatchPoller per consumer thread.
  */
 
 typedef struct IndexedBatchPoller IndexedBatchPoller;
 
 /**
- * BatchNextMove — returned by BatchMessageHandler to control the poller cursor.
+ * BatchPollResult — alias for PollResult, returned by batch poll().
  *
- * Mirrors Java IBatchMessageHandler.NextMove exactly.
+ * Has the same variants as PollResult (POLL_END_OF_STREAM, POLL_ADVANCED,
+ * POLL_STOPPED, POLL_RETREATED, POLL_ARCHIVED, POLL_ERROR).
  */
-typedef enum {
-    /**
-     * Advance to the next message in the current batch.
-     * If at the last message, advance to the next batch (index++, message_index=0).
-     * Equivalent to Java NextMove.ADVANCE.
-     */
-    BATCH_ADVANCE,
-
-    /**
-     * Skip any remaining messages in the current batch and advance to the next batch.
-     * Equivalent to Java NextMove.ADVANCE_BATCH.
-     */
-    BATCH_ADVANCE_BATCH,
-
-    /**
-     * Stop at the current message. The same message will be offered again on the
-     * next poll() call. Equivalent to Java NextMove.STOP.
-     */
-    BATCH_STOP,
-
-    /**
-     * Move to the previous batch index. Useful for reverse scans, such as
-     * locating the most recent snapshot. Equivalent to Java NextMove.RETREAT_BATCH.
-     */
-    BATCH_RETREAT_BATCH
-} BatchNextMove;
+typedef PollResult BatchPollResult;
 
 /**
- * BatchPollResult — indicates how the poller adjusted its position after a poll().
+ * BatchHandler — callback invoked once per poll() call, for one batch.
  *
- * Works in tandem with BatchNextMove: maps handler feedback into high-level
- * poller state changes. Mirrors Java IIndexedBatchPoller.Result.
- */
-typedef enum {
-    /**
-     * No batch is available at the current index. The poller remains at the
-     * same position; a subsequent poll() will retry once data arrives.
-     * Mirrors Java Result.END_OF_STREAM.
-     */
-    POLL_BATCH_END_OF_STREAM,
-
-    /**
-     * One message was processed and the cursor advanced to the next message
-     * within the same batch. Mirrors Java Result.ADVANCED_MESSAGE.
-     */
-    POLL_BATCH_ADVANCED_MESSAGE,
-
-    /**
-     * One message was processed and the cursor advanced to the next batch
-     * (either because the batch ended or BATCH_ADVANCE_BATCH was returned).
-     * Mirrors Java Result.ADVANCED_BATCH.
-     */
-    POLL_BATCH_ADVANCED_BATCH,
-
-    /**
-     * The handler returned BATCH_STOP. The cursor remains at the current
-     * message; the same message will be offered on the next poll().
-     * Mirrors Java Result.STOPPED.
-     */
-    POLL_BATCH_STOPPED,
-
-    /**
-     * The handler returned BATCH_RETREAT_BATCH and the cursor moved to
-     * the previous batch index. Mirrors Java Result.RETREATED_BATCH.
-     */
-    POLL_BATCH_RETREATED_BATCH,
-
-    /**
-     * The batch at the current index has been archived and is no longer
-     * accessible. The poller remains at the same index.
-     * Mirrors Java Result.ARCHIVED.
-     */
-    POLL_BATCH_ARCHIVED,
-
-    /**
-     * A mapping or I/O error occurred. The application should retry or log.
-     * Mirrors Java Result.ERROR.
-     */
-    POLL_BATCH_ERROR
-} BatchPollResult;
-
-/**
- * BatchMessageHandler — callback invoked once per poll() call, for one message.
+ * The BatchReadingContext's batch_iterator is positioned BEFORE message 0.
+ * Handlers MUST call batch_iterator_advance() before the first call to
+ * batch_iterator_current_data() / batch_iterator_current_length().
  *
- * @param batch_index    zero-based index of the current batch
- * @param message_index  zero-based index of the message within the batch
- * @param message_count  total number of messages in the current batch
- * @param data           pointer to the raw message payload (flyweight — do not retain)
- * @param length         length of the message payload in bytes
- * @param ctx            caller-supplied context pointer
- * @return               how the poller should move its cursor after this message
+ * The context and its iterator are flyweight views into mapped memory —
+ * valid only for the duration of this call. Do not retain the pointer.
+ *
+ * @param batch_index  zero-based index of the delivered batch
+ * @param context      batch context with iterator positioned before msg 0
+ * @param ctx          caller-supplied context pointer
+ * @return             cursor directive: ADVANCE, STOP, or RETREAT
  */
-typedef BatchNextMove (*BatchMessageHandler)(
-    int64_t     batch_index,
-    int32_t     message_index,
-    int32_t     message_count,
-    const void *data,
-    int32_t     length,
-    void       *ctx);
+typedef NextMove (*BatchHandler)(
+    int64_t              batch_index,
+    BatchReadingContext *context,
+    void                *ctx);
 
 /* ── Factory ─────────────────────────────────────────────────────────────── */
 
 /**
- * Create a poller for the named queue, positioned at batch index 0.
+ * Create a poller for the named queue, positioned at start_index.
  *
- * The queue must have been created by an appender before any batches can
- * be polled, but the poller may be created before the queue exists — it
- * will return POLL_BATCH_END_OF_STREAM until data arrives.
+ * The poller may be created before the queue exists — poll() will return
+ * POLL_END_OF_STREAM until batches are committed.
  *
  * @param directory   path to the directory containing queue files
  * @param queue_name  logical name of the queue
@@ -160,136 +99,86 @@ IndexedBatchPoller *indexed_batch_poller_create(
 /* ── Polling ─────────────────────────────────────────────────────────────── */
 
 /**
- * Poll one message from the current batch, delivering it to @p handler.
+ * Poll the next batch, delivering it to @p handler.
  *
- * The handler is called at most once per poll() invocation. The handler's
- * returned BatchNextMove determines how the cursor advances. The resulting
- * BatchPollResult describes the new cursor state.
- *
- * If no committed batch exists at the current index, returns
- * POLL_BATCH_END_OF_STREAM without invoking the handler.
+ * The handler is called at most once per poll() invocation. If no committed
+ * batch exists at the current index, returns POLL_END_OF_STREAM without
+ * invoking the handler.
  *
  * @param p       the poller
- * @param handler callback to receive the message
- * @param ctx     caller context passed through to the handler unchanged
+ * @param handler callback to receive the batch context
+ * @param ctx     caller context passed through to the handler
  * @return the result of the poll operation
  */
 BatchPollResult indexed_batch_poller_poll(
     IndexedBatchPoller *p,
-    BatchMessageHandler handler,
+    BatchHandler        handler,
     void               *ctx);
 
 /* ── Cursor positioning ──────────────────────────────────────────────────── */
 
 /**
- * Move the cursor to the start of the given batch (message_index = 0).
+ * Move the cursor to a specific batch index.
  *
- * - If the batch exists and is committed, polling begins at message 0.
- * - If the batch does not yet exist but the previous batch does, the move
- *   is accepted and poll() will return END_OF_STREAM until data arrives.
- * - If the batch is archived, or no previous batch exists, the move is
- *   rejected and the cursor is unchanged.
- *
- * @param p           the poller
- * @param batch_index zero-based target batch index (must be >= 0)
- * @return 1 if the move succeeded; 0 if the batch is archived or out of range
+ * Returns 1 if the index is valid (>= start_index and not too far ahead).
+ * Returns 0 if the index is archived or unreachable.
  */
 int indexed_batch_poller_move_to_index(IndexedBatchPoller *p, int64_t batch_index);
 
 /**
- * Move the cursor to a specific message within a batch.
- *
- * - If the batch exists, message_index must be in [0, message_count).
- * - If the batch does not yet exist, the move is accepted only if
- *   message_index == 0 and the previous batch exists.
- * - If the batch is archived, or message_index is out of range, returns 0.
- *
- * @param p             the poller
- * @param batch_index   zero-based target batch index
- * @param message_index zero-based target message index within the batch
- * @return 1 if the move succeeded; 0 otherwise
- */
-int indexed_batch_poller_move_to(IndexedBatchPoller *p, int64_t batch_index, int32_t message_index);
-
-/**
  * Move the cursor to one past the last committed batch.
  *
- * Subsequent poll() calls will return END_OF_STREAM until a new batch is
- * appended. Equivalent to Java moveToEnd().
+ * Subsequent poll() calls will return POLL_END_OF_STREAM until a new
+ * batch is appended.
  *
- * @return 1 if the move succeeded; 0 on error
+ * @return 1 always
  */
 int indexed_batch_poller_move_to_end(IndexedBatchPoller *p);
 
 /**
- * Move the cursor to the last existing (committed) batch.
+ * Move the cursor to the last committed batch.
  *
  * Unlike move_to_end(), which positions past the last batch, this positions
- * AT the last valid batch so it can be polled immediately. Useful for
- * reverse scanning or resuming from the most recent known data.
+ * AT the last valid batch so it can be polled immediately.
  *
- * If the queue is empty, the cursor is unchanged and 0 is returned.
- *
- * @return 1 if the move succeeded; 0 if the queue is empty
+ * @return 1 if a committed batch exists; 0 if the queue is empty
  */
 int indexed_batch_poller_move_to_last_existing_batch(IndexedBatchPoller *p);
 
 /**
- * Move the cursor to the first unarchived batch index (the logical start).
+ * Move the cursor to the first unarchived batch index.
  *
- * This is the lowest index still available for reading. Batches below this
- * index have been permanently removed. If the queue has no committed batches
- * yet, positions at the first writable index (equivalent to move_to_end()).
+ * This is the lowest index still available for reading.
  *
- * @return 1 if the move succeeded; 0 on error
+ * @return 1 always
  */
 int indexed_batch_poller_move_to_start(IndexedBatchPoller *p);
 
 /* ── Metadata ─────────────────────────────────────────────────────────────── */
 
 /**
- * Return the current batch index.
- *
- * This is the batch the poller is positioned at, whether committed or not.
- * If at the end of the queue, this is the index at which the next commit
- * is expected.
+ * Return the current batch index (cursor position).
  */
 int64_t indexed_batch_poller_current_batch_index(const IndexedBatchPoller *p);
 
 /**
- * Return the current message index within the current batch.
- *
- * If the current batch is not yet committed, returns 0 (the default start).
- */
-int32_t indexed_batch_poller_current_message_index(const IndexedBatchPoller *p);
-
-/**
- * Return the first unarchived batch index — the logical start of the readable queue.
- *
- * Any batch with an index below this value has been permanently removed and
- * cannot be accessed. The batch at this index may not yet be committed.
+ * Return the first unarchived batch index (logical start of readable queue).
  */
 int64_t indexed_batch_poller_start_index(IndexedBatchPoller *p);
 
 /**
- * Check whether a message exists at the specified batch and message index.
+ * Return 1 if a committed batch exists at @p batch_index, 0 otherwise.
  *
- * Returns 1 only if the batch is committed, not archived, and message_index
- * is within [0, message_count). Does not alter the poller's cursor.
- *
- * @param p             the poller
- * @param batch_index   zero-based batch index to check
- * @param message_index zero-based message index within the batch
- * @return 1 if the message exists and is readable; 0 otherwise
+ * Does not alter the poller's cursor.
  */
-int indexed_batch_poller_exists(IndexedBatchPoller *p, int64_t batch_index, int32_t message_index);
+int indexed_batch_poller_exists(IndexedBatchPoller *p, int64_t batch_index);
 
 /* ── Lifecycle ────────────────────────────────────────────────────────────── */
 
 /**
  * Close the poller and release all associated resources.
  *
- * After this call the pointer must not be used.
+ * After this call the pointer must not be used. Idempotent.
  */
 void indexed_batch_poller_close(IndexedBatchPoller *p);
 

@@ -99,7 +99,7 @@ IndexedBatchAppender *indexed_batch_queue_create_appender(IndexedBatchQueue *q);
  * The poller must be closed independently with indexed_batch_poller_close().
  *
  * @param q  the queue (must not be closed)
- * @return a new poller positioned at batch index 0
+ * @return a new poller positioned at the queue's start index
  */
 IndexedBatchPoller *indexed_batch_queue_create_poller(IndexedBatchQueue *q);
 

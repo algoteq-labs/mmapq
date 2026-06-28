@@ -34,26 +34,27 @@ typedef struct {
     volatile int          shutdown_requested;
 } BatchServerCtx;
 
-static BatchNextMove internal_echo_handler(
-    int64_t     b_idx,
-    int32_t     m_idx,
-    int32_t     m_cnt,
-    const void *data,
-    int32_t     length,
-    void       *ctx)
+static NextMove internal_echo_handler(
+    int64_t              b_idx,
+    BatchReadingContext *ctx,
+    void                *user_ctx)
 {
-    (void)b_idx; (void)m_idx; (void)m_cnt;
-    BatchServerCtx *s = (BatchServerCtx *)ctx;
+    (void)b_idx;
+    BatchServerCtx *s = (BatchServerCtx *)user_ctx;
 
-    BatchLatencyHeader hdr;
-    memcpy(&hdr, data, sizeof(BatchLatencyHeader));
-    if (hdr.sequence == SHUTDOWN_SEQ) s->shutdown_requested = 1;
+    if (!batch_iterator_advance(&ctx->batch_iterator))
+        return NEXT_ADVANCE;
+    const BatchLatencyHeader *hdr = batch_iterator_current_data(&ctx->batch_iterator);
+    if (hdr->sequence == SHUTDOWN_SEQ)
+        s->shutdown_requested = 1;
 
     MutableBatch *b = indexed_batch_appender_start_batch(s->response_appender);
-    mutable_batch_append(b, data, length);
+    mutable_batch_append(b, batch_iterator_current_data(&ctx->batch_iterator),
+                            batch_iterator_current_length(&ctx->batch_iterator));
+    mutable_batch_append_remaining_from(b, &ctx->batch_iterator);
     indexed_batch_appender_commit_batch(s->response_appender, mutable_batch_complete(b));
 
-    return BATCH_ADVANCE;
+    return NEXT_ADVANCE;
 }
 
 typedef struct {
@@ -131,7 +132,6 @@ int main(int argc, char *argv[])
     if (use_sync)       mode_str = "SYNCHRONOUS";
     else if (use_mixed) mode_str = "MIXED";
 
-    /* Spawn mapper BEFORE pinning client thread to prevent affinity inheritance */
     Runtime *write_rt = NULL, *read_rt = NULL;
     if (!use_sync) {
         Runtime *rt = runtime_region_mapper();
@@ -150,7 +150,6 @@ int main(int argc, char *argv[])
            validate_server ? "ON" : "OFF", validate_client ? "ON" : "OFF");
     printf("  Queues: %s/request -> %s/response\n", dir, dir);
 
-    /* Internal server thread */
     pthread_t server_thread;
     InternalServerArgs server_args = {0};
     if (!external_server) {
@@ -165,7 +164,6 @@ int main(int argc, char *argv[])
             printf("  Internal Server started on Core %d\n", server_cpu);
     }
 
-    /* Pin client thread AFTER spawning everything */
     if (client_cpu >= 0) thread_set_affinity(client_cpu);
 
     BatchQueueLatencyProbe *probe = batch_queue_latency_probe_create(

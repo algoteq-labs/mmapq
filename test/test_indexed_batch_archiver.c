@@ -42,11 +42,10 @@ static IndexedBatchAppender *create_archivable_batch_appender(void)
         REGION_SZ, RING_SZ, MAX_FILE, TIMEOUT, rt);
 }
 
-static BatchNextMove advance_handler(int64_t bi, int32_t mi, int32_t mc,
-                                      const void *data, int32_t len, void *ctx)
+static NextMove advance_handler(int64_t bi, BatchReadingContext *ctx, void *user_ctx)
 {
-    (void)bi; (void)mi; (void)mc; (void)data; (void)len; (void)ctx;
-    return BATCH_ADVANCE;
+    (void)bi; (void)ctx; (void)user_ctx;
+    return NEXT_ADVANCE;
 }
 
 void setUp(void)
@@ -109,7 +108,7 @@ void test_batch_archiver_poller_returns_archived_below_start(void)
 
     /* Verify batch 0 is readable before archive */
     BatchPollResult r = indexed_batch_poller_poll(p, advance_handler, NULL);
-    TEST_ASSERT_EQUAL_INT(POLL_BATCH_ADVANCED_BATCH, r);
+    TEST_ASSERT_EQUAL_INT(POLL_ADVANCED, r);
 
     /* Reset to 0 */
     indexed_batch_poller_move_to_index(p, 0);
@@ -119,22 +118,22 @@ void test_batch_archiver_poller_returns_archived_below_start(void)
     indexed_batch_archiver_archive_up_to_index(arch, 3);
     indexed_batch_archiver_close(arch);
 
-    /* Cursor at 0, start_index now 3 — returns POLL_BATCH_ARCHIVED */
+    /* Cursor at 0, start_index now 3 — returns POLL_ARCHIVED */
     r = indexed_batch_poller_poll(p, advance_handler, NULL);
-    TEST_ASSERT_EQUAL_INT(POLL_BATCH_ARCHIVED, r);
+    TEST_ASSERT_EQUAL_INT(POLL_ARCHIVED, r);
 
     indexed_batch_poller_close(p);
 
     /* New poller starts at start_index=3 automatically */
     IndexedBatchPoller *p2 = indexed_batch_poller_create(DIR, QUEUE, RING_SZ, TIMEOUT, rt);
     r = indexed_batch_poller_poll(p2, advance_handler, NULL);
-    TEST_ASSERT_EQUAL_INT(POLL_BATCH_ADVANCED_BATCH, r); /* batch 3 */
+    TEST_ASSERT_EQUAL_INT(POLL_ADVANCED, r); /* batch 3 */
 
     r = indexed_batch_poller_poll(p2, advance_handler, NULL);
-    TEST_ASSERT_EQUAL_INT(POLL_BATCH_ADVANCED_BATCH, r); /* batch 4 */
+    TEST_ASSERT_EQUAL_INT(POLL_ADVANCED, r); /* batch 4 */
 
     r = indexed_batch_poller_poll(p2, advance_handler, NULL);
-    TEST_ASSERT_EQUAL_INT(POLL_BATCH_END_OF_STREAM, r);
+    TEST_ASSERT_EQUAL_INT(POLL_END_OF_STREAM, r);
 
     indexed_batch_poller_close(p2);
 }

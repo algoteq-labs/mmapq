@@ -154,8 +154,8 @@ static inline int32_t batch_iterator_current_length(const BatchPayloadIterator *
 /**
  * Skip all remaining messages in the batch, leaving the iterator exhausted.
  *
- * Used by the poller when BATCH_ADVANCE_BATCH is returned, to position
- * the next_message_position at the start of the following batch.
+ * Used to skip remaining messages and position next_message_position at
+ * the start of the following batch.
  */
 void batch_iterator_exhaust(BatchPayloadIterator *it);
 

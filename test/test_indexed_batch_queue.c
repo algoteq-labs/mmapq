@@ -49,34 +49,62 @@ void tearDown(void)
 /* ── Capture helpers ─────────────────────────────────────────────────────── */
 
 typedef struct {
-    char    data[256];
-    int32_t length;
-    int32_t message_index;
-    int32_t message_count;
+    int64_t captured_batch_index;
+    int32_t captured_message_count;
+    char    captured_first_msg[256];
     int     call_count;
-    BatchNextMove directive;
+    NextMove directive;
 } BatchPollCapture;
 
-static BatchNextMove capture_handler(
-    int64_t batch_index, int32_t message_index, int32_t message_count,
-    const void *data, int32_t length, void *ctx)
+static NextMove capture_handler(
+    int64_t              batch_index,
+    BatchReadingContext *ctx,
+    void                *user_ctx)
 {
-    (void)batch_index;
-    BatchPollCapture *c = (BatchPollCapture *)ctx;
-    c->message_index = message_index;
-    c->message_count = message_count;
-    c->length        = length;
+    BatchPollCapture *c = (BatchPollCapture *)user_ctx;
+    c->captured_batch_index = batch_index;
+    c->captured_message_count = ctx->message_count;
     c->call_count++;
-    if (length > 0 && length < (int32_t)sizeof(c->data) - 1) {
-        memcpy(c->data, data, (size_t)length);
-        c->data[length] = '\0';
+
+    if (batch_iterator_advance(&ctx->batch_iterator)) {
+        int32_t len = batch_iterator_current_length(&ctx->batch_iterator);
+        if (len > 0 && len < (int32_t)sizeof(c->captured_first_msg) - 1) {
+            memcpy(c->captured_first_msg, batch_iterator_current_data(&ctx->batch_iterator), (size_t)len);
+            c->captured_first_msg[len] = '\0';
+        }
     }
+
     return c->directive;
 }
 
-/* ── Tests ───────────────────────────────────────────────────────────────── */
+static NextMove advance_all_handler(
+    int64_t              batch_index,
+    BatchReadingContext *ctx,
+    void                *user_ctx)
+{
+    (void)batch_index;
+    int *count = (int *)user_ctx;
+    *count = 0;
+    while (batch_iterator_advance(&ctx->batch_iterator)) {
+        (*count)++;
+    }
+    return NEXT_ADVANCE;
+}
 
-void test_batch_append_and_poll_three_messages(void)
+/* ── Poller tests ────────────────────────────────────────────────────────── */
+
+void test_batch_poll_end_of_stream(void)
+{
+    IndexedBatchPoller *p = indexed_batch_queue_create_poller(q);
+
+    BatchPollCapture cap = { .directive = NEXT_ADVANCE };
+    BatchPollResult pr = indexed_batch_poller_poll(p, capture_handler, &cap);
+    TEST_ASSERT_EQUAL_INT(POLL_END_OF_STREAM, pr);
+
+    indexed_batch_poller_close(p);
+}
+
+void test_batch_poll_single_batch(void)
 {
     IndexedBatchAppender *a = indexed_batch_queue_create_appender(q);
     IndexedBatchPoller   *p = indexed_batch_queue_create_poller(q);
@@ -88,93 +116,196 @@ void test_batch_append_and_poll_three_messages(void)
     int64_t off = mutable_batch_complete(b);
     indexed_batch_appender_commit_batch(a, off);
 
-    BatchPollCapture cap = { .directive = BATCH_ADVANCE };
-
-    /* msg0 */
+    BatchPollCapture cap = { .directive = NEXT_ADVANCE };
     BatchPollResult pr = indexed_batch_poller_poll(p, capture_handler, &cap);
-    TEST_ASSERT_EQUAL_INT(POLL_BATCH_ADVANCED_MESSAGE, pr);
-    TEST_ASSERT_EQUAL_INT(0, cap.message_index);
-    TEST_ASSERT_EQUAL_INT(3, cap.message_count);
-    TEST_ASSERT_EQUAL_STRING("msg0", cap.data);
+    TEST_ASSERT_EQUAL_INT(POLL_ADVANCED, pr);
+    TEST_ASSERT_EQUAL_INT(0, cap.captured_batch_index);
+    TEST_ASSERT_EQUAL_INT(3, cap.captured_message_count);
+    TEST_ASSERT_EQUAL_STRING("msg0", cap.captured_first_msg);
+    TEST_ASSERT_EQUAL_INT(1, cap.call_count);
 
-    /* msg1 */
-    cap.call_count = 0;
     pr = indexed_batch_poller_poll(p, capture_handler, &cap);
-    TEST_ASSERT_EQUAL_INT(POLL_BATCH_ADVANCED_MESSAGE, pr);
-    TEST_ASSERT_EQUAL_INT(1, cap.message_index);
-    TEST_ASSERT_EQUAL_STRING("msg1", cap.data);
-
-    /* msg2 — last in batch, returns ADVANCED_BATCH */
-    cap.call_count = 0;
-    pr = indexed_batch_poller_poll(p, capture_handler, &cap);
-    TEST_ASSERT_EQUAL_INT(POLL_BATCH_ADVANCED_BATCH, pr);
-    TEST_ASSERT_EQUAL_INT(2, cap.message_index);
-    TEST_ASSERT_EQUAL_STRING("msg2", cap.data);
-
-    /* end of stream */
-    pr = indexed_batch_poller_poll(p, capture_handler, &cap);
-    TEST_ASSERT_EQUAL_INT(POLL_BATCH_END_OF_STREAM, pr);
+    TEST_ASSERT_EQUAL_INT(POLL_END_OF_STREAM, pr);
 
     indexed_batch_appender_close(a);
     indexed_batch_poller_close(p);
 }
 
-void test_batch_multiple_batches_polled_in_order(void)
+void test_batch_poll_multiple_batches(void)
 {
     IndexedBatchAppender *a = indexed_batch_queue_create_appender(q);
     IndexedBatchPoller   *p = indexed_batch_queue_create_poller(q);
 
-    /* batch 0: 2 messages */
     MutableBatch *b = indexed_batch_appender_start_batch(a);
     mutable_batch_append(b, "b0m0", 4);
     mutable_batch_append(b, "b0m1", 4);
     indexed_batch_appender_commit_batch(a, mutable_batch_complete(b));
 
-    /* batch 1: 1 message */
     b = indexed_batch_appender_start_batch(a);
     mutable_batch_append(b, "b1m0", 4);
     indexed_batch_appender_commit_batch(a, mutable_batch_complete(b));
 
-    BatchPollCapture cap = { .directive = BATCH_ADVANCE };
+    BatchPollCapture cap = { .directive = NEXT_ADVANCE };
 
-    /* batch 0, msg 0 */
     BatchPollResult pr = indexed_batch_poller_poll(p, capture_handler, &cap);
-    TEST_ASSERT_EQUAL_INT(POLL_BATCH_ADVANCED_MESSAGE, pr);
-    TEST_ASSERT_EQUAL_INT(0, cap.message_index);
-    TEST_ASSERT_EQUAL_INT(2, cap.message_count);
-    TEST_ASSERT_EQUAL_STRING("b0m0", cap.data);
-
-    /* batch 0, msg 1 — last, advances batch */
-    pr = indexed_batch_poller_poll(p, capture_handler, &cap);
-    TEST_ASSERT_EQUAL_INT(POLL_BATCH_ADVANCED_BATCH, pr);
-    TEST_ASSERT_EQUAL_STRING("b0m1", cap.data);
-
-    /* batch 1, msg 0 — only message, advances batch */
-    pr = indexed_batch_poller_poll(p, capture_handler, &cap);
-    TEST_ASSERT_EQUAL_INT(POLL_BATCH_ADVANCED_BATCH, pr);
-    TEST_ASSERT_EQUAL_INT(0, cap.message_index);
-    TEST_ASSERT_EQUAL_INT(1, cap.message_count);
-    TEST_ASSERT_EQUAL_STRING("b1m0", cap.data);
+    TEST_ASSERT_EQUAL_INT(POLL_ADVANCED, pr);
+    TEST_ASSERT_EQUAL_INT(0, cap.captured_batch_index);
+    TEST_ASSERT_EQUAL_INT(2, cap.captured_message_count);
+    TEST_ASSERT_EQUAL_STRING("b0m0", cap.captured_first_msg);
 
     pr = indexed_batch_poller_poll(p, capture_handler, &cap);
-    TEST_ASSERT_EQUAL_INT(POLL_BATCH_END_OF_STREAM, pr);
+    TEST_ASSERT_EQUAL_INT(POLL_ADVANCED, pr);
+    TEST_ASSERT_EQUAL_INT(1, cap.captured_batch_index);
+    TEST_ASSERT_EQUAL_INT(1, cap.captured_message_count);
+    TEST_ASSERT_EQUAL_STRING("b1m0", cap.captured_first_msg);
+
+    pr = indexed_batch_poller_poll(p, capture_handler, &cap);
+    TEST_ASSERT_EQUAL_INT(POLL_END_OF_STREAM, pr);
 
     indexed_batch_appender_close(a);
     indexed_batch_poller_close(p);
 }
+
+void test_batch_poll_advance_all_messages(void)
+{
+    IndexedBatchAppender *a = indexed_batch_queue_create_appender(q);
+    IndexedBatchPoller   *p = indexed_batch_queue_create_poller(q);
+
+    MutableBatch *b = indexed_batch_appender_start_batch(a);
+    mutable_batch_append(b, "m0", 2);
+    mutable_batch_append(b, "m1", 2);
+    mutable_batch_append(b, "m2", 2);
+    indexed_batch_appender_commit_batch(a, mutable_batch_complete(b));
+
+    int msg_count = 0;
+    BatchPollResult pr = indexed_batch_poller_poll(p, advance_all_handler, &msg_count);
+    TEST_ASSERT_EQUAL_INT(POLL_ADVANCED, pr);
+    TEST_ASSERT_EQUAL_INT(3, msg_count);
+
+    indexed_batch_appender_close(a);
+    indexed_batch_poller_close(p);
+}
+
+void test_batch_poll_stop(void)
+{
+    IndexedBatchAppender *a = indexed_batch_queue_create_appender(q);
+    IndexedBatchPoller   *p = indexed_batch_queue_create_poller(q);
+
+    MutableBatch *b = indexed_batch_appender_start_batch(a);
+    mutable_batch_append(b, "msg", 3);
+    indexed_batch_appender_commit_batch(a, mutable_batch_complete(b));
+
+    BatchPollCapture cap = { .directive = NEXT_STOP };
+    BatchPollResult pr = indexed_batch_poller_poll(p, capture_handler, &cap);
+    TEST_ASSERT_EQUAL_INT(POLL_STOPPED, pr);
+    TEST_ASSERT_EQUAL_INT(0, cap.captured_batch_index);
+
+    indexed_batch_appender_close(a);
+    indexed_batch_poller_close(p);
+}
+
+void test_batch_poll_retreat(void)
+{
+    IndexedBatchAppender *a = indexed_batch_queue_create_appender(q);
+    IndexedBatchPoller   *p = indexed_batch_queue_create_poller(q);
+
+    MutableBatch *b = indexed_batch_appender_start_batch(a);
+    mutable_batch_append(b, "batch0", 6);
+    indexed_batch_appender_commit_batch(a, mutable_batch_complete(b));
+
+    b = indexed_batch_appender_start_batch(a);
+    mutable_batch_append(b, "batch1", 6);
+    indexed_batch_appender_commit_batch(a, mutable_batch_complete(b));
+
+    BatchPollCapture cap = { .directive = NEXT_ADVANCE };
+    indexed_batch_poller_poll(p, capture_handler, &cap);
+    TEST_ASSERT_EQUAL_INT(0, cap.captured_batch_index);
+
+    /* Retreat from batch 1 — handler sees batch 1, cursor goes back to 0 */
+    cap.directive = NEXT_RETREAT;
+    BatchPollResult pr = indexed_batch_poller_poll(p, capture_handler, &cap);
+    TEST_ASSERT_EQUAL_INT(POLL_RETREATED, pr);
+    TEST_ASSERT_EQUAL_INT(1, cap.captured_batch_index);
+
+    /* Now poll batch 0 again */
+    cap.directive = NEXT_ADVANCE;
+    pr = indexed_batch_poller_poll(p, capture_handler, &cap);
+    TEST_ASSERT_EQUAL_INT(POLL_ADVANCED, pr);
+    TEST_ASSERT_EQUAL_INT(0, cap.captured_batch_index);
+
+    indexed_batch_appender_close(a);
+    indexed_batch_poller_close(p);
+}
+
+void test_batch_poll_retreat_at_start(void)
+{
+    IndexedBatchAppender *a = indexed_batch_queue_create_appender(q);
+    IndexedBatchPoller   *p = indexed_batch_queue_create_poller(q);
+
+    MutableBatch *b = indexed_batch_appender_start_batch(a);
+    mutable_batch_append(b, "msg", 3);
+    indexed_batch_appender_commit_batch(a, mutable_batch_complete(b));
+
+    BatchPollCapture cap = { .directive = NEXT_RETREAT };
+    BatchPollResult pr = indexed_batch_poller_poll(p, capture_handler, &cap);
+    TEST_ASSERT_EQUAL_INT(POLL_STOPPED, pr);
+
+    indexed_batch_appender_close(a);
+    indexed_batch_poller_close(p);
+}
+
+void test_batch_poller_exists(void)
+{
+    IndexedBatchAppender *a = indexed_batch_queue_create_appender(q);
+    IndexedBatchPoller   *p = indexed_batch_queue_create_poller(q);
+
+    TEST_ASSERT_FALSE(indexed_batch_poller_exists(p, 0));
+
+    MutableBatch *b = indexed_batch_appender_start_batch(a);
+    mutable_batch_append(b, "x", 1);
+    indexed_batch_appender_commit_batch(a, mutable_batch_complete(b));
+
+    TEST_ASSERT_TRUE(indexed_batch_poller_exists(p, 0));
+    TEST_ASSERT_FALSE(indexed_batch_poller_exists(p, 1));
+
+    indexed_batch_appender_close(a);
+    indexed_batch_poller_close(p);
+}
+
+void test_batch_poller_move_to_last_existing(void)
+{
+    IndexedBatchAppender *a = indexed_batch_queue_create_appender(q);
+    IndexedBatchPoller   *p = indexed_batch_queue_create_poller(q);
+
+    TEST_ASSERT_FALSE(indexed_batch_poller_move_to_last_existing_batch(p));
+
+    MutableBatch *b = indexed_batch_appender_start_batch(a);
+    mutable_batch_append(b, "first", 5);
+    indexed_batch_appender_commit_batch(a, mutable_batch_complete(b));
+
+    b = indexed_batch_appender_start_batch(a);
+    mutable_batch_append(b, "second", 6);
+    indexed_batch_appender_commit_batch(a, mutable_batch_complete(b));
+
+    TEST_ASSERT_TRUE(indexed_batch_poller_move_to_last_existing_batch(p));
+    TEST_ASSERT_EQUAL_INT64(1, indexed_batch_poller_current_batch_index(p));
+
+    indexed_batch_appender_close(a);
+    indexed_batch_poller_close(p);
+}
+
+/* ── Reader tests (unchanged) ────────────────────────────────────────────── */
 
 void test_reader_read_by_index(void)
 {
     IndexedBatchAppender *a = indexed_batch_queue_create_appender(q);
     IndexedBatchReader   *r = indexed_batch_queue_create_reader(q);
 
-    /* batch 0 */
     MutableBatch *b = indexed_batch_appender_start_batch(a);
     mutable_batch_append(b, "first0", 6);
     mutable_batch_append(b, "second0", 7);
     indexed_batch_appender_commit_batch(a, mutable_batch_complete(b));
 
-    /* batch 1 */
     b = indexed_batch_appender_start_batch(a);
     mutable_batch_append(b, "first1", 6);
     mutable_batch_append(b, "second1", 7);
@@ -183,7 +314,6 @@ void test_reader_read_by_index(void)
 
     BatchReadingContext ctx;
 
-    /* read batch 0 */
     indexed_batch_reader_read(r, 0, &ctx);
     TEST_ASSERT_EQUAL_INT(BATCH_ENTRY_AVAILABLE, ctx.status);
     TEST_ASSERT_EQUAL_INT64(0, ctx.index);
@@ -198,7 +328,6 @@ void test_reader_read_by_index(void)
 
     TEST_ASSERT_FALSE(batch_iterator_advance(&ctx.batch_iterator));
 
-    /* read batch 1 */
     indexed_batch_reader_read(r, 1, &ctx);
     TEST_ASSERT_EQUAL_INT(BATCH_ENTRY_AVAILABLE, ctx.status);
     TEST_ASSERT_EQUAL_INT(3, ctx.message_count);
@@ -220,12 +349,10 @@ void test_reader_read_first_and_last(void)
     IndexedBatchAppender *a = indexed_batch_queue_create_appender(q);
     IndexedBatchReader   *r = indexed_batch_queue_create_reader(q);
 
-    /* batch 0: 1 message */
     MutableBatch *b = indexed_batch_appender_start_batch(a);
     mutable_batch_append(b, "only", 4);
     indexed_batch_appender_commit_batch(a, mutable_batch_complete(b));
 
-    /* batch 1: 2 messages */
     b = indexed_batch_appender_start_batch(a);
     mutable_batch_append(b, "last_a", 6);
     mutable_batch_append(b, "last_b", 6);
@@ -285,8 +412,15 @@ void test_reader_has_entry(void)
 int main(void)
 {
     UNITY_BEGIN();
-    RUN_TEST(test_batch_append_and_poll_three_messages);
-    RUN_TEST(test_batch_multiple_batches_polled_in_order);
+    RUN_TEST(test_batch_poll_end_of_stream);
+    RUN_TEST(test_batch_poll_single_batch);
+    RUN_TEST(test_batch_poll_multiple_batches);
+    RUN_TEST(test_batch_poll_advance_all_messages);
+    RUN_TEST(test_batch_poll_stop);
+    RUN_TEST(test_batch_poll_retreat);
+    RUN_TEST(test_batch_poll_retreat_at_start);
+    RUN_TEST(test_batch_poller_exists);
+    RUN_TEST(test_batch_poller_move_to_last_existing);
     RUN_TEST(test_reader_read_by_index);
     RUN_TEST(test_reader_read_first_and_last);
     RUN_TEST(test_reader_end_of_stream_when_empty);

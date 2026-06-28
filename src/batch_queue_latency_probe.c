@@ -47,20 +47,24 @@ static int verify_payload_pattern(const uint8_t *data, int32_t length, uint32_t 
     return 1;
 }
 
-static BatchNextMove client_handler(int64_t b_idx, int32_t m_idx, int32_t m_cnt, const void *data, int32_t length, void *ctx)
+static NextMove client_handler(int64_t b_idx, BatchReadingContext *batch_ctx, void *user_ctx)
 {
-    (void)b_idx; (void)m_idx; (void)m_cnt;
-    BatchQueueLatencyProbe *p = (BatchQueueLatencyProbe *)ctx;
-    LatencyHeader hdr;
-    memcpy(&hdr, data, sizeof(LatencyHeader));
+    (void)b_idx;
+    BatchQueueLatencyProbe *p = (BatchQueueLatencyProbe *)user_ctx;
 
-    if (hdr.instance_id == p->instance_id && hdr.sequence == p->current_request_seq) {
-        if (p->validate_on_client && !verify_payload_pattern(data, length, hdr.sequence)) {
+    if (!batch_iterator_advance(&batch_ctx->batch_iterator))
+        return NEXT_ADVANCE;
+    const LatencyHeader *hdr = batch_iterator_current_data(&batch_ctx->batch_iterator);
+
+    if (hdr->instance_id == p->instance_id && hdr->sequence == p->current_request_seq) {
+        if (p->validate_on_client && !verify_payload_pattern(
+                (const void *)hdr, batch_iterator_current_length(&batch_ctx->batch_iterator),
+                hdr->sequence)) {
             atomic_fetch_add(&p->validation_errors, 1);
         }
         atomic_store(&p->response_received, 1);
     }
-    return BATCH_ADVANCE;
+    return NEXT_ADVANCE;
 }
 
 BatchQueueLatencyProbe *batch_queue_latency_probe_create(
