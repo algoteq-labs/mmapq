@@ -106,3 +106,14 @@ void batch_iterator_exhaust(BatchPayloadIterator *it)
 {
     while (batch_iterator_advance(it));
 }
+
+/* Non-inline wrappers for static inline accessors — used by Rust FFI. */
+const void *batch_iterator_current_data_ffi(const BatchPayloadIterator *it)
+{
+    return batch_iterator_current_data(it);
+}
+
+int32_t batch_iterator_current_length_ffi(const BatchPayloadIterator *it)
+{
+    return batch_iterator_current_length(it);
+}

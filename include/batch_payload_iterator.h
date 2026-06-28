@@ -151,6 +151,10 @@ static inline int32_t batch_iterator_current_length(const BatchPayloadIterator *
     return it->current_msg_length;
 }
 
+/* Non-inline FFI wrappers — exported for Rust FFI (static inline has no symbol). */
+const void *batch_iterator_current_data_ffi(const BatchPayloadIterator *it);
+int32_t    batch_iterator_current_length_ffi(const BatchPayloadIterator *it);
+
 /**
  * Skip all remaining messages in the batch, leaving the iterator exhausted.
  *
