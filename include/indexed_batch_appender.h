@@ -149,7 +149,7 @@ void indexed_batch_appender_discard_batch(IndexedBatchAppender *a, int64_t batch
  * @param length number of bytes to write
  * @return the zero-based index of the committed batch, or -1 on error
  */
-int64_t indexed_batch_appender_echo_append(IndexedBatchAppender *a, const void *data, int32_t length);
+int64_t indexed_batch_appender_append_and_commit(IndexedBatchAppender *a, const void *data, int32_t length);
 
 /* ── Message append ──────────────────────────────────────────────────────── */
 
