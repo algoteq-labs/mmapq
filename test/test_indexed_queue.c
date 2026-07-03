@@ -567,6 +567,25 @@ void test_poller_automatically_discovers_region_size(void)
     indexed_queue_close(q2);
 }
 
+void test_append_rejects_zero_length(void)
+{
+    IndexedQueue      *q = indexed_queue_create_default(DIR, QUEUE, rt, rt);
+    IndexedAppender   *a = indexed_queue_create_appender(q);
+
+    int64_t idx = indexed_appender_append(a, "first", 5);
+    TEST_ASSERT_EQUAL_INT64(0, idx);
+
+    int64_t bad = indexed_appender_append(a, "", 0);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL, bad);
+
+    /* Verify state unchanged — next append gets correct index */
+    int64_t next = indexed_appender_append(a, "third", 5);
+    TEST_ASSERT_EQUAL_INT64(1, next);
+
+    indexed_appender_close(a);
+    indexed_queue_close(q);
+}
+
 /* ── main ────────────────────────────────────────────────────────────────── */
 
 int main(void)
@@ -598,6 +617,8 @@ int main(void)
     RUN_TEST(test_poller_exists);
     
     RUN_TEST(test_poller_automatically_discovers_region_size);
+
+    RUN_TEST(test_append_rejects_zero_length);
 
     return UNITY_END();
 }

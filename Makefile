@@ -67,6 +67,9 @@ test-tsan:
 test-multi: $(LIB)
 	@bash test/multiprocess/test_multiprocess.sh
 
+print-cflags-release:
+	@echo $(CFLAGS)
+
 # Ensure scripts are executable after checkout
 scripts/test.sh test/multiprocess/test_multiprocess.sh:
 	chmod +x $@

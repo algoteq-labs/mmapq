@@ -249,6 +249,28 @@ void test_unregister_and_wait_safe_free(void)
     free(ce2);
 }
 
+void test_runtime_double_acquire(void)
+{
+    /* Verify that runtime_get_instance/clone/destroy cycle doesn't
+     * orphan the registry entry. Regression for P0.4 refcount fix. */
+    Runtime *rt1 = runtime_region_mapper();
+    TEST_ASSERT_NOT_NULL(rt1);
+    TEST_ASSERT_FALSE(runtime_is_closed(rt1));
+
+    Runtime *rt2 = runtime_clone(rt1);
+    TEST_ASSERT_NOT_NULL(rt2);
+
+    runtime_destroy(rt1);
+    runtime_destroy(rt2);
+
+    /* Re-acquire — should return a valid entry (registry still holds ref) */
+    Runtime *rt3 = runtime_region_mapper();
+    TEST_ASSERT_NOT_NULL(rt3);
+    TEST_ASSERT_FALSE(runtime_is_closed(rt3));
+
+    runtime_destroy(rt3);
+}
+
 /* ── main ────────────────────────────────────────────────────────────────── */
 
 int main(void)
@@ -266,5 +288,6 @@ int main(void)
     RUN_TEST(test_idle_strategy_backoff);
     RUN_TEST(test_deregister_executable);
     RUN_TEST(test_unregister_and_wait_safe_free);
+    RUN_TEST(test_runtime_double_acquire);
     return UNITY_END();
 }

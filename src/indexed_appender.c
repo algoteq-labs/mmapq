@@ -189,14 +189,14 @@ static int commit_header(IndexedAppender *a, int64_t payload_offset, int64_t *ou
 
 /* ── Initialise append position after (re)start ──────────────────────────── */
 
-static void initialise_append_position(IndexedAppender *a,
-                                        const char *directory,
-                                        const char *queue_name,
-                                        int32_t region_size,
-                                        int ring_size,
-                                        int64_t max_file_size,
-                                        uint64_t timeout_ns,
-                                        Runtime *runtime)
+static int initialise_append_position(IndexedAppender *a,
+                                       const char *directory,
+                                       const char *queue_name,
+                                       int32_t region_size,
+                                       int ring_size,
+                                       int64_t max_file_size,
+                                       uint64_t timeout_ns,
+                                       Runtime *runtime)
 {
     /*
      * Step 1: Use a temporary RO accessor to find lastIndex via
@@ -261,9 +261,10 @@ static void initialise_append_position(IndexedAppender *a,
             int32_t len = payload_walk_advance(a->queue_name,
                                                 &probing, &msg_off,
                                                 ro_payload, &ro_buf);
-            (void)len;
-            MMAP_ASSERT(len > 0,
-                "initialise_append_position: committed message has zero length");
+            if (len <= 0) {
+                queue_region_accessor_close(ro_acc);
+                return MMAPQ_ECORRUPT;
+            }
 
             /* Walk past any uncommitted tail */
             while (1) {
@@ -300,6 +301,7 @@ static void initialise_append_position(IndexedAppender *a,
     (void)r;
     MMAP_ASSERT(r == WRAP_SUCCESS,
         "initialise_append_position: failed to eager-wrap payload region");
+    return 0;
 }
 
 /* ── Internal constructor ────────────────────────────────────────────────── */
@@ -359,9 +361,16 @@ static IndexedAppender *appender_create_internal(
     a->payload_acc = queue_region_accessor_payload(a->rw_acc, appender_id);
 
     /* Find where to resume appending */
-    initialise_append_position(a, directory, queue_name,
-                                 reconciled_region_size, ring_size,
-                                 reconciled_max_file_size, timeout_ns, runtime);
+    if (initialise_append_position(a, directory, queue_name,
+                                     reconciled_region_size, ring_size,
+                                     reconciled_max_file_size, timeout_ns, runtime)) {
+        queue_region_accessor_close(a->rw_acc);
+        if (a->queue_meta) queue_meta_close(a->queue_meta);
+        free(a->directory);
+        free(a->queue_name);
+        free(a);
+        return NULL;
+    }
 
     return a;
 }
@@ -420,10 +429,8 @@ int64_t indexed_appender_append(
     const void      *data,
     int32_t          length)
 {
-    MMAP_ASSERT(a      != NULL, "indexed_appender_append: appender is NULL");
-    MMAP_ASSERT(!a->closed,     "indexed_appender_append: appender is closed");
-    MMAP_ASSERT(data   != NULL, "indexed_appender_append: data is NULL");
-    MMAP_ASSERT(length > 0,     "indexed_appender_append: length must be > 0");
+    if (a == NULL || data == NULL || length <= 0) return MMAPQ_EINVAL;
+    if (a->closed) return MMAPQ_ECLOSED;
 
     int64_t payload_offset;
     if (write_payload(a, data, length, &payload_offset)) return -1;
@@ -440,10 +447,8 @@ int64_t indexed_appender_append_uncommitted(
     const void      *data,
     int32_t          length)
 {
-    MMAP_ASSERT(a      != NULL, "indexed_appender_append_uncommitted: appender is NULL");
-    MMAP_ASSERT(!a->closed,     "indexed_appender_append_uncommitted: appender is closed");
-    MMAP_ASSERT(data   != NULL, "indexed_appender_append_uncommitted: data is NULL");
-    MMAP_ASSERT(length > 0,     "indexed_appender_append_uncommitted: length must be > 0");
+    if (a == NULL || data == NULL || length <= 0) return MMAPQ_EINVAL;
+    if (a->closed) return MMAPQ_ECLOSED;
 
     int64_t payload_offset;
     if (write_payload(a, data, length, &payload_offset)) return -1;

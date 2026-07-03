@@ -502,6 +502,16 @@ and `REBASE` / `PRESERVE` start index mode.
 
 ---
 
+## Corruption recovery
+
+The appender recovery scan (run on open after a previous process crashed or was killed)
+detects committed zero-length payload slots — a sign of queue corruption caused by
+appending empty messages under a build with `MMAP_ASSERT` rather than real checks.
+It refuses to open the appender and returns an error.
+
+Recovery detects corruption. It does **not** repair it. If you encounter a queue open
+failure due to corruption, recreate the queue from exported data.
+
 ## Platform
 
 Linux only. Requires naturally aligned lock-free atomics over `MAP_SHARED`

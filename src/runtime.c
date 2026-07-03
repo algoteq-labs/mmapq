@@ -428,7 +428,11 @@ Runtime *runtime_create(
 
     pthread_mutex_init(&rt->register_mutex, NULL);
     pthread_mutex_init(&rt->close_mutex,    NULL);
-    pthread_cond_init (&rt->close_cond,     NULL);
+    pthread_condattr_t cond_attr;
+    pthread_condattr_init(&cond_attr);
+    pthread_condattr_setclock(&cond_attr, CLOCK_MONOTONIC);
+    pthread_cond_init(&rt->close_cond, &cond_attr);
+    pthread_condattr_destroy(&cond_attr);
 
     pthread_attr_t attr;
     pthread_attr_init(&attr);
@@ -578,10 +582,9 @@ void runtime_close(Runtime *rt)
                     rt->name);
             break;
         }
-        uint64_t remaining_ns = deadline - now;
         struct timespec ts = {
-            .tv_sec  = (time_t)(remaining_ns / UINT64_C(1000000000)),
-            .tv_nsec = (long)  (remaining_ns % UINT64_C(1000000000)),
+            .tv_sec  = (time_t)(deadline / UINT64_C(1000000000)),
+            .tv_nsec = (long)  (deadline % UINT64_C(1000000000)),
         };
         pthread_cond_timedwait(&rt->close_cond, &rt->close_mutex, &ts);
     }
@@ -784,7 +787,7 @@ Runtime *runtime_get_instance(
             pthread_mutex_unlock(&registry_mutex);
             /* Caller provided idle but won't be used — destroy it */
             idle_strategy_destroy(idle);
-            return existing;
+            return runtime_clone(existing);
         }
     }
 
@@ -803,7 +806,10 @@ Runtime *runtime_get_instance(
     registry_count++;
 
     pthread_mutex_unlock(&registry_mutex);
-    return rt;
+    /* Registry holds one permanent reference (refcount 1 from runtime_create).
+     * Every caller, including the first, receives a clone — caller owns their
+     * own reference and destroy-all-handles never drops the registry's hold. */
+    return runtime_clone(rt);
 }
 
 Runtime *runtime_region_mapper(void)

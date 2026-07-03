@@ -1,4 +1,5 @@
 #include "unity.h"
+#include "mmap_platform.h"
 #include "indexed_batch_queue.h"
 #include "indexed_batch_appender.h"
 #include "indexed_batch_poller.h"
@@ -409,9 +410,28 @@ void test_reader_has_entry(void)
     indexed_batch_reader_close(r);
 }
 
+void test_batch_append_rejects_zero_length(void)
+{
+    IndexedBatchAppender *a = indexed_batch_queue_create_appender(q);
+    MutableBatch *b = indexed_batch_appender_start_batch(a);
+
+    int32_t ok = mutable_batch_append(b, "valid", 5);
+    TEST_ASSERT_EQUAL_INT(0, ok);
+
+    int32_t bad = mutable_batch_append(b, "", 0);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL, bad);
+
+    int32_t next = mutable_batch_append(b, "also-ok", 7);
+    TEST_ASSERT_EQUAL_INT(1, next);
+
+    indexed_batch_appender_commit_batch(a, mutable_batch_complete(b));
+    indexed_batch_appender_close(a);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
+    RUN_TEST(test_batch_append_rejects_zero_length);
     RUN_TEST(test_batch_poll_end_of_stream);
     RUN_TEST(test_batch_poll_single_batch);
     RUN_TEST(test_batch_poll_multiple_batches);

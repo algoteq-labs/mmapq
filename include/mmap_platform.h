@@ -1,6 +1,18 @@
 #ifndef MMAP_PLATFORM_H
 #define MMAP_PLATFORM_H
 
+/*
+ * Return codes used across the queue API.
+ *
+ *   >= 0  success (index, count, etc.)
+ *    -1   mapping timeout or I/O error (transient — retry)
+ *    -2   invalid argument (NULL pointer, zero/negative length, etc.)
+ */
+#define MMAPQ_ETIMEDOUT  (-1)   /* mapping timeout or I/O — transient, retry */
+#define MMAPQ_EINVAL     (-2)   /* invalid argument (NULL, zero length, etc.) */
+#define MMAPQ_ECLOSED    (-3)   /* operation on closed handle */
+#define MMAPQ_ECORRUPT   (-4)   /* on-disk corruption detected */
+
 #if defined(__linux__) && !defined(_GNU_SOURCE)
 #  define _GNU_SOURCE
 #endif

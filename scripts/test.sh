@@ -89,6 +89,22 @@ for TEST in "${TESTS[@]}"; do
     rm -f "$BIN"
 done
 
+# ── Release-flags validation (the 3 regression tests that guard NDEBUG bugs) ─
+echo ""
+echo "=== release-flags validation ==="
+CFLAGS_RELEASE="$(make -s print-cflags-release)"
+REL_FAILED=0
+for TEST in test_indexed_queue test_indexed_batch_queue test_runtime; do
+    BIN="/tmp/mmap_c_${TEST}_release"
+    if gcc $CFLAGS_RELEASE $SRCS "test/${TEST}.c" $UNITY -o "$BIN" $LDFLAGS 2>&1 && "$BIN" 2>&1; then
+        echo "PASS (release): $TEST"
+    else
+        echo "FAIL (release): $TEST"
+        REL_FAILED=1
+    fi
+    rm -f "$BIN"
+done
+
 echo ""
 echo "=== Results ($MODE): $PASS passed, $FAIL failed ==="
-[ "$FAIL" -eq 0 ]
+[ "$FAIL" -eq 0 ] && [ "$REL_FAILED" -eq 0 ]

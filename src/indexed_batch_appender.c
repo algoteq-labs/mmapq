@@ -253,6 +253,7 @@ int64_t indexed_batch_appender_append_and_commit(IndexedBatchAppender *a, const 
 
 int32_t mutable_batch_append(MutableBatch *b, const void *data, int32_t length)
 {
+    if (b == NULL || data == NULL || length <= 0) return MMAPQ_EINVAL;
     IndexedBatchAppender *a = b->appender;
     if (write_padding_if_needed(a, length)) return -1;
     memcpy(a->payload_buf.data + PAYLOAD_LENGTH_OFFSET, &length, sizeof(int32_t));
@@ -263,6 +264,7 @@ int32_t mutable_batch_append(MutableBatch *b, const void *data, int32_t length)
 
 int32_t mutable_batch_append_reserved(MutableBatch *b, int32_t length, void **out_data)
 {
+    if (b == NULL || out_data == NULL || length <= 0) return MMAPQ_EINVAL;
     IndexedBatchAppender *a = b->appender;
     if (write_padding_if_needed(a, length)) return -1;
     memcpy(a->payload_buf.data + PAYLOAD_LENGTH_OFFSET, &length, sizeof(int32_t));
