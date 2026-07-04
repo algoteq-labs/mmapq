@@ -256,19 +256,19 @@ int64_t queue_transfer_export_chunked(
  * Large payloads (> 64 KB) are heap-allocated; smaller payloads use a
  * stack buffer.
  *
- * @param in              input stream positioned after the meta header
- * @param directory       queue base directory
- * @param queue_name      queue subdirectory name
- * @param start_index     desired start index (0 for rebase)
- * @param region_size     region size from stream metadata
- * @param max_file_size   max file size from stream metadata
- * @param archivable      archivable flag from stream metadata
- * @param fixed_size      fixed_size_8bytes flag from stream metadata
- * @param total_entries   number of entries (or batches) to read
- * @param is_batch_stream 1 = batched stream, 0 = flat stream
- * @param wrt             runtime for writers (NULL = sync)
- * @param rrt             runtime for readers (NULL = sync)
- * @return number of entries (individual messages) imported, or -1 on error
+ * in:             input stream positioned after the meta header
+ * directory:      queue base directory
+ * queue_name:     queue subdirectory name
+ * start_index:    desired start index (0 for rebase)
+ * region_size:    region size from stream metadata
+ * max_file_size:  max file size from stream metadata
+ * archivable:     archivable flag from stream metadata
+ * fixed_size:     fixed_size_8bytes flag from stream metadata
+ * total_entries:  number of entries (or batches) to read
+ * is_batch_stream: 1 = batched stream, 0 = flat stream
+ * wrt:            runtime for writers (NULL = sync)
+ * rrt:            runtime for readers (NULL = sync)
+ * Returns: number of entries (individual messages) imported, or -1 on error
  */
 static int64_t do_import(
     FILE *in, const char *directory, const char *queue_name,

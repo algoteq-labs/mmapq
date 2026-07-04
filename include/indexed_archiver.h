@@ -39,11 +39,11 @@ typedef struct IndexedArchiver IndexedArchiver;
  * archivable_files() will fail with an error if the queue does not yet
  * exist on disk.
  *
- * @param directory   path to the directory containing queue files
- * @param queue_name  logical name of the queue
- * @param ring_size   number of simultaneously mapped regions (must be >= 2)
- * @param runtime     background region-mapper runtime for header access
- * @return a new archiver; never NULL (asserts on allocation failure)
+ * directory:  path to the directory containing queue files
+ * queue_name: logical name of the queue
+ * ring_size:  number of simultaneously mapped regions (must be >= 2)
+ * runtime:    background region-mapper runtime for header access
+ * Returns: a new archiver; never NULL (asserts on allocation failure)
  */
 IndexedArchiver *indexed_archiver_create(
     const char *directory,
@@ -82,9 +82,9 @@ int indexed_archiver_archivable(IndexedArchiver *a);
  *
  * No-op if index == current start_index.
  *
- * @param a      the archiver
- * @param index  first unarchived index (all prior indices will be archived)
- * @return 0 on success, MMAPQ_EINVAL if archiver is NULL, index < 0,
+ * a:     the archiver
+ * index: first unarchived index (all prior indices will be archived)
+ * Returns: 0 on success, MMAPQ_EINVAL if archiver is NULL, index < 0,
  *         queue not created, or queue not archivable.
  */
 int indexed_archiver_archive_up_to_index(IndexedArchiver *a, int64_t index);
@@ -114,10 +114,10 @@ int indexed_archiver_start_offset(
  * falls below the current start_index / start_offset respectively.
  * Only files that actually exist on disk are included.
  *
- * @param a          the archiver
- * @param paths_out  caller-allocated array of char* to populate
- * @param max_paths  capacity of paths_out
- * @return number of paths written to paths_out (may be less than max_paths)
+ * a:         the archiver
+ * paths_out: caller-allocated array of char* to populate
+ * max_paths: capacity of paths_out
+ * Returns: number of paths written to paths_out (may be less than max_paths)
  */
 int indexed_archiver_archivable_files(
     IndexedArchiver *a,
@@ -128,10 +128,10 @@ int indexed_archiver_archivable_files(
  * Append a human-readable summary of the queue's file layout and index
  * ranges to @p sb.
  *
- * @param a   the archiver
- * @param sb  caller-allocated buffer to append to
- * @param n   size of @p sb
- * @return number of bytes written (excluding null terminator)
+ * a:  the archiver
+ * sb: caller-allocated buffer to append to
+ * n:  size of @p sb
+ * Returns: number of bytes written (excluding null terminator)
  */
 int indexed_archiver_print_summary(IndexedArchiver *a, char *sb, int n);
 

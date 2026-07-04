@@ -105,12 +105,12 @@ typedef struct {
  * lazily on the first read. Reads before the queue exists return
  * BATCH_ENTRY_END_OF_STREAM.
  *
- * @param directory   path to the directory containing queue files
- * @param queue_name  logical name of the queue
- * @param ring_size   number of simultaneously mapped regions
- * @param timeout_ns  region-mapping timeout in nanoseconds
- * @param runtime     background region-mapper runtime
- * @return a new reader; never NULL (asserts on allocation failure)
+ * directory:  path to the directory containing queue files
+ * queue_name: logical name of the queue
+ * ring_size:  number of simultaneously mapped regions
+ * timeout_ns: region-mapping timeout in nanoseconds
+ * runtime:    background region-mapper runtime
+ * Returns: a new reader; never NULL (asserts on allocation failure)
  */
 IndexedBatchReader *indexed_batch_reader_create(
     const char *directory,
@@ -133,10 +133,10 @@ IndexedBatchReader *indexed_batch_reader_create(
  *   BATCH_ENTRY_ARCHIVED      — index below start_index()
  *   BATCH_ENTRY_ERROR         — mapping timeout or I/O failure
  *
- * @param r      the reader
- * @param index  zero-based batch index to read (must be >= 0)
- * @param ctx    caller-owned context to populate; returned for convenience
- * @return @p ctx (same pointer passed in)
+ * r:     the reader
+ * index: zero-based batch index to read (must be >= 0)
+ * ctx:   caller-owned context to populate; returned for convenience
+ * Returns: @p ctx (same pointer passed in)
  */
 BatchReadingContext *indexed_batch_reader_read(
     IndexedBatchReader  *r,
@@ -149,9 +149,9 @@ BatchReadingContext *indexed_batch_reader_read(
  * If the queue is empty or not yet created, ctx->status is
  * BATCH_ENTRY_END_OF_STREAM.
  *
- * @param r    the reader
- * @param ctx  caller-owned context to populate
- * @return @p ctx
+ * r:   the reader
+ * ctx: caller-owned context to populate
+ * Returns: @p ctx
  */
 BatchReadingContext *indexed_batch_reader_read_first(
     IndexedBatchReader  *r,
@@ -163,9 +163,9 @@ BatchReadingContext *indexed_batch_reader_read_first(
  * If the queue is empty, ctx->status is BATCH_ENTRY_END_OF_STREAM and
  * ctx->index is -1 (HEADER_NULL_INDEX).
  *
- * @param r    the reader
- * @param ctx  caller-owned context to populate
- * @return @p ctx
+ * r:   the reader
+ * ctx: caller-owned context to populate
+ * Returns: @p ctx
  */
 BatchReadingContext *indexed_batch_reader_read_last(
     IndexedBatchReader  *r,
@@ -196,9 +196,9 @@ int64_t indexed_batch_reader_start_index(IndexedBatchReader *r);
  * A lightweight check that does not populate a BatchReadingContext.
  * Equivalent to reading the header entry at @p index without loading payload.
  *
- * @param r      the reader
- * @param index  zero-based batch index to check
- * @return BATCH_ENTRY_AVAILABLE, BATCH_ENTRY_END_OF_STREAM, or BATCH_ENTRY_ARCHIVED
+ * r:     the reader
+ * index: zero-based batch index to check
+ * Returns: BATCH_ENTRY_AVAILABLE, BATCH_ENTRY_END_OF_STREAM, or BATCH_ENTRY_ARCHIVED
  */
 BatchEntryStatus indexed_batch_reader_entry_status(IndexedBatchReader *r, int64_t index);
 

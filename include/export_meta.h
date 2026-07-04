@@ -64,8 +64,8 @@ static inline void export_meta_init(ExportMeta *m)
 
 /**
  * Encode @p m into the 64-byte buffer @p out.
- * @param m    source metadata struct
- * @param out  caller-owned buffer of at least EXPORT_META_SIZE bytes
+ * m:   source metadata struct
+ * out: caller-owned buffer of at least EXPORT_META_SIZE bytes
  */
 static inline void export_meta_encode(const ExportMeta *m, uint8_t *out)
 {
@@ -80,8 +80,8 @@ static inline void export_meta_encode(const ExportMeta *m, uint8_t *out)
 
 /**
  * Decode the 64-byte buffer @p in into @p m.
- * @param in  caller-owned buffer of at least EXPORT_META_SIZE bytes
- * @param m   destination metadata struct
+ * in: caller-owned buffer of at least EXPORT_META_SIZE bytes
+ * m:  destination metadata struct
  */
 static inline void export_meta_decode(const uint8_t *in, ExportMeta *m)
 {

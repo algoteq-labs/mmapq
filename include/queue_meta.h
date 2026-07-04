@@ -149,13 +149,13 @@ static inline void queue_meta_set_start_index(QueueMeta *m, int64_t index)
  * parameters. If it already exists, the existing values are used (the
  * parameters are ignored for existing files).
  *
- * @param directory    base directory for the queue
- * @param queue_name   queue subdirectory name
- * @param start_index  initial index (typically 0)
- * @param region_size  region size in bytes (power of two, page-aligned)
- * @param max_file_size maximum rolled file size
- * @param archivable   0 or 1
- * @param queue_type   QUEUE_TYPE_NORMAL, QUEUE_TYPE_FIXED8, or QUEUE_TYPE_BATCH
+ * directory:      base directory for the queue
+ * queue_name:     queue subdirectory name
+ * start_index:    initial index (typically 0)
+ * region_size:    region size in bytes (power of two, page-aligned)
+ * max_file_size:  maximum rolled file size
+ * archivable:     0 or 1
+ * queue_type:     QUEUE_TYPE_NORMAL or QUEUE_TYPE_BATCH (FIXED8 is refused)
  *
  * Returns a heap-allocated QueueMeta on success, NULL on validation failure.
  */
@@ -171,9 +171,9 @@ QueueMeta *queue_meta_open_rw(
 /**
  * queue_meta_open_ro — open the meta file for reading only.
  *
- * @param directory     base directory for the queue
- * @param queue_name    queue subdirectory name
- * @param expected_type QUEUE_TYPE_NORMAL, QUEUE_TYPE_FIXED8, or QUEUE_TYPE_BATCH
+ * directory:       base directory for the queue
+ * queue_name:      queue subdirectory name
+ * expected_type:   QUEUE_TYPE_NORMAL or QUEUE_TYPE_BATCH (FIXED8 is refused)
  *
  * Returns a heap-allocated QueueMeta on success.
  * Returns NULL if the meta file does not exist yet (queue not created)

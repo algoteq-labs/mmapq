@@ -24,11 +24,11 @@ int queue_file_exists(const char *path);
  * Scan the queue directory for `appender_meta_N` files and populate
  * @p ids with the found appender IDs (0–255).
  *
- * @param directory  queue root directory
- * @param queue_name queue name
- * @param ids        caller-allocated array to populate (capacity max_ids)
- * @param max_ids    capacity of @p ids
- * @return number of IDs written
+ * directory: queue root directory
+ * queue_name: queue name
+ * ids:       caller-allocated array to populate (capacity max_ids)
+ * max_ids:   capacity of @p ids
+ * Returns: number of IDs written
  */
 int queue_files_get_appender_ids(
     const char *directory,

@@ -64,8 +64,8 @@ static inline void batch_export_meta_init(BatchExportMeta *m)
 
 /**
  * Encode @p m into the 64-byte buffer @p out.
- * @param m    source metadata struct
- * @param out  caller-owned buffer of at least BATCH_EXPORT_META_SIZE bytes
+ * m:   source metadata struct
+ * out: caller-owned buffer of at least BATCH_EXPORT_META_SIZE bytes
  */
 static inline void batch_export_meta_encode(const BatchExportMeta *m, uint8_t *out)
 {
@@ -79,8 +79,8 @@ static inline void batch_export_meta_encode(const BatchExportMeta *m, uint8_t *o
 
 /**
  * Decode the 64-byte buffer @p in into @p m.
- * @param in  caller-owned buffer of at least BATCH_EXPORT_META_SIZE bytes
- * @param m   destination metadata struct
+ * in: caller-owned buffer of at least BATCH_EXPORT_META_SIZE bytes
+ * m:  destination metadata struct
  */
 static inline void batch_export_meta_decode(const uint8_t *in, BatchExportMeta *m)
 {

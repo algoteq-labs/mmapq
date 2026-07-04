@@ -50,11 +50,11 @@
  * Called once per entry during export/import/copy.
  * Return 1 to include the entry, 0 to skip it.
  *
- * @param index     queue index of the entry
- * @param data      pointer to the message payload (read-only during callback)
- * @param length    payload byte count
- * @param ctx       caller-supplied context (passed through from the API call)
- * @return 1 to include, 0 to skip
+ * index:    queue index of the entry
+ * data:     pointer to the message payload (read-only during callback)
+ * length:   payload byte count
+ * ctx:      caller-supplied context (passed through from the API call)
+ * Returns: 1 to include, 0 to skip
  */
 typedef int (*QueueFilterFn)(int64_t index, const void *data,
                              int32_t length, void *ctx);
@@ -67,15 +67,15 @@ typedef int (*QueueFilterFn)(int64_t index, const void *data,
  * Writes a 64-byte ExportMeta header followed by each matching entry in
  * [uint16 appender_id][int32 length][payload] framing.
  *
- * @param reader           source queue reader
- * @param out              output stream (FILE*, typically a file or stdout)
- * @param start            first index to export (inclusive)
- * @param end              last index to export (inclusive)
- * @param start_index_mode QUEUE_TRANSFER_REBASE or QUEUE_TRANSFER_PRESERVE
- * @param include          optional include filter (NULL = accept all)
- * @param exclude          optional exclude filter (NULL = skip none)
- * @param ctx              caller context passed to filter callbacks
- * @return number of entries written, or -1 on I/O error
+ * reader:          source queue reader
+ * out:             output stream (FILE*, typically a file or stdout)
+ * start:           first index to export (inclusive)
+ * end:             last index to export (inclusive)
+ * start_index_mode: QUEUE_TRANSFER_REBASE or QUEUE_TRANSFER_PRESERVE
+ * include:         optional include filter (NULL = accept all)
+ * exclude:         optional exclude filter (NULL = skip none)
+ * ctx:             caller context passed to filter callbacks
+ * Returns: number of entries written, or -1 on I/O error
  */
 int64_t queue_transfer_export(
     IndexedReader *reader, FILE *out,
@@ -93,16 +93,16 @@ int64_t queue_transfer_export(
  * With REBASE (default), each chunk's start_index resets to the cumulative
  * count.  With PRESERVE, each chunk retains the original source index.
  *
- * @param reader          source queue reader
- * @param base_path       base file path (chunk files get _start-end suffix)
- * @param start           first index to export (inclusive)
- * @param end             last index to export (inclusive)
- * @param chunk_size_mb   approximate maximum size of each chunk in MB
- * @param start_index_mode QUEUE_TRANSFER_REBASE or QUEUE_TRANSFER_PRESERVE
- * @param include         optional include filter (NULL = accept all)
- * @param exclude         optional exclude filter (NULL = skip none)
- * @param ctx             caller context passed to filter callbacks
- * @return total entries exported across all chunks, or -1 on error
+ * reader:         source queue reader
+ * base_path:      base file path (chunk files get _start-end suffix)
+ * start:          first index to export (inclusive)
+ * end:            last index to export (inclusive)
+ * chunk_size_mb:  approximate maximum size of each chunk in MB
+ * start_index_mode: QUEUE_TRANSFER_REBASE or QUEUE_TRANSFER_PRESERVE
+ * include:        optional include filter (NULL = accept all)
+ * exclude:        optional exclude filter (NULL = skip none)
+ * ctx:            caller context passed to filter callbacks
+ * Returns: total entries exported across all chunks, or -1 on error
  */
 int64_t queue_transfer_export_chunked(
     IndexedReader *reader, const char *base_path,
@@ -117,13 +117,13 @@ int64_t queue_transfer_export_chunked(
  * Reads the ExportMeta header, creates (or opens) the destination queue
  * with matching parameters, and appends each entry.
  *
- * @param in            input stream (FILE*, typically a file or stdin)
- * @param directory     queue base directory
- * @param queue_name    queue subdirectory name
- * @param start_index   desired start index for the new queue (0 = rebase)
- * @param write_rt      runtime for writers (NULL = sync)
- * @param read_rt       runtime for readers (NULL = sync)
- * @return number of entries imported, or -1 on error
+ * in:           input stream (FILE*, typically a file or stdin)
+ * directory:    queue base directory
+ * queue_name:   queue subdirectory name
+ * start_index:  desired start index for the new queue (0 = rebase)
+ * write_rt:     runtime for writers (NULL = sync)
+ * read_rt:      runtime for readers (NULL = sync)
+ * Returns: number of entries imported, or -1 on error
  */
 int64_t queue_transfer_import(
     FILE *in, const char *directory, const char *queue_name,
@@ -137,13 +137,13 @@ int64_t queue_transfer_import(
  * and flattens every batch — each message in the batch becomes its own
  * entry in the output queue.
  *
- * @param in            input stream (FILE*) containing batch stream
- * @param directory     queue base directory
- * @param queue_name    queue subdirectory name
- * @param start_index   desired start index for the new queue (0 = rebase)
- * @param write_rt      runtime for writers (NULL = sync)
- * @param read_rt       runtime for readers (NULL = sync)
- * @return total number of individual messages imported, or -1 on error
+ * in:           input stream (FILE*) containing batch stream
+ * directory:    queue base directory
+ * queue_name:   queue subdirectory name
+ * start_index:  desired start index for the new queue (0 = rebase)
+ * write_rt:     runtime for writers (NULL = sync)
+ * read_rt:      runtime for readers (NULL = sync)
+ * Returns: total number of individual messages imported, or -1 on error
  */
 int64_t queue_transfer_import_batch_stream(
     FILE *in, const char *directory, const char *queue_name,
@@ -157,18 +157,18 @@ int64_t queue_transfer_import_batch_stream(
  *
  * Creates the destination queue with the same parameters as the source.
  *
- * @param reader           source queue reader
- * @param dest_dir         destination queue base directory
- * @param dest_queue       destination queue name
- * @param start            first index to copy (inclusive)
- * @param end              last index to copy (inclusive)
- * @param start_index_mode QUEUE_TRANSFER_REBASE or QUEUE_TRANSFER_PRESERVE
- * @param include          optional include filter (NULL = accept all)
- * @param exclude          optional exclude filter (NULL = skip none)
- * @param ctx              caller context passed to filter callbacks
- * @param write_rt         runtime for writers (NULL = sync)
- * @param read_rt          runtime for readers (NULL = sync)
- * @return number of entries copied, or -1 on error
+ * reader:          source queue reader
+ * dest_dir:        destination queue base directory
+ * dest_queue:      destination queue name
+ * start:           first index to copy (inclusive)
+ * end:             last index to copy (inclusive)
+ * start_index_mode: QUEUE_TRANSFER_REBASE or QUEUE_TRANSFER_PRESERVE
+ * include:         optional include filter (NULL = accept all)
+ * exclude:         optional exclude filter (NULL = skip none)
+ * ctx:             caller context passed to filter callbacks
+ * write_rt:        runtime for writers (NULL = sync)
+ * read_rt:         runtime for readers (NULL = sync)
+ * Returns: number of entries copied, or -1 on error
  */
 int64_t queue_transfer_copy(
     IndexedReader *reader,

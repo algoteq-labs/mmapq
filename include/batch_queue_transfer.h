@@ -58,13 +58,13 @@
  * Called once per message within a batch during export/import/copy.
  * Return 1 to include the message, 0 to skip it.
  *
- * @param batch_index   index of the batch containing this message
- * @param msg_index     zero-based index of this message within its batch
- * @param msg_count     total number of messages in the batch
- * @param data          pointer to the message payload (read-only during callback)
- * @param length        payload byte count
- * @param ctx           caller-supplied context
- * @return 1 to include, 0 to skip
+ * batch_index:  index of the batch containing this message
+ * msg_index:    zero-based index of this message within its batch
+ * msg_count:    total number of messages in the batch
+ * data:         pointer to the message payload (read-only during callback)
+ * length:       payload byte count
+ * ctx:          caller-supplied context
+ * Returns: 1 to include, 0 to skip
  */
 typedef int (*BatchQueueFilterFn)(int64_t batch_index, int32_t msg_index,
                                    int32_t msg_count, const void *data,
@@ -82,15 +82,15 @@ typedef int (*BatchQueueFilterFn)(int64_t batch_index, int32_t msg_index,
  * least one matching message.  Only matching messages within the batch
  * are written to the stream.
  *
- * @param reader           source batch queue reader
- * @param out              output stream (FILE*)
- * @param start            first batch index to export (inclusive)
- * @param end              last batch index to export (inclusive)
- * @param start_index_mode BATCH_QUEUE_TRANSFER_REBASE or PRESERVE
- * @param include          optional include filter (NULL = accept all)
- * @param exclude          optional exclude filter (NULL = skip none)
- * @param ctx              caller context passed to filter callbacks
- * @return number of batches written, or -1 on I/O error
+ * reader:          source batch queue reader
+ * out:             output stream (FILE*)
+ * start:           first batch index to export (inclusive)
+ * end:             last batch index to export (inclusive)
+ * start_index_mode: BATCH_QUEUE_TRANSFER_REBASE or PRESERVE
+ * include:         optional include filter (NULL = accept all)
+ * exclude:         optional exclude filter (NULL = skip none)
+ * ctx:             caller context passed to filter callbacks
+ * Returns: number of batches written, or -1 on I/O error
  */
 int64_t batch_queue_transfer_export(
     IndexedBatchReader *reader, FILE *out,
@@ -104,16 +104,16 @@ int64_t batch_queue_transfer_export(
  * Each chunk file is a complete, self-contained batched stream with its
  * own BatchExportMeta header and embedded index range in the file name.
  *
- * @param reader          source batch queue reader
- * @param base_path       base file path (chunk files get _start-end suffix)
- * @param start           first batch index to export (inclusive)
- * @param end             last batch index to export (inclusive)
- * @param chunk_size_mb   approximate maximum size of each chunk in MB
- * @param start_index_mode BATCH_QUEUE_TRANSFER_REBASE or PRESERVE
- * @param include         optional include filter (NULL = accept all)
- * @param exclude         optional exclude filter (NULL = skip none)
- * @param ctx             caller context passed to filter callbacks
- * @return total batches exported across all chunks, or -1 on error
+ * reader:         source batch queue reader
+ * base_path:      base file path (chunk files get _start-end suffix)
+ * start:          first batch index to export (inclusive)
+ * end:            last batch index to export (inclusive)
+ * chunk_size_mb:  approximate maximum size of each chunk in MB
+ * start_index_mode: BATCH_QUEUE_TRANSFER_REBASE or PRESERVE
+ * include:        optional include filter (NULL = accept all)
+ * exclude:        optional exclude filter (NULL = skip none)
+ * ctx:            caller context passed to filter callbacks
+ * Returns: total batches exported across all chunks, or -1 on error
  */
 int64_t batch_queue_transfer_export_chunked(
     IndexedBatchReader *reader, const char *base_path,
@@ -128,13 +128,13 @@ int64_t batch_queue_transfer_export_chunked(
  * Reads the BatchExportMeta header, creates the destination batch queue
  * with matching parameters, and commits each batch.
  *
- * @param in            input stream (FILE*) containing batched stream
- * @param directory     queue base directory
- * @param queue_name    queue subdirectory name
- * @param start_index   desired start index for the new queue (0 = rebase)
- * @param write_rt      runtime for writers (NULL = sync)
- * @param read_rt       runtime for readers (NULL = sync)
- * @return number of batches imported, or -1 on error
+ * in:           input stream (FILE*) containing batched stream
+ * directory:    queue base directory
+ * queue_name:   queue subdirectory name
+ * start_index:  desired start index for the new queue (0 = rebase)
+ * write_rt:     runtime for writers (NULL = sync)
+ * read_rt:      runtime for readers (NULL = sync)
+ * Returns: number of batches imported, or -1 on error
  */
 int64_t batch_queue_transfer_import(
     FILE *in, const char *directory, const char *queue_name,
@@ -148,13 +148,13 @@ int64_t batch_queue_transfer_import(
  * and for each entry starts a new batch, appends the single message,
  * and commits it.
  *
- * @param in            input stream (FILE*) containing flat stream
- * @param directory     queue base directory
- * @param queue_name    queue subdirectory name
- * @param start_index   desired start index for the new queue (0 = rebase)
- * @param write_rt      runtime for writers (NULL = sync)
- * @param read_rt       runtime for readers (NULL = sync)
- * @return number of batches (and messages) imported, or -1 on error
+ * in:           input stream (FILE*) containing flat stream
+ * directory:    queue base directory
+ * queue_name:   queue subdirectory name
+ * start_index:  desired start index for the new queue (0 = rebase)
+ * write_rt:     runtime for writers (NULL = sync)
+ * read_rt:      runtime for readers (NULL = sync)
+ * Returns: number of batches (and messages) imported, or -1 on error
  */
 int64_t batch_queue_transfer_import_flat_stream(
     FILE *in, const char *directory, const char *queue_name,
@@ -170,18 +170,18 @@ int64_t batch_queue_transfer_import_flat_stream(
  * least one matching message.  Only matching messages are written to the
  * output batch.
  *
- * @param reader           source batch queue reader
- * @param dest_dir         destination queue base directory
- * @param dest_queue       destination queue name
- * @param start            first batch index to copy (inclusive)
- * @param end              last batch index to copy (inclusive)
- * @param start_index_mode BATCH_QUEUE_TRANSFER_REBASE or PRESERVE
- * @param include          optional include filter (NULL = accept all)
- * @param exclude          optional exclude filter (NULL = skip none)
- * @param ctx              caller context passed to filter callbacks
- * @param write_rt         runtime for writers (NULL = sync)
- * @param read_rt          runtime for readers (NULL = sync)
- * @return number of batches copied, or -1 on error
+ * reader:          source batch queue reader
+ * dest_dir:        destination queue base directory
+ * dest_queue:      destination queue name
+ * start:           first batch index to copy (inclusive)
+ * end:             last batch index to copy (inclusive)
+ * start_index_mode: BATCH_QUEUE_TRANSFER_REBASE or PRESERVE
+ * include:         optional include filter (NULL = accept all)
+ * exclude:         optional exclude filter (NULL = skip none)
+ * ctx:             caller context passed to filter callbacks
+ * write_rt:        runtime for writers (NULL = sync)
+ * read_rt:         runtime for readers (NULL = sync)
+ * Returns: number of batches copied, or -1 on error
  */
 int64_t batch_queue_transfer_copy(
     IndexedBatchReader *reader,

@@ -58,14 +58,14 @@ struct MutableBatch {
  * and ignores the corresponding arguments — the queue meta file is
  * authoritative.
  *
- * @param directory    path to the directory containing queue files
- * @param queue_name   logical name of the queue
- * @param region_size  preferred payload region size (power of 2, ignored if queue exists)
- * @param ring_size    number of simultaneously mapped regions
- * @param max_file_size  maximum rolled file size
- * @param timeout_ns   region-mapping timeout in nanoseconds
- * @param archivable   1 to create archivable (applies at creation only; 0 default, performant)
- * @return a new appender; never NULL (asserts on allocation failure)
+ * directory:   path to the directory containing queue files
+ * queue_name:  logical name of the queue
+ * region_size: preferred payload region size (power of 2, ignored if queue exists)
+ * ring_size:   number of simultaneously mapped regions
+ * max_file_size: maximum rolled file size
+ * timeout_ns:  region-mapping timeout in nanoseconds
+ * archivable:  1 to create archivable (applies at creation only; 0 default, performant)
+ * Returns: a new appender; never NULL (asserts on allocation failure)
  */
 IndexedBatchAppender *indexed_batch_appender_create(
     const char *directory,
@@ -88,7 +88,7 @@ IndexedBatchAppender *indexed_batch_appender_create(
  *
  * Only one batch may be in progress at a time per appender.
  *
- * @return pointer to the appender-owned MutableBatch (valid until commit or close),
+ * Returns: pointer to the appender-owned MutableBatch (valid until commit or close),
  *         or NULL on mapping timeout
  */
 MutableBatch *indexed_batch_appender_start_batch(IndexedBatchAppender *a);
@@ -98,8 +98,8 @@ MutableBatch *indexed_batch_appender_start_batch(IndexedBatchAppender *a);
  *
  * After calling this, no further appends may be made to the batch.
  *
- * @param b  the in-progress batch
- * @return the payload offset of the completed batch (to be passed to
+ * b: the in-progress batch
+ * Returns: the payload offset of the completed batch (to be passed to
  *         indexed_batch_appender_commit_batch()), or -1 on mapping timeout
  */
 int64_t mutable_batch_complete(MutableBatch *b);
@@ -110,9 +110,9 @@ int64_t mutable_batch_complete(MutableBatch *b);
  * The CAS on the header entry is atomic — once this returns, any poller
  * waiting on this index will see the batch.
  *
- * @param a            the appender
- * @param batch_offset the value returned by mutable_batch_complete()
- * @return the zero-based index of the committed batch,
+ * a:           the appender
+ * batch_offset: the value returned by mutable_batch_complete()
+ * Returns: the zero-based index of the committed batch,
  *         or -1 on mapping timeout
  */
 int64_t indexed_batch_appender_commit_batch(IndexedBatchAppender *a, int64_t batch_offset);
@@ -129,8 +129,8 @@ int64_t indexed_batch_appender_commit_batch(IndexedBatchAppender *a, int64_t bat
  * mutable_batch_complete() was called but before commit. Not needed when
  * commit succeeds — the batch is then permanent.
  *
- * @param a            the appender
- * @param batch_offset the value returned by mutable_batch_complete(),
+ * a:           the appender
+ * batch_offset: the value returned by mutable_batch_complete(),
  *                     or the offset from start_batch if never completed
  */
 void indexed_batch_appender_discard_batch(IndexedBatchAppender *a, int64_t batch_offset);
@@ -145,10 +145,10 @@ void indexed_batch_appender_discard_batch(IndexedBatchAppender *a, int64_t batch
  *   int64_t off = mutable_batch_complete(b);
  *   return indexed_batch_appender_commit_batch(a, off);
  *
- * @param a      the appender
- * @param data   pointer to the message payload
- * @param length number of bytes to write
- * @return the zero-based index of the committed batch, or -1 on error
+ * a:     the appender
+ * data:  pointer to the message payload
+ * length: number of bytes to write
+ * Returns: the zero-based index of the committed batch, or -1 on error
  */
 int64_t indexed_batch_appender_append_and_commit(IndexedBatchAppender *a, const void *data, int32_t length);
 
@@ -161,10 +161,10 @@ int64_t indexed_batch_appender_append_and_commit(IndexedBatchAppender *a, const 
  * current region lacks space a padding marker is written and the accessor
  * is remapped to the next region transparently.
  *
- * @param b      the in-progress batch
- * @param data   pointer to the message payload
- * @param length number of bytes to write (not including the length prefix)
- * @return the zero-based index of the newly appended message within the batch,
+ * b:     the in-progress batch
+ * data:  pointer to the message payload
+ * length: number of bytes to write (not including the length prefix)
+ * Returns: the zero-based index of the newly appended message within the batch,
  *         or -1 on mapping timeout
  */
 int32_t mutable_batch_append(MutableBatch *b, const void *data, int32_t length);
@@ -177,11 +177,11 @@ int32_t mutable_batch_append(MutableBatch *b, const void *data, int32_t length);
  * message count. Use mutable_batch_get() or mutable_batch_iterator() to
  * populate the reserved bytes before calling mutable_batch_complete().
  *
- * @param b        the in-progress batch
- * @param length   number of payload bytes to reserve
- * @param out_data set to a pointer to the reserved payload region on return;
+ * b:       the in-progress batch
+ * length:  number of payload bytes to reserve
+ * out_data: set to a pointer to the reserved payload region on return;
  *                 valid until the next append, region remap, or close
- * @return the zero-based index of the reserved message slot within the batch,
+ * Returns: the zero-based index of the reserved message slot within the batch,
  *         or -1 on mapping timeout
  */
 int32_t mutable_batch_append_reserved(MutableBatch *b, int32_t length, void **out_data);
@@ -193,9 +193,9 @@ int32_t mutable_batch_append_reserved(MutableBatch *b, int32_t length, void **ou
  * The iterator must not be backed by the same in-progress batch to avoid
  * undefined behaviour.
  *
- * @param b   the in-progress batch
- * @param it  iterator positioned at the first message to copy
- * @return the number of messages appended
+ * b:  the in-progress batch
+ * it: iterator positioned at the first message to copy
+ * Returns: the number of messages appended
  */
 int32_t mutable_batch_append_remaining_from(MutableBatch *b, BatchPayloadIterator *it);
 
@@ -211,10 +211,10 @@ int32_t mutable_batch_append_remaining_from(MutableBatch *b, BatchPayloadIterato
  * appender's internal iterator state and must not be used concurrently
  * with an active iteration.
  *
- * @param b              the in-progress batch
- * @param message_index  zero-based index of the message (must be < message_count)
- * @param out_length     set to the length of the message on return
- * @return pointer to the raw payload bytes; NULL if index is out of range
+ * b:             the in-progress batch
+ * message_index: zero-based index of the message (must be < message_count)
+ * out_length:    set to the length of the message on return
+ * Returns: pointer to the raw payload bytes; NULL if index is out of range
  */
 const void *mutable_batch_get(MutableBatch *b, int32_t message_index, int32_t *out_length);
 
@@ -224,9 +224,9 @@ const void *mutable_batch_get(MutableBatch *b, int32_t message_index, int32_t *o
  * Shares the same internal state as mutable_batch_get() — the two must not
  * be used simultaneously.
  *
- * @param b                   the in-progress batch
- * @param start_message_index zero-based index to begin from
- * @return pointer to the appender's internal iterator; valid until next append or close
+ * b:                  the in-progress batch
+ * start_message_index: zero-based index to begin from
+ * Returns: pointer to the appender's internal iterator; valid until next append or close
  */
 BatchPayloadIterator *mutable_batch_iterator(MutableBatch *b, int32_t start_message_index);
 
@@ -235,7 +235,7 @@ BatchPayloadIterator *mutable_batch_iterator(MutableBatch *b, int32_t start_mess
 /**
  * Return the number of messages currently in the in-progress batch.
  *
- * @param b  the in-progress batch
+ * b: the in-progress batch
  */
 int32_t mutable_batch_message_count(const MutableBatch *b);
 

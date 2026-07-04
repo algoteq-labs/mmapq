@@ -71,11 +71,11 @@ typedef struct {
  * Must be called before advancing. payload_acc and queue_name must already
  * be set by the owning object.
  *
- * @param it               the iterator to initialise
- * @param batch_offset     absolute payload offset where the batch begins
- * @param message_count    total messages in the batch; pass -1 to read from disk
- * @param start_msg_index  zero-based message index to start iteration from
- * @return @p it (for chaining)
+ * it:              the iterator to initialise
+ * batch_offset:    absolute payload offset where the batch begins
+ * message_count:   total messages in the batch; pass -1 to read from disk
+ * start_msg_index: zero-based message index to start iteration from
+ * Returns: @p it (for chaining)
  */
 BatchPayloadIterator *batch_iterator_init(
     BatchPayloadIterator *it,
@@ -89,9 +89,9 @@ BatchPayloadIterator *batch_iterator_init(
  * Used during initialisation when the count is not already known (e.g.
  * in the reader after looking up the header entry).
  *
- * @param it           the iterator (payload_acc must be set)
- * @param batch_offset absolute payload offset of the batch to probe
- * @return the message count, or -1 if the region cannot be mapped
+ * it:          the iterator (payload_acc must be set)
+ * batch_offset: absolute payload offset of the batch to probe
+ * Returns: the message count, or -1 if the region cannot be mapped
  */
 int32_t batch_iterator_read_message_count(BatchPayloadIterator *it, int64_t batch_offset);
 
@@ -101,9 +101,9 @@ int32_t batch_iterator_read_message_count(BatchPayloadIterator *it, int64_t batc
  * Used during initialisation of the append position on restart to locate
  * the last committed batch without scanning all headers.
  *
- * @param it      the iterator
- * @param offset  payload offset to probe
- * @return the resolved batch offset, or BATCH_ITERATOR_INVALID_POSITION if none found
+ * it:     the iterator
+ * offset: payload offset to probe
+ * Returns: the resolved batch offset, or BATCH_ITERATOR_INVALID_POSITION if none found
  */
 int64_t batch_iterator_probe_batch(BatchPayloadIterator *it, int64_t offset);
 
@@ -116,7 +116,7 @@ int64_t batch_iterator_probe_batch(BatchPayloadIterator *it, int64_t offset);
  * After a successful call, batch_iterator_current_data() and
  * batch_iterator_current_length() return valid values for the current message.
  *
- * @return 1 if advanced successfully; 0 if the batch is exhausted
+ * Returns: 1 if advanced successfully; 0 if the batch is exhausted
  */
 int batch_iterator_advance(BatchPayloadIterator *it);
 

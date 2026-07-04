@@ -34,11 +34,11 @@ typedef struct IndexedBatchArchiver IndexedBatchArchiver;
 /**
  * Create a batch archiver for the named queue.
  *
- * @param directory   path to the directory containing queue files
- * @param queue_name  logical name of the queue
- * @param ring_size   number of simultaneously mapped regions
- * @param runtime     background region-mapper runtime for header/payload access
- * @return a new archiver; never NULL (asserts on allocation failure)
+ * directory:  path to the directory containing queue files
+ * queue_name: logical name of the queue
+ * ring_size:  number of simultaneously mapped regions
+ * runtime:    background region-mapper runtime for header/payload access
+ * Returns: a new archiver; never NULL (asserts on allocation failure)
  */
 IndexedBatchArchiver *indexed_batch_archiver_create(
     const char *directory,
@@ -76,9 +76,9 @@ int indexed_batch_archiver_archivable(IndexedBatchArchiver *a);
  *
  * No-op if index == current start_index.
  *
- * @param a      the archiver
- * @param index  first unarchived batch index (all prior indices archived)
- * @return 0 on success, MMAPQ_EINVAL on invalid argument or non-archivable.
+ * a:     the archiver
+ * index: first unarchived batch index (all prior indices archived)
+ * Returns: 0 on success, MMAPQ_EINVAL on invalid argument or non-archivable.
  */
 int indexed_batch_archiver_archive_up_to_index(IndexedBatchArchiver *a, int64_t index);
 
@@ -104,10 +104,10 @@ int indexed_batch_archiver_start_offset(
  * Includes header_N and payload_N_M files whose entire range falls below
  * the current start_index / start_offset. Only existing files are included.
  *
- * @param a          the archiver
- * @param paths_out  caller-allocated array of char* to populate
- * @param max_paths  capacity of paths_out
- * @return number of paths written (may be less than max_paths)
+ * a:         the archiver
+ * paths_out: caller-allocated array of char* to populate
+ * max_paths: capacity of paths_out
+ * Returns: number of paths written (may be less than max_paths)
  */
 int indexed_batch_archiver_archivable_files(
     IndexedBatchArchiver *a,

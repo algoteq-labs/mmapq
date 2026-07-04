@@ -64,10 +64,10 @@ typedef PollResult BatchPollResult;
  * The context and its iterator are flyweight views into mapped memory —
  * valid only for the duration of this call. Do not retain the pointer.
  *
- * @param batch_index  zero-based index of the delivered batch
- * @param context      batch context with iterator positioned before msg 0
- * @param ctx          caller-supplied context pointer
- * @return             cursor directive: ADVANCE, STOP, or RETREAT
+ * batch_index: zero-based index of the delivered batch
+ * context:     batch context with iterator positioned before msg 0
+ * ctx:         caller-supplied context pointer
+ * Returns:             cursor directive: ADVANCE, STOP, or RETREAT
  */
 typedef NextMove (*BatchHandler)(
     int64_t              batch_index,
@@ -82,12 +82,12 @@ typedef NextMove (*BatchHandler)(
  * The poller may be created before the queue exists — poll() will return
  * POLL_END_OF_STREAM until batches are committed.
  *
- * @param directory   path to the directory containing queue files
- * @param queue_name  logical name of the queue
- * @param ring_size   number of simultaneously mapped regions
- * @param timeout_ns  region-mapping timeout in nanoseconds
- * @param runtime     background region-mapper runtime
- * @return a new poller; never NULL (asserts on allocation failure)
+ * directory:  path to the directory containing queue files
+ * queue_name: logical name of the queue
+ * ring_size:  number of simultaneously mapped regions
+ * timeout_ns: region-mapping timeout in nanoseconds
+ * runtime:    background region-mapper runtime
+ * Returns: a new poller; never NULL (asserts on allocation failure)
  */
 IndexedBatchPoller *indexed_batch_poller_create(
     const char *directory,
@@ -105,10 +105,10 @@ IndexedBatchPoller *indexed_batch_poller_create(
  * batch exists at the current index, returns POLL_END_OF_STREAM without
  * invoking the handler.
  *
- * @param p       the poller
- * @param handler callback to receive the batch context
- * @param ctx     caller context passed through to the handler
- * @return the result of the poll operation
+ * p:      the poller
+ * handler: callback to receive the batch context
+ * ctx:    caller context passed through to the handler
+ * Returns: the result of the poll operation
  */
 BatchPollResult indexed_batch_poller_poll(
     IndexedBatchPoller *p,
@@ -131,7 +131,7 @@ int indexed_batch_poller_move_to_index(IndexedBatchPoller *p, int64_t batch_inde
  * Subsequent poll() calls will return POLL_END_OF_STREAM until a new
  * batch is appended.
  *
- * @return 1 always
+ * Returns: 1 always
  */
 int indexed_batch_poller_move_to_end(IndexedBatchPoller *p);
 
@@ -141,7 +141,7 @@ int indexed_batch_poller_move_to_end(IndexedBatchPoller *p);
  * Unlike move_to_end(), which positions past the last batch, this positions
  * AT the last valid batch so it can be polled immediately.
  *
- * @return 1 if a committed batch exists; 0 if the queue is empty
+ * Returns: 1 if a committed batch exists; 0 if the queue is empty
  */
 int indexed_batch_poller_move_to_last_existing_batch(IndexedBatchPoller *p);
 
@@ -150,7 +150,7 @@ int indexed_batch_poller_move_to_last_existing_batch(IndexedBatchPoller *p);
  *
  * This is the lowest index still available for reading.
  *
- * @return 1 always
+ * Returns: 1 always
  */
 int indexed_batch_poller_move_to_start(IndexedBatchPoller *p);
 

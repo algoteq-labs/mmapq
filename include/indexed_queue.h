@@ -162,8 +162,8 @@ IndexedReader *indexed_queue_create_reader(IndexedQueue *q);
  *
  * The archiver must be closed independently with indexed_archiver_close().
  *
- * @param q  the queue (must not be closed, must be archivable)
- * @return a new archiver; asserts if the queue is not archivable
+ * q: the queue (must not be closed, must be archivable)
+ * Returns: a new archiver; asserts if the queue is not archivable
  */
 IndexedArchiver *indexed_queue_create_archiver(IndexedQueue *q);
 
