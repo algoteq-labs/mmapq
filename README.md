@@ -107,6 +107,11 @@ indexed_batch_queue_close(q);
 
 ## Core concepts
 
+
+See [doc/feature-matrix.md](doc/feature-matrix.md) for the full feature
+matrix across the C, Rust, and Python implementations, including
+compatibility scope.
+
 ```
   ─────────────────────────────────────────────► Header
 

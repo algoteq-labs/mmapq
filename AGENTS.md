@@ -9,7 +9,8 @@ disagree, follow the rules and flag the disagreement in your summary.
 
 A small, frozen-scope, low-latency C library: a persistent, indexed,
 multi-appender shared-memory queue over memory-mapped files, binary-compatible
-with the Java `tools4j/mmap` project. Cross-process correctness under
+with Algoteq's Java implementation (an evolved derivative of tools4j/mmap;
+NOT compatible with upstream tools4j). Cross-process correctness under
 contention is the entire value of this code. Nanoseconds matter on the hot
 path. The on-disk format is a compatibility contract.
 
@@ -31,6 +32,9 @@ file governs conduct; that file governs design.
    explicitly requests them. Useful higher-level functionality belongs in
    separate projects, never here. If a task seems to need a new public API,
    stop and ask.
+   *Sole exception: completing parity with the Algoteq Java surface (the
+   tools4j-derived reference implementation) for capability that already
+   exists on disk, and only by explicit task.*
 
 2. **Never change the on-disk layout.** Byte offsets, file sizes, file
    naming, header encoding, payload framing, and the 64-byte meta layout are
@@ -126,11 +130,19 @@ file governs conduct; that file governs design.
 - Header comments use this project's house style: prose block comments with
   aligned `name: description` parameter lists. **No Javadoc/Doxygen tags** —
   no `@param`, `@return`, `@brief`. Match the surrounding file exactly.
+  Example:
+  ```c
+   * directory:    base queue directory (e.g. "/data/queues")
+   * queue_name:   queue subdirectory name
+   * timeout_ns:   mapping timeout in nanoseconds
+  ```
 - Comments carry design rationale and invariants ("only place that handles
   padding"), not restatements of the code. If a comment says nothing the
   signature doesn't, delete it before it's written.
 - If your change makes an existing comment false, fixing that comment is in
   scope; rewriting comments that are still true is not.
+- Changes to the public surface (factory signatures, error codes, types)
+  update `doc/feature-matrix.md` in the same task.
 
 ## Mirror discipline
 
