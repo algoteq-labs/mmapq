@@ -78,8 +78,9 @@ int indexed_batch_archiver_archivable(IndexedBatchArchiver *a);
  *
  * @param a      the archiver
  * @param index  first unarchived batch index (all prior indices archived)
+ * @return 0 on success, MMAPQ_EINVAL on invalid argument or non-archivable.
  */
-void indexed_batch_archiver_archive_up_to_index(IndexedBatchArchiver *a, int64_t index);
+int indexed_batch_archiver_archive_up_to_index(IndexedBatchArchiver *a, int64_t index);
 
 /* ── Query ───────────────────────────────────────────────────────────────── */
 

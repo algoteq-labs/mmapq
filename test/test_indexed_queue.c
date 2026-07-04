@@ -6,6 +6,9 @@
 #include "runtime.h"
 #include "header_codec.h"
 #include "header_reader.h"
+#include "indexed_batch_queue.h"
+#include "queue_meta.h"
+#include <stdio.h>
 
 #include <unistd.h>
 #include <string.h>
@@ -44,7 +47,7 @@ void setUp(void)
     q  = indexed_queue_create(DIR, QUEUE,
                                REGION_SZ, RING_SZ, 1,
                                MAX_FILE, 0,
-                               TIMEOUT_NS, rt, rt);
+                               TIMEOUT_NS, 0, rt, rt);
 }
 
 void tearDown(void)
@@ -415,7 +418,7 @@ void test_appender_recovers_position_after_close(void)
 
     /* Phase 2: reopen with same ID — should resume at index 2 */
     IndexedAppender *a2 = indexed_appender_create_with_id(
-        DIR, QUEUE, REGION_SZ, RING_SZ, MAX_FILE, TIMEOUT_NS, rt, id);
+        DIR, QUEUE, REGION_SZ, RING_SZ, MAX_FILE, TIMEOUT_NS, 0, rt, id);
 
     TEST_ASSERT_EQUAL_INT64(before_close, indexed_appender_current_index(a2));
 
@@ -542,7 +545,7 @@ void test_poller_automatically_discovers_region_size(void)
     /* Phase 1: Create a queue with 8MB regions and write a message */
     int32_t LARGE_REGION = 8 * 1024 * 1024;
     IndexedQueue *q1 = indexed_queue_create(DIR, QUEUE, LARGE_REGION, RING_SZ, 1, 
-                                             LARGE_REGION * 16, 0, TIMEOUT_NS, rt, rt);
+                                             LARGE_REGION * 16, 0, TIMEOUT_NS, 0, rt, rt);
     IndexedAppender *a = indexed_queue_create_appender(q1);
     indexed_appender_append(a, "hello", 5);
     indexed_appender_close(a);
@@ -550,7 +553,7 @@ void test_poller_automatically_discovers_region_size(void)
 
     /* Phase 2: Create a second queue instance with "wrong" default (4KB) */
     IndexedQueue *q2 = indexed_queue_create(DIR, QUEUE, REGION_SZ, RING_SZ, 1,
-                                             MAX_FILE, 0, TIMEOUT_NS, rt, rt);
+                                             MAX_FILE, 0, TIMEOUT_NS, 0, rt, rt);
     
     /* Verify metadata reported by q2 is correct (8MB) */
     TEST_ASSERT_EQUAL_INT32(LARGE_REGION, indexed_queue_region_size(q2));
@@ -586,6 +589,75 @@ void test_append_rejects_zero_length(void)
     indexed_queue_close(q);
 }
 
+void test_open_normal_as_batch_refused(void)
+{
+    IndexedQueue *q = indexed_queue_create_default(DIR, QUEUE, rt, rt);
+    IndexedAppender *a = indexed_queue_create_appender(q);
+    indexed_appender_append(a, "msg", 3);
+    indexed_appender_close(a);
+    indexed_queue_close(q);
+
+    /* Attempt to create a batch participant on the same queue */
+    IndexedBatchQueue *bq = indexed_batch_queue_create_default(DIR, QUEUE, rt, rt);
+    IndexedBatchAppender *ba = indexed_batch_queue_create_appender(bq);
+    TEST_ASSERT_NULL(ba);
+
+    if (bq) indexed_batch_queue_close(bq);
+}
+
+void test_meta_schema_mismatch_refused(void)
+{
+    IndexedQueue *q = indexed_queue_create_default(DIR, QUEUE, rt, rt);
+    IndexedAppender *a = indexed_queue_create_appender(q);
+    indexed_appender_append(a, "msg", 3);
+    indexed_appender_close(a);
+    indexed_queue_close(q);
+
+    /* Patch schema_version to 99 */
+    char path[512];
+    snprintf(path, sizeof(path), "/tmp/%s/meta", QUEUE);
+    int32_t bad = 99;
+    FILE *f = fopen(path, "r+b");
+    if (f) {
+        fwrite(&bad, sizeof(bad), 1, f);
+        fclose(f);
+    }
+
+    /* Appender creation should now fail */
+    IndexedQueue *q2 = indexed_queue_create_default(DIR, QUEUE, rt, rt);
+    IndexedAppender *a2 = indexed_queue_create_appender(q2);
+    TEST_ASSERT_NULL(a2);
+
+    if (q2) indexed_queue_close(q2);
+}
+
+void test_meta_fixed8_refused(void)
+{
+    IndexedQueue *q = indexed_queue_create_default(DIR, QUEUE, rt, rt);
+    IndexedAppender *a = indexed_queue_create_appender(q);
+    indexed_appender_append(a, "msg", 3);
+    indexed_appender_close(a);
+    indexed_queue_close(q);
+
+    /* Patch byte at offset 25 to 1 (QUEUE_TYPE_FIXED8) */
+    char path[512];
+    snprintf(path, sizeof(path), "/tmp/%s/meta", QUEUE);
+    uint8_t qt = QUEUE_TYPE_FIXED8;
+    FILE *f = fopen(path, "r+b");
+    if (f) {
+        fseek(f, QUEUE_META_QUEUE_TYPE_OFFSET, SEEK_SET);
+        fwrite(&qt, sizeof(qt), 1, f);
+        fclose(f);
+    }
+
+    /* Appender creation should now fail */
+    IndexedQueue *q2 = indexed_queue_create_default(DIR, QUEUE, rt, rt);
+    IndexedAppender *a2 = indexed_queue_create_appender(q2);
+    TEST_ASSERT_NULL(a2);
+
+    if (q2) indexed_queue_close(q2);
+}
+
 /* ── main ────────────────────────────────────────────────────────────────── */
 
 int main(void)
@@ -619,6 +691,10 @@ int main(void)
     RUN_TEST(test_poller_automatically_discovers_region_size);
 
     RUN_TEST(test_append_rejects_zero_length);
+
+    RUN_TEST(test_open_normal_as_batch_refused);
+    RUN_TEST(test_meta_schema_mismatch_refused);
+    RUN_TEST(test_meta_fixed8_refused);
 
     return UNITY_END();
 }

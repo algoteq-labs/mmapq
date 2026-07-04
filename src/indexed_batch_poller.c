@@ -33,7 +33,7 @@ struct IndexedBatchPoller {
 static int poller_init(IndexedBatchPoller *p)
 {
     if (p->queue_meta) return 1;
-    p->queue_meta = queue_meta_open_ro(p->directory, p->queue_name);
+    p->queue_meta = queue_meta_open_ro(p->directory, p->queue_name, QUEUE_TYPE_BATCH);
     if (!p->queue_meta) return 0;
 
     p->ro_acc = queue_region_accessor_create_ro(p->directory, p->queue_name, queue_meta_region_size(p->queue_meta), p->ring_size, 1, queue_meta_max_file_size(p->queue_meta), p->timeout_ns, p->runtime);

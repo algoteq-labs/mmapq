@@ -73,7 +73,12 @@ typedef struct IndexedQueue IndexedQueue;
  * max_file_size:      preferred maximum file size (used ONLY if creating new)
  * start_index:        initial start index (used ONLY if creating new)
  * timeout_ns:         mapping timeout in nanoseconds
- * runtime:            region mapper runtime (shared across all participants)
+ * archivable:        1 to create the queue archivable (archiver may advance
+ *                    start_index; readers pay an acquire load). Applies at
+ *                    creation only — existing queues keep their on-disk value.
+ *                    0 (default) is the performant mode.
+ * write_runtime:     region mapper runtime for write-side
+ * read_runtime:      region mapper runtime for read-side
  *
  * Does NOT create the queue files or directory immediately. The queue is
  * created when the first appender is created.
@@ -89,6 +94,7 @@ IndexedQueue *indexed_queue_create(
     int64_t     max_file_size,
     int64_t     start_index,
     uint64_t    timeout_ns,
+    int         archivable,
     Runtime    *write_runtime,
     Runtime    *read_runtime);
 

@@ -50,7 +50,7 @@ static int poller_init(IndexedPoller *p)
 {
     if (p->queue_meta != NULL) return 1;
 
-    p->queue_meta = queue_meta_open_ro(p->directory, p->queue_name);
+    p->queue_meta = queue_meta_open_ro(p->directory, p->queue_name, QUEUE_TYPE_NORMAL);
     if (p->queue_meta == NULL) return 0;  /* queue not created yet */
 
     p->ro_acc = queue_region_accessor_create_ro(

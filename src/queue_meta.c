@@ -26,6 +26,7 @@ typedef struct {
     int32_t region_size;
     int64_t max_file_size;
     int     archivable;
+    uint8_t queue_type;
 } MetaInitCtx;
 
 static int meta_file_init(int fd, size_t size, void *ctx)
@@ -42,14 +43,14 @@ static int meta_file_init(int fd, size_t size, void *ctx)
     int64_t si     = mctx->start_index;
     int64_t mfs    = mctx->max_file_size;
     uint8_t arch   = (uint8_t)(mctx->archivable ? 1 : 0);
-    uint8_t fs8    = 0;  /* C implementation does not support fixed_size_8bytes */
+    uint8_t qt     = mctx->queue_type;
 
     if (pwrite(fd, &schema, sizeof(schema), QUEUE_META_SCHEMA_VERSION_OFFSET) < 0) return -1;
     if (pwrite(fd, &rs,     sizeof(rs),     QUEUE_META_REGION_SIZE_OFFSET)    < 0) return -1;
     if (pwrite(fd, &si,     sizeof(si),     QUEUE_META_START_INDEX_OFFSET)    < 0) return -1;
     if (pwrite(fd, &mfs,    sizeof(mfs),    QUEUE_META_MAX_FILE_SIZE_OFFSET)  < 0) return -1;
     if (pwrite(fd, &arch,   sizeof(arch),   QUEUE_META_ARCHIVABLE_OFFSET)     < 0) return -1;
-    if (pwrite(fd, &fs8,    sizeof(fs8),    QUEUE_META_FIXED_SIZE_8BYTES_OFFSET) < 0) return -1;
+    if (pwrite(fd, &qt,     sizeof(qt),     QUEUE_META_QUEUE_TYPE_OFFSET)     < 0) return -1;
 
     return 0;
 }
@@ -61,7 +62,38 @@ static void meta_cache_fields(QueueMeta *m)
     memcpy(&m->region_size,   m->base + QUEUE_META_REGION_SIZE_OFFSET,   sizeof(int32_t));
     memcpy(&m->max_file_size, m->base + QUEUE_META_MAX_FILE_SIZE_OFFSET, sizeof(int64_t));
     m->archivable = (m->base[QUEUE_META_ARCHIVABLE_OFFSET] == 1) ? 1 : 0;
-    m->fixed_size_8bytes = (m->base[QUEUE_META_FIXED_SIZE_8BYTES_OFFSET] == 1) ? 1 : 0;
+    m->queue_type = (int)m->base[QUEUE_META_QUEUE_TYPE_OFFSET];
+}
+
+/* ── Validation helper (real check, NOT an assert — survives -DNDEBUG) ──── */
+
+static int meta_validate(const QueueMeta *m, uint8_t expected_type,
+                          const char *directory, const char *queue_name)
+{
+    int32_t schema = queue_meta_schema_version(m);
+    if (schema != QUEUE_META_SCHEMA_VERSION) {
+        fprintf(stderr,
+            "mmap-c: %s/%s: unsupported meta schema_version %d (expected %d)"
+            " — refusing to open\n",
+            directory, queue_name, schema, QUEUE_META_SCHEMA_VERSION);
+        return MMAPQ_ESCHEMA;
+    }
+    if (m->queue_type == QUEUE_TYPE_FIXED8) {
+        fprintf(stderr,
+            "mmap-c: %s/%s: fixed-8-byte queues are Java-only and not"
+            " supported by mmap-c — refusing to open\n",
+            directory, queue_name);
+        return MMAPQ_ESCHEMA;
+    }
+    if ((uint8_t)m->queue_type != expected_type) {
+        fprintf(stderr,
+            "mmap-c: %s/%s: queue_type mismatch — file is type %d, opener"
+            " expected %d (0=normal, 2=batch). Opening a queue with the wrong"
+            " participant kind misparses payload framing — refusing to open\n",
+            directory, queue_name, m->queue_type, (int)expected_type);
+        return MMAPQ_ESCHEMA;
+    }
+    return 0;
 }
 
 /* ── queue_meta_open_rw ──────────────────────────────────────────────────── */
@@ -72,7 +104,8 @@ QueueMeta *queue_meta_open_rw(
     int64_t     start_index,
     int32_t     region_size,
     int64_t     max_file_size,
-    int         archivable)
+    int         archivable,
+    uint8_t     queue_type)
 {
     MMAP_ASSERT(directory  != NULL, "queue_meta_open_rw: directory is NULL");
     MMAP_ASSERT(queue_name != NULL, "queue_meta_open_rw: queue_name is NULL");
@@ -87,6 +120,7 @@ QueueMeta *queue_meta_open_rw(
         .region_size  = region_size,
         .max_file_size = max_file_size,
         .archivable   = archivable,
+        .queue_type   = queue_type,
     };
 
     RegionAccessor *region = fixed_size_region_create(
@@ -109,9 +143,11 @@ QueueMeta *queue_meta_open_rw(
     m->base   = buf.data;
     meta_cache_fields(m);
 
-    MMAP_ASSERT(m->fixed_size_8bytes == 0,
-        "C implementation does not support fixed_size_8bytes mode. "
-        "Queue was created by Java with fixed-size 8-byte mode enabled.");
+    if (meta_validate(m, queue_type, directory, queue_name) != 0) {
+        fixed_size_region_destroy(region);
+        free(m);
+        return NULL;
+    }
 
     return m;
 }
@@ -120,7 +156,8 @@ QueueMeta *queue_meta_open_rw(
 
 QueueMeta *queue_meta_open_ro(
     const char *directory,
-    const char *queue_name)
+    const char *queue_name,
+    uint8_t     expected_type)
 {
     MMAP_ASSERT(directory  != NULL, "queue_meta_open_ro: directory is NULL");
     MMAP_ASSERT(queue_name != NULL, "queue_meta_open_ro: queue_name is NULL");
@@ -154,15 +191,22 @@ QueueMeta *queue_meta_open_ro(
     }
 
     QueueMeta *m = calloc(1, sizeof(QueueMeta));
-    MMAP_ASSERT(m != NULL, "queue_meta_open_ro: out of memory");
+    if (m == NULL) {
+        region_accessor_close(region);
+        fixed_size_region_destroy(region);
+        return NULL;
+    }
 
     m->region = region;
     m->base   = buf.data;
     meta_cache_fields(m);
 
-    MMAP_ASSERT(m->fixed_size_8bytes == 0,
-        "C implementation does not support fixed_size_8bytes mode. "
-        "Queue was created by Java with fixed-size 8-byte mode enabled.");
+    if (meta_validate(m, expected_type, directory, queue_name) != 0) {
+        region_accessor_close(region);
+        fixed_size_region_destroy(region);
+        free(m);
+        return NULL;
+    }
 
     return m;
 }

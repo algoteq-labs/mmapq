@@ -58,8 +58,9 @@ typedef struct IndexedAppender IndexedAppender;
  * ring_size:   number of regions in the ring
  * max_file_size: maximum rolled file size
  * timeout_ns:  mapping timeout in nanoseconds
+ * archivable:  1 to create the queue archivable (applies at creation only;
+ *              existing queues keep their on-disk value). 0 is performant mode.
  * runtime:     region mapper runtime
- * fixed_size_8bytes: if 1, use optimized 8-byte fixed-size mode.
  *
  * Acquires an appender ID from the pool, initialises append position
  * (including recovery scan), and eager-wraps RW regions.
@@ -73,6 +74,7 @@ IndexedAppender *indexed_appender_create(
     int         ring_size,
     int64_t     max_file_size,
     uint64_t    timeout_ns,
+    int         archivable,
     Runtime    *runtime);
 
 /**
@@ -88,6 +90,7 @@ IndexedAppender *indexed_appender_create_with_id(
     int         ring_size,
     int64_t     max_file_size,
     uint64_t    timeout_ns,
+    int         archivable,
     Runtime    *runtime,
     uint8_t     appender_id);
 

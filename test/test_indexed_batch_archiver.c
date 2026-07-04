@@ -34,12 +34,12 @@ static IndexedBatchAppender *create_archivable_batch_appender(void)
     mkdir(dir_path, 0775);
 
     QueueMeta *m = queue_meta_open_rw(DIR, QUEUE, 0,
-        REGION_SZ, MAX_FILE, /* archivable= */ 1);
+        REGION_SZ, MAX_FILE, /* archivable= */ 1, QUEUE_TYPE_BATCH);
     TEST_ASSERT_NOT_NULL(m);
     queue_meta_close(m);
 
     return indexed_batch_appender_create(DIR, QUEUE,
-        REGION_SZ, RING_SZ, MAX_FILE, TIMEOUT, rt);
+        REGION_SZ, RING_SZ, MAX_FILE, TIMEOUT, 0, rt);
 }
 
 static NextMove advance_handler(int64_t bi, BatchReadingContext *ctx, void *user_ctx)
@@ -212,6 +212,27 @@ void test_batch_archiver_noop_when_index_equals_start(void)
     indexed_batch_archiver_close(arch);
 }
 
+void test_batch_archive_up_to_index_rejects_non_archivable(void)
+{
+    char dir_path[512];
+    snprintf(dir_path, sizeof(dir_path), "%s/%s", DIR, QUEUE);
+    mkdir(dir_path, 0775);
+
+    IndexedBatchAppender *a = indexed_batch_appender_create(DIR, QUEUE,
+        REGION_SZ, RING_SZ, MAX_FILE, TIMEOUT, 0, rt);
+    TEST_ASSERT_NOT_NULL(a);
+    MutableBatch *b = indexed_batch_appender_start_batch(a);
+    mutable_batch_append(b, "msg", 3);
+    indexed_batch_appender_commit_batch(a, mutable_batch_complete(b));
+    indexed_batch_appender_close(a);
+
+    IndexedBatchArchiver *arch = indexed_batch_archiver_create(DIR, QUEUE, RING_SZ, rt);
+    TEST_ASSERT_NOT_NULL(arch);
+    int rc = indexed_batch_archiver_archive_up_to_index(arch, 1);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL, rc);
+    indexed_batch_archiver_close(arch);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -222,5 +243,6 @@ int main(void)
     RUN_TEST(test_batch_archiver_archivable_files_none_at_start_zero);
     RUN_TEST(test_batch_archiver_backward_unarchive);
     RUN_TEST(test_batch_archiver_noop_when_index_equals_start);
+    RUN_TEST(test_batch_archive_up_to_index_rejects_non_archivable);
     return UNITY_END();
 }

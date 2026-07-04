@@ -57,6 +57,7 @@ IndexedBatchQueue *indexed_batch_queue_create(
     int64_t     max_file_size,
     int64_t     start_index,
     uint64_t    timeout_ns,
+    int         archivable,
     Runtime    *write_runtime,
     Runtime    *read_runtime);
 

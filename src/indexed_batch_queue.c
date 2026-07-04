@@ -17,6 +17,7 @@ struct IndexedBatchQueue {
     int      regions_to_map_ahead;
     int64_t  max_file_size;
     int64_t  start_index;
+    int      archivable;
     uint64_t timeout_ns;
     Runtime *write_runtime;
     Runtime *read_runtime;
@@ -46,6 +47,7 @@ IndexedBatchQueue *indexed_batch_queue_create(
     int64_t     max_file_size,
     int64_t     start_index,
     uint64_t    timeout_ns,
+    int         archivable,
     Runtime    *write_runtime,
     Runtime    *read_runtime)
 {
@@ -59,6 +61,7 @@ IndexedBatchQueue *indexed_batch_queue_create(
     q->regions_to_map_ahead = regions_to_map_ahead;
     q->max_file_size        = max_file_size;
     q->start_index          = start_index;
+    q->archivable           = archivable;
     q->timeout_ns           = timeout_ns;
     q->write_runtime        = write_runtime;
     q->read_runtime         = read_runtime;
@@ -81,6 +84,7 @@ IndexedBatchQueue *indexed_batch_queue_create_default(
         INDEXED_QUEUE_DEFAULT_MAX_FILE_SIZE,
         0,
         INDEXED_QUEUE_DEFAULT_TIMEOUT_NS,
+        0, /* archivable */
         write_runtime, read_runtime);
 }
 
@@ -88,7 +92,7 @@ IndexedBatchAppender *indexed_batch_queue_create_appender(IndexedBatchQueue *q)
 {
     MMAP_ASSERT(!q->closed, "queue closed");
     create_queue_directory(q->directory, q->queue_name);
-    return indexed_batch_appender_create(q->directory, q->queue_name, q->region_size, q->ring_size, q->max_file_size, q->timeout_ns, q->write_runtime);
+    return indexed_batch_appender_create(q->directory, q->queue_name, q->region_size, q->ring_size, q->max_file_size, q->timeout_ns, q->archivable, q->write_runtime);
 }
 
 IndexedBatchPoller *indexed_batch_queue_create_poller(IndexedBatchQueue *q)

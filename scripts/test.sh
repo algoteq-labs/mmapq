@@ -94,7 +94,7 @@ echo ""
 echo "=== release-flags validation ==="
 CFLAGS_RELEASE="$(make -s print-cflags-release)"
 REL_FAILED=0
-for TEST in test_indexed_queue test_indexed_batch_queue test_runtime; do
+for TEST in test_indexed_queue test_indexed_batch_queue test_indexed_archiver test_indexed_batch_archiver test_runtime; do
     BIN="/tmp/mmap_c_${TEST}_release"
     if gcc $CFLAGS_RELEASE $SRCS "test/${TEST}.c" $UNITY -o "$BIN" $LDFLAGS 2>&1 && "$BIN" 2>&1; then
         echo "PASS (release): $TEST"

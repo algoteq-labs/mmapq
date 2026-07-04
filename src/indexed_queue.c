@@ -23,6 +23,7 @@ struct IndexedQueue {
     int      regions_to_map_ahead;
     int64_t  max_file_size; /* preferred/initial */
     int64_t  start_index;   /* initial */
+    int      archivable;    /* 0 or 1 — applies at creation, disk wins on reopen */
     uint64_t timeout_ns;
     Runtime *write_runtime;
     Runtime *read_runtime;
@@ -57,6 +58,7 @@ IndexedQueue *indexed_queue_create(
     int64_t     max_file_size,
     int64_t     start_index,
     uint64_t    timeout_ns,
+    int         archivable,
     Runtime    *write_runtime,
     Runtime    *read_runtime)
 {
@@ -83,6 +85,7 @@ IndexedQueue *indexed_queue_create(
     q->regions_to_map_ahead = regions_to_map_ahead;
     q->max_file_size        = max_file_size;
     q->start_index          = start_index;
+    q->archivable           = archivable;
     q->timeout_ns           = timeout_ns;
     q->write_runtime        = write_runtime;
     q->read_runtime         = read_runtime;
@@ -132,6 +135,7 @@ IndexedQueue *indexed_queue_create_default_opt(
         INDEXED_QUEUE_DEFAULT_MAX_FILE_SIZE,
         /* start_index = */ 0,
         INDEXED_QUEUE_DEFAULT_TIMEOUT_NS,
+        /* archivable = */ 0,
         write_runtime,
         read_runtime);
 }
@@ -149,7 +153,8 @@ IndexedAppender *indexed_queue_create_appender(IndexedQueue *q)
     return indexed_appender_create(
         q->directory, q->queue_name,
         q->region_size, q->ring_size,
-        q->max_file_size, q->timeout_ns, q->write_runtime);
+        q->max_file_size, q->timeout_ns,
+        q->archivable, q->write_runtime);
 }
 
 IndexedAppender *indexed_queue_create_appender_with_id(
@@ -165,8 +170,8 @@ IndexedAppender *indexed_queue_create_appender_with_id(
     return indexed_appender_create_with_id(
         q->directory, q->queue_name,
         q->region_size, q->ring_size,
-        q->max_file_size, q->timeout_ns, q->write_runtime,
-        appender_id);
+        q->max_file_size, q->timeout_ns,
+        q->archivable, q->write_runtime, appender_id);
 }
 
 IndexedPoller *indexed_queue_create_poller(IndexedQueue *q)
@@ -206,7 +211,7 @@ IndexedArchiver *indexed_queue_create_archiver(IndexedQueue *q)
 static void ensure_meta_open(IndexedQueue *q)
 {
     if (q->queue_meta != NULL) return;
-    q->queue_meta = queue_meta_open_ro(q->directory, q->queue_name);
+    q->queue_meta = queue_meta_open_ro(q->directory, q->queue_name, QUEUE_TYPE_NORMAL);
 }
 
 int32_t indexed_queue_region_size(const IndexedQueue *q)

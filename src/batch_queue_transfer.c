@@ -335,7 +335,7 @@ int64_t batch_queue_transfer_import(
     IndexedBatchQueue *q = indexed_batch_queue_create(
         directory, queue_name,
         meta.region_size, 4, 1, meta.max_file_size, start_index,
-        10000000000ULL, write_rt, read_rt);
+        10000000000ULL, 0, write_rt, read_rt);
     if (!q) return -1;
 
     IndexedBatchAppender *appender = indexed_batch_queue_create_appender(q);
@@ -395,7 +395,7 @@ int64_t batch_queue_transfer_import_flat_stream(
     IndexedBatchQueue *q = indexed_batch_queue_create(
         directory, queue_name,
         meta.region_size, 4, 1, meta.max_file_size, start_index,
-        10000000000ULL, write_rt, read_rt);
+        10000000000ULL, 0, write_rt, read_rt);
     if (!q) return -1;
 
     IndexedBatchAppender *appender = indexed_batch_queue_create_appender(q);
@@ -465,7 +465,7 @@ int64_t batch_queue_transfer_copy(
     IndexedBatchQueue *q = indexed_batch_queue_create(
         dest_dir, dest_queue,
         queue_meta_region_size(qm), 4, 1, queue_meta_max_file_size(qm),
-        dest_start, 10000000000ULL, write_rt, read_rt);
+        dest_start, 10000000000ULL, 0, write_rt, read_rt);
     if (!q) return -1;
 
     IndexedBatchAppender *appender = indexed_batch_queue_create_appender(q);

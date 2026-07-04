@@ -7,6 +7,9 @@
 #include "runtime.h"
 #include "header_codec.h"
 #include "header_reader.h"
+#include "indexed_queue.h"
+#include "queue_meta.h"
+#include <stdio.h>
 
 #include <unistd.h>
 #include <string.h>
@@ -38,7 +41,7 @@ void setUp(void)
     q  = indexed_batch_queue_create(DIR, QUEUE,
              REGION_SZ, RING_SZ, 1,
              MAX_FILE, 0, TIMEOUT,
-             rt, rt);
+             0, rt, rt);
 }
 
 void tearDown(void)
@@ -428,6 +431,42 @@ void test_batch_append_rejects_zero_length(void)
     indexed_batch_appender_close(a);
 }
 
+void test_open_batch_as_normal_refused(void)
+{
+    IndexedBatchAppender *a = indexed_batch_queue_create_appender(q);
+    MutableBatch *b = indexed_batch_appender_start_batch(a);
+    mutable_batch_append(b, "msg", 3);
+    indexed_batch_appender_commit_batch(a, mutable_batch_complete(b));
+    indexed_batch_appender_close(a);
+
+    /* Attempt to create a normal participant on the same queue */
+    IndexedQueue *nq = indexed_queue_create_default(DIR, QUEUE, rt, rt);
+    IndexedAppender *na = indexed_queue_create_appender(nq);
+    TEST_ASSERT_NULL(na);
+
+    if (nq) indexed_queue_close(nq);
+}
+
+void test_batch_roundtrip_type_stamped(void)
+{
+    IndexedBatchAppender *a = indexed_batch_queue_create_appender(q);
+    MutableBatch *b = indexed_batch_appender_start_batch(a);
+    mutable_batch_append(b, "x", 1);
+    indexed_batch_appender_commit_batch(a, mutable_batch_complete(b));
+    indexed_batch_appender_close(a);
+
+    /* Verify byte at offset 25 == 2 (QUEUE_TYPE_BATCH) */
+    char path[512];
+    snprintf(path, sizeof(path), "/tmp/%s/meta", QUEUE);
+    uint8_t qt = 0xFF;
+    FILE *f = fopen(path, "rb");
+    TEST_ASSERT_NOT_NULL(f);
+    TEST_ASSERT_EQUAL_INT(0, fseek(f, QUEUE_META_QUEUE_TYPE_OFFSET, SEEK_SET));
+    TEST_ASSERT_EQUAL_INT(1, (int)fread(&qt, sizeof(qt), 1, f));
+    fclose(f);
+    TEST_ASSERT_EQUAL_INT(QUEUE_TYPE_BATCH, qt);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -445,5 +484,7 @@ int main(void)
     RUN_TEST(test_reader_read_first_and_last);
     RUN_TEST(test_reader_end_of_stream_when_empty);
     RUN_TEST(test_reader_has_entry);
+    RUN_TEST(test_open_batch_as_normal_refused);
+    RUN_TEST(test_batch_roundtrip_type_stamped);
     return UNITY_END();
 }

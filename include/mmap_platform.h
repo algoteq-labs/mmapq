@@ -12,6 +12,7 @@
 #define MMAPQ_EINVAL     (-2)   /* invalid argument (NULL, zero length, etc.) */
 #define MMAPQ_ECLOSED    (-3)   /* operation on closed handle */
 #define MMAPQ_ECORRUPT   (-4)   /* on-disk corruption detected */
+#define MMAPQ_ESCHEMA    (-5)   /* schema version or queue type mismatch */
 
 #if defined(__linux__) && !defined(_GNU_SOURCE)
 #  define _GNU_SOURCE

@@ -64,7 +64,7 @@ struct MutableBatch {
  * @param ring_size    number of simultaneously mapped regions
  * @param max_file_size  maximum rolled file size
  * @param timeout_ns   region-mapping timeout in nanoseconds
- * @param runtime      background region-mapper runtime (must not be NULL for async mapping)
+ * @param archivable   1 to create archivable (applies at creation only; 0 default, performant)
  * @return a new appender; never NULL (asserts on allocation failure)
  */
 IndexedBatchAppender *indexed_batch_appender_create(
@@ -74,6 +74,7 @@ IndexedBatchAppender *indexed_batch_appender_create(
     int         ring_size,
     int64_t     max_file_size,
     uint64_t    timeout_ns,
+    int         archivable,
     Runtime    *runtime);
 
 /* ── Batch lifecycle ─────────────────────────────────────────────────────── */

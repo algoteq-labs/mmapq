@@ -84,8 +84,10 @@ int indexed_archiver_archivable(IndexedArchiver *a);
  *
  * @param a      the archiver
  * @param index  first unarchived index (all prior indices will be archived)
+ * @return 0 on success, MMAPQ_EINVAL if archiver is NULL, index < 0,
+ *         queue not created, or queue not archivable.
  */
-void indexed_archiver_archive_up_to_index(IndexedArchiver *a, int64_t index);
+int indexed_archiver_archive_up_to_index(IndexedArchiver *a, int64_t index);
 
 /* ── Query ───────────────────────────────────────────────────────────────── */
 

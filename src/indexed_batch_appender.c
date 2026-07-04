@@ -145,6 +145,7 @@ IndexedBatchAppender *indexed_batch_appender_create(
     int         ring_size,
     int64_t     max_file_size,
     uint64_t    timeout_ns,
+    int         archivable,
     Runtime    *runtime)
 {
     IndexedBatchAppender *a = calloc(1, sizeof(IndexedBatchAppender));
@@ -155,7 +156,15 @@ IndexedBatchAppender *indexed_batch_appender_create(
     a->id_pool    = appender_id_pool_open(directory, queue_name);
     a->appender_id = (uint8_t)appender_id_pool_acquire(a->id_pool);
 
-    a->queue_meta = queue_meta_open_rw(directory, queue_name, 0, region_size, max_file_size, 0);
+    a->queue_meta = queue_meta_open_rw(directory, queue_name, 0, region_size, max_file_size, archivable, QUEUE_TYPE_BATCH);
+    if (a->queue_meta == NULL) {
+        appender_id_pool_release(a->id_pool, a->appender_id);
+        appender_id_pool_close(a->id_pool);
+        free(a->directory);
+        free(a->queue_name);
+        free(a);
+        return NULL;
+    }
     int32_t rec_reg = queue_meta_region_size(a->queue_meta);
     int64_t rec_max = queue_meta_max_file_size(a->queue_meta);
 

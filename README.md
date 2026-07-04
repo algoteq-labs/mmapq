@@ -426,6 +426,10 @@ BENCH_ITER=5000000 BENCH_MAPPER=11 ./scripts/bench.sh
 | `mutable_batch_append()` | Add a message to an in-progress batch |
 | `indexed_batch_appender_commit_batch()` | Commit the batch atomically |
 
+`indexed_queue_create` and `indexed_batch_queue_create` accept an `archivable` parameter
+(0 = non-archivable, performant; 1 = archivable, atomic start_index reads).
+Applies at creation only; existing queues keep their on-disk value.
+
 ### Single-message queue
 
 | Function | Description |

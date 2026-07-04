@@ -39,7 +39,7 @@ static QueueMeta *ro_init(IndexedArchiver *a)
 {
     if (a->ro_meta) return a->ro_meta;
 
-    a->ro_meta = queue_meta_open_ro(a->directory, a->queue_name);
+    a->ro_meta = queue_meta_open_ro(a->directory, a->queue_name, QUEUE_TYPE_NORMAL);
     if (!a->ro_meta) return NULL;
 
     /* Sync mapping (regions_to_map_ahead = 0): the archiver does a single
@@ -72,7 +72,8 @@ static QueueMeta *rw_meta_open(IndexedArchiver *a)
         queue_meta_start_index(a->ro_meta),
         queue_meta_region_size(a->ro_meta),
         queue_meta_max_file_size(a->ro_meta),
-        queue_meta_archivable(a->ro_meta));
+        queue_meta_archivable(a->ro_meta),
+        QUEUE_TYPE_NORMAL);
     return a->rw_meta;
 }
 
@@ -97,12 +98,10 @@ IndexedArchiver *indexed_archiver_create(
     int         ring_size,
     Runtime    *runtime)
 {
-    MMAP_ASSERT(directory  != NULL, "indexed_archiver_create: directory is NULL");
-    MMAP_ASSERT(queue_name != NULL, "indexed_archiver_create: queue_name is NULL");
-    MMAP_ASSERT(ring_size > 0,      "indexed_archiver_create: ring_size must be > 0");
+    if (directory == NULL || queue_name == NULL || ring_size <= 0) return NULL;
 
     IndexedArchiver *a = calloc(1, sizeof(IndexedArchiver));
-    MMAP_ASSERT(a != NULL, "indexed_archiver_create: out of memory");
+    if (a == NULL) return NULL;
 
     a->directory  = strdup(directory);
     a->queue_name = strdup(queue_name);
@@ -115,23 +114,21 @@ IndexedArchiver *indexed_archiver_create(
 
 int indexed_archiver_archivable(IndexedArchiver *a)
 {
-    MMAP_ASSERT(a != NULL, "indexed_archiver_archivable: archiver is NULL");
+    if (a == NULL) return 0;
     QueueMeta *m = ro_init(a);
-    MMAP_ASSERT(m != NULL, "indexed_archiver_archivable: queue not initialised");
+    if (m == NULL) return 0;
     return queue_meta_archivable(m);
 }
 
-void indexed_archiver_archive_up_to_index(IndexedArchiver *a, int64_t index)
+int indexed_archiver_archive_up_to_index(IndexedArchiver *a, int64_t index)
 {
-    MMAP_ASSERT(a     != NULL, "archive_up_to_index: archiver is NULL");
-    MMAP_ASSERT(index >= 0,    "archive_up_to_index: index must be >= 0");
+    if (a == NULL || index < 0) return MMAPQ_EINVAL;
 
     QueueMeta *rom = ro_init(a);
-    MMAP_ASSERT(rom != NULL,                "archive_up_to_index: queue not created yet");
-    MMAP_ASSERT(queue_meta_archivable(rom), "archive_up_to_index: queue is not archivable");
+    if (rom == NULL || !queue_meta_archivable(rom)) return MMAPQ_EINVAL;
 
     int64_t current   = queue_meta_start_index(rom);
-    if (index == current) return; /* no-op */
+    if (index == current) return 0; /* no-op */
 
     int64_t max_file_size = queue_meta_max_file_size(rom);
     int     fixed_size    = queue_meta_fixed_size_8bytes(rom);
@@ -275,23 +272,23 @@ void indexed_archiver_archive_up_to_index(IndexedArchiver *a, int64_t index)
     QueueMeta *rwm = rw_meta_open(a);
     MMAP_ASSERT(rwm != NULL, "archive_up_to_index: failed to open rw queue meta");
     queue_meta_set_start_index(rwm, index);
+    return 0;
 }
 
 /* ── Query ───────────────────────────────────────────────────────────────── */
 
 int64_t indexed_archiver_start_index(IndexedArchiver *a)
 {
-    MMAP_ASSERT(a != NULL, "indexed_archiver_start_index: archiver is NULL");
+    if (a == NULL) return 0;
     QueueMeta *m = ro_init(a);
-    MMAP_ASSERT(m != NULL, "indexed_archiver_start_index: queue not initialised");
+    if (m == NULL) return 0;
     return queue_meta_start_index(m);
 }
 
 int indexed_archiver_start_offset(
     IndexedArchiver *a, uint8_t appender_id, int64_t *out_offset)
 {
-    MMAP_ASSERT(a          != NULL, "indexed_archiver_start_offset: archiver is NULL");
-    MMAP_ASSERT(out_offset != NULL, "indexed_archiver_start_offset: out_offset is NULL");
+    if (a == NULL || out_offset == NULL) return 0;
 
     if (!ro_init(a)) return 0;
 
@@ -307,11 +304,10 @@ int indexed_archiver_archivable_files(
     char            **paths_out,
     int               max_paths)
 {
-    MMAP_ASSERT(a         != NULL, "archivable_files: archiver is NULL");
-    MMAP_ASSERT(paths_out != NULL, "archivable_files: paths_out is NULL");
+    if (a == NULL || paths_out == NULL) return 0;
 
     QueueMeta *m = ro_init(a);
-    MMAP_ASSERT(m != NULL, "archivable_files: queue not created yet");
+    if (m == NULL) return 0;
 
     int64_t start = queue_meta_start_index(m);
     if (start <= QUEUE_META_INITIAL_START_INDEX) return 0;
@@ -361,9 +357,7 @@ static int64_t archiver_start_index_fn(void *ctx)
 
 int indexed_archiver_print_summary(IndexedArchiver *a, char *sb, int n)
 {
-    MMAP_ASSERT(a  != NULL, "print_summary: archiver is NULL");
-    MMAP_ASSERT(sb != NULL, "print_summary: buffer is NULL");
-    MMAP_ASSERT(n  > 0,     "print_summary: buffer size must be > 0");
+    if (a == NULL || sb == NULL || n <= 0) return 0;
 
     QueueMeta *m = ro_init(a);
     if (!m) {

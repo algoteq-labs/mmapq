@@ -49,7 +49,7 @@ static int reader_init(IndexedReader *r)
 {
     if (r->queue_meta != NULL) return 1;
 
-    r->queue_meta = queue_meta_open_ro(r->directory, r->queue_name);
+    r->queue_meta = queue_meta_open_ro(r->directory, r->queue_name, QUEUE_TYPE_NORMAL);
     if (r->queue_meta == NULL) return 0;
 
     r->ro_acc = queue_region_accessor_create_ro(

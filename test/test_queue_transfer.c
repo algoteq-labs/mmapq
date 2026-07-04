@@ -46,7 +46,7 @@ static IndexedQueue *create_queue(const char *name, const char **msgs, int n, in
     mkdir(path, 0775);
 
     IndexedQueue *q = indexed_queue_create(TEST_DIR, name, 4096, 4, 1, 4096LL * 64,
-                                            start_index, 5000000000ULL, rt, rt);
+                                            start_index, 5000000000ULL, 0, rt, rt);
 
     IndexedAppender *a = indexed_queue_create_appender(q);
     for (int i = 0; i < n; i++)
@@ -58,7 +58,7 @@ static IndexedQueue *create_queue(const char *name, const char **msgs, int n, in
 static int load_messages(const char *name, char out[][100], int max)
 {
     IndexedQueue *q = indexed_queue_create(TEST_DIR, name, 4096, 4, 1, 4096LL * 64,
-                                            0, 5000000000ULL, rt, rt);
+                                            0, 5000000000ULL, 0, rt, rt);
     IndexedReader *r = indexed_queue_create_reader(q);
     int count = 0;
     int64_t last = indexed_reader_last_index(r);

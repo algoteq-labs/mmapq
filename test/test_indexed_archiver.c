@@ -38,12 +38,12 @@ static IndexedAppender *create_archivable_appender(void)
     mkdir(dir_path, 0775);
 
     QueueMeta *m = queue_meta_open_rw(DIR, QUEUE, 0,
-        REGION_SZ, MAX_FILE, /* archivable= */ 1);
+        REGION_SZ, MAX_FILE, /* archivable= */ 1, QUEUE_TYPE_NORMAL);
     TEST_ASSERT_NOT_NULL(m);
     queue_meta_close(m);
 
     return indexed_appender_create(DIR, QUEUE, REGION_SZ, RING_SZ,
-        MAX_FILE, TIMEOUT, rt);
+        MAX_FILE, TIMEOUT, 0, rt);
 }
 
 static NextMove poll_advance(int64_t idx, uint8_t aid,
@@ -63,6 +63,94 @@ void setUp(void)
 void tearDown(void)
 {
     cleanup();
+}
+
+/* ── Helper: ensure queue directory exists ───────────────────────────────── */
+
+static void ensure_queue_dir(void)
+{
+    char path[512];
+    snprintf(path, sizeof(path), "%s/%s", DIR, QUEUE);
+    mkdir(path, 0775);
+}
+
+/* ── New tests for archivable parameter ───────────────────────────────────── */
+
+void test_archivable_roundtrip(void)
+{
+    ensure_queue_dir();
+    /* Create archivable queue via public factory */
+    IndexedAppender *a = indexed_appender_create(DIR, QUEUE, REGION_SZ, RING_SZ,
+        MAX_FILE, TIMEOUT, 1, rt);
+    TEST_ASSERT_NOT_NULL(a);
+    indexed_appender_close(a);
+
+    /* Verify byte 24 == 1 */
+    char path[512];
+    snprintf(path, sizeof(path), "/tmp/%s/meta", QUEUE);
+    uint8_t byte24 = 0xFF;
+    FILE *f = fopen(path, "rb");
+    if (f) {
+        fseek(f, 24, SEEK_SET);
+        TEST_ASSERT_EQUAL_INT(1, (int)fread(&byte24, 1, 1, f));
+        fclose(f);
+    }
+    TEST_ASSERT_EQUAL_INT(1, byte24);
+
+    /* Verify archiver reports archivable */
+    IndexedArchiver *arch = indexed_archiver_create(DIR, QUEUE, RING_SZ, rt);
+    TEST_ASSERT_TRUE(indexed_archiver_archivable(arch));
+    indexed_archiver_close(arch);
+
+    /* Reopen with archivable=0 — disk wins, still archivable */
+    a = indexed_appender_create(DIR, QUEUE, REGION_SZ, RING_SZ,
+        MAX_FILE, TIMEOUT, 0, rt);
+    TEST_ASSERT_NOT_NULL(a);
+    indexed_appender_close(a);
+
+    arch = indexed_archiver_create(DIR, QUEUE, RING_SZ, rt);
+    TEST_ASSERT_TRUE(indexed_archiver_archivable(arch));
+    indexed_archiver_close(arch);
+}
+
+void test_default_not_archivable(void)
+{
+    ensure_queue_dir();
+    IndexedAppender *a = indexed_appender_create(DIR, QUEUE, REGION_SZ, RING_SZ,
+        MAX_FILE, TIMEOUT, 0, rt);
+    TEST_ASSERT_NOT_NULL(a);
+    indexed_appender_close(a);
+
+    char path[512];
+    snprintf(path, sizeof(path), "/tmp/%s/meta", QUEUE);
+    uint8_t byte24 = 0xFF;
+    FILE *f = fopen(path, "rb");
+    if (f) {
+        fseek(f, 24, SEEK_SET);
+        TEST_ASSERT_EQUAL_INT(1, (int)fread(&byte24, 1, 1, f));
+        fclose(f);
+    }
+    TEST_ASSERT_EQUAL_INT(0, byte24);
+
+    IndexedArchiver *arch = indexed_archiver_create(DIR, QUEUE, RING_SZ, rt);
+    TEST_ASSERT_FALSE(indexed_archiver_archivable(arch));
+    indexed_archiver_close(arch);
+}
+
+void test_archive_up_to_index_rejects_non_archivable(void)
+{
+    ensure_queue_dir();
+    IndexedAppender *a = indexed_appender_create(DIR, QUEUE, REGION_SZ, RING_SZ,
+        MAX_FILE, TIMEOUT, 0, rt);
+    TEST_ASSERT_NOT_NULL(a);
+    indexed_appender_append(a, "msg", 3);
+    indexed_appender_close(a);
+
+    IndexedArchiver *arch = indexed_archiver_create(DIR, QUEUE, RING_SZ, rt);
+    TEST_ASSERT_NOT_NULL(arch);
+    int rc = indexed_archiver_archive_up_to_index(arch, 1);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL, rc);
+    indexed_archiver_close(arch);
 }
 
 /* ── Tests ───────────────────────────────────────────────────────────────── */
@@ -227,5 +315,8 @@ int main(void)
     RUN_TEST(test_archiver_archivable_files_none_at_start_zero);
     RUN_TEST(test_archiver_backward_unarchive);
     RUN_TEST(test_archiver_noop_when_index_equals_start);
+    RUN_TEST(test_archivable_roundtrip);
+    RUN_TEST(test_default_not_archivable);
+    RUN_TEST(test_archive_up_to_index_rejects_non_archivable);
     return UNITY_END();
 }

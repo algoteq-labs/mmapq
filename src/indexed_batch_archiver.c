@@ -37,7 +37,7 @@ struct IndexedBatchArchiver {
 static QueueMeta *ro_init(IndexedBatchArchiver *a)
 {
     if (a->ro_meta) return a->ro_meta;
-    a->ro_meta = queue_meta_open_ro(a->directory, a->queue_name);
+    a->ro_meta = queue_meta_open_ro(a->directory, a->queue_name, QUEUE_TYPE_BATCH);
     if (!a->ro_meta) return NULL;
     /* Sync mapping: archiver does a single sequential pass, no premap benefit */
     a->ro_acc = queue_region_accessor_create_ro(
@@ -67,7 +67,8 @@ static QueueMeta *rw_meta_open(IndexedBatchArchiver *a)
         queue_meta_start_index(a->ro_meta),
         queue_meta_region_size(a->ro_meta),
         queue_meta_max_file_size(a->ro_meta),
-        queue_meta_archivable(a->ro_meta));
+        queue_meta_archivable(a->ro_meta),
+        QUEUE_TYPE_BATCH);
     return a->rw_meta;
 }
 
@@ -104,11 +105,10 @@ IndexedBatchArchiver *indexed_batch_archiver_create(
     int         ring_size,
     Runtime    *runtime)
 {
-    MMAP_ASSERT(directory  != NULL, "indexed_batch_archiver_create: directory is NULL");
-    MMAP_ASSERT(queue_name != NULL, "indexed_batch_archiver_create: queue_name is NULL");
+    if (directory == NULL || queue_name == NULL) return NULL;
 
     IndexedBatchArchiver *a = calloc(1, sizeof(IndexedBatchArchiver));
-    MMAP_ASSERT(a != NULL, "indexed_batch_archiver_create: out of memory");
+    if (a == NULL) return NULL;
 
     a->directory  = strdup(directory);
     a->queue_name = strdup(queue_name);
@@ -121,23 +121,21 @@ IndexedBatchArchiver *indexed_batch_archiver_create(
 
 int indexed_batch_archiver_archivable(IndexedBatchArchiver *a)
 {
-    MMAP_ASSERT(a != NULL, "indexed_batch_archiver_archivable: archiver is NULL");
+    if (a == NULL) return 0;
     QueueMeta *m = ro_init(a);
-    MMAP_ASSERT(m != NULL, "indexed_batch_archiver_archivable: queue not initialised");
+    if (m == NULL) return 0;
     return queue_meta_archivable(m);
 }
 
-void indexed_batch_archiver_archive_up_to_index(IndexedBatchArchiver *a, int64_t index)
+int indexed_batch_archiver_archive_up_to_index(IndexedBatchArchiver *a, int64_t index)
 {
-    MMAP_ASSERT(a     != NULL, "batch_archive_up_to_index: archiver is NULL");
-    MMAP_ASSERT(index >= 0,    "batch_archive_up_to_index: index must be >= 0");
+    if (a == NULL || index < 0) return MMAPQ_EINVAL;
 
     QueueMeta *rom = ro_init(a);
-    MMAP_ASSERT(rom != NULL,                "batch_archive_up_to_index: queue not created yet");
-    MMAP_ASSERT(queue_meta_archivable(rom), "batch_archive_up_to_index: queue is not archivable");
+    if (rom == NULL || !queue_meta_archivable(rom)) return MMAPQ_EINVAL;
 
     int64_t current       = queue_meta_start_index(rom);
-    if (index == current) return;
+    if (index == current) return 0;
 
     int64_t max_file_size   = queue_meta_max_file_size(rom);
     int64_t headers_in_file = max_file_size / HEADER_SIZE;
@@ -282,23 +280,23 @@ void indexed_batch_archiver_archive_up_to_index(IndexedBatchArchiver *a, int64_t
     QueueMeta *rwm = rw_meta_open(a);
     MMAP_ASSERT(rwm != NULL, "batch_archive_up_to_index: failed to open rw queue meta");
     queue_meta_set_start_index(rwm, index);
+    return 0;
 }
 
 /* ── Query ───────────────────────────────────────────────────────────────── */
 
 int64_t indexed_batch_archiver_start_index(IndexedBatchArchiver *a)
 {
-    MMAP_ASSERT(a != NULL, "indexed_batch_archiver_start_index: archiver is NULL");
+    if (a == NULL) return 0;
     QueueMeta *m = ro_init(a);
-    MMAP_ASSERT(m != NULL, "indexed_batch_archiver_start_index: queue not initialised");
+    if (m == NULL) return 0;
     return queue_meta_start_index(m);
 }
 
 int indexed_batch_archiver_start_offset(
     IndexedBatchArchiver *a, uint8_t appender_id, int64_t *out_offset)
 {
-    MMAP_ASSERT(a          != NULL, "indexed_batch_archiver_start_offset: archiver is NULL");
-    MMAP_ASSERT(out_offset != NULL, "indexed_batch_archiver_start_offset: out_offset is NULL");
+    if (a == NULL || out_offset == NULL) return 0;
 
     if (!ro_init(a)) return 0;
 
@@ -314,11 +312,10 @@ int indexed_batch_archiver_archivable_files(
     char                **paths_out,
     int                   max_paths)
 {
-    MMAP_ASSERT(a         != NULL, "batch_archivable_files: archiver is NULL");
-    MMAP_ASSERT(paths_out != NULL, "batch_archivable_files: paths_out is NULL");
+    if (a == NULL || paths_out == NULL) return 0;
 
     QueueMeta *m = ro_init(a);
-    MMAP_ASSERT(m != NULL, "batch_archivable_files: queue not created yet");
+    if (m == NULL) return 0;
 
     int64_t start = queue_meta_start_index(m);
     if (start <= QUEUE_META_INITIAL_START_INDEX) return 0;
