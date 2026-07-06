@@ -658,6 +658,43 @@ void test_meta_fixed8_refused(void)
     if (q2) indexed_queue_close(q2);
 }
 
+/* ── Standalone factory — missing directory ───────────────────────────────── */
+
+static void test_standalone_factory_rejects_missing_directory(void)
+{
+    IndexedAppender *a = indexed_appender_create_with_id(
+        "/nonexistent-dir-for-test", "q",
+        4096 * 1024, 4, (4096 * 1024) * 256,
+        10000000000, 0, NULL, 7);
+    TEST_ASSERT_NULL(a);
+}
+
+static void test_create_with_id_already_in_use(void)
+{
+    /* Need the queue subdirectory and pool file for the standalone factory */
+    char tmp[128];
+    snprintf(tmp, sizeof(tmp), "%s/%s_XXXXXX", DIR, QUEUE);
+    char *dir = mkdtemp(tmp);
+    TEST_ASSERT_NOT_NULL(dir);
+    char qdir[256];
+    snprintf(qdir, sizeof(qdir), "%s/%s", dir, QUEUE);
+    mkdir(qdir, 0755);
+
+    IndexedAppender *a1 = indexed_appender_create_with_id(
+        dir, QUEUE,
+        4096 * 1024, 4, (4096 * 1024) * 256,
+        10000000000, 0, NULL, 7);
+    TEST_ASSERT_NOT_NULL(a1);
+
+    IndexedAppender *a2 = indexed_appender_create_with_id(
+        dir, QUEUE,
+        4096 * 1024, 4, (4096 * 1024) * 256,
+        10000000000, 0, NULL, 7);
+    TEST_ASSERT_NULL(a2);
+
+    indexed_appender_close(a1);
+}
+
 /* ── main ────────────────────────────────────────────────────────────────── */
 
 int main(void)
@@ -695,6 +732,9 @@ int main(void)
     RUN_TEST(test_open_normal_as_batch_refused);
     RUN_TEST(test_meta_schema_mismatch_refused);
     RUN_TEST(test_meta_fixed8_refused);
+
+    RUN_TEST(test_standalone_factory_rejects_missing_directory);
+    RUN_TEST(test_create_with_id_already_in_use);
 
     return UNITY_END();
 }

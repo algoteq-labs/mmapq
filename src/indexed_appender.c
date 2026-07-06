@@ -396,13 +396,18 @@ IndexedAppender *indexed_appender_create(
     int         archivable,
     Runtime    *runtime)
 {
-    MMAP_ASSERT(directory  != NULL, "indexed_appender_create: directory is NULL");
-    MMAP_ASSERT(queue_name != NULL, "indexed_appender_create: queue_name is NULL");
+    if (directory  == NULL) return NULL;
+    if (queue_name == NULL) return NULL;
 
     /* Acquire an ID from the pool — pool is opened here and owned by the appender */
     AppenderIdPool *pool = appender_id_pool_open(directory, queue_name);
+    if (pool == NULL) return NULL;
+
     int id = appender_id_pool_acquire(pool);
-    MMAP_ASSERT(id >= 0, "indexed_appender_create: appender ID pool exhausted");
+    if (id < 0) {
+        appender_id_pool_close(pool);
+        return NULL;
+    }
 
     return appender_create_internal(directory, queue_name, region_size, ring_size,
                                       max_file_size, timeout_ns, archivable, runtime,
@@ -420,13 +425,17 @@ IndexedAppender *indexed_appender_create_with_id(
     Runtime    *runtime,
     uint8_t     appender_id)
 {
-    MMAP_ASSERT(directory  != NULL, "indexed_appender_create_with_id: directory is NULL");
-    MMAP_ASSERT(queue_name != NULL, "indexed_appender_create_with_id: queue_name is NULL");
+    if (directory  == NULL) return NULL;
+    if (queue_name == NULL) return NULL;
 
     AppenderIdPool *pool = appender_id_pool_open(directory, queue_name);
+    if (pool == NULL) return NULL;
+
     int ok = appender_id_pool_try_acquire(pool, appender_id);
-    (void)ok;
-    MMAP_ASSERT(ok, "indexed_appender_create_with_id: requested appender_id already in use");
+    if (!ok) {
+        appender_id_pool_close(pool);
+        return NULL;
+    }
 
     return appender_create_internal(directory, queue_name, region_size, ring_size,
                                       max_file_size, timeout_ns, archivable, runtime,

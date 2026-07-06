@@ -10,11 +10,11 @@ diverged; these libraries are NOT compatible with upstream tools4j.
 
 The C library is the complete surface and the source of truth. Rust exposes
 near-complete parity. **Python deliberately exposes the producer/consumer
-subset** — append and poll for both queue types — which covers the dominant
-Python use case (writing from or feeding into Python processes); random
-access, transfer, archiving, and low-level batch construction remain
-C/Rust territory. Gaps marked — in the Python column are design decisions,
-not roadmap items.
+subset plus random-access reading and queue transfer** — append and poll for
+both queue types, random-access readers for replay and analysis, and
+export/import/copy for durable long-term storage. Archiving and low-level
+batch construction remain C/Rust territory. Gaps marked — in the Python
+column are design decisions, not roadmap items.
 
 ## Queue lifecycle
 
@@ -34,8 +34,8 @@ not roadmap items.
 | Feature | C | Rust | Python |
 |---|---|---|---|
 | Atomic append-and-commit | ✓ | ✓ | ✓ |
-| Append uncommitted + explicit commit | ✓ | ✓ | — |
-| Appender with specific ID (fixed-ID deployments) | ✓ | ✓ | — |
+| Append uncommitted + explicit commit | ✓ | ✓ | ✓ |
+| Appender with specific ID (fixed-ID deployments) | ✓ | ✓ | ✓ |
 | Appender ID / current index / start offset accessors | ✓ | ✓ | ◐ id only |
 | Committed / uncommitted payload iterators | ✓ | ◐ via FFI layer | — |
 | Zero-length append rejected (`MMAPQ_EINVAL`) at runtime | ✓ | ✓ `Err(InvalidArgument)` | ✓ raises `ValueError` |
@@ -64,10 +64,10 @@ not roadmap items.
 
 | Feature | C | Rust | Python |
 |---|---|---|---|
-| Read at arbitrary index; read_first / read_last | ✓ | ✓ (`&mut`, one live message) | — |
-| Entry status (present / not yet / archived) | ✓ | ✓ | — |
-| last_index / start_index | ✓ | ✓ | — |
-| Batch reader | ✓ | ✓ | — |
+| Read at arbitrary index; read_first / read_last | ✓ | ✓ (`&mut`, one live message) | ✓ |
+| Entry status (present / not yet / archived) | ✓ | ✓ | ✓ |
+| last_index / start_index | ✓ | ✓ | ✓ |
+| Batch reader | ✓ | ✓ | ✓ |
 
 ## Archiving
 
@@ -83,9 +83,9 @@ not roadmap items.
 
 | Feature | C | Rust | Python |
 |---|---|---|---|
-| Export queue → stream (full + chunked) | ✓ | ✓ | — |
-| Import stream → queue | ✓ | ✓ | — |
-| Queue-to-queue copy | ✓ | ✓ | — |
+| Export queue → stream (full + chunked) | ✓ | ✓ | ◐ full only (chunked omitted) |
+| Import stream → queue | ✓ | ✓ | ✓ |
+| Queue-to-queue copy | ✓ | ✓ | ✓ |
 | Batch variants (incl. flat-stream import) | ✓ | ✓ | — |
 
 ## Cross-cutting guarantees (all languages, enforced in the C core)

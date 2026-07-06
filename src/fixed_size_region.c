@@ -76,12 +76,12 @@ RegionAccessor *fixed_size_region_create(
     FileInitialiser  initialiser,
     void            *initialiser_ctx)
 {
-    MMAP_ASSERT(file_path != NULL, "fixed_size_region_create: file_path is NULL");
-    MMAP_ASSERT(size > 0,          "fixed_size_region_create: size must be > 0");
+    if (file_path == NULL) return NULL;
+    if (size <= 0)         return NULL;
 
     /* Open or create the backing file */
     int fd = open(file_path, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
-    MMAP_ASSERT(fd >= 0, "fixed_size_region_create: failed to open/create file");
+    if (fd < 0) return NULL;
 
     /*
      * Coordination for multi-process initialisation:
@@ -94,9 +94,10 @@ RegionAccessor *fixed_size_region_create(
         if (flock(fd, LOCK_EX) == 0) {
             struct stat st;
             if (fstat(fd, &st) == 0 && st.st_size == 0) {
-                int ok = initialiser(fd, (size_t)size, initialiser_ctx);
-                (void)ok;
-                MMAP_ASSERT(ok == 0, "fixed_size_region_create: initialiser failed");
+                if (initialiser(fd, (size_t)size, initialiser_ctx) != 0) {
+                    close(fd);
+                    return NULL;
+                }
             }
             flock(fd, LOCK_UN);
         }
@@ -113,14 +114,18 @@ RegionAccessor *fixed_size_region_create(
                       PROT_READ | PROT_WRITE,
                       MAP_SHARED | MAP_POPULATE, fd, 0);
     if (addr == MAP_FAILED) {
-        MMAP_ASSERT(0, "fixed_size_region_create: mmap failed — "
-                        "check file size and permissions");
+        close(fd);
+        return NULL;
     }
 
     huge_pages_hint(addr, map_len);
 
     FixedSizeImpl *impl = calloc(1, sizeof(FixedSizeImpl));
-    MMAP_ASSERT(impl != NULL, "fixed_size_region_create: out of memory");
+    if (impl == NULL) {
+        munmap(addr, map_len);
+        close(fd);
+        return NULL;
+    }
 
     impl->file_path = strdup(file_path);  /* keep for toString/debugging */
     impl->size      = size;
@@ -128,7 +133,13 @@ RegionAccessor *fixed_size_region_create(
     impl->fd        = fd;
 
     RegionAccessor *acc = calloc(1, sizeof(RegionAccessor));
-    MMAP_ASSERT(acc != NULL, "fixed_size_region_create: out of memory");
+    if (acc == NULL) {
+        free(impl->file_path);
+        free(impl);
+        munmap(addr, map_len);
+        close(fd);
+        return NULL;
+    }
 
     acc->wrap           = fixed_wrap;
     acc->wrap_no_premap = fixed_wrap_no_premap;

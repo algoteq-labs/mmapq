@@ -23,8 +23,8 @@ AppenderIdPool *appender_id_pool_open(
     const char *directory,
     const char *queue_name)
 {
-    MMAP_ASSERT(directory  != NULL, "appender_id_pool_open: directory is NULL");
-    MMAP_ASSERT(queue_name != NULL, "appender_id_pool_open: queue_name is NULL");
+    if (directory  == NULL) return NULL;
+    if (queue_name == NULL) return NULL;
 
     char path[4096];
     pool_file_path(directory, queue_name, path, sizeof(path));
@@ -36,15 +36,20 @@ AppenderIdPool *appender_id_pool_open(
         file_init_zeros,
         NULL);
 
-    MMAP_ASSERT(region != NULL, "appender_id_pool_open: failed to create region");
+    if (region == NULL) return NULL;
 
     Buffer buf = {0};
     WrapResult r = region_accessor_wrap(region, 0, &buf);
-    (void)r;
-    MMAP_ASSERT(r == WRAP_SUCCESS, "appender_id_pool_open: failed to wrap region");
+    if (r != WRAP_SUCCESS) {
+        fixed_size_region_destroy(region);
+        return NULL;
+    }
 
     AppenderIdPool *pool = calloc(1, sizeof(AppenderIdPool));
-    MMAP_ASSERT(pool != NULL, "appender_id_pool_open: out of memory");
+    if (pool == NULL) {
+        fixed_size_region_destroy(region);
+        return NULL;
+    }
 
     pool->region = region;
     pool->base   = buf.data;
