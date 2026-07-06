@@ -1,26 +1,102 @@
 # mmap-c
 
-Low-latency memory-mapped queue primitives in C.
+**A persistent, indexed, replayable inter-process queue — no broker, no
+daemon, no garbage collector. The queue is a file.**
 
-Implements a shared-memory indexed queue for inter-process messaging on
-Linux where sub-microsecond latency and allocation-free hot paths matter —
-market data feeds, trading engines, real-time sensor pipelines, or any
-system that needs to pass messages between processes on the same machine
-with predictable tail latency below 20 µs.
+mmap-c passes messages between processes on the same Linux machine through
+memory-mapped files, with sub-microsecond latency and allocation-free,
+syscall-free hot paths. Unlike a transport, the queue is durable state:
+every message has a stable index, any process can read at any index at any
+time, and a consumer that restarts resumes exactly where it stopped. Unlike
+a log framework, it costs a `memcpy` and one atomic CAS to publish.
 
-Use this when you need:
-- **~280 ns median round-trip** between two processes on isolated cores
-- **No garbage collection, no kernel calls on the hot path** — pure memory
-  reads and writes over `MAP_SHARED` files
-- **Binary interoperability with Java** — the same queue files can be
-  written by a C process and read by a Java process, and vice versa
-- **Deterministic tail latency** — P99.999 under 16 µs in production
+What you get:
 
-Originally derived from the [tools4j/mmap](https://github.com/tools4j/mmap) library,
-this project has been significantly enhanced by Algoteq with advanced
-features for high-performance trading and messaging systems. Both the
-original Java implementation and this C port are open-sourced under the
-MIT license.
+- **~280 ns median round-trip** between two processes on isolated cores;
+  P99.999 under 16 µs (measured, tables below)
+- **Indexed and replayable** — messages are addressable by index forever
+  (or until you archive them); readers can seek, tail, or re-read from zero.
+  Replay is the same mechanism as recovery and replication
+- **Up to 256 concurrent writers**, lock-free, each message committed by a
+  single atomic operation — no torn reads, no partial messages, ever
+- **Batch queues with atomic multi-message commit** — append N messages,
+  commit once; consumers never observe a partial batch. This is a
+  transaction boundary, designed for command → event-batch architectures
+- **Crash-safe by construction** — a killed producer loses only its
+  uncommitted tail; recovery is a deterministic scan, not a repair
+- **No infrastructure** — two processes and a directory. No media driver,
+  no broker, no background daemon required (an optional in-process mapper
+  thread hides mmap latency)
+- **Wire-compatible with Algoteq's Java implementation** (an evolved
+  derivative of [tools4j/mmap](https://github.com/tools4j/mmap); not
+  compatible with upstream tools4j — the formats have diverged). The same
+  queue files can be written from C and read from Java, and vice versa —
+  which makes migrating a Java system to C or Rust possible one process at
+  a time, over a live queue
+
+Rust and Python bindings live in the companion repositories `mmap-c-rs` and
+`mmap-c-py`; see `doc/feature-matrix.md` for exact coverage per language.
+
+This library was extracted from production trading infrastructure, where
+its Java ancestor carried FX flows for years. The design target is not
+"fast messaging" in the abstract — it is the storage layer for
+**event-sourced systems**: sequenced command queues, replicated event logs,
+and deterministic replay, where the answer to "what happened in production"
+is *re-run it*. `doc/event-sourcing-guide.md` describes the pattern this
+library was built to serve.
+
+---
+
+## When to use it — and when not to
+
+Be suspicious of any infrastructure library that doesn't tell you when to
+avoid it. Honest edges:
+
+**Use mmap-c when** you need same-host inter-process messaging where the
+history matters: event-sourced services, sequenced order/command flow,
+market-data capture, sensor/telemetry logs that a second process analyses,
+replay-based testing and debugging, or a migration bridge between a Java
+system and C/Rust/Python processes sharing one queue.
+
+**Use something else when:**
+
+- **You need network transport.** mmap-c is same-machine only, by design;
+  the wire path belongs to a network messaging system.
+- **You want pub/sub with many dynamic topics** and no interest in
+  history. mmap-c queues are named, persistent streams, not a topic
+  fabric.
+- **You want a full application framework** rather than a storage layer —
+  see the references in `doc/event-sourcing-guide.md`.
+- **You need guaranteed durability through power loss.** mmap-c writes
+  reach the page cache, not the platter; the OS persists them eventually.
+  Queues here are transport-plus-recent-history; long-term data belongs in
+  the export format (`QueueTransfer`) or a database.
+- **You need Windows or macOS.** Linux only (x86-64, ARM64).
+
+What you give up relative to the alternatives is scope. What you gain is a
+system small enough to audit end-to-end: ~10k lines of dependency-free C11,
+a frozen on-disk format specified in one header, and a test suite that runs
+under the exact release flags that ship.
+
+---
+
+## Stability
+
+The feature set and the on-disk format are **frozen**. This is a design
+position, not a maturity disclaimer:
+
+- The wire format never changes. Queue files written today remain readable
+  by every future version. Format constants live in `include/header_codec.h`
+  and `include/queue_meta.h`, which are the specification.
+- The public API only grows for one reason: completing parity with the
+  Algoteq Java reference implementation for capability that already exists
+  on disk. No convenience layers, no configuration sprawl, no ecosystem.
+  Higher-level functionality belongs in separate projects built on top.
+- Every open validates the format (`schema_version`, queue type) and
+  refuses mismatches with a distinct error rather than misreading data.
+
+If your evaluation horizon is years, this is the property to weigh: the
+library you audit today is the library you run in five years.
 
 ---
 
@@ -85,18 +161,22 @@ mutable_batch_append(b, "msg1", 4);
 mutable_batch_append(b, "msg2", 4);
 int64_t batch_idx = indexed_batch_appender_commit_batch(a, mutable_batch_complete(b));
 
-/* Poll one message at a time (batch is transparent to the consumer) */
+/* Poll one batch at a time — handler receives the full batch context */
 IndexedBatchPoller *p = indexed_batch_queue_create_poller(q);
 
-static BatchNextMove my_handler(int64_t batch_index, int32_t msg_index,
-                                 int32_t msg_count, const void *data,
-                                 int32_t length, void *ctx) {
-    printf("batch[%ld] msg[%d/%d]: %.*s\n",
-           batch_index, msg_index, msg_count, length, (const char *)data);
-    return BATCH_ADVANCE;
+static NextMove my_handler(int64_t batch_index, BatchReadingContext *ctx,
+                            void *user_ctx) {
+    /* Iterate through messages in the batch */
+    while (batch_iterator_advance(&ctx->batch_iterator)) {
+        printf("batch[%ld]: %.*s\n",
+               batch_index,
+               (int)batch_iterator_current_length(&ctx->batch_iterator),
+               (const char *)batch_iterator_current_data(&ctx->batch_iterator));
+    }
+    return NEXT_ADVANCE;
 }
 
-BatchPollResult r = indexed_batch_poller_poll(p, my_handler, NULL);
+PollResult r = indexed_batch_poller_poll(p, my_handler, NULL);
 
 indexed_batch_appender_close(a);
 indexed_batch_poller_close(p);
@@ -159,7 +239,10 @@ across different cache lines (512 byte stride).
 
 ## Performance
 
-On isolated cores (physical cores 5, 7, 9 on an Intel i7-12700H) with
+Measured against a mature, heavily-optimised Java implementation of the
+identical wire format, on the same machine — the one comparison where
+every variable (format, framing, hardware, cores) is controlled. On
+isolated cores (physical cores 5, 7, 9 on an Intel i7-12700H) with
 Transparent Huge Pages enabled:
 
 ### Single-message queue — roundtrip to echo server in external process, 20M iterations
@@ -328,22 +411,20 @@ absorb dirty-bit penalties before the hot loop reaches the new region.
 
 ```
 <directory>/<queue_name>/
-  meta                  queue config (region_size, max_file_size, schema version, start_index, archivable flag)
-  header                shared header file — one 8-byte entry per queue index (single file, non-archivable)
-  header_0              rolled header files — N = 0, 1, 2... (archivable queues)
-  header_1
-  ...
-  payload_N             per-appender payload file (N = appender ID, 0–255) (single file, non-archivable)
-  payload_N_0           rolled per-appender payload files (archivable queues)
-  payload_N_1
-  ...
-  appender_meta_N       per-appender start_offset (for archiving)
+  meta                  queue config (region_size, max_file_size, schema version,
+                        start_index, archivable flag, queue_type)
+  header_N              shared header file (N = file index 0, 1, 2...; the
+                        highest-indexed file is the current active one)
+  payload_A_N           per-appender payload file (A = appender ID 0–255,
+                        N = file index 0, 1, 2...; same pattern)
+  appender_meta_A       per-appender start_offset (for archiving)
   appender_id_pool      CAS bitset — allocates appender IDs
 ```
 
-All files are plain OS files. The format is binary-compatible with the
-Java implementation — a Java producer and C consumer (or vice versa) can
-share the same queue directory.
+All files are plain OS files. The format is binary-compatible with
+Algoteq's Java implementation — an Algoteq Java producer and C consumer
+(or vice versa) can share the same queue directory. (Evolved derivative
+of tools4j/mmap; NOT compatible with upstream tools4j.)
 
 ---
 
@@ -383,10 +464,12 @@ make -j$(nproc)
 ## Running the benchmarks
 
 ```bash
-# Single-message queue — internal + external (async) + external (sync)
-make bench-suite
+# Full benchmark suite: single-message + batch, all modes
+./scripts/bench.sh
+./scripts/batch_bench.sh
 
-# Batch queue — same three configurations
+# Or via make (runs the scripts above):
+make bench-suite
 make batch-bench-suite
 ```
 
@@ -400,14 +483,17 @@ Or run individual configurations manually:
 ./echo_server /tmp request response 7 9 &
 ./latency_bench 20000000 100000 64 5 7 9 --external
 
+# Batch queue, internal server
+./batch_latency_bench 20000000 100000 64 5 7 9
+
 # Batch queue, external server
-./batch_echo_server /tmp request response 7 9 &
+./batch_echo_server /tmp batch_req batch_res 7 9 &
 ./batch_latency_bench 20000000 100000 64 5 7 9 --external
 ```
 
 Arguments: `<iterations> <warmup> <msg_size> <client_cpu> <server_cpu> <mapper_cpu>`
 
-Override benchmark defaults via environment variables:
+Override defaults via environment variables:
 ```bash
 BENCH_ITER=5000000 BENCH_MAPPER=11 ./scripts/bench.sh
 ```
@@ -473,8 +559,9 @@ The poll callback returns `NEXT_ADVANCE`, `NEXT_STOP`, or `NEXT_RETREAT`.
 | `indexed_batch_archiver_archive_up_to_index()` | Archive batches up to an index |
 | `indexed_batch_archiver_archivable_files()` | List files safe to delete/archive |
 
-The batch poll callback returns `BATCH_ADVANCE`, `BATCH_ADVANCE_BATCH`,
-`BATCH_STOP`, or `BATCH_RETREAT_BATCH`.
+The batch poll callback returns `NEXT_ADVANCE`, `NEXT_STOP`, or
+`NEXT_RETREAT` — the same `NextMove` enum used by the single-message
+poller.
 
 ### Export / import (QueueTransfer)
 
@@ -506,20 +593,26 @@ and `REBASE` / `PRESERVE` start index mode.
 
 ## Documentation
 
+*   `doc/feature-matrix.md` — feature coverage across C, Rust, and Python, including compatibility scope
+*   `doc/event-sourcing-guide.md` — building sequenced command/event architectures on mmap-c: batch commits as transactions, replay, recovery, replication
 *   `doc/header_layout_design.md` — full derivation of the vertical walk, worked example, and verification trace
+*   `doc/payload_alignment_design.md` — payload framing and alignment rationale
 *   `doc/maintainer_guide.md` — anti-pattern ledger, performance tuning baseline, thread affinity rules, metadata protocol
+*   `doc/queue-type-spec-for-implementation.md`, `doc/archivable-param-spec.md` — design records of the two post-extraction changes, retained as history
 
 ---
 
 ## Corruption recovery
 
-The appender recovery scan (run on open after a previous process crashed or was killed)
-detects committed zero-length payload slots — a sign of queue corruption caused by
-appending empty messages under a build with `MMAP_ASSERT` rather than real checks.
-It refuses to open the appender and returns an error.
+On open, the appender recovery scan validates the committed stream. If it
+finds an inconsistency (for example, a committed entry pointing at an empty
+payload slot), it refuses to open and returns an error instead of risking
+silent overwrites.
 
-Recovery detects corruption. It does **not** repair it. If you encounter a queue open
-failure due to corruption, recreate the queue from exported data.
+Recovery **detects** corruption; it does not repair it. The remediation is
+always the same: recreate the queue, restoring any needed history from the
+export format (`QueueTransfer`). `mmapq-stat --verify` (see tools, if
+present in your build) reports the exact location of an inconsistency.
 
 ## Platform
 
