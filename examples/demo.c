@@ -1,5 +1,5 @@
 /*
- * demo.c — mmap-c indexed queue demonstration
+ * demo.c — mmapq indexed queue demonstration
  *
  * Runs a single-process producer/consumer loop using the indexed queue.
  * The appender writes 1,000,000 messages; the poller reads them all.
@@ -135,7 +135,7 @@ static void cleanup(void)
 
 int main(void)
 {
-    printf("mmap-c indexed queue demo\n");
+    printf("mmapq indexed queue demo\n");
     printf("  messages:    %d\n", MSG_COUNT);
     printf("  region size: %d KB\n", REGION_SIZE / 1024);
     printf("  queue dir:   %s/%s\n\n", QUEUE_DIR, QUEUE_NAME);
@@ -182,7 +182,7 @@ int main(void)
 
     Message msg;
     memset(&msg, 0, sizeof(msg));
-    snprintf(msg.payload, sizeof(msg.payload), "hello from mmap-c");
+    snprintf(msg.payload, sizeof(msg.payload), "hello from mmapq");
 
     for (int i = 0; i < MSG_COUNT; i++) {
         msg.sequence     = i;

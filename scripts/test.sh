@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# test.sh — build and run the mmap-c test suite
+# test.sh — build and run the mmapq test suite
 # Usage:
 #   ./scripts/test.sh            # normal build + tests
 #   ./scripts/test.sh --asan     # AddressSanitizer (leak + memory error detection)
@@ -55,13 +55,13 @@ case "${1:-}" in
         ;;
 esac
 
-echo "=== mmap-c test suite ($MODE) ==="
+echo "=== mmapq test suite ($MODE) ==="
 
 PASS=0
 FAIL=0
 
 for TEST in "${TESTS[@]}"; do
-    BIN="/tmp/mmap_c_${TEST}_${MODE}"
+    BIN="/tmp/mmapq_${TEST}_${MODE}"
 
     # Compile
     if ! gcc $CFLAGS $SRCS "test/${TEST}.c" $UNITY -o "$BIN" $LDFLAGS 2>&1; then
@@ -95,7 +95,7 @@ echo "=== release-flags validation ==="
 CFLAGS_RELEASE="$(make -s print-cflags-release)"
 REL_FAILED=0
 for TEST in test_indexed_queue test_indexed_batch_queue test_indexed_archiver test_indexed_batch_archiver test_runtime; do
-    BIN="/tmp/mmap_c_${TEST}_release"
+    BIN="/tmp/mmapq_${TEST}_release"
     if gcc $CFLAGS_RELEASE $SRCS "test/${TEST}.c" $UNITY -o "$BIN" $LDFLAGS 2>&1 && "$BIN" 2>&1; then
         echo "PASS (release): $TEST"
     else

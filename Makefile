@@ -1,4 +1,4 @@
-# mmap-c Makefile
+# mmapq Makefile
 #
 # Targets:
 #   make            build static library (default)
@@ -15,7 +15,7 @@ LDFLAGS = -pthread -lm
 
 SRCS    = $(wildcard src/*.c)
 OBJS    = $(SRCS:.c=.o)
-LIB     = libmmap_queue.a
+LIB     = libmmapq.a
 
 .PHONY: all demo bench echo_server batch_bench batch_echo_server bench-suite batch-bench-suite interop test test-asan test-tsan test-multi clean
 
@@ -28,23 +28,23 @@ $(LIB): $(OBJS)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 demo: $(LIB)
-	$(CC) $(CFLAGS) examples/demo.c -L. -lmmap_queue $(LDFLAGS) -o demo
+	$(CC) $(CFLAGS) examples/demo.c -L. -lmmapq $(LDFLAGS) -o demo
 	@echo "built: demo"
 
 bench: $(LIB)
-	$(CC) $(CFLAGS) examples/latency_bench.c -L. -lmmap_queue $(LDFLAGS) -o latency_bench
+	$(CC) $(CFLAGS) examples/latency_bench.c -L. -lmmapq $(LDFLAGS) -o latency_bench
 	@echo "built: latency_bench"
 
 echo_server: $(LIB)
-	$(CC) $(CFLAGS) examples/echo_server.c -L. -lmmap_queue $(LDFLAGS) -o echo_server
+	$(CC) $(CFLAGS) examples/echo_server.c -L. -lmmapq $(LDFLAGS) -o echo_server
 	@echo "built: echo_server"
 
 batch_bench: $(LIB)
-	$(CC) $(CFLAGS) examples/batch_latency_bench.c -L. -lmmap_queue $(LDFLAGS) -o batch_latency_bench
+	$(CC) $(CFLAGS) examples/batch_latency_bench.c -L. -lmmapq $(LDFLAGS) -o batch_latency_bench
 	@echo "built: batch_latency_bench"
 
 batch_echo_server: $(LIB)
-	$(CC) $(CFLAGS) examples/batch_echo_server.c -L. -lmmap_queue $(LDFLAGS) -o batch_echo_server
+	$(CC) $(CFLAGS) examples/batch_echo_server.c -L. -lmmapq $(LDFLAGS) -o batch_echo_server
 	@echo "built: batch_echo_server"
 
 bench-suite: bench echo_server

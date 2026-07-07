@@ -1,4 +1,4 @@
-# mmap-c Maintainer's Guide
+# mmapq Maintainer's Guide
 
 This document preserves the critical architectural insights and hard-won optimizations developed during the C11 port of the Algoteq mmap-queue.
 

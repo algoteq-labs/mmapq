@@ -4,8 +4,8 @@
 > Retained as a design record — the code and tests are authoritative
 > where they have since evolved.*
 
-**Audience:** implementing model/engineer with access to `mmap-c`,
-`mmap-c-rs`, and `mmap-c-py`, WITHOUT access to prior design discussion.
+**Audience:** implementing model/engineer with access to `mmapq`,
+`mmapq-rs`, and `mmapq-py`, WITHOUT access to prior design discussion.
 Everything needed is in this document; all design decisions are made. Where
 this spec and your judgment disagree, the spec wins — flag the disagreement
 in your summary instead of deviating. The repositories' `AGENTS.md` files
@@ -71,7 +71,7 @@ before proceeding.
 
 # PART A — plumb the parameter
 
-## A1. C — `mmap-c`
+## A1. C — `mmapq`
 
 The flow mirrors how `region_size` travels today: factory → queue struct →
 participant creation → `queue_meta_open_rw`.
@@ -116,7 +116,7 @@ participant creation → `queue_meta_open_rw`.
    this is the one sanctioned test modification, and only where behavior is
    identical; report each such simplification explicitly.
 
-## A2. Rust — `mmap-c-rs`
+## A2. Rust — `mmapq-rs`
 
 Config-level flag, exactly how `region_size` flows. **Participant wrapper
 files (`appender.rs`, `poller.rs`, `reader.rs`, batch equivalents) do NOT
@@ -145,7 +145,7 @@ change** — appenders are created from the C queue's stored state.
    `IndexedQueue::create` passes `config.archivable as i32` in the FFI call.
 4. Batch config equivalently, if/where the batch path takes queue params.
 
-## A3. Python — `mmap-c-py`
+## A3. Python — `mmapq-py`
 
 1. `setup.py` cdef: update the changed C signatures exactly (same
    silent-corruption warning as Rust).
@@ -225,7 +225,7 @@ teardown, `RUN_TEST` registered — an unregistered test does not exist).
 
 # D — documentation
 
-1. `mmap-c/AGENTS.md`, "Scope of the C port" section: REPLACE the line
+1. `mmapq/AGENTS.md`, "Scope of the C port" section: REPLACE the line
    "Archiving support exists but `archivable` is always 0 in C-created
    queues." with:
    "`archivable` is a creation-time factory parameter (default 0). Existing

@@ -72,7 +72,7 @@ int main(int argc, char *argv[])
 
     TestMessage msg;
     memset(msg.tag, 0, sizeof(msg.tag));
-    strncpy(msg.tag, "mmap-c-producer", sizeof(msg.tag) - 1);
+    strncpy(msg.tag, "mmapq-producer", sizeof(msg.tag) - 1);
 
     for (int64_t i = 0; i < count; i++) {
         msg.sequence = i;

@@ -1,4 +1,4 @@
-anton@anton-XPS15:~/algoteq/cqueue/mmap-c$ ./latency_bench 10000000 100 64 5 7 9 0 0
+anton@anton-XPS15:~/algoteq/cqueue/mmapq$ ./latency_bench 10000000 100 64 5 7 9 0 0
 Starting Round-Trip Latency Benchmark...
   Cores:  Client=5, Server=7, Mapper=9
   Config: Iterations=10000000, Warmup=100, MsgSize=64
@@ -23,7 +23,7 @@ P99.99:          10285
 P99.999:         18950
 ------------------------------------------
 
-anton@anton-XPS15:~/algoteq/cqueue/mmap-c$ ./latency_bench 20000000 100 64 5 7 9 0 0
+anton@anton-XPS15:~/algoteq/cqueue/mmapq$ ./latency_bench 20000000 100 64 5 7 9 0 0
 Starting Round-Trip Latency Benchmark...
   Cores:  Client=5, Server=7, Mapper=9
   Config: Iterations=20000000, Warmup=100, MsgSize=64
@@ -48,7 +48,7 @@ P99.99:          10236
 P99.999:         18635
 ------------------------------------------
 
-anton@anton-XPS15:~/algoteq/cqueue/mmap-c$ ./latency_bench 20000000 100 64 5 7 9 0 0
+anton@anton-XPS15:~/algoteq/cqueue/mmapq$ ./latency_bench 20000000 100 64 5 7 9 0 0
 Starting Round-Trip Latency Benchmark...
   Cores:  Client=5, Server=7, Mapper=9
   Config: Iterations=20000000, Warmup=100, MsgSize=64
@@ -73,7 +73,7 @@ P99.99:           8719
 P99.999:         18326
 ------------------------------------------
 
-anton@anton-XPS15:~/algoteq/cqueue/mmap-c$ ./latency_bench 20000000 100 64 5 7 9 0 0
+anton@anton-XPS15:~/algoteq/cqueue/mmapq$ ./latency_bench 20000000 100 64 5 7 9 0 0
 Starting Round-Trip Latency Benchmark...
   Cores:  Client=5, Server=7, Mapper=9
   Config: Iterations=20000000, Warmup=100, MsgSize=64
@@ -98,7 +98,7 @@ P99.99:           8285
 P99.999:         18080
 ------------------------------------------
 
-anton@anton-XPS15:~/algoteq/cqueue/mmap-c$ ./latency_bench 20000000 100 64 5 7 9 0 0
+anton@anton-XPS15:~/algoteq/cqueue/mmapq$ ./latency_bench 20000000 100 64 5 7 9 0 0
 Starting Round-Trip Latency Benchmark...
   Cores:  Client=5, Server=7, Mapper=9
   Config: Iterations=20000000, Warmup=100, MsgSize=64
@@ -123,7 +123,7 @@ P99.99:           8414
 P99.999:         17977
 ------------------------------------------
 
-anton@anton-XPS15:~/algoteq/cqueue/mmap-c$ ./latency_bench 20000000 100 64 5 7 9 0 0
+anton@anton-XPS15:~/algoteq/cqueue/mmapq$ ./latency_bench 20000000 100 64 5 7 9 0 0
 Starting Round-Trip Latency Benchmark...
   Cores:  Client=5, Server=7, Mapper=9
   Config: Iterations=20000000, Warmup=100, MsgSize=64
@@ -148,7 +148,7 @@ P99.99:           8173
 P99.999:         18069
 ------------------------------------------
 
-anton@anton-XPS15:~/algoteq/cqueue/mmap-c$ ./latency_bench 20000000 100 64 5 7 9 0 0
+anton@anton-XPS15:~/algoteq/cqueue/mmapq$ ./latency_bench 20000000 100 64 5 7 9 0 0
 Starting Round-Trip Latency Benchmark...
   Cores:  Client=5, Server=7, Mapper=9
   Config: Iterations=20000000, Warmup=100, MsgSize=64
@@ -173,7 +173,7 @@ P99.99:           8464
 P99.999:         18166
 ------------------------------------------
 
-anton@anton-XPS15:~/algoteq/cqueue/mmap-c$ ./latency_bench 20000000 100 64 5 7 9 0 0
+anton@anton-XPS15:~/algoteq/cqueue/mmapq$ ./latency_bench 20000000 100 64 5 7 9 0 0
 Starting Round-Trip Latency Benchmark...
   Cores:  Client=5, Server=7, Mapper=9
   Config: Iterations=20000000, Warmup=100, MsgSize=64
@@ -198,7 +198,7 @@ P99.99:           8523
 P99.999:         18349
 ------------------------------------------
 
-anton@anton-XPS15:~/algoteq/cqueue/mmap-c$ ./latency_bench 20000000 100 64 5 7 9 0 0
+anton@anton-XPS15:~/algoteq/cqueue/mmapq$ ./latency_bench 20000000 100 64 5 7 9 0 0
 Starting Round-Trip Latency Benchmark...
   Cores:  Client=5, Server=7, Mapper=9
   Config: Iterations=20000000, Warmup=100, MsgSize=64
@@ -223,7 +223,7 @@ P99.99:           7964
 P99.999:         18065
 ------------------------------------------
 
-anton@anton-XPS15:~/algoteq/cqueue/mmap-c$ ./latency_bench 20000000 100 64 5 7 9 0 0
+anton@anton-XPS15:~/algoteq/cqueue/mmapq$ ./latency_bench 20000000 100 64 5 7 9 0 0
 Starting Round-Trip Latency Benchmark...
   Cores:  Client=5, Server=7, Mapper=9
   Config: Iterations=20000000, Warmup=100, MsgSize=64
@@ -248,7 +248,7 @@ P99.99:           8408
 P99.999:         17924
 ------------------------------------------
 
-anton@anton-XPS15:~/algoteq/cqueue/mmap-c$ ./latency_bench 20000000 100 64 5 7 9 0 0
+anton@anton-XPS15:~/algoteq/cqueue/mmapq$ ./latency_bench 20000000 100 64 5 7 9 0 0
 Starting Round-Trip Latency Benchmark...
   Cores:  Client=5, Server=7, Mapper=9
   Config: Iterations=20000000, Warmup=100, MsgSize=64
@@ -273,7 +273,7 @@ P99.99:           7284
 P99.999:         18037
 ------------------------------------------
 
-anton@anton-XPS15:~/algoteq/cqueue/mmap-c$ ./latency_bench 20000000 100 64 5 7 9 0 0
+anton@anton-XPS15:~/algoteq/cqueue/mmapq$ ./latency_bench 20000000 100 64 5 7 9 0 0
 Starting Round-Trip Latency Benchmark...
   Cores:  Client=5, Server=7, Mapper=9
   Config: Iterations=20000000, Warmup=100, MsgSize=64
@@ -298,7 +298,7 @@ P99.99:           6480
 P99.999:         16951
 ------------------------------------------
 
-anton@anton-XPS15:~/algoteq/cqueue/mmap-c$ ./latency_bench 20000000 100 64 5 7 9 0 0
+anton@anton-XPS15:~/algoteq/cqueue/mmapq$ ./latency_bench 20000000 100 64 5 7 9 0 0
 Starting Round-Trip Latency Benchmark...
   Cores:  Client=5, Server=7, Mapper=9
   Config: Iterations=20000000, Warmup=100, MsgSize=64
@@ -323,7 +323,7 @@ P99.99:           6598
 P99.999:         17138
 ------------------------------------------
 
-anton@anton-XPS15:~/algoteq/cqueue/mmap-c$ ./latency_bench 20000000 100 64 5 7 9 0 0
+anton@anton-XPS15:~/algoteq/cqueue/mmapq$ ./latency_bench 20000000 100 64 5 7 9 0 0
 Starting Round-Trip Latency Benchmark...
   Cores:  Client=5, Server=7, Mapper=9
   Config: Iterations=20000000, Warmup=100, MsgSize=64
@@ -348,7 +348,7 @@ P99.99:           6392
 P99.999:         16774
 ------------------------------------------
 
-anton@anton-XPS15:~/algoteq/cqueue/mmap-c$ ./latency_bench 20000000 100 64 5 7 9 0 0
+anton@anton-XPS15:~/algoteq/cqueue/mmapq$ ./latency_bench 20000000 100 64 5 7 9 0 0
 Starting Round-Trip Latency Benchmark...
   Cores:  Client=5, Server=7, Mapper=9
   Config: Iterations=20000000, Warmup=100, MsgSize=64

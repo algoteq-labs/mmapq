@@ -1,4 +1,4 @@
-# mmap-c header layout design
+# mmapq header layout design
 
 **Status:** Approved design
 **Component:** Header file — indexed visibility/commit layer

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(mmap-c
+project(mmapq
     VERSION 0.1.0
     DESCRIPTION "Low-latency shared memory primitives in C"
     LANGUAGES C
@@ -39,7 +39,7 @@ option(MMAP_ENABLE_TSAN    "Enable ThreadSanitizer"   OFF)
 
 # ── Platform guard ────────────────────────────────────────────────────────
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT CMAKE_SYSTEM_NAME STREQUAL "Darwin")
-    message(FATAL_ERROR "mmap-c supports Linux and macOS only")
+    message(FATAL_ERROR "mmapq supports Linux and macOS only")
 endif()
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -56,17 +56,17 @@ endif()
 
 # ── Examples / Benchmarks ────────────────────────────────────────────────
 add_executable(demo examples/demo.c)
-target_link_libraries(demo PRIVATE mmap-c)
+target_link_libraries(demo PRIVATE mmapq)
 
 add_executable(latency_bench examples/latency_bench.c)
-target_link_libraries(latency_bench PRIVATE mmap-c)
+target_link_libraries(latency_bench PRIVATE mmapq)
 
 add_executable(echo_server examples/echo_server.c)
-target_link_libraries(echo_server PRIVATE mmap-c)
+target_link_libraries(echo_server PRIVATE mmapq)
 
 # ── Summary ───────────────────────────────────────────────────────────────
 message(STATUS "")
-message(STATUS "mmap-c ${PROJECT_VERSION}")
+message(STATUS "mmapq ${PROJECT_VERSION}")
 message(STATUS "  Build type : ${CMAKE_BUILD_TYPE}")
 message(STATUS "  Tests      : ${MMAP_BUILD_TESTS}")
 message(STATUS "  ASAN       : ${MMAP_ENABLE_ASAN}")

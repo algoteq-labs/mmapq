@@ -73,21 +73,21 @@ static int meta_validate(const QueueMeta *m, uint8_t expected_type,
     int32_t schema = queue_meta_schema_version(m);
     if (schema != QUEUE_META_SCHEMA_VERSION) {
         fprintf(stderr,
-            "mmap-c: %s/%s: unsupported meta schema_version %d (expected %d)"
+            "mmapq: %s/%s: unsupported meta schema_version %d (expected %d)"
             " — refusing to open\n",
             directory, queue_name, schema, QUEUE_META_SCHEMA_VERSION);
         return MMAPQ_ESCHEMA;
     }
     if (m->queue_type == QUEUE_TYPE_FIXED8) {
         fprintf(stderr,
-            "mmap-c: %s/%s: fixed-8-byte queues are Java-only and not"
-            " supported by mmap-c — refusing to open\n",
+            "mmapq: %s/%s: fixed-8-byte queues are Java-only and not"
+            " supported by mmapq — refusing to open\n",
             directory, queue_name);
         return MMAPQ_ESCHEMA;
     }
     if ((uint8_t)m->queue_type != expected_type) {
         fprintf(stderr,
-            "mmap-c: %s/%s: queue_type mismatch — file is type %d, opener"
+            "mmapq: %s/%s: queue_type mismatch — file is type %d, opener"
             " expected %d (0=normal, 2=batch). Opening a queue with the wrong"
             " participant kind misparses payload framing — refusing to open\n",
             directory, queue_name, m->queue_type, (int)expected_type);

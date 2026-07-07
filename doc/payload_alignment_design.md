@@ -1,4 +1,4 @@
-# mmap-c payload alignment design
+# mmapq payload alignment design
 
 **Status:** Approved design
 **Scope:** Java / C / Rust / Python interoperability over the operational queue file format

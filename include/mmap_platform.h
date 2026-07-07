@@ -37,7 +37,7 @@
  */
 
 #if !defined(__linux__) && !defined(__APPLE__)
-#  error "mmap-c supports Linux and macOS only"
+#  error "mmapq supports Linux and macOS only"
 #endif
 
 #include <stdint.h>

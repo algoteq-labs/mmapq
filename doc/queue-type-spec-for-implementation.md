@@ -4,8 +4,8 @@
 > Retained as a design record — the code and tests are authoritative
 > where they have since evolved.*
 
-**Audience:** implementing model/engineer with access to the `mmap-c`,
-`mmap-c-rs`, and `mmap-c-py` repositories, but WITHOUT access to prior design
+**Audience:** implementing model/engineer with access to the `mmapq`,
+`mmapq-rs`, and `mmapq-py` repositories, but WITHOUT access to prior design
 discussion. Everything needed is in this document. Follow it exactly; all
 design decisions are already made. Where this spec and your own judgment
 disagree, the spec wins — flag the disagreement in your summary instead of
@@ -18,7 +18,7 @@ deviating.
 The byte at offset 25 of the queue meta file (currently `fixed_size_8bytes`,
 values 0/1) becomes a three-value **queue type discriminator**:
 
-| value | meaning                       | supported by mmap-c |
+| value | meaning                       | supported by mmapq |
 |-------|-------------------------------|---------------------|
 | 0     | normal single-message queue   | yes                 |
 | 1     | fixed 8-byte payloads (Java)  | NO — refuse to open |
@@ -98,13 +98,13 @@ change, every participant refuses at creation with a clear diagnostic.
   violation.
 
 - Rust error mapping: `pub(crate) fn map_rc(rc: i32) -> MmapError` in
-  `mmap-c-rs/src/error.rs`.
+  `mmapq-rs/src/error.rs`.
 - Python error mapping: `_RC_ERRORS` dict in
-  `mmap-c-py/src/mmap_c_py/_errors.py`.
+  `mmapq-py/src/mmapq/_errors.py`.
 
 ---
 
-## 4. C changes (`mmap-c`)
+## 4. C changes (`mmapq`)
 
 ### 4.1 `include/mmap_platform.h`
 
@@ -201,21 +201,21 @@ static int meta_validate(const QueueMeta *m, uint8_t expected_type,
     int32_t schema = queue_meta_schema_version(m);
     if (schema != QUEUE_META_SCHEMA_VERSION) {
         fprintf(stderr,
-            "mmap-c: %s/%s: unsupported meta schema_version %d (expected %d) "
+            "mmapq: %s/%s: unsupported meta schema_version %d (expected %d) "
             "— refusing to open\n",
             directory, queue_name, schema, QUEUE_META_SCHEMA_VERSION);
         return MMAPQ_ESCHEMA;
     }
     if (m->queue_type == QUEUE_TYPE_FIXED8) {
         fprintf(stderr,
-            "mmap-c: %s/%s: fixed-8-byte queues are Java-only and not "
-            "supported by mmap-c — refusing to open\n",
+            "mmapq: %s/%s: fixed-8-byte queues are Java-only and not "
+            "supported by mmapq — refusing to open\n",
             directory, queue_name);
         return MMAPQ_ESCHEMA;
     }
     if ((uint8_t)m->queue_type != expected_type) {
         fprintf(stderr,
-            "mmap-c: %s/%s: queue_type mismatch — file is type %d, opener "
+            "mmapq: %s/%s: queue_type mismatch — file is type %d, opener "
             "expected %d (0=normal, 2=batch). Opening a queue with the wrong "
             "participant kind misparses payload framing — refusing to open\n",
             directory, queue_name, m->queue_type, (int)expected_type);
@@ -294,7 +294,7 @@ assume).
 
 ---
 
-## 5. Rust changes (`mmap-c-rs`)
+## 5. Rust changes (`mmapq-rs`)
 
 1. Sync the C changes into the vendored/submodule C tree the crate builds
    from (`c/`), the same way previous C changes were synced.
@@ -318,9 +318,9 @@ assume).
    `Internal`/`PoolExhausted`-style variants because create paths return
    NULL, not codes — assert `is_err()`, do NOT assert the specific variant.)
 
-## 6. Python changes (`mmap-c-py`)
+## 6. Python changes (`mmapq-py`)
 
-1. `src/mmap_c_py/_errors.py`: add
+1. `src/mmapq/_errors.py`: add
 
 ```python
 class SchemaMismatchError(RuntimeError):
@@ -334,11 +334,11 @@ class SchemaMismatchError(RuntimeError):
 3. Add two pytest tests: creating a single-message queue then constructing a
    batch appender on the same path raises (assert `pytest.raises(Exception)`
    — create-path errors are generic today); and
-   `from mmap_c_py import SchemaMismatchError` works.
+   `from mmapq import SchemaMismatchError` works.
 
 ## 7. Documentation
 
-- `mmap-c/README.md`: in the compatibility/interop section add:
+- `mmapq/README.md`: in the compatibility/interop section add:
   "Every open validates `schema_version` and the queue type stored in the
   meta file; a mismatch (including opening a batch queue with single-message
   participants, or vice versa) is refused. Fixed-8-byte queues created by
@@ -351,41 +351,41 @@ class SchemaMismatchError(RuntimeError):
 ## 8. Complete file manifest (touch nothing else)
 
 ```
-mmap-c/include/mmap_platform.h      (+1 define)
-mmap-c/include/queue_meta.h         (constants, rename, accessor, signatures, docs)
-mmap-c/src/queue_meta.c             (init ctx, cache, meta_validate, both opens)
-mmap-c/src/indexed_appender.c       (call site)
-mmap-c/src/indexed_poller.c         (call site)
-mmap-c/src/indexed_reader.c         (call site)
-mmap-c/src/indexed_queue.c          (call site)
-mmap-c/src/indexed_batch_appender.c (call site)
-mmap-c/src/indexed_batch_poller.c   (call site)
-mmap-c/src/indexed_batch_reader.c   (call site)
-mmap-c/src/<archiver/transfer files with queue_meta_open hits, if any>
-mmap-c/test/test_indexed_queue.c    (+3 tests)
-mmap-c/test/test_indexed_batch_queue.c (+2 tests)
-mmap-c/README.md                    (interop + release note)
-mmap-c-rs/c/...                     (synced mirror of the above C changes)
-mmap-c-rs/src/error.rs              (variant + map_rc line)
-mmap-c-rs/tests/queue_type.rs       (new test)
-mmap-c-py/src/mmap_c_py/_errors.py  (exception + dict entry)
-mmap-c-py/src/mmap_c_py/__init__.py (export)
-mmap-c-py/tests/...                 (+2 tests)
+mmapq/include/mmap_platform.h      (+1 define)
+mmapq/include/queue_meta.h         (constants, rename, accessor, signatures, docs)
+mmapq/src/queue_meta.c             (init ctx, cache, meta_validate, both opens)
+mmapq/src/indexed_appender.c       (call site)
+mmapq/src/indexed_poller.c         (call site)
+mmapq/src/indexed_reader.c         (call site)
+mmapq/src/indexed_queue.c          (call site)
+mmapq/src/indexed_batch_appender.c (call site)
+mmapq/src/indexed_batch_poller.c   (call site)
+mmapq/src/indexed_batch_reader.c   (call site)
+mmapq/src/<archiver/transfer files with queue_meta_open hits, if any>
+mmapq/test/test_indexed_queue.c    (+3 tests)
+mmapq/test/test_indexed_batch_queue.c (+2 tests)
+mmapq/README.md                    (interop + release note)
+mmapq-rs/c/...                     (synced mirror of the above C changes)
+mmapq-rs/src/error.rs              (variant + map_rc line)
+mmapq-rs/tests/queue_type.rs       (new test)
+mmapq-py/src/mmapq/_errors.py  (exception + dict entry)
+mmapq-py/src/mmapq/__init__.py (export)
+mmapq-py/tests/...                 (+2 tests)
 ```
 
 ## 9. Acceptance criteria — all must hold
 
-1. `bash scripts/test.sh` in `mmap-c` exits 0: previous tests plus the five
+1. `bash scripts/test.sh` in `mmapq` exits 0: previous tests plus the five
    new ones, in BOTH the normal run and the release-flags loop.
-2. `grep -rn "MMAP_ASSERT" mmap-c/src/queue_meta.c` shows NO assert on
+2. `grep -rn "MMAP_ASSERT" mmapq/src/queue_meta.c` shows NO assert on
    queue type or schema (other pre-existing asserts in the file are fine).
-3. `cargo test` in `mmap-c-rs` fully green including `tests/queue_type.rs`.
-4. `python -m pytest` in `mmap-c-py` fully green including the two new tests.
+3. `cargo test` in `mmapq-rs` fully green including `tests/queue_type.rs`.
+4. `python -m pytest` in `mmapq-py` fully green including the two new tests.
 5. Manual check: create a normal queue, `printf '\x02' | dd of=<dir>/<q>/meta
    bs=1 seek=25 count=1 conv=notrunc`, then attempt to create a normal
    appender — must print the queue_type mismatch diagnostic to stderr and
    fail creation. Same file opened with batch participants must succeed.
-6. `grep -rn "fixed_size_8bytes" mmap-c/src mmap-c/include` returns only the
+6. `grep -rn "fixed_size_8bytes" mmapq/src mmapq/include` returns only the
    legacy alias `#define` in queue_meta.h (and comments), no live code.
 
 ## 10. Summary format required from the implementer

@@ -48,7 +48,7 @@ if [ ! -x "$ECHO" ]; then
 fi
 
 echo "========================================================"
-echo "  mmap-c single-message queue latency benchmark"
+echo "  mmapq single-message queue latency benchmark"
 echo "  $(date)"
 echo "  Cores:   client=$CLIENT  server=$SERVER  mapper=$MAPPER echo_mapper=$ECHO_MAPPER"
 echo "  Config:  iter=$ITER  warmup=$WARMUP  msg=${MSG}B"

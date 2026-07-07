@@ -1,6 +1,6 @@
-# Building event-sourced systems on mmap-c
+# Building event-sourced systems on mmapq
 
-This guide describes the architecture mmap-c was built to serve: a
+This guide describes the architecture mmapq was built to serve: a
 sequenced command/event system in which the single-message queue carries
 commands and the batch queue carries events, and in which replay, recovery,
 replication, and audit are all the same mechanism — reading a committed
@@ -12,7 +12,7 @@ same lineage: [tools4j/event-sourcing](https://github.com/tools4j/event-sourcing
 and its successor [elara](https://github.com/tools4j/elara), whose
 terminology this guide borrows. It is a variation of the *sequencer*
 pattern known from the LMAX architecture — with one structural difference
-explained below (outputs are replicated, not inputs). mmap-c provides the
+explained below (outputs are replicated, not inputs). mmapq provides the
 storage layer for this architecture; it deliberately does not provide the
 framework (see the last section).
 
@@ -55,7 +55,7 @@ The queue-type mapping is not incidental — each queue type exists for its
 role:
 
 **The command queue is a single-message queue** because commands arrive
-from many concurrent sources. mmap-c's multi-appender design (up to 256
+from many concurrent sources. mmapq's multi-appender design (up to 256
 writers, each message committed by one atomic operation) lets every
 gateway, sensor loop, or upstream bridge append directly, lock-free, with
 the queue's index order serving as the arrival order the processor
@@ -78,7 +78,7 @@ indexed read.
 
 ## Why the batch commit is the transaction
 
-`mmap-c`'s batch commit publishes all messages in the batch with a single
+`mmapq`'s batch commit publishes all messages in the batch with a single
 atomic header write. Until that instant, the batch's events exist only in
 the appender's uncommitted payload tail — invisible to every reader. This
 buys three properties that otherwise require machinery:
@@ -97,7 +97,7 @@ re-read it from the command queue. There is no undo log, no compensation
 logic, no repair step: the failure state is unrepresentable in the
 committed log. (For contrast: elara ships a *repair plugin* that appends a
 rollback event when the last command's processing didn't finish — a fix-up
-its Chronicle-backed store needs and the mmap-c batch protocol makes
+its Chronicle-backed store needs and the mmapq batch protocol makes
 structurally unnecessary.)
 
 **Applying before committing is safe.** The processor mutates its own
@@ -170,7 +170,7 @@ or poller and consume from index N:
   resolves to an indexed lookup, at zero runtime logging cost. The hot
   path never formats a string; the event append *is* the record.
 
-This is why the design tolerates no ambiguity in the log: mmap-c refuses
+This is why the design tolerates no ambiguity in the log: mmapq refuses
 to open corrupted or mismatched queues (`MMAPQ_ECORRUPT`, `MMAPQ_ESCHEMA`)
 rather than repairing them. A repaired log is a forked timeline; a refused
 log is a recreate-from-export. Determinism is only worth what the log's
@@ -230,7 +230,7 @@ position the command poller from what the events prove), and the absence
 of any state mutation outside `process_command`'s event-emission path.
 Everything else is the queue's problem, which is the point.
 
-## What mmap-c deliberately does not provide
+## What mmapq deliberately does not provide
 
 This library is the storage layer of the pattern — the two logs and their
 atomicity, recovery, and replay semantics. It is not the framework. The

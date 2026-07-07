@@ -65,7 +65,7 @@ static NextMove verify_handler(
     memcpy(&m, data, sizeof(TestMessage));
 
     /* Tag check */
-    if (strncmp(m.tag, "mmap-c-producer", 15) != 0) {
+    if (strncmp(m.tag, "mmapq-producer", sizeof("mmapq-producer") - 1) != 0) {
         fprintf(stderr, "consumer: bad tag at index %ld\n", index);
         s->errors++;
         return NEXT_ADVANCE;

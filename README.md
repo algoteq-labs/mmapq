@@ -1,9 +1,9 @@
-# mmap-c
+# mmapq
 
 **A persistent, indexed, replayable inter-process queue — no broker, no
 daemon, no garbage collector. The queue is a file.**
 
-mmap-c passes messages between processes on the same Linux machine through
+mmapq passes messages between processes on the same Linux machine through
 memory-mapped files, with sub-microsecond latency and allocation-free,
 syscall-free hot paths. Unlike a transport, the queue is durable state:
 every message has a stable index, any process can read at any index at any
@@ -34,8 +34,8 @@ What you get:
   which makes migrating a Java system to C or Rust possible one process at
   a time, over a live queue
 
-Rust and Python bindings live in the companion repositories `mmap-c-rs` and
-`mmap-c-py`; see `doc/feature-matrix.md` for exact coverage per language.
+Rust and Python bindings live in the companion repositories `mmapq-rs` and
+`mmapq-py`; see `doc/feature-matrix.md` for exact coverage per language.
 
 This library was extracted from production trading infrastructure, where
 its Java ancestor carried FX flows for years. The design target is not
@@ -52,7 +52,7 @@ library was built to serve.
 Be suspicious of any infrastructure library that doesn't tell you when to
 avoid it. Honest edges:
 
-**Use mmap-c when** you need same-host inter-process messaging where the
+**Use mmapq when** you need same-host inter-process messaging where the
 history matters: event-sourced services, sequenced order/command flow,
 market-data capture, sensor/telemetry logs that a second process analyses,
 replay-based testing and debugging, or a migration bridge between a Java
@@ -60,14 +60,14 @@ system and C/Rust/Python processes sharing one queue.
 
 **Use something else when:**
 
-- **You need network transport.** mmap-c is same-machine only, by design;
+- **You need network transport.** mmapq is same-machine only, by design;
   the wire path belongs to a network messaging system.
 - **You want pub/sub with many dynamic topics** and no interest in
-  history. mmap-c queues are named, persistent streams, not a topic
+  history. mmapq queues are named, persistent streams, not a topic
   fabric.
 - **You want a full application framework** rather than a storage layer —
   see the references in `doc/event-sourcing-guide.md`.
-- **You need guaranteed durability through power loss.** mmap-c writes
+- **You need guaranteed durability through power loss.** mmapq writes
   reach the page cache, not the platter; the OS persists them eventually.
   Queues here are transport-plus-recent-history; long-term data belongs in
   the export format (`QueueTransfer`) or a database.
@@ -594,7 +594,7 @@ and `REBASE` / `PRESERVE` start index mode.
 ## Documentation
 
 *   `doc/feature-matrix.md` — feature coverage across C, Rust, and Python, including compatibility scope
-*   `doc/event-sourcing-guide.md` — building sequenced command/event architectures on mmap-c: batch commits as transactions, replay, recovery, replication
+*   `doc/event-sourcing-guide.md` — building sequenced command/event architectures on mmapq: batch commits as transactions, replay, recovery, replication
 *   `doc/header_layout_design.md` — full derivation of the vertical walk, worked example, and verification trace
 *   `doc/payload_alignment_design.md` — payload framing and alignment rationale
 *   `doc/maintainer_guide.md` — anti-pattern ledger, performance tuning baseline, thread affinity rules, metadata protocol

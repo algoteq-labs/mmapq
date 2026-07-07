@@ -1,6 +1,6 @@
-# ── mmap-c static library ────────────────────────────────────────────────
+# ── mmapq static library ────────────────────────────────────────────────
 
-add_library(mmap-c STATIC
+add_library(mmapq STATIC
     file_initialiser.c
     file_mapper_single_ro.c
     file_mapper_single_rw.c
@@ -38,16 +38,16 @@ add_library(mmap-c STATIC
     indexed_batch_queue.c
 )
 
-target_include_directories(mmap-c
+target_include_directories(mmapq
     PUBLIC  ${PROJECT_SOURCE_DIR}/include
 )
 
-target_link_libraries(mmap-c
+target_link_libraries(mmapq
     PUBLIC pthread m
 )
 
 # Apply build-type-specific flags
-target_compile_options(mmap-c PRIVATE
+target_compile_options(mmapq PRIVATE
     $<$<CONFIG:Debug>:        ${MMAP_DEBUG_FLAGS}>
     $<$<CONFIG:Release>:      ${MMAP_RELEASE_FLAGS}>
     $<$<CONFIG:RelWithDebInfo>:${MMAP_RELDBG_FLAGS}>
@@ -55,24 +55,24 @@ target_compile_options(mmap-c PRIVATE
 
 # Sanitizer support
 if(MMAP_ENABLE_ASAN)
-    target_compile_options(mmap-c PUBLIC -fsanitize=address,undefined -fno-omit-frame-pointer)
-    target_link_options   (mmap-c PUBLIC -fsanitize=address,undefined)
+    target_compile_options(mmapq PUBLIC -fsanitize=address,undefined -fno-omit-frame-pointer)
+    target_link_options   (mmapq PUBLIC -fsanitize=address,undefined)
 endif()
 
 if(MMAP_ENABLE_UBSAN AND NOT MMAP_ENABLE_ASAN)
-    target_compile_options(mmap-c PUBLIC -fsanitize=undefined)
-    target_link_options   (mmap-c PUBLIC -fsanitize=undefined)
+    target_compile_options(mmapq PUBLIC -fsanitize=undefined)
+    target_link_options   (mmapq PUBLIC -fsanitize=undefined)
 endif()
 
 if(MMAP_ENABLE_TSAN)
-    target_compile_options(mmap-c PUBLIC -fsanitize=thread)
-    target_link_options   (mmap-c PUBLIC -fsanitize=thread)
+    target_compile_options(mmapq PUBLIC -fsanitize=thread)
+    target_link_options   (mmapq PUBLIC -fsanitize=thread)
 endif()
 
 # Install targets
-install(TARGETS mmap-c
+install(TARGETS mmapq
     ARCHIVE DESTINATION lib
 )
 install(DIRECTORY ${PROJECT_SOURCE_DIR}/include/
-    DESTINATION include/mmap-c
+    DESTINATION include/mmapq
 )

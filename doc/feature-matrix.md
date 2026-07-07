@@ -1,4 +1,4 @@
-# mmap-c Feature Matrix — C / Rust / Python
+# mmapq Feature Matrix — C / Rust / Python
 
 Feature coverage across the three repositories as of the archivable commit
 (feature freeze). Legend: ✓ full · ◐ partial (see note) · — not exposed.
@@ -113,7 +113,7 @@ column are design decisions, not roadmap items.
 
 - The Python paragraph above (producer/consumer subset, gaps are design
   decisions) is the "documented subset" statement — lift it verbatim into
-  `mmap-c-py/README.md`.
+  `mmapq-py/README.md`.
 - Rust's two ◐ archiver cells are the only unplanned asymmetries vs C;
   everything else in the Rust column is at parity. If batch
   `print_summary` is ever wanted, it is written properly in C first
@@ -121,4 +121,4 @@ column are design decisions, not roadmap items.
 - Feature set is frozen as of this matrix. The sole sanctioned addition
   category is parity completion with the Algoteq Java surface
   (the tools4j-derived reference implementation), by explicit task
-  (see `mmap-c/AGENTS.md`).
+  (see `mmapq/AGENTS.md`).

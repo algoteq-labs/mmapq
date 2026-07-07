@@ -4,10 +4,10 @@ target_include_directories(unity PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 # ── Test helper macro ─────────────────────────────────────────────────────
 # Each test file becomes its own executable + CTest entry.
-# ASAN/UBSAN flags are inherited from the mmap-c library target.
+# ASAN/UBSAN flags are inherited from the mmapq library target.
 macro(mmap_test name)
     add_executable(${name} ${name}.c)
-    target_link_libraries(${name} PRIVATE mmap-c unity)
+    target_link_libraries(${name} PRIVATE mmapq unity)
     target_compile_options(${name} PRIVATE
         $<$<CONFIG:Debug>:        ${MMAP_DEBUG_FLAGS}>
         $<$<CONFIG:Release>:      ${MMAP_RELEASE_FLAGS}>

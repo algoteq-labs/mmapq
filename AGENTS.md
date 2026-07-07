@@ -1,4 +1,4 @@
-# AGENTS.md — mmap-c
+# AGENTS.md — mmapq
 
 Instructions for AI coding agents working in this repository. Read fully
 before making any change. These rules are not suggestions; they encode
@@ -14,8 +14,8 @@ NOT compatible with upstream tools4j). Cross-process correctness under
 contention is the entire value of this code. Nanoseconds matter on the hot
 path. The on-disk format is a compatibility contract.
 
-Companion repositories `mmap-c-rs` (Rust) and `mmap-c-py` (Python) wrap this
-library; `mmap-c-rs/c/` carries a vendored mirror of `src/` and `include/`.
+Companion repositories `mmapq-rs` (Rust) and `mmapq-py` (Python) wrap this
+library; `mmapq-rs/c/` carries a vendored mirror of `src/` and `include/`.
 This file is the upstream authority for the whole ecosystem: the wrappers'
 AGENTS.md files defer to it, and where they differ, this file wins.
 
@@ -67,8 +67,8 @@ file governs conduct; that file governs design.
   `MMAPQ_ECORRUPT -4`, `MMAPQ_ESCHEMA -5`). New failure modes get a new code
   appended, never a reused one; existing values are ABI. Both language
   wrappers map these codes 1:1 — adding a code means adding one line to
-  `map_rc` in `mmap-c-rs/src/error.rs` and one entry to `_RC_ERRORS` in
-  `mmap-c-py/src/mmap_c_py/_errors.py` in the same change.
+  `map_rc` in `mmapq-rs/src/error.rs` and one entry to `_RC_ERRORS` in
+  `mmapq-py/src/mmapq/_errors.py` in the same change.
 
 - **Concurrency and atomics changes require justification in comments.**
   This code uses C11 atomics with deliberate memory orderings (the payload
@@ -147,12 +147,12 @@ file governs conduct; that file governs design.
 ## Mirror discipline
 
 Any change under `src/` or `include/` must be synced verbatim into
-`mmap-c-rs/c/src` and `mmap-c-rs/c/include` in the same task, and verified
+`mmapq-rs/c/src` and `mmapq-rs/c/include` in the same task, and verified
 mechanically, both directions:
 
 ```
-diff -r src ../mmap-c-rs/c/src -x '*.o'
-diff -r include ../mmap-c-rs/c/include
+diff -r src ../mmapq-rs/c/src -x '*.o'
+diff -r include ../mmapq-rs/c/include
 ```
 
 Exit code zero or the task is not done. Do not hand-eye it.
