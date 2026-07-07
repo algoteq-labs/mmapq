@@ -39,14 +39,16 @@ typedef enum {
  * RETREATED     — data delivered and cursor moved backward
  * ARCHIVED      — current index is below the queue's start index
  * ERROR         — mapping timeout or I/O failure
+ * CORRUPT       — committed header with invalid payload (corruption detected)
  */
 typedef enum {
-    POLL_END_OF_STREAM,
-    POLL_ADVANCED,
-    POLL_STOPPED,
-    POLL_RETREATED,
-    POLL_ARCHIVED,
-    POLL_ERROR,
+    POLL_END_OF_STREAM = 0,
+    POLL_ADVANCED      = 1,
+    POLL_STOPPED       = 2,
+    POLL_RETREATED     = 3,
+    POLL_ARCHIVED      = 4,
+    POLL_ERROR         = 5,
+    POLL_CORRUPT       = 6,
 } PollResult;
 
 #endif /* POLLER_H */

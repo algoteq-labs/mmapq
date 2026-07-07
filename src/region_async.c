@@ -365,7 +365,7 @@ static int32_t async_size(RegionAccessor *self)
 static int async_map(Region *self, int64_t position)
 {
     MMAP_ASSERT(self != NULL,  "async_map: self is NULL");
-    MMAP_ASSERT(position >= 0, "async_map: position must be >= 0");
+    if (position < 0) return -1;
 
     AsyncRegionImpl *impl = (AsyncRegionImpl *)self->base.impl;
     const RegionStateOps *s    = get_state(impl);
@@ -415,13 +415,12 @@ Region *region_async_create(
     int         max_file_not_found_errors,
     int         max_beyond_file_size_errors)
 {
-    MMAP_ASSERT(file_mapper != NULL, "region_async_create: file_mapper is NULL");
-    MMAP_ASSERT(region_size > 0,     "region_async_create: region_size must be > 0");
-    MMAP_ASSERT((region_size & (region_size - 1)) == 0,
-        "region_async_create: region_size must be a power of two");
+    if (file_mapper == NULL) return NULL;
+    if (region_size <= 0) return NULL;
+    if ((region_size & (region_size - 1)) != 0) return NULL;
 
     AsyncRegionImpl *impl = calloc(1, sizeof(AsyncRegionImpl));
-    MMAP_ASSERT(impl != NULL, "region_async_create: out of memory");
+    if (impl == NULL) return NULL;
 
     impl->file_mapper                 = file_mapper;
     impl->region_size                 = region_size;
@@ -437,7 +436,7 @@ Region *region_async_create(
     atomic_store_explicit(&impl->state, &UNMAPPED_OPS, memory_order_relaxed);
 
     Region *r = calloc(1, sizeof(Region));
-    MMAP_ASSERT(r != NULL, "region_async_create: out of memory");
+    if (r == NULL) { free(impl); return NULL; }
 
     r->base.wrap           = async_wrap;
     r->base.wrap_no_premap = async_wrap_no_premap;

@@ -64,7 +64,7 @@ static QueueRegionAccessor *acc_alloc(
     int         read_only)
 {
     QueueRegionAccessor *acc = calloc(1, sizeof(QueueRegionAccessor));
-    MMAP_ASSERT(acc != NULL, "queue_region_accessor: out of memory");
+    if (acc == NULL) return NULL;
 
     acc->directory           = strdup(directory);
     acc->queue_name          = strdup(queue_name);
@@ -92,8 +92,8 @@ QueueRegionAccessor *queue_region_accessor_create_rw(
     Runtime    *runtime,
     uint8_t     appender_id)
 {
-    MMAP_ASSERT(directory  != NULL, "queue_region_accessor_create_rw: directory is NULL");
-    MMAP_ASSERT(queue_name != NULL, "queue_region_accessor_create_rw: queue_name is NULL");
+    if (directory  == NULL) return NULL;
+    if (queue_name == NULL) return NULL;
 
     QueueRegionAccessor *acc = acc_alloc(directory, queue_name, region_size,
                                           ring_size, regions_to_map_ahead,
@@ -153,8 +153,8 @@ QueueRegionAccessor *queue_region_accessor_create_ro(
     uint64_t    timeout_ns,
     Runtime    *runtime)
 {
-    MMAP_ASSERT(directory  != NULL, "queue_region_accessor_create_ro: directory is NULL");
-    MMAP_ASSERT(queue_name != NULL, "queue_region_accessor_create_ro: queue_name is NULL");
+    if (directory  == NULL) return NULL;
+    if (queue_name == NULL) return NULL;
 
     QueueRegionAccessor *acc = acc_alloc(directory, queue_name, region_size,
                                           ring_size, regions_to_map_ahead,
@@ -189,7 +189,7 @@ QueueRegionAccessor *queue_region_accessor_create_ro(
 RegionAccessor *queue_region_accessor_payload(QueueRegionAccessor *acc,
                                                uint8_t appender_id)
 {
-    MMAP_ASSERT(acc != NULL, "queue_region_accessor_payload: acc is NULL");
+    if (acc == NULL) return NULL;
 
     if (acc->payload[appender_id].occupied) {
         return acc->payload[appender_id].accessor;

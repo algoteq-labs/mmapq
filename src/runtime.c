@@ -28,7 +28,7 @@ static void idle_noop_close(IdleStrategy *self) { (void)self; }
 IdleStrategy *idle_strategy_busy_spin_create(void)
 {
     IdleStrategy *s = calloc(1, sizeof(IdleStrategy));
-    MMAP_ASSERT(s != NULL, "idle_strategy_busy_spin_create: out of memory");
+    if (s == NULL) return NULL;
     s->idle  = busy_spin_idle;
     s->close = idle_noop_close;
     s->ctx   = NULL;
@@ -48,7 +48,7 @@ static void yield_idle(IdleStrategy *self, int work_done)
 IdleStrategy *idle_strategy_yield_create(void)
 {
     IdleStrategy *s = calloc(1, sizeof(IdleStrategy));
-    MMAP_ASSERT(s != NULL, "idle_strategy_yield_create: out of memory");
+    if (s == NULL) return NULL;
     s->idle  = yield_idle;
     s->close = idle_noop_close;
     s->ctx   = NULL;
@@ -89,17 +89,17 @@ static void sleep_close(IdleStrategy *self)
 
 IdleStrategy *idle_strategy_sleep_create(uint64_t min_sleep_ns, uint64_t max_sleep_ns)
 {
-    MMAP_ASSERT(min_sleep_ns > 0,              "idle_strategy_sleep_create: min_sleep_ns must be > 0");
-    MMAP_ASSERT(max_sleep_ns >= min_sleep_ns,  "idle_strategy_sleep_create: max >= min required");
+    if (min_sleep_ns <= 0) return NULL;
+    if (max_sleep_ns < min_sleep_ns) return NULL;
 
     SleepCtx *ctx = calloc(1, sizeof(SleepCtx));
-    MMAP_ASSERT(ctx != NULL, "idle_strategy_sleep_create: out of memory");
+    if (ctx == NULL) return NULL;
     ctx->min_sleep_ns     = min_sleep_ns;
     ctx->max_sleep_ns     = max_sleep_ns;
     ctx->current_sleep_ns = min_sleep_ns;
 
     IdleStrategy *s = calloc(1, sizeof(IdleStrategy));
-    MMAP_ASSERT(s != NULL, "idle_strategy_sleep_create: out of memory");
+    if (s == NULL) return NULL;
     s->idle  = sleep_idle;
     s->close = sleep_close;
     s->ctx   = ctx;
@@ -162,7 +162,7 @@ IdleStrategy *idle_strategy_backoff_create(
     uint64_t max_sleep_ns)
 {
     BackoffCtx *ctx = calloc(1, sizeof(BackoffCtx));
-    MMAP_ASSERT(ctx != NULL, "idle_strategy_backoff_create: out of memory");
+    if (ctx == NULL) return NULL;
     ctx->spin_count   = spin_count;
     ctx->yield_count  = yield_count;
     ctx->max_sleep_ns = max_sleep_ns;
@@ -171,7 +171,7 @@ IdleStrategy *idle_strategy_backoff_create(
     ctx->sleep_ns     = UINT64_C(1000);
 
     IdleStrategy *s = calloc(1, sizeof(IdleStrategy));
-    MMAP_ASSERT(s != NULL, "idle_strategy_backoff_create: out of memory");
+    if (s == NULL) return NULL;
     s->idle  = backoff_idle;
     s->close = backoff_close;
     s->ctx   = ctx;
@@ -206,7 +206,7 @@ typedef struct ExecList {
 static ExecList *exec_list_create(int capacity)
 {
     ExecList *list = calloc(1, sizeof(ExecList));
-    MMAP_ASSERT(list != NULL, "exec_list_create: out of memory");
+    if (list == NULL) return NULL;
     list->items    = calloc((size_t)capacity, sizeof(Executable *));
     list->count    = 0;
     list->capacity = capacity;
@@ -217,7 +217,7 @@ static ExecList *exec_list_add(ExecList *old, Executable *exec)
 {
     int new_cap = old->capacity + 8;
     ExecList *next = calloc(1, sizeof(ExecList));
-    MMAP_ASSERT(next != NULL, "exec_list_add: out of memory");
+    if (next == NULL) return NULL;
     next->items    = calloc((size_t)new_cap, sizeof(Executable *));
     next->count    = old->count + 1;
     next->capacity = new_cap;
@@ -229,7 +229,7 @@ static ExecList *exec_list_add(ExecList *old, Executable *exec)
 static ExecList *exec_list_remove(ExecList *old, Executable *exec)
 {
     ExecList *next = calloc(1, sizeof(ExecList));
-    MMAP_ASSERT(next != NULL, "exec_list_remove: out of memory");
+    if (next == NULL) return NULL;
     next->items    = calloc((size_t)old->capacity, sizeof(Executable *));
     next->count    = 0;
     next->capacity = old->capacity;
@@ -405,11 +405,11 @@ Runtime *runtime_create(
     void        (*on_close)(Runtime *rt, void *ctx),
     void         *on_close_ctx)
 {
-    MMAP_ASSERT(name != NULL, "runtime_create: name is NULL");
-    MMAP_ASSERT(idle != NULL, "runtime_create: idle is NULL");
+    if (name == NULL) return NULL;
+    if (idle == NULL) return NULL;
 
     Runtime *rt = calloc(1, sizeof(Runtime));
-    MMAP_ASSERT(rt != NULL, "runtime_create: out of memory");
+    if (rt == NULL) return NULL;
 
     strncpy(rt->name, name, sizeof(rt->name) - 1);
     rt->idle             = idle;
@@ -536,7 +536,7 @@ static void affinity_close(Executable *self)
 
 int runtime_set_affinity(Runtime *rt, int cpu_core)
 {
-    MMAP_ASSERT(rt != NULL, "runtime_set_affinity: rt is NULL");
+    if (rt == NULL) return -1;
 
     AffinityImpl *impl = calloc(1, sizeof(AffinityImpl));
     if (impl == NULL) return -1;
@@ -558,13 +558,13 @@ int runtime_set_affinity(Runtime *rt, int cpu_core)
 
 int runtime_is_closed(const Runtime *rt)
 {
-    MMAP_ASSERT(rt != NULL, "runtime_is_closed: rt is NULL");
+    if (rt == NULL) return 1;
     return atomic_load(&rt->closed);
 }
 
 void runtime_close(Runtime *rt)
 {
-    MMAP_ASSERT(rt != NULL, "runtime_close: rt is NULL");
+    if (rt == NULL) return;
 
     if (!atomic_compare_exchange_strong(&rt->closed,
                                          &(int){0}, 1)) {
@@ -599,7 +599,7 @@ void runtime_close(Runtime *rt)
 
 Runtime *runtime_clone(Runtime *rt)
 {
-    MMAP_ASSERT(rt != NULL, "runtime_clone: rt is NULL");
+    if (rt == NULL) return NULL;
     __atomic_fetch_add(&rt->refcount, 1, __ATOMIC_RELAXED);
     return rt;
 }
@@ -665,11 +665,11 @@ Executable *deregister_executable_create(Runtime *runtime, Executable *target)
 Executable *deregister_executable_create_with_free(
     Runtime *runtime, Executable *target, void *ctx_to_free)
 {
-    MMAP_ASSERT(runtime != NULL, "deregister_executable_create: runtime is NULL");
-    MMAP_ASSERT(target  != NULL, "deregister_executable_create: target is NULL");
+    if (runtime == NULL) return NULL;
+    if (target == NULL) return NULL;
 
     DeregisterImpl *impl = calloc(1, sizeof(DeregisterImpl));
-    MMAP_ASSERT(impl != NULL, "deregister_executable_create: out of memory");
+    if (impl == NULL) return NULL;
 
     impl->runtime              = runtime;
     impl->target               = target;
@@ -791,11 +791,10 @@ Runtime *runtime_get_instance(
         }
     }
 
-    MMAP_ASSERT(registry_count < MAX_RUNTIME_INSTANCES,
-        "runtime_get_instance: maximum runtime instances reached");
+    if (registry_count >= MAX_RUNTIME_INSTANCES) return NULL;
 
     int *id_copy = malloc(sizeof(int));
-    MMAP_ASSERT(id_copy != NULL, "runtime_get_instance: out of memory");
+    if (id_copy == NULL) return NULL;
     *id_copy = runtime_id;
 
     Runtime *rt = runtime_create(name, idle, close_timeout_ns,

@@ -26,16 +26,17 @@ struct IndexedBatchQueue {
     int        closed;
 };
 
-static void create_queue_directory(const char *directory, const char *queue_name)
+static int create_queue_directory(const char *directory, const char *queue_name)
 {
     char path[4096];
     snprintf(path, sizeof(path), "%s/%s", directory, queue_name);
 
     if (mkdir(path, 0775) != 0) {
         if (errno != EEXIST) {
-            MMAP_ASSERT(0, "indexed_batch_queue: failed to create queue directory");
+            return -1;
         }
     }
+    return 0;
 }
 
 IndexedBatchQueue *indexed_batch_queue_create(
@@ -52,7 +53,7 @@ IndexedBatchQueue *indexed_batch_queue_create(
     Runtime    *read_runtime)
 {
     IndexedBatchQueue *q = calloc(1, sizeof(IndexedBatchQueue));
-    MMAP_ASSERT(q != NULL, "out of memory");
+    if (q == NULL) return NULL;
 
     q->directory            = strdup(directory);
     q->queue_name           = strdup(queue_name);

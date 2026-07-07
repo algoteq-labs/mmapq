@@ -78,11 +78,11 @@ IndexedPoller *indexed_poller_create(
     uint64_t    timeout_ns,
     Runtime    *runtime)
 {
-    MMAP_ASSERT(directory  != NULL, "indexed_poller_create: directory is NULL");
-    MMAP_ASSERT(queue_name != NULL, "indexed_poller_create: queue_name is NULL");
+    if (directory  == NULL) return NULL;
+    if (queue_name == NULL) return NULL;
 
     IndexedPoller *p = calloc(1, sizeof(IndexedPoller));
-    MMAP_ASSERT(p != NULL, "indexed_poller_create: out of memory");
+    if (p == NULL) return NULL;
 
     p->directory           = strdup(directory);
     p->queue_name          = strdup(queue_name);
@@ -103,9 +103,9 @@ PollResult indexed_poller_poll(
     MessageHandler handler,
     void          *ctx)
 {
-    MMAP_ASSERT(p        != NULL, "indexed_poller_poll: poller is NULL");
-    MMAP_ASSERT(!p->closed,       "indexed_poller_poll: poller is closed");
-    MMAP_ASSERT(handler  != NULL, "indexed_poller_poll: handler is NULL");
+    if (p == NULL)    return POLL_ERROR;
+    if (p->closed)    return POLL_ERROR;
+    if (handler == NULL) return POLL_ERROR;
 
     if (!poller_init(p)) return POLL_END_OF_STREAM;
 
@@ -144,8 +144,7 @@ PollResult indexed_poller_poll(
     int32_t length;
     memcpy(&length, p->payload_buf.data + PAYLOAD_LENGTH_OFFSET, sizeof(int32_t));
 
-    MMAP_ASSERT(length > 0,
-        "indexed_poller_poll: invalid payload length at committed header");
+    if (length <= 0) return POLL_CORRUPT;
 
     const void *data = p->payload_buf.data + PAYLOAD_DATA_OFFSET;
 
@@ -181,9 +180,9 @@ PollResult indexed_poller_poll(
 
 int indexed_poller_move_to_index(IndexedPoller *p, int64_t index)
 {
-    MMAP_ASSERT(p != NULL,   "indexed_poller_move_to_index: poller is NULL");
-    MMAP_ASSERT(!p->closed,  "indexed_poller_move_to_index: poller is closed");
-    MMAP_ASSERT(index >= 0,  "indexed_poller_move_to_index: index must be >= 0");
+    if (p == NULL)   return 0;
+    if (p->closed)   return 0;
+    if (index < 0)   return 0;
 
     if (!poller_init(p)) {
         if (index == 0) { p->current_index = 0; return 1; }
@@ -205,8 +204,8 @@ int indexed_poller_move_to_index(IndexedPoller *p, int64_t index)
 
 int indexed_poller_move_to_end(IndexedPoller *p)
 {
-    MMAP_ASSERT(p != NULL,  "indexed_poller_move_to_end: poller is NULL");
-    MMAP_ASSERT(!p->closed, "indexed_poller_move_to_end: poller is closed");
+    if (p == NULL)  return 0;
+    if (p->closed)  return 0;
 
     if (!poller_init(p)) return 1;
 
@@ -227,8 +226,8 @@ int indexed_poller_move_to_end(IndexedPoller *p)
 
 int indexed_poller_move_to_last(IndexedPoller *p)
 {
-    MMAP_ASSERT(p != NULL,  "indexed_poller_move_to_last: poller is NULL");
-    MMAP_ASSERT(!p->closed, "indexed_poller_move_to_last: poller is closed");
+    if (p == NULL)  return 0;
+    if (p->closed)  return 0;
 
     if (!poller_init(p)) return 0;
 
@@ -249,8 +248,8 @@ int indexed_poller_move_to_last(IndexedPoller *p)
 
 int indexed_poller_move_to_start(IndexedPoller *p)
 {
-    MMAP_ASSERT(p != NULL,  "indexed_poller_move_to_start: poller is NULL");
-    MMAP_ASSERT(!p->closed, "indexed_poller_move_to_start: poller is closed");
+    if (p == NULL)  return 0;
+    if (p->closed)  return 0;
 
     p->current_index = indexed_poller_start_index(p);
     return 1;
@@ -260,20 +259,20 @@ int indexed_poller_move_to_start(IndexedPoller *p)
 
 int64_t indexed_poller_current_index(const IndexedPoller *p)
 {
-    MMAP_ASSERT(p != NULL, "indexed_poller_current_index: poller is NULL");
+    if (p == NULL) return 0;
     return p->current_index;
 }
 
 int64_t indexed_poller_start_index(IndexedPoller *p)
 {
-    MMAP_ASSERT(p != NULL, "indexed_poller_start_index: poller is NULL");
+    if (p == NULL) return 0;
     if (!poller_init(p)) return QUEUE_META_INITIAL_START_INDEX;
     return queue_meta_start_index(p->queue_meta);
 }
 
 int indexed_poller_exists(IndexedPoller *p, int64_t index)
 {
-    MMAP_ASSERT(p != NULL, "indexed_poller_exists: poller is NULL");
+    if (p == NULL) return 0;
     if (!poller_init(p)) return 0;
     if (index < queue_meta_start_index(p->queue_meta)) return 0;
     return header_found(p->header_acc, &p->header_buf, index, p->queue_name);

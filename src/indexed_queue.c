@@ -34,17 +34,18 @@ struct IndexedQueue {
 
 /* ── Directory creation ──────────────────────────────────────────────────── */
 
-static void create_queue_directory(const char *directory, const char *queue_name)
+static int create_queue_directory(const char *directory, const char *queue_name)
 {
     char path[4096];
     snprintf(path, sizeof(path), "%s/%s", directory, queue_name);
 
     if (mkdir(path, 0775) != 0) {
         if (errno != EEXIST) {
-            MMAP_ASSERT(0, "indexed_queue_create: failed to create queue directory");
+            return -1;
         }
         /* EEXIST is fine — directory already exists */
     }
+    return 0;
 }
 
 /* ── indexed_queue_create ────────────────────────────────────────────────── */
@@ -62,21 +63,18 @@ IndexedQueue *indexed_queue_create(
     Runtime    *write_runtime,
     Runtime    *read_runtime)
 {
-    MMAP_ASSERT(directory  != NULL, "indexed_queue_create: directory is NULL");
-    MMAP_ASSERT(queue_name != NULL, "indexed_queue_create: queue_name is NULL");
-    MMAP_ASSERT(region_size > 0,    "indexed_queue_create: region_size must be > 0");
-    MMAP_ASSERT((region_size & (region_size - 1)) == 0,
-        "indexed_queue_create: region_size must be a power of two");
-    MMAP_ASSERT(ring_size > 0,      "indexed_queue_create: ring_size must be > 0");
-    MMAP_ASSERT((ring_size & (ring_size - 1)) == 0,
-        "indexed_queue_create: ring_size must be a power of two");
-    MMAP_ASSERT(max_file_size > 0,  "indexed_queue_create: max_file_size must be > 0");
-    MMAP_ASSERT(max_file_size % region_size == 0,
-        "indexed_queue_create: max_file_size must be a multiple of region_size");
-    MMAP_ASSERT(start_index >= 0,   "indexed_queue_create: start_index must be >= 0");
+    if (directory  == NULL) return NULL;
+    if (queue_name == NULL) return NULL;
+    if (region_size <= 0) return NULL;
+    if ((region_size & (region_size - 1)) != 0) return NULL;
+    if (ring_size <= 0) return NULL;
+    if ((ring_size & (ring_size - 1)) != 0) return NULL;
+    if (max_file_size <= 0) return NULL;
+    if (max_file_size % region_size != 0) return NULL;
+    if (start_index < 0) return NULL;
 
     IndexedQueue *q = calloc(1, sizeof(IndexedQueue));
-    MMAP_ASSERT(q != NULL, "indexed_queue_create: out of memory");
+    if (q == NULL) return NULL;
 
     q->directory            = strdup(directory);
     q->queue_name           = strdup(queue_name);
@@ -144,11 +142,10 @@ IndexedQueue *indexed_queue_create_default_opt(
 
 IndexedAppender *indexed_queue_create_appender(IndexedQueue *q)
 {
-    MMAP_ASSERT(q != NULL,  "indexed_queue_create_appender: queue is NULL");
-    MMAP_ASSERT(!atomic_load_explicit(&q->closed, memory_order_relaxed),
-        "indexed_queue_create_appender: queue is closed");
+    if (q == NULL) return NULL;
+    if (atomic_load_explicit(&q->closed, memory_order_relaxed)) return NULL;
 
-    create_queue_directory(q->directory, q->queue_name);
+    if (create_queue_directory(q->directory, q->queue_name) != 0) return NULL;
 
     return indexed_appender_create(
         q->directory, q->queue_name,
@@ -161,11 +158,10 @@ IndexedAppender *indexed_queue_create_appender_with_id(
     IndexedQueue *q,
     uint8_t       appender_id)
 {
-    MMAP_ASSERT(q != NULL,  "indexed_queue_create_appender_with_id: queue is NULL");
-    MMAP_ASSERT(!atomic_load_explicit(&q->closed, memory_order_relaxed),
-        "indexed_queue_create_appender_with_id: queue is closed");
+    if (q == NULL) return NULL;
+    if (atomic_load_explicit(&q->closed, memory_order_relaxed)) return NULL;
 
-    create_queue_directory(q->directory, q->queue_name);
+    if (create_queue_directory(q->directory, q->queue_name) != 0) return NULL;
 
     return indexed_appender_create_with_id(
         q->directory, q->queue_name,
@@ -176,9 +172,8 @@ IndexedAppender *indexed_queue_create_appender_with_id(
 
 IndexedPoller *indexed_queue_create_poller(IndexedQueue *q)
 {
-    MMAP_ASSERT(q != NULL,  "indexed_queue_create_poller: queue is NULL");
-    MMAP_ASSERT(!atomic_load_explicit(&q->closed, memory_order_relaxed),
-        "indexed_queue_create_poller: queue is closed");
+    if (q == NULL) return NULL;
+    if (atomic_load_explicit(&q->closed, memory_order_relaxed)) return NULL;
 
     return indexed_poller_create(
         q->directory, q->queue_name,
@@ -187,9 +182,8 @@ IndexedPoller *indexed_queue_create_poller(IndexedQueue *q)
 
 IndexedReader *indexed_queue_create_reader(IndexedQueue *q)
 {
-    MMAP_ASSERT(q != NULL,  "indexed_queue_create_reader: queue is NULL");
-    MMAP_ASSERT(!atomic_load_explicit(&q->closed, memory_order_relaxed),
-        "indexed_queue_create_reader: queue is closed");
+    if (q == NULL) return NULL;
+    if (atomic_load_explicit(&q->closed, memory_order_relaxed)) return NULL;
 
     return indexed_reader_create(
         q->directory, q->queue_name,
@@ -198,9 +192,8 @@ IndexedReader *indexed_queue_create_reader(IndexedQueue *q)
 
 IndexedArchiver *indexed_queue_create_archiver(IndexedQueue *q)
 {
-    MMAP_ASSERT(q != NULL,  "indexed_queue_create_archiver: queue is NULL");
-    MMAP_ASSERT(!atomic_load_explicit(&q->closed, memory_order_relaxed),
-        "indexed_queue_create_archiver: queue is closed");
+    if (q == NULL) return NULL;
+    if (atomic_load_explicit(&q->closed, memory_order_relaxed)) return NULL;
 
     return indexed_archiver_create(
         q->directory, q->queue_name, q->ring_size, q->read_runtime);
@@ -216,21 +209,21 @@ static void ensure_meta_open(IndexedQueue *q)
 
 int32_t indexed_queue_region_size(const IndexedQueue *q)
 {
-    MMAP_ASSERT(q != NULL, "indexed_queue_region_size: queue is NULL");
+    if (q == NULL) return 0;
     ensure_meta_open((IndexedQueue *)q);
     return q->queue_meta ? queue_meta_region_size(q->queue_meta) : q->region_size;
 }
 
 int64_t indexed_queue_max_file_size(const IndexedQueue *q)
 {
-    MMAP_ASSERT(q != NULL, "indexed_queue_max_file_size: queue is NULL");
+    if (q == NULL) return 0;
     ensure_meta_open((IndexedQueue *)q);
     return q->queue_meta ? queue_meta_max_file_size(q->queue_meta) : q->max_file_size;
 }
 
 int64_t indexed_queue_start_index(const IndexedQueue *q)
 {
-    MMAP_ASSERT(q != NULL, "indexed_queue_start_index: queue is NULL");
+    if (q == NULL) return 0;
     ensure_meta_open((IndexedQueue *)q);
     return q->queue_meta ? queue_meta_start_index(q->queue_meta) : q->start_index;
 }

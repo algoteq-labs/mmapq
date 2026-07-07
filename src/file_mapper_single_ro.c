@@ -113,7 +113,7 @@ static void ro_unmap(FileMapper *self, uintptr_t address, int64_t position, int3
 
     if (munmap((void *)address, (size_t)length) != 0) {
         /* munmap failure is a programming error — wrong address or length */
-        MMAP_ASSERT(0, "ro_unmap: munmap failed");
+        return;
     }
 }
 
@@ -138,10 +138,10 @@ FileMapper *file_mapper_single_ro_create(
     void            *initialiser_ctx,
     int              check_file_size)
 {
-    MMAP_ASSERT(file_path != NULL, "file_mapper_single_ro_create: file_path is NULL");
+    if (file_path == NULL) return NULL;
 
     SingleFileRoImpl *impl = calloc(1, sizeof(SingleFileRoImpl));
-    MMAP_ASSERT(impl != NULL, "file_mapper_single_ro_create: out of memory");
+    if (impl == NULL) return NULL;
 
     impl->file_path       = strdup(file_path);
     impl->initialiser     = initialiser;
@@ -151,7 +151,7 @@ FileMapper *file_mapper_single_ro_create(
     impl->cached_size     = -1;
 
     FileMapper *fm = calloc(1, sizeof(FileMapper));
-    MMAP_ASSERT(fm != NULL, "file_mapper_single_ro_create: out of memory");
+    if (fm == NULL) { free(impl); return NULL; }
 
     fm->map   = ro_map;
     fm->unmap = ro_unmap;

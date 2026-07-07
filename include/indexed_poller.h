@@ -105,7 +105,8 @@ IndexedPoller *indexed_poller_create(
  *   POLL_ADVANCED, POLL_STOPPED, POLL_RETREATED on success;
  *   POLL_END_OF_STREAM if no message yet;
  *   POLL_ARCHIVED if currentIndex is below startIndex;
- *   POLL_ERROR on mapping timeout.
+ *   POLL_ERROR on mapping timeout;
+ *   POLL_CORRUPT if committed payload data is invalid.
  */
 PollResult indexed_poller_poll(
     IndexedPoller *p,

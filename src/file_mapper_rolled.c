@@ -130,7 +130,7 @@ static FileCacheEntry *cache_get_or_open(RolledImpl *impl, int file_index)
             impl->initialiser_ctx);
     }
 
-    MMAP_ASSERT(mapper != NULL, "cache_get_or_open: failed to create file mapper");
+    if (mapper == NULL) return NULL;
 
     /* Add to cache */
     FileCacheEntry *new_entry = &impl->cache[impl->cache_count++];
@@ -245,15 +245,14 @@ FileMapper *file_mapper_rolled_create(
     int              max_cache_size,
     int              check_file_size)
 {
-    MMAP_ASSERT(file_prefix != NULL,   "file_mapper_rolled_create: file_prefix is NULL");
-    MMAP_ASSERT(max_file_size > 0,     "file_mapper_rolled_create: max_file_size must be > 0");
-    MMAP_ASSERT(region_size > 0,       "file_mapper_rolled_create: region_size must be > 0");
-    MMAP_ASSERT(max_file_size % region_size == 0,
-        "file_mapper_rolled_create: max_file_size must be a multiple of region_size");
-    MMAP_ASSERT(max_cache_size > 0,    "file_mapper_rolled_create: max_cache_size must be > 0");
+    if (file_prefix == NULL) return NULL;
+    if (max_file_size <= 0) return NULL;
+    if (region_size <= 0) return NULL;
+    if (max_file_size % region_size != 0) return NULL;
+    if (max_cache_size <= 0) return NULL;
 
     RolledImpl *impl = calloc(1, sizeof(RolledImpl));
-    MMAP_ASSERT(impl != NULL, "file_mapper_rolled_create: out of memory");
+    if (impl == NULL) return NULL;
 
     impl->file_prefix      = strdup(file_prefix);
     impl->max_file_size    = max_file_size;
@@ -267,10 +266,10 @@ FileMapper *file_mapper_rolled_create(
     impl->insert_tick      = 0;
 
     impl->cache = calloc((size_t)max_cache_size, sizeof(FileCacheEntry));
-    MMAP_ASSERT(impl->cache != NULL, "file_mapper_rolled_create: out of memory for cache");
+    if (impl->cache == NULL) { free(impl); return NULL; }
 
     FileMapper *fm = calloc(1, sizeof(FileMapper));
-    MMAP_ASSERT(fm != NULL, "file_mapper_rolled_create: out of memory");
+    if (fm == NULL) { free(impl->cache); free(impl); return NULL; }
 
     fm->map   = rolled_map;
     fm->unmap = rolled_unmap;

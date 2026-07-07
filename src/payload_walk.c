@@ -30,7 +30,7 @@ int32_t payload_walk_advance(
     /* ── Map current position ────────────────────────────────────────────── */
     WrapResult r = region_accessor_wrap(payload_accessor, position, payload_buf);
     if (r != WRAP_SUCCESS) {
-        MMAP_ASSERT(0, "payload_walk_advance: failed to wrap payload buffer");
+        return -1;
     }
 
     int32_t capacity = payload_buf->capacity;
@@ -43,7 +43,7 @@ int32_t payload_walk_advance(
 
         r = region_accessor_wrap(payload_accessor, position, payload_buf);
         if (r != WRAP_SUCCESS) {
-            MMAP_ASSERT(0, "payload_walk_advance: failed to wrap after short padding");
+            return -1;
         }
     }
 
@@ -65,7 +65,7 @@ int32_t payload_walk_advance(
 
         r = region_accessor_wrap(payload_accessor, position, payload_buf);
         if (r != WRAP_SUCCESS) {
-            MMAP_ASSERT(0, "payload_walk_advance: failed to wrap after long padding");
+            return -1;
         }
 
         /* Re-read length at new position */
@@ -78,8 +78,7 @@ int32_t payload_walk_advance(
     }
 
     /* ── Valid message ───────────────────────────────────────────────────── */
-    MMAP_ASSERT(length > 0,
-        "payload_walk_advance: unexpected negative length after padding handling");
+    if (length <= 0) return -1;
 
     *message_offset_out = position;
     *probing_offset     = position + PAYLOAD_LENGTH_SIZE + length;

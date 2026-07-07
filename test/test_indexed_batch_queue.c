@@ -11,6 +11,7 @@
 #include "queue_meta.h"
 #include <stdio.h>
 
+#include <fcntl.h>
 #include <unistd.h>
 #include <string.h>
 #include <stdio.h>
@@ -31,7 +32,7 @@ static void cleanup(void)
 {
     char cmd[512];
     snprintf(cmd, sizeof(cmd), "rm -rf %s/%s", DIR, QUEUE);
-    (void)system(cmd);
+    int rc = system(cmd); (void)rc;
 }
 
 void setUp(void)
@@ -467,6 +468,62 @@ void test_batch_roundtrip_type_stamped(void)
     TEST_ASSERT_EQUAL_INT(QUEUE_TYPE_BATCH, qt);
 }
 
+/* ── Batch corrupt payload ────────────────────────────────────────────────── */
+
+static int batch_corrupt_handler_count;
+static NextMove batch_corrupt_handler(int64_t bi, BatchReadingContext *ctx, void *user)
+{
+    (void)bi; (void)ctx; (void)user;
+    batch_corrupt_handler_count++;
+    return NEXT_ADVANCE;
+}
+
+static void test_batch_poll_detects_corrupt_payload(void)
+{
+    char qname[64];
+    snprintf(qname, sizeof(qname), "%s_corrupt", QUEUE);
+    char cmd[512];
+    snprintf(cmd, sizeof(cmd), "rm -rf %s/%s", DIR, qname);
+    int rc = system(cmd); (void)rc;
+
+    IndexedBatchQueue *q = indexed_batch_queue_create(
+        DIR, qname, REGION_SZ, RING_SZ, 1, MAX_FILE, 0, TIMEOUT, 0, NULL, NULL);
+    TEST_ASSERT_NOT_NULL(q);
+
+    IndexedBatchAppender *a = indexed_batch_queue_create_appender(q);
+    TEST_ASSERT_NOT_NULL(a);
+    MutableBatch *mb = indexed_batch_appender_start_batch(a);
+    TEST_ASSERT_NOT_NULL(mb);
+    int32_t r = mutable_batch_append(mb, "hello", 5);
+    TEST_ASSERT(r >= 0);
+    int64_t off = mutable_batch_complete(mb);
+    TEST_ASSERT(off >= 0);
+    int64_t idx = indexed_batch_appender_commit_batch(a, off);
+    TEST_ASSERT(idx >= 0);
+    indexed_batch_appender_close(a);
+
+    /* Find the payload file for appender 0 */
+    char path[512];
+    snprintf(path, sizeof(path), "%s/%s/payload_0_0", DIR, qname);
+    int fd = open(path, O_WRONLY);
+    TEST_ASSERT_MESSAGE(fd >= 0, "failed to open batch payload file");
+    /* Zero the 4-byte message count at offset 0 (first batch starts at 0) */
+    uint32_t zero = 0;
+    ssize_t written = pwrite(fd, &zero, sizeof(zero), off); (void)written;
+    close(fd);
+
+    IndexedBatchPoller *p = indexed_batch_queue_create_poller(q);
+    TEST_ASSERT_NOT_NULL(p);
+    batch_corrupt_handler_count = 0;
+    PollResult pr = indexed_batch_poller_poll(p, batch_corrupt_handler, NULL);
+    TEST_ASSERT_EQUAL(POLL_CORRUPT, pr);
+    TEST_ASSERT_EQUAL(0, batch_corrupt_handler_count);
+    indexed_batch_poller_close(p);
+
+    indexed_batch_queue_close(q);
+    cleanup();
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -486,5 +543,6 @@ int main(void)
     RUN_TEST(test_reader_has_entry);
     RUN_TEST(test_open_batch_as_normal_refused);
     RUN_TEST(test_batch_roundtrip_type_stamped);
+    RUN_TEST(test_batch_poll_detects_corrupt_payload);
     return UNITY_END();
 }

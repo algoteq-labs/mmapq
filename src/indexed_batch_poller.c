@@ -94,7 +94,7 @@ BatchPollResult indexed_batch_poller_poll(IndexedBatchPoller *p, BatchHandler ha
 
     BatchPayloadIterator *it = get_iterator(p, aid);
     int32_t msg_count = batch_iterator_read_message_count(it, pos);
-    MMAP_ASSERT(msg_count > 0, "indexed_batch_poller: invalid message count");
+    if (msg_count <= 0) return POLL_CORRUPT;
     batch_iterator_init(it, pos, msg_count, 0);
 
     BatchReadingContext batch_ctx;

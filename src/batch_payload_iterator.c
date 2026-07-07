@@ -8,7 +8,7 @@ static void wrap_or_fail(BatchPayloadIterator *it, int64_t position, const char 
     (void)context;
     WrapResult r = region_accessor_wrap(it->payload_acc, position, &it->payload_buf);
     (void)r;
-    MMAP_ASSERT(r == WRAP_SUCCESS, "batch_iterator: failed to wrap region");
+    if (r != WRAP_SUCCESS) return;
 }
 
 int32_t batch_iterator_read_message_count(BatchPayloadIterator *it, int64_t batch_offset)
@@ -16,7 +16,7 @@ int32_t batch_iterator_read_message_count(BatchPayloadIterator *it, int64_t batc
     wrap_or_fail(it, batch_offset, "read_message_count");
     int32_t count;
     memcpy(&count, it->payload_buf.data + BATCH_MSG_COUNT_OFFSET, sizeof(int32_t));
-    MMAP_ASSERT(count >= 0, "batch_iterator: negative message count");
+    if (count < 0) return -1;
     return count;
 }
 
@@ -85,7 +85,7 @@ static int32_t advance_buffer(BatchPayloadIterator *it)
         memcpy(&msg_len, it->payload_buf.data + PAYLOAD_LENGTH_OFFSET, sizeof(int32_t));
     }
 
-    MMAP_ASSERT(msg_len > 0, "batch_iterator: zero-length message in committed batch");
+    if (msg_len <= 0) return 0;
     it->next_message_position += PAYLOAD_LENGTH_SIZE + msg_len;
     return msg_len;
 }

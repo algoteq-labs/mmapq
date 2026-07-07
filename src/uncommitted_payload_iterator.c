@@ -21,7 +21,7 @@ static void ranges_ensure_capacity(UncommittedPayloadIterator *it)
         : it->range_capacity * 2;
 
     it->ranges = realloc(it->ranges, (size_t)new_cap * sizeof(CommittedRange));
-    MMAP_ASSERT(it->ranges != NULL, "uncommitted_iterator: out of memory expanding ranges");
+    if (it->ranges == NULL) return;
     it->range_capacity = new_cap;
 }
 
@@ -237,14 +237,14 @@ UncommittedPayloadIterator *uncommitted_iterator_create(
     RegionAccessor  *header_accessor,
     PayloadIterator *inner)
 {
-    MMAP_ASSERT(queue_name             != NULL, "uncommitted_iterator_create: queue_name is NULL");
-    MMAP_ASSERT(start_of_stream_offset != NULL, "uncommitted_iterator_create: start fn is NULL");
-    MMAP_ASSERT(end_of_stream_offset   != NULL, "uncommitted_iterator_create: end fn is NULL");
-    MMAP_ASSERT(header_accessor        != NULL, "uncommitted_iterator_create: header_accessor is NULL");
-    MMAP_ASSERT(inner                  != NULL, "uncommitted_iterator_create: inner is NULL");
+    if (queue_name == NULL) return NULL;
+    if (start_of_stream_offset == NULL) return NULL;
+    if (end_of_stream_offset == NULL) return NULL;
+    if (header_accessor == NULL) return NULL;
+    if (inner == NULL) return NULL;
 
     UncommittedPayloadIterator *it = calloc(1, sizeof(UncommittedPayloadIterator));
-    MMAP_ASSERT(it != NULL, "uncommitted_iterator_create: out of memory");
+    if (it == NULL) return NULL;
 
     it->queue_name              = queue_name;
     it->appender_id             = appender_id;
@@ -274,12 +274,10 @@ UncommittedPayloadIterator *uncommitted_iterator_init(
     int64_t stream_start = it->start_of_stream_offset(it->stream_ctx);
 
     if (start_offset != PAYLOAD_ITERATOR_NOT_SET) {
-        MMAP_ASSERT(start_offset >= stream_start,
-            "uncommitted_iterator_init: start_offset before stream start");
+        if (start_offset < stream_start) return 0;
     }
     if (end_offset != PAYLOAD_ITERATOR_NOT_SET) {
-        MMAP_ASSERT(end_offset >= stream_start,
-            "uncommitted_iterator_init: end_offset before stream start");
+        if (end_offset < stream_start) return 0;
     }
 
     it->init_start_offset = start_offset;

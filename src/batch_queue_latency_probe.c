@@ -79,7 +79,7 @@ BatchQueueLatencyProbe *batch_queue_latency_probe_create(
     Runtime    *read_runtime)
 {
     BatchQueueLatencyProbe *p = calloc(1, sizeof(BatchQueueLatencyProbe));
-    MMAP_ASSERT(p != NULL, "out of memory");
+    if (p == NULL) return NULL;
 
     p->instance_id = instance_id;
     p->message_size = message_size;
@@ -87,7 +87,7 @@ BatchQueueLatencyProbe *batch_queue_latency_probe_create(
     p->validate_on_client = validate_on_client;
 
     p->msg_buffer = malloc((size_t)message_size);
-    MMAP_ASSERT(p->msg_buffer != NULL, "out of memory");
+    if (p->msg_buffer == NULL) { free(p); return NULL; }
 
     p->request_queue = indexed_batch_queue_create_default(directory, request_name, write_runtime, read_runtime);
     p->response_queue = indexed_batch_queue_create_default(directory, response_name, write_runtime, read_runtime);

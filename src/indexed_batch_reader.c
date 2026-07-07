@@ -66,11 +66,11 @@ IndexedBatchReader *indexed_batch_reader_create(
     uint64_t    timeout_ns,
     Runtime    *runtime)
 {
-    MMAP_ASSERT(directory  != NULL, "indexed_batch_reader_create: directory is NULL");
-    MMAP_ASSERT(queue_name != NULL, "indexed_batch_reader_create: queue_name is NULL");
+    if (directory  == NULL) return NULL;
+    if (queue_name == NULL) return NULL;
 
     IndexedBatchReader *r = calloc(1, sizeof(IndexedBatchReader));
-    MMAP_ASSERT(r != NULL, "indexed_batch_reader_create: out of memory");
+    if (r == NULL) return NULL;
 
     r->directory            = strdup(directory);
     r->queue_name           = strdup(queue_name);
@@ -136,10 +136,10 @@ BatchReadingContext *indexed_batch_reader_read(
     int64_t              index,
     BatchReadingContext *ctx)
 {
-    MMAP_ASSERT(r   != NULL, "indexed_batch_reader_read: reader is NULL");
-    MMAP_ASSERT(ctx != NULL, "indexed_batch_reader_read: ctx is NULL");
-    MMAP_ASSERT(!r->closed,  "indexed_batch_reader_read: reader is closed");
-    MMAP_ASSERT(index >= 0,  "indexed_batch_reader_read: index must be >= 0");
+    if (r == NULL)   return NULL;
+    if (ctx == NULL) return NULL;
+    if (r->closed)   { ctx->status = BATCH_ENTRY_ERROR; return ctx; }
+    if (index < 0)   { ctx->status = BATCH_ENTRY_ERROR; return ctx; }
 
     reader_fill_context(r, index, ctx);
     return ctx;
@@ -149,9 +149,9 @@ BatchReadingContext *indexed_batch_reader_read_first(
     IndexedBatchReader  *r,
     BatchReadingContext *ctx)
 {
-    MMAP_ASSERT(r   != NULL, "indexed_batch_reader_read_first: reader is NULL");
-    MMAP_ASSERT(ctx != NULL, "indexed_batch_reader_read_first: ctx is NULL");
-    MMAP_ASSERT(!r->closed,  "indexed_batch_reader_read_first: reader is closed");
+    if (r == NULL)   return NULL;
+    if (ctx == NULL) return NULL;
+    if (r->closed)   { ctx->status = BATCH_ENTRY_ERROR; return ctx; }
 
     int64_t start = reader_init(r)
         ? queue_meta_start_index(r->queue_meta)
@@ -165,9 +165,9 @@ BatchReadingContext *indexed_batch_reader_read_last(
     IndexedBatchReader  *r,
     BatchReadingContext *ctx)
 {
-    MMAP_ASSERT(r   != NULL, "indexed_batch_reader_read_last: reader is NULL");
-    MMAP_ASSERT(ctx != NULL, "indexed_batch_reader_read_last: ctx is NULL");
-    MMAP_ASSERT(!r->closed,  "indexed_batch_reader_read_last: reader is closed");
+    if (r == NULL)   return NULL;
+    if (ctx == NULL) return NULL;
+    if (r->closed)   { ctx->status = BATCH_ENTRY_ERROR; return ctx; }
 
     int64_t last = indexed_batch_reader_last_index(r);
     if (last == HEADER_NULL_INDEX) {
@@ -185,8 +185,8 @@ BatchReadingContext *indexed_batch_reader_read_last(
 
 int64_t indexed_batch_reader_last_index(IndexedBatchReader *r)
 {
-    MMAP_ASSERT(r != NULL,  "indexed_batch_reader_last_index: reader is NULL");
-    MMAP_ASSERT(!r->closed, "indexed_batch_reader_last_index: reader is closed");
+    if (r == NULL)  return HEADER_NULL_INDEX;
+    if (r->closed)  return HEADER_NULL_INDEX;
 
     if (!reader_init(r)) return HEADER_NULL_INDEX;
 
@@ -207,15 +207,15 @@ int64_t indexed_batch_reader_last_index(IndexedBatchReader *r)
 
 int64_t indexed_batch_reader_start_index(IndexedBatchReader *r)
 {
-    MMAP_ASSERT(r != NULL, "indexed_batch_reader_start_index: reader is NULL");
+    if (r == NULL) return QUEUE_META_INITIAL_START_INDEX;
     if (!reader_init(r)) return QUEUE_META_INITIAL_START_INDEX;
     return queue_meta_start_index(r->queue_meta);
 }
 
 BatchEntryStatus indexed_batch_reader_entry_status(IndexedBatchReader *r, int64_t index)
 {
-    MMAP_ASSERT(r != NULL,  "indexed_batch_reader_entry_status: reader is NULL");
-    MMAP_ASSERT(!r->closed, "indexed_batch_reader_entry_status: reader is closed");
+    if (r == NULL)  return BATCH_ENTRY_ERROR;
+    if (r->closed)  return BATCH_ENTRY_ERROR;
 
     if (!reader_init(r)) return BATCH_ENTRY_END_OF_STREAM;
     if (index < queue_meta_start_index(r->queue_meta)) return BATCH_ENTRY_ARCHIVED;

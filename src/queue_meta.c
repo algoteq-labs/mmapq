@@ -107,10 +107,10 @@ QueueMeta *queue_meta_open_rw(
     int         archivable,
     uint8_t     queue_type)
 {
-    MMAP_ASSERT(directory  != NULL, "queue_meta_open_rw: directory is NULL");
-    MMAP_ASSERT(queue_name != NULL, "queue_meta_open_rw: queue_name is NULL");
-    MMAP_ASSERT(region_size > 0,    "queue_meta_open_rw: region_size must be > 0");
-    MMAP_ASSERT(max_file_size > 0,  "queue_meta_open_rw: max_file_size must be > 0");
+    if (directory  == NULL) return NULL;
+    if (queue_name == NULL) return NULL;
+    if (region_size <= 0) return NULL;
+    if (max_file_size <= 0) return NULL;
 
     char path[4096];
     meta_file_path(directory, queue_name, path, sizeof(path));
@@ -129,15 +129,15 @@ QueueMeta *queue_meta_open_rw(
         meta_file_init,
         &ctx);
 
-    MMAP_ASSERT(region != NULL, "queue_meta_open_rw: failed to open meta region");
+    if (region == NULL) return NULL;
 
     Buffer buf = {0};
     WrapResult r = region_accessor_wrap(region, 0, &buf);
     (void)r;
-    MMAP_ASSERT(r == WRAP_SUCCESS, "queue_meta_open_rw: failed to wrap meta region");
+    if (r != WRAP_SUCCESS) { fixed_size_region_destroy(region); return NULL; }
 
     QueueMeta *m = calloc(1, sizeof(QueueMeta));
-    MMAP_ASSERT(m != NULL, "queue_meta_open_rw: out of memory");
+    if (m == NULL) { fixed_size_region_destroy(region); return NULL; }
 
     m->region = region;
     m->base   = buf.data;
@@ -159,8 +159,8 @@ QueueMeta *queue_meta_open_ro(
     const char *queue_name,
     uint8_t     expected_type)
 {
-    MMAP_ASSERT(directory  != NULL, "queue_meta_open_ro: directory is NULL");
-    MMAP_ASSERT(queue_name != NULL, "queue_meta_open_ro: queue_name is NULL");
+    if (directory  == NULL) return NULL;
+    if (queue_name == NULL) return NULL;
 
     char path[4096];
     meta_file_path(directory, queue_name, path, sizeof(path));

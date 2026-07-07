@@ -35,7 +35,7 @@ static int64_t rw_file_length(SingleFileRwImpl *impl)
 {
     struct stat st;
     if (fstat(impl->fd, &st) != 0) {
-        MMAP_ASSERT(0, "rw_file_length: fstat failed");
+        return 0;
     }
     return st.st_size;
 }
@@ -109,7 +109,7 @@ static int rw_init(SingleFileRwImpl *impl)
                   O_RDWR | O_CREAT,
                   S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
     if (fd < 0) {
-        MMAP_ASSERT(0, "rw_init: failed to open/create file");
+        return -1;
         return 0;
     }
 
@@ -120,7 +120,7 @@ static int rw_init(SingleFileRwImpl *impl)
         if (st.st_size == 0 && impl->initialiser(fd, (size_t)impl->max_size,
                                                    impl->initialiser_ctx) != 0) {
             close(fd);
-            MMAP_ASSERT(0, "rw_init: file initialiser failed");
+            return -1;
             return 0;
         }
     }
@@ -186,7 +186,7 @@ static void rw_unmap(FileMapper *self, uintptr_t address, int64_t position, int3
     (void)position;
 
     if (munmap((void *)address, (size_t)length) != 0) {
-        MMAP_ASSERT(0, "rw_unmap: munmap failed");
+        return;
     }
 }
 
@@ -211,8 +211,8 @@ FileMapper *file_mapper_single_rw_create(
     FileInitialiser  initialiser,
     void            *initialiser_ctx)
 {
-    MMAP_ASSERT(file_path != NULL, "file_mapper_single_rw_create: file_path is NULL");
-    MMAP_ASSERT(max_size > 0,      "file_mapper_single_rw_create: max_size must be > 0");
+    if (file_path == NULL) return NULL;
+    if (max_size <= 0) return NULL;
 
     SingleFileRwImpl *impl = calloc(1, sizeof(SingleFileRwImpl));
     MMAP_ASSERT(impl != NULL, "file_mapper_single_rw_create: out of memory");

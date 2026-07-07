@@ -291,16 +291,8 @@ static int initialise_append_position(IndexedAppender *a,
      *         mapping before the first append. Eliminates first-message
      *         latency spike.
      */
-    WrapResult r;
-    r = region_accessor_wrap(a->header_acc, a->current_header_position, &a->header_buf);
-    (void)r;
-    MMAP_ASSERT(r == WRAP_SUCCESS,
-        "initialise_append_position: failed to eager-wrap header region");
-
-    r = region_accessor_wrap(a->payload_acc, a->current_payload_position, &a->payload_buf);
-    (void)r;
-    MMAP_ASSERT(r == WRAP_SUCCESS,
-        "initialise_append_position: failed to eager-wrap payload region");
+    if (region_accessor_wrap(a->header_acc, a->current_header_position, &a->header_buf) != WRAP_SUCCESS) return -1;
+    if (region_accessor_wrap(a->payload_acc, a->current_payload_position, &a->payload_buf) != WRAP_SUCCESS) return -1;
     return 0;
 }
 
@@ -319,7 +311,7 @@ static IndexedAppender *appender_create_internal(
     uint8_t         appender_id)
 {
     IndexedAppender *a = calloc(1, sizeof(IndexedAppender));
-    MMAP_ASSERT(a != NULL, "indexed_appender: out of memory");
+    if (a == NULL) return NULL;
 
     a->directory    = strdup(directory);
     a->queue_name   = strdup(queue_name);
@@ -358,7 +350,7 @@ static IndexedAppender *appender_create_internal(
 
     /* Open appender meta (creates file if new) */
     a->appender_meta = appender_meta_open_rw(directory, queue_name, appender_id);
-    MMAP_ASSERT(a->appender_meta != NULL, "indexed_appender: failed to open appender meta");
+    if (a->appender_meta == NULL) { free(a); return NULL; }
 
     /* Create RW region accessors */
     a->rw_acc = queue_region_accessor_create_rw(
@@ -481,24 +473,21 @@ int64_t indexed_appender_commit(
     IndexedAppender *a,
     int64_t          payload_offset)
 {
-    MMAP_ASSERT(a != NULL,  "indexed_appender_commit: appender is NULL");
-    MMAP_ASSERT(!a->closed, "indexed_appender_commit: appender is closed");
-    MMAP_ASSERT(payload_offset > 0,
-        "indexed_appender_commit: payload_offset must be > 0");
+    if (a == NULL) return -1;
+    if (a->closed) return -1;
+    if (payload_offset <= 0) return -1;
 
     int64_t committed;
     if (commit_header(a, payload_offset, &committed)) return -1;
     return committed;
 }
 
-/* ── Iterators ───────────────────────────────────────────────────────────── */
-
 PayloadIterator *indexed_appender_iterator(
     IndexedAppender *a,
     int64_t          start_offset,
     int64_t          end_offset)
 {
-    MMAP_ASSERT(a != NULL, "indexed_appender_iterator: appender is NULL");
+    if (a == NULL) return NULL;
 
     if (a->payload_iter == NULL) {
         a->payload_iter = payload_iterator_create(
@@ -518,7 +507,7 @@ UncommittedPayloadIterator *indexed_appender_uncommitted_iterator(
     int64_t          start_offset,
     int64_t          end_offset)
 {
-    MMAP_ASSERT(a != NULL, "indexed_appender_uncommitted_iterator: appender is NULL");
+    if (a == NULL) return NULL;
 
     /* Create inner iterator with fixed end-of-stream */
     if (a->uncommitted_inner == NULL) {
@@ -549,19 +538,19 @@ UncommittedPayloadIterator *indexed_appender_uncommitted_iterator(
 
 uint8_t indexed_appender_id(const IndexedAppender *a)
 {
-    MMAP_ASSERT(a != NULL, "indexed_appender_id: appender is NULL");
+    if (a == NULL) return 0;
     return a->appender_id;
 }
 
 int64_t indexed_appender_current_index(const IndexedAppender *a)
 {
-    MMAP_ASSERT(a != NULL, "indexed_appender_current_index: appender is NULL");
+    if (a == NULL) return 0;
     return a->current_index;
 }
 
 int64_t indexed_appender_start_offset(const IndexedAppender *a)
 {
-    MMAP_ASSERT(a != NULL, "indexed_appender_start_offset: appender is NULL");
+    if (a == NULL) return 0;
     return appender_meta_start_offset(a->appender_meta);
 }
 

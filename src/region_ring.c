@@ -35,16 +35,14 @@ RegionRing *region_ring_sync_create(
     FileMapper *file_mapper,
     uint64_t    timeout_ns)
 {
-    MMAP_ASSERT(file_mapper != NULL, "region_ring_sync_create: file_mapper is NULL");
-    MMAP_ASSERT(ring_size > 0,       "region_ring_sync_create: ring_size must be > 0");
-    MMAP_ASSERT((ring_size & (ring_size - 1)) == 0,
-        "region_ring_sync_create: ring_size must be a power of two");
-    MMAP_ASSERT(region_size > 0,     "region_ring_sync_create: region_size must be > 0");
-    MMAP_ASSERT((region_size & (region_size - 1)) == 0,
-        "region_ring_sync_create: region_size must be a power of two");
+    if (file_mapper == NULL) return NULL;
+    if (ring_size <= 0) return NULL;
+    if ((ring_size & (ring_size - 1)) != 0) return NULL;
+    if (region_size <= 0) return NULL;
+    if ((region_size & (region_size - 1)) != 0) return NULL;
 
     Region **regions = calloc((size_t)ring_size, sizeof(Region *));
-    MMAP_ASSERT(regions != NULL, "region_ring_sync_create: out of memory");
+    if (regions == NULL) return NULL;
 
     for (int i = 0; i < ring_size; i++) {
         regions[i] = region_sync_create(
@@ -56,11 +54,11 @@ RegionRing *region_ring_sync_create(
     }
 
     SyncRingImpl *impl = calloc(1, sizeof(SyncRingImpl));
-    MMAP_ASSERT(impl != NULL, "region_ring_sync_create: out of memory");
+    if (impl == NULL) { free(regions); return NULL; }
     impl->file_mapper = file_mapper;
 
     RegionRing *ring = calloc(1, sizeof(RegionRing));
-    MMAP_ASSERT(ring != NULL, "region_ring_sync_create: out of memory");
+    if (ring == NULL) { free(impl); free(regions); return NULL; }
     ring->close     = sync_ring_close;
     ring->regions   = (Region **)regions;
     ring->ring_size = ring_size;
@@ -217,18 +215,16 @@ RegionRing *region_ring_async_create(
     uint64_t    timeout_ns,
     Runtime    *runtime)
 {
-    MMAP_ASSERT(file_mapper != NULL, "region_ring_async_create: file_mapper is NULL");
-    MMAP_ASSERT(runtime     != NULL, "region_ring_async_create: runtime is NULL");
-    MMAP_ASSERT(ring_size > 0,       "region_ring_async_create: ring_size must be > 0");
-    MMAP_ASSERT((ring_size & (ring_size - 1)) == 0,
-        "region_ring_async_create: ring_size must be a power of two");
-    MMAP_ASSERT(region_size > 0,     "region_ring_async_create: region_size must be > 0");
-    MMAP_ASSERT((region_size & (region_size - 1)) == 0,
-        "region_ring_async_create: region_size must be a power of two");
+    if (file_mapper == NULL) return NULL;
+    if (runtime     == NULL) return NULL;
+    if (ring_size <= 0) return NULL;
+    if ((ring_size & (ring_size - 1)) != 0) return NULL;
+    if (region_size <= 0) return NULL;
+    if ((region_size & (region_size - 1)) != 0) return NULL;
 
     /* Create regions */
     Region **regions = calloc((size_t)ring_size, sizeof(Region *));
-    MMAP_ASSERT(regions != NULL, "region_ring_async_create: out of memory");
+    if (regions == NULL) return NULL;
 
     for (int i = 0; i < ring_size; i++) {
         regions[i] = region_async_create(
@@ -241,27 +237,28 @@ RegionRing *region_ring_async_create(
 
     /* Create and register the AsyncMappingExecutable */
     AsyncMappingImpl *mapping_impl = calloc(1, sizeof(AsyncMappingImpl));
-    MMAP_ASSERT(mapping_impl != NULL, "region_ring_async_create: out of memory");
+    if (mapping_impl == NULL) { free(regions); return NULL; }
     mapping_impl->regions   = regions;
     mapping_impl->ring_size = ring_size;
     mapping_impl->exec.execute = async_mapping_execute;
     mapping_impl->exec.close   = async_mapping_close;
     mapping_impl->exec.ctx     = mapping_impl;
 
-    int ok = runtime_register(runtime, &mapping_impl->exec);
-    (void)ok;
-    MMAP_ASSERT(ok, "region_ring_async_create: failed to register with runtime — is it closed?");
+    if (!runtime_register(runtime, &mapping_impl->exec)) {
+        free(mapping_impl);
+        return NULL;
+    }
 
     /* Create async ring impl */
     AsyncRingImpl *impl = calloc(1, sizeof(AsyncRingImpl));
-    MMAP_ASSERT(impl != NULL, "region_ring_async_create: out of memory");
+    if (impl == NULL) { free(mapping_impl); return NULL; }
     impl->file_mapper   = file_mapper;
     impl->runtime       = runtime;
     impl->mapping_impl  = mapping_impl;
     atomic_store(&impl->closed, 0);
 
     RegionRing *ring = calloc(1, sizeof(RegionRing));
-    MMAP_ASSERT(ring != NULL, "region_ring_async_create: out of memory");
+    if (ring == NULL) { free(mapping_impl); free(impl); free(regions); return NULL; }
     ring->close     = async_ring_close;
     ring->regions   = regions;
     ring->ring_size = ring_size;

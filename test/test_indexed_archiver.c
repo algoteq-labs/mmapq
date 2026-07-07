@@ -27,7 +27,7 @@ static void cleanup(void)
 {
     char cmd[512];
     snprintf(cmd, sizeof(cmd), "rm -rf %s/%s", DIR, QUEUE);
-    (void)system(cmd);
+    int rc = system(cmd); (void)rc;
 }
 
 /* Create queue with archivable=1 by writing meta before opening appender */

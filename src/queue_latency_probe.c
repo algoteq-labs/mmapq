@@ -94,11 +94,10 @@ QueueLatencyProbe *queue_latency_probe_create(
     Runtime    *write_runtime,
     Runtime    *read_runtime)
 {
-    MMAP_ASSERT(message_size >= (int32_t)sizeof(LatencyHeader), 
-                "message_size too small for latency header");
+    if (message_size < (int32_t)sizeof(LatencyHeader)) return NULL;
 
     QueueLatencyProbe *p = calloc(1, sizeof(QueueLatencyProbe));
-    MMAP_ASSERT(p != NULL, "out of memory");
+    if (p == NULL) return NULL;
     
     p->instance_id        = instance_id;
     p->message_size       = message_size;

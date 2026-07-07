@@ -65,7 +65,7 @@ static WrapResult ring_accessor_wrap(RegionAccessor *self, int64_t position, Buf
 {
     MMAP_ASSERT(self   != NULL, "ring_accessor_wrap: self is NULL");
     MMAP_ASSERT(buffer != NULL, "ring_accessor_wrap: buffer is NULL");
-    MMAP_ASSERT(position >= 0,  "ring_accessor_wrap: position must be >= 0");
+    if (position < 0) return WRAP_MAP_TIMED_OUT;
 
     RingAccessorImpl *impl = (RingAccessorImpl *)self->impl;
 
@@ -108,7 +108,7 @@ static WrapResult ring_accessor_wrap_no_premap(RegionAccessor *self, int64_t pos
 {
     MMAP_ASSERT(self   != NULL, "ring_accessor_wrap_no_premap: self is NULL");
     MMAP_ASSERT(buffer != NULL, "ring_accessor_wrap_no_premap: buffer is NULL");
-    MMAP_ASSERT(position >= 0,  "ring_accessor_wrap_no_premap: position must be >= 0");
+    if (position < 0) return WRAP_MAP_TIMED_OUT;
 
     RingAccessorImpl *impl = (RingAccessorImpl *)self->impl;
 
@@ -148,18 +148,13 @@ RegionAccessor *region_ring_accessor_create(
     int         regions_to_map_ahead,
     double      premap_trigger_ratio)
 {
-    MMAP_ASSERT(ring != NULL,              "region_ring_accessor_create: ring is NULL");
-    MMAP_ASSERT(region_size > 0,           "region_ring_accessor_create: region_size must be > 0");
-    MMAP_ASSERT((region_size & (region_size - 1)) == 0,
-        "region_ring_accessor_create: region_size must be a power of two");
-    MMAP_ASSERT(regions_to_map_ahead >= 0, "region_ring_accessor_create: regions_to_map_ahead must be >= 0");
-    MMAP_ASSERT(regions_to_map_ahead < ring->ring_size,
-        "region_ring_accessor_create: regions_to_map_ahead must be < ring_size");
-    MMAP_ASSERT(premap_trigger_ratio >= 0.0 && premap_trigger_ratio <= 1.0,
-        "region_ring_accessor_create: premap_trigger_ratio must be in [0.0, 1.0]");
-
+    if (ring == NULL) return NULL;
+    if (region_size <= 0) return NULL;
+    if ((region_size & (region_size - 1)) != 0) return NULL;
+    if (regions_to_map_ahead < 0) return NULL;
+    if (regions_to_map_ahead >= ring->ring_size) return NULL;
+    if (premap_trigger_ratio < 0.0 || premap_trigger_ratio > 1.0) return NULL;
     /*
-     * Premap is only meaningful for async regions.
      * Sync regions map on demand on the calling thread — requesting ahead
      * would just block the thread earlier with no latency benefit.
      */

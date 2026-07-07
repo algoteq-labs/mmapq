@@ -185,7 +185,7 @@ IndexedBatchAppender *indexed_batch_appender_create(
 
 MutableBatch *indexed_batch_appender_start_batch(IndexedBatchAppender *a)
 {
-    MMAP_ASSERT(!a->closed, "appender closed");
+    if (a->closed) return NULL;
     if (ensure_space_for_batch_header(a)) return NULL;
 
     a->current_batch.appender      = a;

@@ -69,7 +69,7 @@ static AppenderMeta *appender_meta_open_internal(
     }
 
     AppenderMeta *m = calloc(1, sizeof(AppenderMeta));
-    MMAP_ASSERT(m != NULL, "appender_meta_open: out of memory");
+    if (m == NULL) return NULL;
 
     m->region      = region;
     m->base        = buf.data;
@@ -85,8 +85,8 @@ AppenderMeta *appender_meta_open_rw(
     const char *queue_name,
     uint8_t     appender_id)
 {
-    MMAP_ASSERT(directory  != NULL, "appender_meta_open_rw: directory is NULL");
-    MMAP_ASSERT(queue_name != NULL, "appender_meta_open_rw: queue_name is NULL");
+    if (directory  == NULL) return NULL;
+    if (queue_name == NULL) return NULL;
 
     AppenderMetaInitCtx ctx = { .appender_id = appender_id };
 
@@ -94,7 +94,7 @@ AppenderMeta *appender_meta_open_rw(
         directory, queue_name, appender_id,
         appender_meta_file_init, &ctx);
 
-    MMAP_ASSERT(m != NULL, "appender_meta_open_rw: failed to open appender meta");
+    if (m == NULL) return NULL;
     return m;
 }
 
@@ -105,8 +105,8 @@ AppenderMeta *appender_meta_open_ro(
     const char *queue_name,
     uint8_t     appender_id)
 {
-    MMAP_ASSERT(directory  != NULL, "appender_meta_open_ro: directory is NULL");
-    MMAP_ASSERT(queue_name != NULL, "appender_meta_open_ro: queue_name is NULL");
+    if (directory  == NULL) return NULL;
+    if (queue_name == NULL) return NULL;
 
     char path[4096];
     appender_meta_file_path(directory, queue_name, appender_id, path, sizeof(path));

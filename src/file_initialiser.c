@@ -16,8 +16,8 @@
 int file_init_zeros(int fd, size_t size, void *ctx)
 {
     (void)ctx;  /* unused */
-    MMAP_ASSERT(fd >= 0, "file_init_zeros: invalid file descriptor");
-    MMAP_ASSERT(size > 0, "file_init_zeros: size must be > 0");
+    if (fd < 0) return -1;
+    if (size <= 0) return -1;
 
     int result = ftruncate(fd, (off_t)size);
     return result;

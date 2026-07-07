@@ -16,13 +16,13 @@ PayloadIterator *payload_iterator_create(
     void           *stream_ctx,
     int             fix_end_of_stream)
 {
-    MMAP_ASSERT(queue_name            != NULL, "payload_iterator_create: queue_name is NULL");
-    MMAP_ASSERT(payload_accessor      != NULL, "payload_iterator_create: payload_accessor is NULL");
-    MMAP_ASSERT(start_of_stream_offset!= NULL, "payload_iterator_create: start_of_stream_offset is NULL");
-    MMAP_ASSERT(end_of_stream_offset  != NULL, "payload_iterator_create: end_of_stream_offset is NULL");
+    if (queue_name == NULL) return NULL;
+    if (payload_accessor == NULL) return NULL;
+    if (start_of_stream_offset == NULL) return NULL;
+    if (end_of_stream_offset == NULL) return NULL;
 
     PayloadIterator *it = calloc(1, sizeof(PayloadIterator));
-    MMAP_ASSERT(it != NULL, "payload_iterator_create: out of memory");
+    if (it == NULL) return NULL;
 
     it->queue_name             = queue_name;
     it->payload_accessor       = payload_accessor;
@@ -57,15 +57,13 @@ PayloadIterator *payload_iterator_init(
     if (start_offset == PAYLOAD_ITERATOR_NOT_SET) {
         it->start_offset = start_of_stream;
     } else {
-        MMAP_ASSERT(start_offset >= start_of_stream,
-            "payload_iterator_init: start_offset is before start of stream");
+        if (start_offset < start_of_stream) { free(it); return NULL; }
         it->start_offset = start_offset;
     }
 
     /* Validate end_offset */
     if (end_offset != PAYLOAD_ITERATOR_NOT_SET) {
-        MMAP_ASSERT(end_offset >= start_of_stream,
-            "payload_iterator_init: end_offset is before start of stream");
+        if (end_offset < start_of_stream) { free(it); return NULL; }
     }
     it->end_offset = end_offset;
 

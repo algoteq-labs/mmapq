@@ -10,6 +10,7 @@
 #include "queue_meta.h"
 #include <stdio.h>
 
+#include <fcntl.h>
 #include <unistd.h>
 #include <string.h>
 #include <stdio.h>
@@ -162,7 +163,7 @@ void test_reader_read_at_index(void)
     indexed_appender_append(a, "second", 6);
     indexed_appender_append(a, "third",  5);
 
-    ReadingContext ctx;
+    ReadingContext ctx = {0};
     indexed_reader_read(r, 1, &ctx);
     TEST_ASSERT_EQUAL_INT(ENTRY_AVAILABLE, ctx.status);
     TEST_ASSERT_EQUAL_INT32(6, ctx.length);
@@ -175,7 +176,7 @@ void test_reader_read_at_index(void)
 void test_reader_end_of_stream_beyond_last(void)
 {
     IndexedReader *r = indexed_queue_create_reader(q);
-    ReadingContext ctx;
+    ReadingContext ctx = {0};
     indexed_reader_read(r, 0, &ctx);
     TEST_ASSERT_EQUAL_INT(ENTRY_END_OF_STREAM, ctx.status);
     indexed_reader_close(r);
@@ -207,7 +208,7 @@ void test_reader_read_first_and_last(void)
     indexed_appender_append(a, "middle", 6);
     indexed_appender_append(a, "last",   4);
 
-    ReadingContext ctx;
+    ReadingContext ctx = {0};
 
     indexed_reader_read_first(r, &ctx);
     TEST_ASSERT_EQUAL_INT(ENTRY_AVAILABLE, ctx.status);
@@ -669,6 +670,70 @@ static void test_standalone_factory_rejects_missing_directory(void)
     TEST_ASSERT_NULL(a);
 }
 
+/* ── Corrupt queue — poll detects corrupted payload ───────────────────────── */
+
+static int corrupt_handler_count;
+static NextMove corrupt_handler(int64_t index, uint8_t aid,
+                                 const void *data, int32_t len, void *ctx)
+{
+    (void)index; (void)aid; (void)data; (void)len; (void)ctx;
+    corrupt_handler_count++;
+    return NEXT_ADVANCE;
+}
+
+static void test_poll_detects_corrupt_payload(void)
+{
+    /* Use a unique queue name to avoid conflicts with other tests */
+    char qname[64];
+    snprintf(qname, sizeof(qname), "%s_corrupt", QUEUE);
+    char cmd[512];
+    snprintf(cmd, sizeof(cmd), "rm -rf %s/%s", DIR, qname);
+    int rc = system(cmd); (void)rc;
+
+    /* Create queue, append one message */
+    IndexedQueue *q = indexed_queue_create(
+        DIR, qname,
+        REGION_SZ, RING_SZ, 1, MAX_FILE,
+        0, TIMEOUT_NS, 0, NULL, NULL);
+    TEST_ASSERT_NOT_NULL(q);
+
+    IndexedAppender *a = indexed_queue_create_appender(q);
+    TEST_ASSERT_NOT_NULL(a);
+    int64_t idx = indexed_appender_append(a, "hello", 5);
+    TEST_ASSERT(idx >= 0);
+    indexed_appender_close(a);
+
+    /* Corrupt the payload: find the header at index 0, decode payload offset,
+       write zero at that offset (the 4-byte length prefix) */
+    IndexedReader *r = indexed_reader_create(DIR, qname, 4, 5000000000ULL, NULL);
+    TEST_ASSERT_NOT_NULL(r);
+    ReadingContext ctx = {0};
+    indexed_reader_read(r, 0, &ctx);
+    TEST_ASSERT(ctx.status == ENTRY_AVAILABLE);
+
+    /* Corrupt the payload file directly */
+    char path[512];
+    snprintf(path, sizeof(path), "%s/%s/payload_%u_0", DIR, qname, (unsigned)ctx.appender_id);
+    int fd = open(path, O_WRONLY);
+    TEST_ASSERT_MESSAGE(fd >= 0, "failed to open payload file for writing");
+    uint32_t zero = 0;
+    ssize_t written = pwrite(fd, &zero, sizeof(zero), ctx.msg_offset); (void)written;
+    close(fd);
+    indexed_reader_close(r);
+
+    /* Now poll — should get POLL_CORRUPT */
+    IndexedPoller *p = indexed_queue_create_poller(q);
+    TEST_ASSERT_NOT_NULL(p);
+    corrupt_handler_count = 0;
+    PollResult pr = indexed_poller_poll(p, corrupt_handler, NULL);
+    TEST_ASSERT_EQUAL(POLL_CORRUPT, pr);
+    TEST_ASSERT_EQUAL(0, corrupt_handler_count);  /* handler was NOT called */
+    indexed_poller_close(p);
+
+    indexed_queue_close(q);
+    cleanup();
+}
+
 static void test_create_with_id_already_in_use(void)
 {
     /* Need the queue subdirectory and pool file for the standalone factory */
@@ -735,6 +800,7 @@ int main(void)
 
     RUN_TEST(test_standalone_factory_rejects_missing_directory);
     RUN_TEST(test_create_with_id_already_in_use);
+    RUN_TEST(test_poll_detects_corrupt_payload);
 
     return UNITY_END();
 }

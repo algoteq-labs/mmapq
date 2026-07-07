@@ -24,7 +24,7 @@ static void cleanup(void)
 {
     char cmd[512];
     snprintf(cmd, sizeof(cmd), "rm -rf %s/%s", DIR, QUEUE);
-    (void)system(cmd);
+    int rc = system(cmd); (void)rc;
 }
 
 static IndexedBatchAppender *create_archivable_batch_appender(void)

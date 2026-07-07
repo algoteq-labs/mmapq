@@ -73,11 +73,11 @@ IndexedReader *indexed_reader_create(
     uint64_t    timeout_ns,
     Runtime    *runtime)
 {
-    MMAP_ASSERT(directory  != NULL, "indexed_reader_create: directory is NULL");
-    MMAP_ASSERT(queue_name != NULL, "indexed_reader_create: queue_name is NULL");
+    if (directory  == NULL) return NULL;
+    if (queue_name == NULL) return NULL;
 
     IndexedReader *r = calloc(1, sizeof(IndexedReader));
-    MMAP_ASSERT(r != NULL, "indexed_reader_create: out of memory");
+    if (r == NULL) return NULL;
 
     r->directory            = strdup(directory);
     r->queue_name           = strdup(queue_name);
@@ -147,10 +147,10 @@ ReadingContext *indexed_reader_read(
     int64_t         index,
     ReadingContext *ctx)
 {
-    MMAP_ASSERT(r   != NULL, "indexed_reader_read: reader is NULL");
-    MMAP_ASSERT(ctx != NULL, "indexed_reader_read: ctx is NULL");
-    MMAP_ASSERT(!r->closed,  "indexed_reader_read: reader is closed");
-    MMAP_ASSERT(index >= 0,  "indexed_reader_read: index must be >= 0");
+    if (r == NULL)    return NULL;
+    if (ctx == NULL)  return NULL;
+    if (r->closed)    { ctx->status = ENTRY_ERROR; return ctx; }
+    if (index < 0)    { ctx->status = ENTRY_ERROR; return ctx; }
 
     reader_fill_context(r, index, ctx);
     return ctx;
@@ -160,9 +160,9 @@ ReadingContext *indexed_reader_read_first(
     IndexedReader  *r,
     ReadingContext *ctx)
 {
-    MMAP_ASSERT(r   != NULL, "indexed_reader_read_first: reader is NULL");
-    MMAP_ASSERT(ctx != NULL, "indexed_reader_read_first: ctx is NULL");
-    MMAP_ASSERT(!r->closed,  "indexed_reader_read_first: reader is closed");
+    if (r == NULL)    return NULL;
+    if (ctx == NULL)  return NULL;
+    if (r->closed)    { ctx->status = ENTRY_ERROR; return ctx; }
 
     int64_t start = reader_init(r)
         ? queue_meta_start_index(r->queue_meta)
@@ -176,9 +176,9 @@ ReadingContext *indexed_reader_read_last(
     IndexedReader  *r,
     ReadingContext *ctx)
 {
-    MMAP_ASSERT(r   != NULL, "indexed_reader_read_last: reader is NULL");
-    MMAP_ASSERT(ctx != NULL, "indexed_reader_read_last: ctx is NULL");
-    MMAP_ASSERT(!r->closed,  "indexed_reader_read_last: reader is closed");
+    if (r == NULL)    return NULL;
+    if (ctx == NULL)  return NULL;
+    if (r->closed)    { ctx->status = ENTRY_ERROR; return ctx; }
 
     int64_t last = indexed_reader_last_index(r);
     if (last == HEADER_NULL_INDEX) {
@@ -197,8 +197,8 @@ ReadingContext *indexed_reader_read_last(
 
 int64_t indexed_reader_last_index(IndexedReader *r)
 {
-    MMAP_ASSERT(r != NULL,  "indexed_reader_last_index: reader is NULL");
-    MMAP_ASSERT(!r->closed, "indexed_reader_last_index: reader is closed");
+    if (r == NULL)  return HEADER_NULL_INDEX;
+    if (r->closed)  return HEADER_NULL_INDEX;
 
     if (!reader_init(r)) return HEADER_NULL_INDEX;
 
@@ -220,15 +220,15 @@ int64_t indexed_reader_last_index(IndexedReader *r)
 
 int64_t indexed_reader_start_index(IndexedReader *r)
 {
-    MMAP_ASSERT(r != NULL, "indexed_reader_start_index: reader is NULL");
+    if (r == NULL) return 0;
     if (!reader_init(r)) return QUEUE_META_INITIAL_START_INDEX;
     return queue_meta_start_index(r->queue_meta);
 }
 
 EntryStatus indexed_reader_entry_status(IndexedReader *r, int64_t index)
 {
-    MMAP_ASSERT(r != NULL,  "indexed_reader_entry_status: reader is NULL");
-    MMAP_ASSERT(!r->closed, "indexed_reader_entry_status: reader is closed");
+    if (r == NULL)  return ENTRY_ERROR;
+    if (r->closed)  return ENTRY_ERROR;
 
     if (!reader_init(r)) return ENTRY_END_OF_STREAM;
     if (index < queue_meta_start_index(r->queue_meta)) return ENTRY_ARCHIVED;
@@ -242,20 +242,20 @@ EntryStatus indexed_reader_entry_status(IndexedReader *r, int64_t index)
 
 QueueMeta *indexed_reader_queue_meta(IndexedReader *r)
 {
-    MMAP_ASSERT(r != NULL, "indexed_reader_queue_meta: reader is NULL");
+    if (r == NULL) return NULL;
     reader_init(r);
     return r->queue_meta;
 }
 
 const char *indexed_reader_directory(IndexedReader *r)
 {
-    MMAP_ASSERT(r != NULL, "indexed_reader_directory: reader is NULL");
+    if (r == NULL) return NULL;
     return r->directory;
 }
 
 const char *indexed_reader_queue_name(IndexedReader *r)
 {
-    MMAP_ASSERT(r != NULL, "indexed_reader_queue_name: reader is NULL");
+    if (r == NULL) return NULL;
     return r->queue_name;
 }
 
