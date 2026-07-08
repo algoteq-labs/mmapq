@@ -1,7 +1,7 @@
 # mmapq
 
 **A persistent, indexed, replayable inter-process queue — no broker, no
-daemon, no garbage collector. The queue is a file.**
+daemon, no garbage collector. The queue is just files.**
 
 mmapq passes messages between processes on the same Linux machine through
 memory-mapped files, with sub-microsecond latency and allocation-free,
@@ -623,6 +623,6 @@ mmap — guaranteed on x86-64 and ARM64.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+BSD 2-Clause — see [LICENSE](LICENSE).
 
 Copyright (c) Anton Anufriev, Algoteq Pty Ltd, and contributors.
