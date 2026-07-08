@@ -477,18 +477,26 @@ Or run individual configurations manually:
 
 ```bash
 # Single-message, internal server
-./latency_bench 20000000 100000 64 5 7 9
+rm -rf /tmp/request /tmp/response
+sleep 3
+./latency_bench 20000000 1000 64 5 7 9
 
 # Single-message, external server
+rm -rf /tmp/request /tmp/response
+sleep 3
 ./echo_server /tmp request response 7 9 &
-./latency_bench 20000000 100000 64 5 7 9 --external
+./latency_bench 20000000 1000 64 5 7 9 --external
 
 # Batch queue, internal server
-./batch_latency_bench 20000000 100000 64 5 7 9
+rm -rf /tmp/request /tmp/response
+sleep 3
+./batch_latency_bench 20000000 1000 64 5 7 9
 
 # Batch queue, external server
-./batch_echo_server /tmp batch_req batch_res 7 9 &
-./batch_latency_bench 20000000 100000 64 5 7 9 --external
+rm -rf /tmp/request /tmp/response
+sleep 3
+./batch_echo_server /tmp request response 7 9 &
+./batch_latency_bench 20000000 1000 64 5 7 9 --external
 ```
 
 Arguments: `<iterations> <warmup> <msg_size> <client_cpu> <server_cpu> <mapper_cpu>`
