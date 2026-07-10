@@ -36,6 +36,8 @@ add_library(mmapq STATIC
     indexed_batch_reader.c
     indexed_batch_archiver.c
     indexed_batch_queue.c
+    queue_transfer.c
+    batch_queue_transfer.c
 )
 
 target_include_directories(mmapq

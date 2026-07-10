@@ -65,6 +65,7 @@ struct MutableBatch {
  * max_file_size: maximum rolled file size
  * timeout_ns:  region-mapping timeout in nanoseconds
  * archivable:  1 to create archivable (applies at creation only; 0 default, performant)
+ * start_index: logical start index for the queue (0 for fresh, preserved on import/copy)
  * Returns: a new appender; never NULL (asserts on allocation failure)
  */
 IndexedBatchAppender *indexed_batch_appender_create(
@@ -75,7 +76,8 @@ IndexedBatchAppender *indexed_batch_appender_create(
     int64_t     max_file_size,
     uint64_t    timeout_ns,
     int         archivable,
-    Runtime    *runtime);
+    Runtime    *runtime,
+    int64_t     start_index);
 
 /* ── Batch lifecycle ─────────────────────────────────────────────────────── */
 

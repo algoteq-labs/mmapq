@@ -13,6 +13,8 @@
 #define MMAPQ_ECLOSED    (-3)   /* operation on closed handle */
 #define MMAPQ_ECORRUPT   (-4)   /* on-disk corruption detected */
 #define MMAPQ_ESCHEMA    (-5)   /* schema version or queue type mismatch */
+#define MMAPQ_EEXIST     (-6)   /* destination queue already exists */
+#define MMAPQ_ENOENT     (-7)   /* file or queue does not exist */
 
 #if defined(__linux__) && !defined(_GNU_SOURCE)
 #  define _GNU_SOURCE

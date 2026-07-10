@@ -43,7 +43,7 @@ static IndexedAppender *create_archivable_appender(void)
     queue_meta_close(m);
 
     return indexed_appender_create(DIR, QUEUE, REGION_SZ, RING_SZ,
-        MAX_FILE, TIMEOUT, 0, rt);
+        MAX_FILE, TIMEOUT, 0, rt, 0);
 }
 
 static NextMove poll_advance(int64_t idx, uint8_t aid,
@@ -81,7 +81,7 @@ void test_archivable_roundtrip(void)
     ensure_queue_dir();
     /* Create archivable queue via public factory */
     IndexedAppender *a = indexed_appender_create(DIR, QUEUE, REGION_SZ, RING_SZ,
-        MAX_FILE, TIMEOUT, 1, rt);
+        MAX_FILE, TIMEOUT, 1, rt, 0);
     TEST_ASSERT_NOT_NULL(a);
     indexed_appender_close(a);
 
@@ -104,7 +104,7 @@ void test_archivable_roundtrip(void)
 
     /* Reopen with archivable=0 — disk wins, still archivable */
     a = indexed_appender_create(DIR, QUEUE, REGION_SZ, RING_SZ,
-        MAX_FILE, TIMEOUT, 0, rt);
+        MAX_FILE, TIMEOUT, 0, rt, 0);
     TEST_ASSERT_NOT_NULL(a);
     indexed_appender_close(a);
 
@@ -117,7 +117,7 @@ void test_default_not_archivable(void)
 {
     ensure_queue_dir();
     IndexedAppender *a = indexed_appender_create(DIR, QUEUE, REGION_SZ, RING_SZ,
-        MAX_FILE, TIMEOUT, 0, rt);
+        MAX_FILE, TIMEOUT, 0, rt, 0);
     TEST_ASSERT_NOT_NULL(a);
     indexed_appender_close(a);
 
@@ -141,7 +141,7 @@ void test_archive_up_to_index_rejects_non_archivable(void)
 {
     ensure_queue_dir();
     IndexedAppender *a = indexed_appender_create(DIR, QUEUE, REGION_SZ, RING_SZ,
-        MAX_FILE, TIMEOUT, 0, rt);
+        MAX_FILE, TIMEOUT, 0, rt, 0);
     TEST_ASSERT_NOT_NULL(a);
     indexed_appender_append(a, "msg", 3);
     indexed_appender_close(a);

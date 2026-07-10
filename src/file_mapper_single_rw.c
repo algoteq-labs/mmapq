@@ -167,10 +167,12 @@ static uintptr_t rw_map(FileMapper *self, int64_t position, int32_t length)
 
     huge_pages_hint(addr, (size_t)length);
 
-    /* Pre-touch newly extended pages */
+    /* Pre-touch newly extended pages — cap to mapped region
+     * to avoid negative offset when file is extended by more than
+     * region_size (e.g. first map at a high start_index). */
     if (extended_bytes >= (int32_t)sizeof(int64_t)) {
-        rw_pretouch((uintptr_t)addr, length,
-                    length - extended_bytes, extended_bytes);
+        int32_t pb = extended_bytes > length ? length : extended_bytes;
+        rw_pretouch((uintptr_t)addr, length, length - pb, pb);
     }
 
     return (uintptr_t)addr;

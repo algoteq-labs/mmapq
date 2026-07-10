@@ -2,8 +2,12 @@
 #include "queue_meta.h"
 #include "indexed_queue.h"
 #include "indexed_appender.h"
+#include "indexed_batch_reader.h"
+#include "indexed_batch_queue.h"
+#include "indexed_batch_appender.h"
 #include "batch_export_meta.h"
 #include "mmap_assert.h"
+#include "mmap_platform.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -37,13 +41,6 @@ static int write_framed_entry(FILE *out, uint16_t aid, const void *data, int32_t
     if (len > 0 && write_all(out, data, (size_t)len)) return -1;
     return 0;
 }
-
-/**
- * ChunkDesc — describes one chunk file in chunked export:
- *   start_idx, end_idx: index range in the source queue
- *   count:              number of entries in this chunk
- */
-
 typedef struct {
     int64_t start_idx;
     int64_t end_idx;
@@ -352,9 +349,15 @@ static int64_t do_import(
 
 int64_t queue_transfer_import(
     FILE *in, const char *directory, const char *queue_name,
-    int64_t start_index, Runtime *write_rt, Runtime *read_rt)
+    int64_t start_index, int start_index_mode,
+    Runtime *write_rt, Runtime *read_rt,
+    int allow_append)
 {
     if (!in || !directory || !queue_name) return -1;
+
+    int chk = queue_meta_dest_check(directory, queue_name, QUEUE_TYPE_NORMAL,
+                                start_index_mode == QUEUE_TRANSFER_PRESERVE, allow_append);
+    if (chk != 0) return chk;
 
     uint8_t hdr[EXPORT_META_SIZE];
     if (read_all(in, hdr, EXPORT_META_SIZE)) return -1;
@@ -371,9 +374,15 @@ int64_t queue_transfer_import(
 
 int64_t queue_transfer_import_batch_stream(
     FILE *in, const char *directory, const char *queue_name,
-    int64_t start_index, Runtime *write_rt, Runtime *read_rt)
+    int64_t start_index, int start_index_mode,
+    Runtime *write_rt, Runtime *read_rt,
+    int allow_append)
 {
     if (!in || !directory || !queue_name) return -1;
+
+    int chk = queue_meta_dest_check(directory, queue_name, QUEUE_TYPE_NORMAL,
+                                start_index_mode == QUEUE_TRANSFER_PRESERVE, allow_append);
+    if (chk != 0) return chk;
 
     uint8_t hdr[BATCH_EXPORT_META_SIZE];
     if (read_all(in, hdr, BATCH_EXPORT_META_SIZE)) return -1;
@@ -393,10 +402,15 @@ int64_t queue_transfer_copy(
     const char *dest_dir, const char *dest_queue,
     int64_t start, int64_t end, int start_index_mode,
     QueueFilterFn include, QueueFilterFn exclude, void *ctx,
-    Runtime *write_rt, Runtime *read_rt)
+    Runtime *write_rt, Runtime *read_rt,
+    int allow_append)
 {
     if (!reader || !dest_dir || !dest_queue) return -1;
     if (start > end) return -1;
+
+    int chk = queue_meta_dest_check(dest_dir, dest_queue, QUEUE_TYPE_NORMAL,
+                                start_index_mode == QUEUE_TRANSFER_PRESERVE, allow_append);
+    if (chk != 0) return chk;
 
     QueueMeta *qm = indexed_reader_queue_meta(reader);
     if (!qm) return -1;
@@ -437,6 +451,78 @@ int64_t queue_transfer_copy(
         }
         indexed_appender_append(appender, rc.data, rc.length);
         copied++;
+    }
+
+    indexed_appender_close(appender);
+    indexed_queue_close(q);
+    return copied;
+}
+
+/* ── Cross-type copy: batch queue → normal queue (flatten) ──────────────────── */
+
+int64_t queue_transfer_copy_batch_to_normal(
+    IndexedBatchReader *reader,
+    const char *dest_dir, const char *dest_queue,
+    int64_t start, int64_t end, int start_index_mode,
+    BatchQueueFilterFn include, BatchQueueFilterFn exclude, void *ctx,
+    Runtime *write_rt, Runtime *read_rt,
+    int allow_append)
+{
+    if (!reader || !dest_dir || !dest_queue) return -1;
+    if (start > end) return -1;
+
+    int chk = queue_meta_dest_check(dest_dir, dest_queue, QUEUE_TYPE_NORMAL,
+                                start_index_mode == QUEUE_TRANSFER_PRESERVE, allow_append);
+    if (chk != 0) return chk;
+
+    QueueMeta *qm = indexed_batch_reader_queue_meta(reader);
+    if (!qm) return -1;
+
+    int64_t qstart = indexed_batch_reader_start_index(reader);
+    int64_t qend   = indexed_batch_reader_last_index(reader);
+    if (qend < 0) return 0;
+    if (start < qstart) start = qstart;
+    if (end > qend) end = qend;
+    if (start > end) return 0;
+
+    int no_filter = (!include && !exclude);
+
+    int64_t dest_start = (start_index_mode == QUEUE_TRANSFER_REBASE) ? 0 : start;
+
+    char dpath[4096];
+    snprintf(dpath, sizeof(dpath), "%s/%s", dest_dir, dest_queue);
+    create_dir(dpath);
+
+    IndexedQueue *q = indexed_queue_create(dest_dir, dest_queue,
+        queue_meta_region_size(qm), 4, 1, queue_meta_max_file_size(qm),
+        dest_start, 10000000000ULL, 0, write_rt, read_rt);
+    if (!q) return -1;
+
+    IndexedAppender *appender = indexed_queue_create_appender(q);
+    if (!appender) { indexed_queue_close(q); return -1; }
+
+    int64_t copied = 0;
+    BatchReadingContext bctx;
+    for (int64_t b = start; b <= end; b++) {
+        indexed_batch_reader_read(reader, b, &bctx);
+        if (bctx.status != BATCH_ENTRY_AVAILABLE) continue;
+
+        batch_iterator_init(&bctx.batch_iterator, bctx.batch_offset,
+                            bctx.message_count, 0);
+        while (batch_iterator_advance(&bctx.batch_iterator)) {
+            int m_idx = bctx.batch_iterator.current_msg_index;
+            int m_cnt = bctx.batch_iterator.message_count;
+            const void *d = batch_iterator_current_data(&bctx.batch_iterator);
+            int32_t l = batch_iterator_current_length(&bctx.batch_iterator);
+
+            if (!no_filter) {
+                int in = include ? include(b, m_idx, m_cnt, d, l, ctx) : 1;
+                int ex = exclude ? exclude(b, m_idx, m_cnt, d, l, ctx) : 0;
+                if (!in || ex) continue;
+            }
+            indexed_appender_append(appender, d, l);
+            copied++;
+        }
     }
 
     indexed_appender_close(appender);

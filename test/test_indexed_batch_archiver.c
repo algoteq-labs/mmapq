@@ -39,7 +39,7 @@ static IndexedBatchAppender *create_archivable_batch_appender(void)
     queue_meta_close(m);
 
     return indexed_batch_appender_create(DIR, QUEUE,
-        REGION_SZ, RING_SZ, MAX_FILE, TIMEOUT, 0, rt);
+        REGION_SZ, RING_SZ, MAX_FILE, TIMEOUT, 0, rt, 0);
 }
 
 static NextMove advance_handler(int64_t bi, BatchReadingContext *ctx, void *user_ctx)
@@ -219,7 +219,7 @@ void test_batch_archive_up_to_index_rejects_non_archivable(void)
     mkdir(dir_path, 0775);
 
     IndexedBatchAppender *a = indexed_batch_appender_create(DIR, QUEUE,
-        REGION_SZ, RING_SZ, MAX_FILE, TIMEOUT, 0, rt);
+        REGION_SZ, RING_SZ, MAX_FILE, TIMEOUT, 0, rt, 0);
     TEST_ASSERT_NOT_NULL(a);
     MutableBatch *b = indexed_batch_appender_start_batch(a);
     mutable_batch_append(b, "msg", 3);

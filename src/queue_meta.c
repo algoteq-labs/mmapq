@@ -10,6 +10,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <errno.h>
 
 /* ── File path helper ────────────────────────────────────────────────────── */
 
@@ -61,6 +62,7 @@ static void meta_cache_fields(QueueMeta *m)
 {
     memcpy(&m->region_size,   m->base + QUEUE_META_REGION_SIZE_OFFSET,   sizeof(int32_t));
     memcpy(&m->max_file_size, m->base + QUEUE_META_MAX_FILE_SIZE_OFFSET, sizeof(int64_t));
+    memcpy(&m->start_index,   m->base + QUEUE_META_START_INDEX_OFFSET,   sizeof(int64_t));
     m->archivable = (m->base[QUEUE_META_ARCHIVABLE_OFFSET] == 1) ? 1 : 0;
     m->queue_type = (int)m->base[QUEUE_META_QUEUE_TYPE_OFFSET];
 }
@@ -157,10 +159,11 @@ QueueMeta *queue_meta_open_rw(
 QueueMeta *queue_meta_open_ro(
     const char *directory,
     const char *queue_name,
-    uint8_t     expected_type)
+    uint8_t     expected_type,
+    int        *out_err)
 {
-    if (directory  == NULL) return NULL;
-    if (queue_name == NULL) return NULL;
+    if (directory  == NULL) { if (out_err) *out_err = MMAPQ_EINVAL; return NULL; }
+    if (queue_name == NULL) { if (out_err) *out_err = MMAPQ_EINVAL; return NULL; }
 
     char path[4096];
     meta_file_path(directory, queue_name, path, sizeof(path));
@@ -168,9 +171,11 @@ QueueMeta *queue_meta_open_ro(
     /* Check file exists before trying to map it */
     struct stat st;
     if (stat(path, &st) != 0) {
-        return NULL;  /* queue not yet created */
+        if (out_err) *out_err = (errno == ENOENT) ? MMAPQ_ENOENT : MMAPQ_ETIMEDOUT;
+        return NULL;
     }
     if (st.st_size < QUEUE_META_ENCODED_LENGTH) {
+        if (out_err) *out_err = MMAPQ_ESCHEMA;
         return NULL;  /* file exists but not yet fully written */
     }
 
@@ -180,13 +185,14 @@ QueueMeta *queue_meta_open_ro(
         file_init_none,
         NULL);
 
-    if (region == NULL) return NULL;
+    if (region == NULL) { if (out_err) *out_err = MMAPQ_ETIMEDOUT; return NULL; }
 
     Buffer buf = {0};
     WrapResult r = region_accessor_wrap(region, 0, &buf);
     if (r != WRAP_SUCCESS) {
         region_accessor_close(region);
         fixed_size_region_destroy(region);
+        if (out_err) *out_err = MMAPQ_ETIMEDOUT;
         return NULL;
     }
 
@@ -194,6 +200,7 @@ QueueMeta *queue_meta_open_ro(
     if (m == NULL) {
         region_accessor_close(region);
         fixed_size_region_destroy(region);
+        if (out_err) *out_err = MMAPQ_ETIMEDOUT;
         return NULL;
     }
 
@@ -205,6 +212,7 @@ QueueMeta *queue_meta_open_ro(
         region_accessor_close(region);
         fixed_size_region_destroy(region);
         free(m);
+        if (out_err) *out_err = MMAPQ_ESCHEMA;
         return NULL;
     }
 
@@ -221,4 +229,23 @@ void queue_meta_close(QueueMeta *m)
         m->region = NULL;
     }
     free(m);
+}
+
+/* ── queue_meta_dest_check ────────────────────────────────────────────────── */
+
+int queue_meta_dest_check(
+    const char *directory, const char *queue_name,
+    uint8_t expected_type, int preserve, int allow_append)
+{
+    int qerr = 0;
+    QueueMeta *dm = queue_meta_open_ro(directory, queue_name, expected_type, &qerr);
+    if (dm == NULL) {
+        if (qerr == MMAPQ_ENOENT) return 0;
+        return qerr ? qerr : -1;
+    }
+    queue_meta_close(dm);
+
+    if (!allow_append) return MMAPQ_EEXIST;
+    if (preserve) return MMAPQ_EINVAL;
+    return 0;
 }

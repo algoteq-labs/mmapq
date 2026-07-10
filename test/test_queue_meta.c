@@ -63,7 +63,7 @@ void test_open_rw_schema_version(void)
 
 void test_open_ro_returns_null_when_missing(void)
 {
-    QueueMeta *ro = queue_meta_open_ro(DIR, QUEUE, QUEUE_TYPE_NORMAL);
+    QueueMeta *ro = queue_meta_open_ro(DIR, QUEUE, QUEUE_TYPE_NORMAL, NULL);
     TEST_ASSERT_NULL(ro);
 }
 
@@ -73,7 +73,7 @@ void test_open_ro_reads_existing_file(void)
     queue_meta_close(meta);
     meta = NULL;
 
-    QueueMeta *ro = queue_meta_open_ro(DIR, QUEUE, QUEUE_TYPE_NORMAL);
+    QueueMeta *ro = queue_meta_open_ro(DIR, QUEUE, QUEUE_TYPE_NORMAL, NULL);
     TEST_ASSERT_NOT_NULL(ro);
     TEST_ASSERT_EQUAL_INT32(4096, queue_meta_region_size(ro));
     queue_meta_close(ro);

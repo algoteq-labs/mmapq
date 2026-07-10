@@ -19,11 +19,11 @@
  *   batch_queue_transfer_export(breader, stdout, 0, last, BATCH_QUEUE_TRANSFER_REBASE, NULL, NULL, NULL);
  *
  * USAGE — Import:
- *   batch_queue_transfer_import(stdin, "/data/queues", "orders", 0, rt, rt);
+ *   batch_queue_transfer_import(stdin, "/data/queues", "orders", 0, BATCH_QUEUE_TRANSFER_REBASE, rt, rt, 0);
  *
  * USAGE — Copy:
  *   batch_queue_transfer_copy(breader, "/backup/queues", "orders_bak",
- *                             0, last, BATCH_QUEUE_TRANSFER_REBASE, NULL, NULL, NULL, rt, rt);
+ *                             0, last, BATCH_QUEUE_TRANSFER_REBASE, NULL, NULL, NULL, rt, rt, 0);
  *
  * All functions support optional include/exclude filters.  Pass NULL for
  * both to accept all messages.
@@ -41,6 +41,9 @@
 #include "indexed_batch_reader.h"
 #include "runtime.h"
 #include "batch_export_meta.h"
+
+/* Forward declaration for cross-type copy function */
+typedef struct IndexedReader IndexedReader;
 
 /* ── Start index mode ─────────────────────────────────────────────────────── */
 
@@ -125,40 +128,49 @@ int64_t batch_queue_transfer_export_chunked(
 /**
  * Import a batched stream into a newly created (or appended) batch queue.
  *
- * Reads the BatchExportMeta header, creates the destination batch queue
- * with matching parameters, and commits each batch.
+ * If the destination queue already exists:
+ *   - allow_append=0 → returns MMAPQ_EEXIST
+ *   - allow_append=1 + PRESERVE → returns MMAPQ_EINVAL
+ *   - allow_append=1 + REBASE → appends
+ * If destination exists but is a normal queue → returns MMAPQ_ESCHEMA.
  *
- * in:           input stream (FILE*) containing batched stream
- * directory:    queue base directory
- * queue_name:   queue subdirectory name
- * start_index:  desired start index for the new queue (0 = rebase)
- * write_rt:     runtime for writers (NULL = sync)
- * read_rt:      runtime for readers (NULL = sync)
+ * in:               input stream (FILE*) containing batched stream
+ * directory:        queue base directory
+ * queue_name:       queue subdirectory name
+ * start_index:      desired start index for the new queue
+ * start_index_mode: BATCH_QUEUE_TRANSFER_REBASE or PRESERVE
+ * write_rt:         runtime for writers (NULL = sync)
+ * read_rt:          runtime for readers (NULL = sync)
+ * allow_append:     1 to allow appending to an existing queue, 0 to forbid
  * Returns: number of batches imported, or -1 on error
  */
 int64_t batch_queue_transfer_import(
     FILE *in, const char *directory, const char *queue_name,
-    int64_t start_index, Runtime *write_rt, Runtime *read_rt);
+    int64_t start_index, int start_index_mode,
+    Runtime *write_rt, Runtime *read_rt,
+    int allow_append);
 
 /**
  * Import a flat (single-message) stream into a batch queue, placing each
  * message into its own 1-element batch.
  *
- * Reads the ExportMeta header, creates the destination batch queue,
- * and for each entry starts a new batch, appends the single message,
- * and commits it.
+ * Destination-exists enforcement same as batch_queue_transfer_import.
  *
- * in:           input stream (FILE*) containing flat stream
- * directory:    queue base directory
- * queue_name:   queue subdirectory name
- * start_index:  desired start index for the new queue (0 = rebase)
- * write_rt:     runtime for writers (NULL = sync)
- * read_rt:      runtime for readers (NULL = sync)
+ * in:               input stream (FILE*) containing flat stream
+ * directory:        queue base directory
+ * queue_name:       queue subdirectory name
+ * start_index:      desired start index for the new queue
+ * start_index_mode: BATCH_QUEUE_TRANSFER_REBASE or PRESERVE
+ * write_rt:         runtime for writers (NULL = sync)
+ * read_rt:          runtime for readers (NULL = sync)
+ * allow_append:     1 to allow appending to an existing queue, 0 to forbid
  * Returns: number of batches (and messages) imported, or -1 on error
  */
 int64_t batch_queue_transfer_import_flat_stream(
     FILE *in, const char *directory, const char *queue_name,
-    int64_t start_index, Runtime *write_rt, Runtime *read_rt);
+    int64_t start_index, int start_index_mode,
+    Runtime *write_rt, Runtime *read_rt,
+    int allow_append);
 
 /* ── Copy ────────────────────────────────────────────────────────────────── */
 
@@ -166,9 +178,7 @@ int64_t batch_queue_transfer_import_flat_stream(
  * Copy batches [start, end] directly from a source batch reader to a new
  * destination batch queue.  Supports optional filters.
  *
- * When filters are active, a batch is included only if it contains at
- * least one matching message.  Only matching messages are written to the
- * output batch.
+ * Destination-exists enforcement same as batch_queue_transfer_import.
  *
  * reader:          source batch queue reader
  * dest_dir:        destination queue base directory
@@ -181,6 +191,7 @@ int64_t batch_queue_transfer_import_flat_stream(
  * ctx:             caller context passed to filter callbacks
  * write_rt:        runtime for writers (NULL = sync)
  * read_rt:         runtime for readers (NULL = sync)
+ * allow_append:    1 to allow appending to an existing queue, 0 to forbid
  * Returns: number of batches copied, or -1 on error
  */
 int64_t batch_queue_transfer_copy(
@@ -188,6 +199,38 @@ int64_t batch_queue_transfer_copy(
     const char *dest_dir, const char *dest_queue,
     int64_t start, int64_t end, int start_index_mode,
     BatchQueueFilterFn include, BatchQueueFilterFn exclude, void *ctx,
-    Runtime *write_rt, Runtime *read_rt);
+    Runtime *write_rt, Runtime *read_rt,
+    int allow_append);
+
+/**
+ * Copy entries [start, end] from a normal queue reader and place each
+ * entry as a single-message batch in a batch queue.
+ *
+ * Each entry in the source becomes its own 1-element batch in the
+ * destination batch queue.  Supports optional message-level filters.
+ *
+ * Destination-exists enforcement same as batch_queue_transfer_import.
+ *
+ * reader:          source normal queue reader
+ * dest_dir:        destination batch queue base directory
+ * dest_queue:      destination batch queue name
+ * start:           first entry index to copy (inclusive)
+ * end:             last entry index to copy (inclusive)
+ * start_index_mode: BATCH_QUEUE_TRANSFER_REBASE or PRESERVE
+ * include:         optional include filter (NULL = accept all)
+ * exclude:         optional exclude filter (NULL = skip none)
+ * ctx:             caller context passed to filter callbacks
+ * write_rt:        runtime for writers (NULL = sync)
+ * read_rt:         runtime for readers (NULL = sync)
+ * allow_append:    1 to allow appending to an existing queue, 0 to forbid
+ * Returns: number of batches (1 per entry) copied, or -1 on error
+ */
+int64_t batch_queue_transfer_copy_normal_to_batch(
+    IndexedReader *reader,
+    const char *dest_dir, const char *dest_queue,
+    int64_t start, int64_t end, int start_index_mode,
+    BatchQueueFilterFn include, BatchQueueFilterFn exclude, void *ctx,
+    Runtime *write_rt, Runtime *read_rt,
+    int allow_append);
 
 #endif /* BATCH_QUEUE_TRANSFER_H */

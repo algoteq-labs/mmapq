@@ -70,6 +70,18 @@ file governs conduct; that file governs design.
   `map_rc` in `mmapq-rs/src/error.rs` and one entry to `_RC_ERRORS` in
   `mmapq-py/src/mmapq/_errors.py` in the same change.
 
+- **Do not collapse causally distinct failures into one NULL/-1/bool.**
+  Before returning a single generic failure signal, ask: does the caller
+  need to act differently depending on which cause occurred? If yes, the
+  collapse is a defect, not a simplification — surface the cause via the
+  existing `MMAPQ_*` codes (an out-parameter, a `last_error`-style channel,
+  or a distinct return) rather than one undifferentiated failure value.
+  The canonical case: "the meta file does not exist yet" and "the meta
+  file exists but is the wrong type/corrupted" must never share one NULL —
+  the correct caller action (create fresh vs. refuse) is opposite. A
+  shared remedy (e.g. every OOM path: "retry after freeing memory") is
+  fine to collapse; opposite remedies are not.
+
 - **Concurrency and atomics changes require justification in comments.**
   This code uses C11 atomics with deliberate memory orderings (the payload
   write → acq_rel CAS header commit is the correctness core). Do not add,
@@ -143,6 +155,18 @@ file governs conduct; that file governs design.
   scope; rewriting comments that are still true is not.
 - Changes to the public surface (factory signatures, error codes, types)
   update `doc/feature-matrix.md` in the same task.
+- **A feature-matrix cell may be marked ✓ only when both an implementation
+  symbol AND a test exercising it are cited** (file:line for each). A cell
+  claiming support backed by an absent or empty implementation is the
+  failure mode of record for this project — it has happened once, it is
+  the thing this rule exists to prevent happening again.
+- Retained historical specs (design records in `doc/`, e.g. rename or
+  parameter-addition specs) get content-preserving renames when repo or
+  package names change, with a one-line provenance note added at the top
+  (e.g. "predates the X→Y rename; updated for clarity, historical commits
+  reference the old names"). Only the design decisions and rationale stay
+  untouched verbatim — do not silently leave stale names in a doc a normal
+  reader will open expecting current information.
 
 ## Mirror discipline
 
@@ -165,8 +189,12 @@ Exit code zero or the task is not done. Do not hand-eye it.
   touching those paths.
 - Fixed-8-byte payload mode (`queue_type == 1`) is Java-only; the C library
   refuses to open such queues. Do not implement it.
-- Batch queues (`queue_type == 2`) are C-ecosystem only; Java cannot read
-  them. This is documented, not a bug.
+- Batch queues (`queue_type == 2`) are part of the mmapq wire format,
+  supported by C, Rust, and Python. The Algoteq Java implementation does
+  not yet read them — this is a current status, not an architectural
+  exclusion; value 2 is planned for the Java side as part of making the
+  feature set symmetrical across all implementations. Do not assume or
+  document Java-incompatibility here as permanent.
 - Recovery detects on-disk corruption (`MMAPQ_ESCHEMA`/`MMAPQ_ECORRUPT`
   refusal) but never repairs. Queues are transient; durable data lives in
   the export format. Do not add repair or migration logic.

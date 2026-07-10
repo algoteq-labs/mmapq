@@ -64,9 +64,8 @@ static int64_t appender_end_of_stream(void *ctx)
 
 static int64_t appender_start_index_fn(void *ctx)
 {
-    /* Appenders don't archive — start index is always 0 */
-    (void)ctx;
-    return QUEUE_META_INITIAL_START_INDEX;
+    if (ctx == NULL) return 0;
+    return *(const int64_t *)ctx;
 }
 
 /* ── Write padding at region boundary ───────────────────────────────────── */
@@ -196,7 +195,8 @@ static int initialise_append_position(IndexedAppender *a,
                                        int ring_size,
                                        int64_t max_file_size,
                                        uint64_t timeout_ns,
-                                       Runtime *runtime)
+                                       Runtime *runtime,
+                                       int64_t start_index)
 {
     /*
      * Step 1: Use a temporary RO accessor to find lastIndex via
@@ -213,14 +213,14 @@ static int initialise_append_position(IndexedAppender *a,
     Buffer ro_buf = {0};
 
     int64_t last_index = header_search_last_index(
-        QUEUE_META_INITIAL_START_INDEX,
-        appender_start_index_fn, NULL,
+        start_index,
+        appender_start_index_fn, &start_index,
         ro_header, &ro_buf,
         a->queue_name);
 
     if (last_index == HEADER_NULL_INDEX) {
-        /* Queue is empty */
-        a->current_index           = 0;
+        /* Queue is empty — start at the requested start_index */
+        a->current_index           = start_index;
         a->current_payload_position = appender_meta_start_offset(a->appender_meta);
     } else {
         a->current_index = last_index + 1;
@@ -308,7 +308,8 @@ static IndexedAppender *appender_create_internal(
     int             archivable,
     Runtime        *runtime,
     AppenderIdPool *id_pool,
-    uint8_t         appender_id)
+    uint8_t         appender_id,
+    int64_t         start_index)
 {
     IndexedAppender *a = calloc(1, sizeof(IndexedAppender));
     if (a == NULL) return NULL;
@@ -331,7 +332,7 @@ static IndexedAppender *appender_create_internal(
      *   - If file exists: adopt its parameters and IGNORE create() args.
      */
     a->queue_meta = queue_meta_open_rw(directory, queue_name,
-                                        QUEUE_META_INITIAL_START_INDEX,
+                                        start_index,
                                         region_size, max_file_size,
                                         archivable,
                                         QUEUE_TYPE_NORMAL);
@@ -364,7 +365,8 @@ static IndexedAppender *appender_create_internal(
     /* Find where to resume appending */
     if (initialise_append_position(a, directory, queue_name,
                                      reconciled_region_size, ring_size,
-                                     reconciled_max_file_size, timeout_ns, runtime)) {
+                                     reconciled_max_file_size, timeout_ns, runtime,
+                                     start_index)) {
         queue_region_accessor_close(a->rw_acc);
         if (a->queue_meta) queue_meta_close(a->queue_meta);
         free(a->directory);
@@ -386,7 +388,8 @@ IndexedAppender *indexed_appender_create(
     int64_t     max_file_size,
     uint64_t    timeout_ns,
     int         archivable,
-    Runtime    *runtime)
+    Runtime    *runtime,
+    int64_t     start_index)
 {
     if (directory  == NULL) return NULL;
     if (queue_name == NULL) return NULL;
@@ -403,7 +406,7 @@ IndexedAppender *indexed_appender_create(
 
     return appender_create_internal(directory, queue_name, region_size, ring_size,
                                       max_file_size, timeout_ns, archivable, runtime,
-                                      pool, (uint8_t)id);
+                                      pool, (uint8_t)id, start_index);
 }
 
 IndexedAppender *indexed_appender_create_with_id(
@@ -415,7 +418,8 @@ IndexedAppender *indexed_appender_create_with_id(
     uint64_t    timeout_ns,
     int         archivable,
     Runtime    *runtime,
-    uint8_t     appender_id)
+    uint8_t     appender_id,
+    int64_t     start_index)
 {
     if (directory  == NULL) return NULL;
     if (queue_name == NULL) return NULL;
@@ -431,7 +435,7 @@ IndexedAppender *indexed_appender_create_with_id(
 
     return appender_create_internal(directory, queue_name, region_size, ring_size,
                                       max_file_size, timeout_ns, archivable, runtime,
-                                      pool, appender_id);
+                                      pool, appender_id, start_index);
 }
 
 /* ── indexed_appender_append ─────────────────────────────────────────────── */
