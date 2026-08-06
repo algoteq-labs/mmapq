@@ -14,7 +14,7 @@
  * lookup-or-create and appender_cache_cleanup() to close everything at the end.
  */
 
-/* Covers all valid appender IDs (0–254), indexed by mapped ID. */
+/* Cache array size — indexed by mapped appender ID (0–255). */
 #define APPENDER_CACHE_SIZE 256
 
 /* Sentinel for mapped_cache[] — the mapper has not been called for this aid. */
@@ -57,7 +57,8 @@ typedef struct {
  *              its actual ID may differ from @p mapped) or
  *              CONFLICT_ABORT (return error)
  * out_abort:   set to 1 when CONFLICT_ABORT triggered and all cached
- *              appenders have been closed — caller must return
+ *              appenders have been closed — caller must close the queue
+ *              (via indexed_queue_close or equivalent) and return
  *              MMAPQ_EIDCONFLICT immediately
  * Returns: the appender pointer, or NULL on error / abort
  */
@@ -88,7 +89,6 @@ static inline void *appender_cache_get(
         for (int i = 0; i < APPENDER_CACHE_SIZE; i++)
             if (c->cache[i]) c->close(c->cache[i]);
         if (c->auto_appender) c->close(c->auto_appender);
-        c->queue_close(q);
         *out_abort = 1;
         return NULL;
     }
@@ -114,11 +114,14 @@ static inline int32_t appender_cache_map(
     AppenderIdMapper mapper, void *mapper_ctx)
 {
     if (!mapper) {
+        /* Source IDs >= 256 are outside the valid 0-255 appender range.
+           Return auto-assign without invoking or caching the mapper. */
         if (aid >= APPENDER_CACHE_SIZE)
             return APPENDER_ID_AUTO;
         return (int32_t)aid;
     }
 
+    /* Same guard for the mapper path — bypass mapper for out-of-range IDs. */
     if (aid >= APPENDER_CACHE_SIZE)
         return APPENDER_ID_AUTO;
 

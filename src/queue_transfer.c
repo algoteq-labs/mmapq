@@ -321,7 +321,7 @@ static int64_t do_import(
             int abort_flag;
             IndexedAppender *a = (IndexedAppender *)appender_cache_get(
                 &ac, mapped, q, on_conflict, &abort_flag);
-            if (abort_flag) return MMAPQ_EIDCONFLICT;
+            if (abort_flag) { indexed_queue_close(q); return MMAPQ_EIDCONFLICT; }
             if (!a) break;
 
             for (int32_t m = 0; m < msg_cnt; m++) {
@@ -355,7 +355,7 @@ static int64_t do_import(
             int abort_flag;
             IndexedAppender *a = (IndexedAppender *)appender_cache_get(
                 &ac, mapped, q, on_conflict, &abort_flag);
-            if (abort_flag) return MMAPQ_EIDCONFLICT;
+            if (abort_flag) { indexed_queue_close(q); return MMAPQ_EIDCONFLICT; }
             if (!a) break;
 
             uint8_t buf[65536];
@@ -514,7 +514,7 @@ int64_t queue_transfer_copy(
         int abort_flag;
         IndexedAppender *a = (IndexedAppender *)appender_cache_get(
             &ac, mapped, q, on_conflict, &abort_flag);
-        if (abort_flag) return MMAPQ_EIDCONFLICT;
+        if (abort_flag) { indexed_queue_close(q); return MMAPQ_EIDCONFLICT; }
         if (!a) break;
 
         indexed_appender_append(a, rc.data, rc.length);
@@ -595,7 +595,7 @@ int64_t queue_transfer_copy_batch_to_normal(
         int abort_flag;
         IndexedAppender *a = (IndexedAppender *)appender_cache_get(
             &ac, mapped, q, on_conflict, &abort_flag);
-        if (abort_flag) return MMAPQ_EIDCONFLICT;
+        if (abort_flag) { indexed_queue_close(q); return MMAPQ_EIDCONFLICT; }
         if (!a) break;
 
         batch_iterator_init(&bctx.batch_iterator, bctx.batch_offset,

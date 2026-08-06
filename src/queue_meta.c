@@ -241,7 +241,7 @@ int queue_meta_dest_check(
     QueueMeta *dm = queue_meta_open_ro(directory, queue_name, expected_type, &qerr);
     if (dm == NULL) {
         if (qerr == MMAPQ_ENOENT) return 0;
-        return qerr ? qerr : -1;
+        return qerr ? qerr : MMAPQ_ETIMEDOUT;
     }
     queue_meta_close(dm);
 

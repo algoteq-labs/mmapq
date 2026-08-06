@@ -295,8 +295,8 @@ int64_t batch_queue_transfer_export_chunked(
             if (msg_matched == 0) continue;
 
             uint16_t batch_aid = bctx.appender_id;
-            fwrite(&batch_aid, sizeof(uint16_t), 1, cf);
-            fwrite(&msg_matched, sizeof(int32_t), 1, cf);
+            if (write_all(cf, &batch_aid, sizeof(uint16_t))) return -1;
+            if (write_all(cf, &msg_matched, sizeof(int32_t)))  return -1;
             batch_iterator_init(&bctx.batch_iterator, bctx.batch_offset,
                                 bctx.message_count, 0);
             while (batch_iterator_advance(&bctx.batch_iterator)) {
@@ -386,7 +386,7 @@ int64_t batch_queue_transfer_import(
         int abort_flag;
         IndexedBatchAppender *a = (IndexedBatchAppender *)appender_cache_get(
             &ac, mapped, q, on_conflict, &abort_flag);
-        if (abort_flag) return MMAPQ_EIDCONFLICT;
+        if (abort_flag) { indexed_batch_queue_close(q); return MMAPQ_EIDCONFLICT; }
         if (!a) break;
 
         MutableBatch *mb = indexed_batch_appender_start_batch(a);
@@ -478,7 +478,7 @@ int64_t batch_queue_transfer_import_flat_stream(
         int abort_flag;
         IndexedBatchAppender *a = (IndexedBatchAppender *)appender_cache_get(
             &ac, mapped, q, on_conflict, &abort_flag);
-        if (abort_flag) return MMAPQ_EIDCONFLICT;
+        if (abort_flag) { indexed_batch_queue_close(q); return MMAPQ_EIDCONFLICT; }
         if (!a) break;
 
         uint8_t buf[65536];
@@ -572,7 +572,7 @@ int64_t batch_queue_transfer_copy(
         int abort_flag;
         IndexedBatchAppender *a = (IndexedBatchAppender *)appender_cache_get(
             &ac, mapped, q, on_conflict, &abort_flag);
-        if (abort_flag) return MMAPQ_EIDCONFLICT;
+        if (abort_flag) { indexed_batch_queue_close(q); return MMAPQ_EIDCONFLICT; }
         if (!a) break;
 
         MutableBatch *mb = NULL;
@@ -681,7 +681,7 @@ int64_t batch_queue_transfer_copy_normal_to_batch(
         int abort_flag;
         IndexedBatchAppender *a = (IndexedBatchAppender *)appender_cache_get(
             &ac, mapped, q, on_conflict, &abort_flag);
-        if (abort_flag) return MMAPQ_EIDCONFLICT;
+        if (abort_flag) { indexed_batch_queue_close(q); return MMAPQ_EIDCONFLICT; }
         if (!a) break;
 
         MutableBatch *mb = indexed_batch_appender_start_batch(a);
