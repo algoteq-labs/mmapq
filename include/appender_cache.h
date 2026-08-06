@@ -74,7 +74,11 @@ static inline void *appender_cache_get(
         return c->auto_appender;
     }
 
-    if (mapped < 0 || mapped >= APPENDER_CACHE_SIZE) return NULL;
+    if (mapped < 0 || mapped >= APPENDER_CACHE_SIZE) {
+        if (!c->auto_appender)
+            c->auto_appender = c->create(q);
+        return c->auto_appender;
+    }
 
     void *a = c->cache[mapped];
     if (a) return a;

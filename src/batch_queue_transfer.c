@@ -270,7 +270,7 @@ int64_t batch_queue_transfer_export_chunked(
 
         uint8_t hdr[EXPORT_META_SIZE];
         export_meta_encode(&meta, hdr);
-        fwrite(hdr, 1, EXPORT_META_SIZE, cf);
+        if (write_all(cf, hdr, EXPORT_META_SIZE)) { fclose(cf); return -1; }
 
         /* Write batches in this chunk range */
         for (int64_t b = chunks[c].start_idx; b <= chunks[c].end_idx; b++) {
@@ -295,8 +295,8 @@ int64_t batch_queue_transfer_export_chunked(
             if (msg_matched == 0) continue;
 
             uint16_t batch_aid = bctx.appender_id;
-            if (write_all(cf, &batch_aid, sizeof(uint16_t))) return -1;
-            if (write_all(cf, &msg_matched, sizeof(int32_t)))  return -1;
+            if (write_all(cf, &batch_aid, sizeof(uint16_t))) { fclose(cf); return -1; }
+            if (write_all(cf, &msg_matched, sizeof(int32_t)))  { fclose(cf); return -1; }
             batch_iterator_init(&bctx.batch_iterator, bctx.batch_offset,
                                 bctx.message_count, 0);
             while (batch_iterator_advance(&bctx.batch_iterator)) {
@@ -305,19 +305,19 @@ int64_t batch_queue_transfer_export_chunked(
                 const void *d = batch_iterator_current_data(&bctx.batch_iterator);
                 int32_t l = batch_iterator_current_length(&bctx.batch_iterator);
                 if (no_filter) {
-                    fwrite(&l, sizeof(int32_t), 1, cf);
-                    if (l > 0) fwrite(d, 1, (size_t)l, cf);
+                    if (write_all(cf, &l, sizeof(int32_t))) { fclose(cf); return -1; }
+                    if (l > 0 && write_all(cf, d, (size_t)l)) { fclose(cf); return -1; }
                 } else {
                     int in = include ? include(b, m_idx, m_cnt, d, l, ctx) : 1;
                     int ex = exclude ? exclude(b, m_idx, m_cnt, d, l, ctx) : 0;
                     if (in && !ex) {
-                        fwrite(&l, sizeof(int32_t), 1, cf);
-                        if (l > 0) fwrite(d, 1, (size_t)l, cf);
+                        if (write_all(cf, &l, sizeof(int32_t))) { fclose(cf); return -1; }
+                        if (l > 0 && write_all(cf, d, (size_t)l)) { fclose(cf); return -1; }
                     }
                 }
             }
         }
-        fclose(cf);
+        if (fclose(cf)) return -1;
 
         cum_exported  += chunks[c].count;
         total_written += chunks[c].count;
@@ -390,21 +390,27 @@ int64_t batch_queue_transfer_import(
         if (!a) break;
 
         MutableBatch *mb = indexed_batch_appender_start_batch(a);
+        int inner_fail = 0;
         for (int32_t m = 0; m < msg_cnt; m++) {
             int32_t len;
-            if (read_all(in, &len, sizeof(int32_t))) break;
-            if (len < 0) break;
+            if (read_all(in, &len, sizeof(int32_t))) { inner_fail = 1; break; }
+            if (len < 0) { inner_fail = 1; break; }
             uint8_t buf[65536];
             uint8_t *payload = buf;
             if ((size_t)len > sizeof(buf)) {
                 payload = malloc((size_t)len);
-                if (!payload) break;
+                if (!payload) { inner_fail = 1; break; }
             }
             if (len > 0 && read_all(in, payload, (size_t)len)) {
-                if (payload != buf) { free(payload); break; }
+                if (payload != buf) { free(payload); inner_fail = 1; break; }
             }
             mutable_batch_append(mb, payload, len);
             if (payload != buf) free(payload);
+        }
+        if (inner_fail) {
+            int64_t off = mutable_batch_complete(mb);
+            indexed_batch_appender_discard_batch(a, off);
+            break;
         }
         int64_t off = mutable_batch_complete(mb);
         indexed_batch_appender_commit_batch(a, off);

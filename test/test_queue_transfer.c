@@ -1885,6 +1885,45 @@ void test_import_abort_on_conflict(void)
     unlink(fpath);
 }
 
+static int32_t map_to_out_of_range(uint16_t aid, void *ctx)
+{
+    (void)aid; (void)ctx;
+    return -2; /* outside 0-255 range — should auto-assign */
+}
+
+void test_import_mapper_invalid_id_falls_back_to_auto(void)
+{
+    cleanup_queue(QUEUE);
+    char path[512];
+    snprintf(path, sizeof(path), "%s/%s", TEST_DIR, QUEUE);
+    mkdir(path, 0775);
+
+    IndexedQueue *q = indexed_queue_create(TEST_DIR, QUEUE, 4096, 4, 1, 4096LL * 64,
+                                            0, 5000000000ULL, 0, rt, rt);
+    IndexedAppender *a = indexed_queue_create_appender(q);
+    indexed_appender_append(a, "hello", 6);
+    indexed_appender_close(a);
+
+    IndexedReader *r = indexed_queue_create_reader(q);
+    char fpath[512];
+    snprintf(fpath, sizeof(fpath), "%s/%s_export.bin", TEST_DIR, QUEUE);
+    FILE *out = fopen(fpath, "wb");
+    queue_transfer_export(r, out, 0, 0, QUEUE_TRANSFER_REBASE, NULL, NULL, NULL);
+    fclose(out);
+    indexed_reader_close(r);
+    indexed_queue_close(q);
+
+    /* Mapper returns 255 (out of range) — should auto-assign, not fail */
+    cleanup_queue(COPY_Q);
+    FILE *in = fopen(fpath, "rb");
+    int64_t imported = queue_transfer_import(in, TEST_DIR, COPY_Q, QUEUE_TRANSFER_REBASE,
+                                              rt, rt, 0,
+                                              map_to_out_of_range, NULL, CONFLICT_AUTO);
+    fclose(in);
+    TEST_ASSERT_EQUAL_INT64(1, imported);
+    unlink(fpath);
+}
+
 /* ── Main ────────────────────────────────────────────────────────────────── */
 
 int main(void)
@@ -1968,6 +2007,7 @@ int main(void)
     RUN_TEST(test_import_merge_via_mapper);
     RUN_TEST(test_import_auto_on_conflict);
     RUN_TEST(test_import_abort_on_conflict);
+    RUN_TEST(test_import_mapper_invalid_id_falls_back_to_auto);
 
     return UNITY_END();
 }

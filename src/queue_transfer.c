@@ -219,7 +219,7 @@ int64_t queue_transfer_export_chunked(
 
         uint8_t hdr[EXPORT_META_SIZE];
         export_meta_encode(&meta, hdr);
-        fwrite(hdr, 1, EXPORT_META_SIZE, cf);
+        if (write_all(cf, hdr, EXPORT_META_SIZE)) { fclose(cf); return -1; }
 
         /* Write entries */
         for (int64_t i = chunks[c].start_idx; i <= chunks[c].end_idx; i++) {
@@ -228,11 +228,11 @@ int64_t queue_transfer_export_chunked(
             int in = include ? include(i, rc.data, rc.length, ctx) : 1;
             int ex = exclude ? exclude(i, rc.data, rc.length, ctx) : 0;
             if (!in || ex) continue;
-            fwrite(&rc.appender_id, sizeof(uint16_t), 1, cf);
-            fwrite(&rc.length,      sizeof(int32_t),  1, cf);
-            if (rc.length > 0) fwrite(rc.data, 1, (size_t)rc.length, cf);
+            if (write_all(cf, &rc.appender_id, sizeof(uint16_t))) { fclose(cf); return -1; }
+            if (write_all(cf, &rc.length,      sizeof(int32_t)))  { fclose(cf); return -1; }
+            if (rc.length > 0 && write_all(cf, rc.data, (size_t)rc.length)) { fclose(cf); return -1; }
         }
-        fclose(cf);
+        if (fclose(cf)) return -1;
 
         cum_exported  += chunks[c].count;
         total_written += chunks[c].count;
@@ -324,23 +324,25 @@ static int64_t do_import(
             if (abort_flag) { indexed_queue_close(q); return MMAPQ_EIDCONFLICT; }
             if (!a) break;
 
+            int inner_fail = 0;
             for (int32_t m = 0; m < msg_cnt; m++) {
                 int32_t len;
-                if (read_all(in, &len, sizeof(int32_t))) break;
-                if (len < 0) break;
+                if (read_all(in, &len, sizeof(int32_t))) { inner_fail = 1; break; }
+                if (len < 0) { inner_fail = 1; break; }
                 uint8_t buf[65536];
                 uint8_t *payload = buf;
                 if ((size_t)len > sizeof(buf)) {
                     payload = malloc((size_t)len);
-                    if (!payload) break;
+                    if (!payload) { inner_fail = 1; break; }
                 }
                 if (len > 0 && read_all(in, payload, (size_t)len)) {
-                    if (payload != buf) { free(payload); break; }
+                    if (payload != buf) { free(payload); inner_fail = 1; break; }
                 }
                 indexed_appender_append(a, payload, len);
                 if (payload != buf) free(payload);
                 imported++;
             }
+            if (inner_fail) break;
         }
     } else {
         for (int64_t i = 0; i < total_entries; i++) {
