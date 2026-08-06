@@ -8,7 +8,7 @@
  * EXPORTED STREAM FORMAT (flat):
  *   [ExportMeta: 64 bytes]
  *     schema_version, region_size, start_index, max_file_size,
- *     total_entries, archivable, fixed_size_8bytes
+ *     total_entries, archivable, queue_type
  *   [uint16 appender_id][int32 payload_length][uint8 payload...] ... (× total_entries)
  *
  * USAGE — Export:
@@ -138,6 +138,10 @@ int64_t queue_transfer_export_chunked(
  * Reads the ExportMeta header, creates the destination queue with matching
  * parameters, and appends each entry.
  *
+ * The start index is determined automatically:
+ *   REBASE  → 0
+ *   PRESERVE → meta.start_index from the stream header
+ *
  * If the destination queue already exists:
  *   - allow_append=0 → returns MMAPQ_EEXIST
  *   - allow_append=1 + PRESERVE → returns MMAPQ_EINVAL
@@ -147,7 +151,6 @@ int64_t queue_transfer_export_chunked(
  * in:               input stream (FILE*, typically a file or stdin)
  * directory:        queue base directory
  * queue_name:       queue subdirectory name
- * start_index:      desired start index for the new queue
  * start_index_mode: QUEUE_TRANSFER_REBASE or QUEUE_TRANSFER_PRESERVE
  * write_rt:         runtime for writers (NULL = sync)
  * read_rt:          runtime for readers (NULL = sync)
@@ -156,7 +159,7 @@ int64_t queue_transfer_export_chunked(
  */
 int64_t queue_transfer_import(
     FILE *in, const char *directory, const char *queue_name,
-    int64_t start_index, int start_index_mode,
+    int start_index_mode,
     Runtime *write_rt, Runtime *read_rt,
     int allow_append);
 
@@ -168,12 +171,12 @@ int64_t queue_transfer_import(
  * and flattens every batch — each message in the batch becomes its own
  * entry in the output queue.
  *
+ * Start index determined automatically (same rules as queue_transfer_import).
  * Destination-exists enforcement same as queue_transfer_import.
  *
  * in:               input stream (FILE*) containing batch stream
  * directory:        queue base directory
  * queue_name:       queue subdirectory name
- * start_index:      desired start index for the new queue
  * start_index_mode: QUEUE_TRANSFER_REBASE or QUEUE_TRANSFER_PRESERVE
  * write_rt:         runtime for writers (NULL = sync)
  * read_rt:          runtime for readers (NULL = sync)
@@ -182,7 +185,7 @@ int64_t queue_transfer_import(
  */
 int64_t queue_transfer_import_batch_stream(
     FILE *in, const char *directory, const char *queue_name,
-    int64_t start_index, int start_index_mode,
+    int start_index_mode,
     Runtime *write_rt, Runtime *read_rt,
     int allow_append);
 

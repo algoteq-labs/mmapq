@@ -5,7 +5,7 @@
 #include "indexed_batch_reader.h"
 #include "indexed_batch_queue.h"
 #include "indexed_batch_appender.h"
-#include "batch_export_meta.h"
+#include "export_meta.h"
 #include "mmap_assert.h"
 #include "mmap_platform.h"
 #include <stdlib.h>
@@ -73,7 +73,7 @@ int64_t queue_transfer_export(
         meta.start_index       = (start_index_mode == QUEUE_TRANSFER_REBASE) ? 0 : start;
         meta.total_entries     = 0;
         meta.archivable        = (uint8_t)queue_meta_archivable(qm);
-        meta.fixed_size_8bytes = (uint8_t)queue_meta_fixed_size_8bytes(qm);
+        meta.queue_type = (uint8_t)queue_meta_queue_type(qm);
         uint8_t hdr[EXPORT_META_SIZE];
         export_meta_encode(&meta, hdr);
         write_all(out, hdr, EXPORT_META_SIZE);
@@ -110,7 +110,7 @@ int64_t queue_transfer_export(
     meta.start_index       = (start_index_mode == QUEUE_TRANSFER_REBASE) ? 0 : start;
     meta.total_entries     = count;
     meta.archivable        = (uint8_t)queue_meta_archivable(qm);
-    meta.fixed_size_8bytes = (uint8_t)queue_meta_fixed_size_8bytes(qm);
+    meta.queue_type = (uint8_t)queue_meta_queue_type(qm);
 
     uint8_t hdr[EXPORT_META_SIZE];
     export_meta_encode(&meta, hdr);
@@ -214,7 +214,7 @@ int64_t queue_transfer_export_chunked(
         meta.start_index       = (start_index_mode == QUEUE_TRANSFER_REBASE) ? cum_exported : chunks[c].start_idx;
         meta.total_entries     = chunks[c].count;
         meta.archivable        = (uint8_t)queue_meta_archivable(qm);
-        meta.fixed_size_8bytes = (uint8_t)queue_meta_fixed_size_8bytes(qm);
+        meta.queue_type = (uint8_t)queue_meta_queue_type(qm);
 
         uint8_t hdr[EXPORT_META_SIZE];
         export_meta_encode(&meta, hdr);
@@ -260,7 +260,6 @@ int64_t queue_transfer_export_chunked(
  * region_size:    region size from stream metadata
  * max_file_size:  max file size from stream metadata
  * archivable:     archivable flag from stream metadata
- * fixed_size:     fixed_size_8bytes flag from stream metadata
  * total_entries:  number of entries (or batches) to read
  * is_batch_stream: 1 = batched stream, 0 = flat stream
  * wrt:            runtime for writers (NULL = sync)
@@ -271,12 +270,12 @@ static int64_t do_import(
     FILE *in, const char *directory, const char *queue_name,
     int64_t start_index,
     int32_t region_size, int64_t max_file_size,
-    uint8_t archivable, uint8_t fixed_size,
+    uint8_t archivable,
     int64_t total_entries,
     int is_batch_stream,
     Runtime *wrt, Runtime *rrt)
 {
-    (void)archivable; (void)fixed_size;
+    (void)archivable;
     char dpath[4096];
     snprintf(dpath, sizeof(dpath), "%s/%s", directory, queue_name);
     create_dir(dpath);
@@ -349,7 +348,7 @@ static int64_t do_import(
 
 int64_t queue_transfer_import(
     FILE *in, const char *directory, const char *queue_name,
-    int64_t start_index, int start_index_mode,
+    int start_index_mode,
     Runtime *write_rt, Runtime *read_rt,
     int allow_append)
 {
@@ -364,17 +363,19 @@ int64_t queue_transfer_import(
 
     ExportMeta meta;
     export_meta_decode(hdr, &meta);
-    return do_import(in, directory, queue_name, start_index,
+    if (meta.queue_type == QUEUE_TYPE_FIXED8) return MMAPQ_ESCHEMA;
+    if (meta.queue_type != QUEUE_TYPE_NORMAL) return MMAPQ_ESCHEMA;
+    int64_t effective = (start_index_mode == QUEUE_TRANSFER_PRESERVE)
+                        ? meta.start_index : 0;
+    return do_import(in, directory, queue_name, effective,
                      meta.region_size, meta.max_file_size,
-                     meta.archivable, meta.fixed_size_8bytes,
+                     meta.archivable,
                      meta.total_entries, 0, write_rt, read_rt);
 }
 
-/* ── Import (batch stream, flatten) ────────────────────────────────────────── */
-
 int64_t queue_transfer_import_batch_stream(
     FILE *in, const char *directory, const char *queue_name,
-    int64_t start_index, int start_index_mode,
+    int start_index_mode,
     Runtime *write_rt, Runtime *read_rt,
     int allow_append)
 {
@@ -384,15 +385,19 @@ int64_t queue_transfer_import_batch_stream(
                                 start_index_mode == QUEUE_TRANSFER_PRESERVE, allow_append);
     if (chk != 0) return chk;
 
-    uint8_t hdr[BATCH_EXPORT_META_SIZE];
-    if (read_all(in, hdr, BATCH_EXPORT_META_SIZE)) return -1;
+    uint8_t hdr[EXPORT_META_SIZE];
+    if (read_all(in, hdr, EXPORT_META_SIZE)) return -1;
 
-    BatchExportMeta meta;
-    batch_export_meta_decode(hdr, &meta);
-    return do_import(in, directory, queue_name, start_index,
+    ExportMeta meta;
+    export_meta_decode(hdr, &meta);
+    if (meta.queue_type == QUEUE_TYPE_FIXED8) return MMAPQ_ESCHEMA;
+    if (meta.queue_type != QUEUE_TYPE_BATCH)  return MMAPQ_ESCHEMA;
+    int64_t effective = (start_index_mode == QUEUE_TRANSFER_PRESERVE)
+                        ? meta.start_index : 0;
+    return do_import(in, directory, queue_name, effective,
                      meta.region_size, meta.max_file_size,
-                     meta.archivable, 0,
-                     meta.total_batches, 1, write_rt, read_rt);
+                     meta.archivable,
+                     meta.total_entries, 1, write_rt, read_rt);
 }
 
 /* ── Copy ─────────────────────────────────────────────────────────────────── */
@@ -424,7 +429,8 @@ int64_t queue_transfer_copy(
 
     int no_filter = (!include && !exclude);
 
-    int64_t dest_start = (start_index_mode == QUEUE_TRANSFER_REBASE) ? 0 : start;
+    int64_t dest_start = (start_index_mode == QUEUE_TRANSFER_PRESERVE)
+                         ? qstart : 0;
 
     char dpath[4096];
     snprintf(dpath, sizeof(dpath), "%s/%s", dest_dir, dest_queue);
@@ -487,7 +493,9 @@ int64_t queue_transfer_copy_batch_to_normal(
 
     int no_filter = (!include && !exclude);
 
-    int64_t dest_start = (start_index_mode == QUEUE_TRANSFER_REBASE) ? 0 : start;
+    int64_t bstart = indexed_batch_reader_start_index(reader);
+    int64_t dest_start = (start_index_mode == QUEUE_TRANSFER_PRESERVE)
+                         ? bstart : 0;
 
     char dpath[4096];
     snprintf(dpath, sizeof(dpath), "%s/%s", dest_dir, dest_queue);

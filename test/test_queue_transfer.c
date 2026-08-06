@@ -175,7 +175,7 @@ void test_export_import_roundtrip(void)
 
     cleanup_queue(COPY_Q);
     FILE *in = fopen(fpath, "rb");
-    int64_t imported = queue_transfer_import(in, TEST_DIR, COPY_Q, 0, QUEUE_TRANSFER_REBASE, rt, rt, 0);
+    int64_t imported = queue_transfer_import(in, TEST_DIR, COPY_Q, QUEUE_TRANSFER_REBASE, rt, rt, 0);
     fclose(in);
     TEST_ASSERT_EQUAL_INT64(3, imported);
 
@@ -216,7 +216,7 @@ void test_export_import_preserve_start_index(void)
     cleanup_queue(COPY_Q);
     FILE *in = fopen(fpath, "rb");
     /* Import with PRESERVE: new queue starts at index 100 */
-    int64_t imported = queue_transfer_import(in, TEST_DIR, COPY_Q, actual_start,
+    int64_t imported = queue_transfer_import(in, TEST_DIR, COPY_Q,
                                               QUEUE_TRANSFER_PRESERVE, rt, rt, 0);
     fclose(in);
     TEST_ASSERT_EQUAL_INT64(3, imported);
@@ -269,7 +269,7 @@ void test_poller_starts_at_preserved_index(void)
 
     cleanup_queue(COPY_Q);
     FILE *in = fopen(fpath, "rb");
-    queue_transfer_import(in, TEST_DIR, COPY_Q, si, QUEUE_TRANSFER_PRESERVE, rt, rt, 0);
+    queue_transfer_import(in, TEST_DIR, COPY_Q, QUEUE_TRANSFER_PRESERVE, rt, rt, 0);
     fclose(in);
 
     /* Now poll the imported queue — first entry should be at index 100 */
@@ -315,7 +315,7 @@ void test_export_import_rebase_start_index(void)
 
     cleanup_queue(COPY_Q);
     FILE *in = fopen(fpath, "rb");
-    int64_t imported = queue_transfer_import(in, TEST_DIR, COPY_Q, 0, QUEUE_TRANSFER_REBASE, rt, rt, 0);
+    int64_t imported = queue_transfer_import(in, TEST_DIR, COPY_Q, QUEUE_TRANSFER_REBASE, rt, rt, 0);
     fclose(in);
     TEST_ASSERT_EQUAL_INT64(3, imported);
 
@@ -351,7 +351,7 @@ void test_export_import_fragment(void)
 
     cleanup_queue(COPY_Q);
     FILE *in = fopen(fpath, "rb");
-    int64_t imported = queue_transfer_import(in, TEST_DIR, COPY_Q, 0, QUEUE_TRANSFER_REBASE, rt, rt, 0);
+    int64_t imported = queue_transfer_import(in, TEST_DIR, COPY_Q, QUEUE_TRANSFER_REBASE, rt, rt, 0);
     fclose(in);
     TEST_ASSERT_EQUAL_INT64(3, imported);
 
@@ -381,7 +381,7 @@ void test_export_empty_queue(void)
 
     cleanup_queue(COPY_Q);
     FILE *in = fopen(fpath, "rb");
-    int64_t imported = queue_transfer_import(in, TEST_DIR, COPY_Q, 0, QUEUE_TRANSFER_REBASE, rt, rt, 0);
+    int64_t imported = queue_transfer_import(in, TEST_DIR, COPY_Q, QUEUE_TRANSFER_REBASE, rt, rt, 0);
     fclose(in);
     TEST_ASSERT_EQUAL_INT64(0, imported);
 
@@ -438,7 +438,7 @@ void test_filter_include(void)
 
     cleanup_queue(COPY_Q);
     FILE *in = fopen(fpath, "rb");
-    int64_t imported = queue_transfer_import(in, TEST_DIR, COPY_Q, 0, QUEUE_TRANSFER_REBASE, rt, rt, 0);
+    int64_t imported = queue_transfer_import(in, TEST_DIR, COPY_Q, QUEUE_TRANSFER_REBASE, rt, rt, 0);
     fclose(in);
     TEST_ASSERT_EQUAL_INT64(3, imported);
 
@@ -490,7 +490,7 @@ void test_import_to_new(void)
 
     cleanup_queue(COPY_Q);
     FILE *in = fopen(fpath, "rb");
-    int64_t imported = queue_transfer_import(in, TEST_DIR, COPY_Q, 0, QUEUE_TRANSFER_REBASE, rt, rt, 0);
+    int64_t imported = queue_transfer_import(in, TEST_DIR, COPY_Q, QUEUE_TRANSFER_REBASE, rt, rt, 0);
     fclose(in);
     TEST_ASSERT_EQUAL_INT64(2, imported);
     unlink(fpath);
@@ -515,7 +515,7 @@ void test_import_rebase_append(void)
     indexed_queue_close(existing_q);
 
     FILE *in = fopen(fpath, "rb");
-    int64_t imported = queue_transfer_import(in, TEST_DIR, COPY_Q, 0, QUEUE_TRANSFER_REBASE, rt, rt, 1);
+    int64_t imported = queue_transfer_import(in, TEST_DIR, COPY_Q, QUEUE_TRANSFER_REBASE, rt, rt, 1);
     fclose(in);
     TEST_ASSERT_EQUAL_INT64(2, imported);
 
@@ -550,7 +550,7 @@ void test_import_preserve_append(void)
 
     FILE *in = fopen(fpath, "rb");
     /* PRESERVE + allow_append=1 on existing queue → EINVAL */
-    int64_t imported = queue_transfer_import(in, TEST_DIR, COPY_Q, 0, QUEUE_TRANSFER_PRESERVE, rt, rt, 1);
+    int64_t imported = queue_transfer_import(in, TEST_DIR, COPY_Q, QUEUE_TRANSFER_PRESERVE, rt, rt, 1);
     fclose(in);
     TEST_ASSERT_EQUAL_INT64(MMAPQ_EINVAL, imported);
 
@@ -577,7 +577,7 @@ void test_import_no_append(void)
     indexed_queue_close(existing_q);
 
     FILE *in = fopen(fpath, "rb");
-    int64_t imported = queue_transfer_import(in, TEST_DIR, COPY_Q, 0, QUEUE_TRANSFER_REBASE, rt, rt, 0);
+    int64_t imported = queue_transfer_import(in, TEST_DIR, COPY_Q, QUEUE_TRANSFER_REBASE, rt, rt, 0);
     fclose(in);
     TEST_ASSERT_EQUAL_INT64(MMAPQ_EEXIST, imported);
 
@@ -714,7 +714,7 @@ void test_batch_import_to_new(void)
 
     cleanup_queue(BQ_COPY);
     FILE *in = fopen(fpath, "rb");
-    int64_t imported = batch_queue_transfer_import(in, TEST_DIR, BQ_COPY, 0, BATCH_QUEUE_TRANSFER_REBASE, rt, rt, 0);
+    int64_t imported = batch_queue_transfer_import(in, TEST_DIR, BQ_COPY, BATCH_QUEUE_TRANSFER_REBASE, rt, rt, 0);
     fclose(in);
     TEST_ASSERT_EQUAL_INT64(2, imported);
     unlink(fpath);
@@ -742,7 +742,7 @@ void test_batch_import_rebase_append(void)
     indexed_batch_queue_close(dest);
 
     FILE *in = fopen(fpath, "rb");
-    int64_t imported = batch_queue_transfer_import(in, TEST_DIR, BQ_COPY, 0, BATCH_QUEUE_TRANSFER_REBASE, rt, rt, 1);
+    int64_t imported = batch_queue_transfer_import(in, TEST_DIR, BQ_COPY, BATCH_QUEUE_TRANSFER_REBASE, rt, rt, 1);
     fclose(in);
     TEST_ASSERT_EQUAL_INT64(1, imported);
     unlink(fpath);
@@ -768,7 +768,7 @@ void test_batch_import_preserve_append(void)
     indexed_batch_queue_close(dest);
 
     FILE *in = fopen(fpath, "rb");
-    int64_t imported = batch_queue_transfer_import(in, TEST_DIR, BQ_COPY, 0, BATCH_QUEUE_TRANSFER_PRESERVE, rt, rt, 1);
+    int64_t imported = batch_queue_transfer_import(in, TEST_DIR, BQ_COPY, BATCH_QUEUE_TRANSFER_PRESERVE, rt, rt, 1);
     fclose(in);
     TEST_ASSERT_EQUAL_INT64(MMAPQ_EINVAL, imported);
     unlink(fpath);
@@ -794,7 +794,7 @@ void test_batch_import_no_append(void)
     indexed_batch_queue_close(dest);
 
     FILE *in = fopen(fpath, "rb");
-    int64_t imported = batch_queue_transfer_import(in, TEST_DIR, BQ_COPY, 0, BATCH_QUEUE_TRANSFER_REBASE, rt, rt, 0);
+    int64_t imported = batch_queue_transfer_import(in, TEST_DIR, BQ_COPY, BATCH_QUEUE_TRANSFER_REBASE, rt, rt, 0);
     fclose(in);
     TEST_ASSERT_EQUAL_INT64(MMAPQ_EEXIST, imported);
     unlink(fpath);
@@ -904,7 +904,7 @@ void test_import_batch_stream_to_new(void)
     char fpath[512];
     snprintf(fpath, sizeof(fpath), "%s/%s_export.bin", TEST_DIR, BQ_QUEUE);
     FILE *in = fopen(fpath, "rb");
-    int64_t imported = queue_transfer_import_batch_stream(in, TEST_DIR, CROSS_Q, 0, QUEUE_TRANSFER_REBASE, rt, rt, 0);
+    int64_t imported = queue_transfer_import_batch_stream(in, TEST_DIR, CROSS_Q, QUEUE_TRANSFER_REBASE, rt, rt, 0);
     fclose(in);
     TEST_ASSERT_EQUAL_INT64(3, imported);
 
@@ -927,7 +927,7 @@ void test_import_batch_stream_rebase_append(void)
     char fpath[512];
     snprintf(fpath, sizeof(fpath), "%s/%s_export.bin", TEST_DIR, BQ_QUEUE);
     FILE *in = fopen(fpath, "rb");
-    int64_t imported = queue_transfer_import_batch_stream(in, TEST_DIR, CROSS_Q, 0, QUEUE_TRANSFER_REBASE, rt, rt, 1);
+    int64_t imported = queue_transfer_import_batch_stream(in, TEST_DIR, CROSS_Q, QUEUE_TRANSFER_REBASE, rt, rt, 1);
     fclose(in);
     TEST_ASSERT_EQUAL_INT64(3, imported);
 
@@ -951,7 +951,7 @@ void test_import_batch_stream_preserve_append(void)
     char fpath[512];
     snprintf(fpath, sizeof(fpath), "%s/%s_export.bin", TEST_DIR, BQ_QUEUE);
     FILE *in = fopen(fpath, "rb");
-    int64_t imported = queue_transfer_import_batch_stream(in, TEST_DIR, CROSS_Q, 0, QUEUE_TRANSFER_PRESERVE, rt, rt, 1);
+    int64_t imported = queue_transfer_import_batch_stream(in, TEST_DIR, CROSS_Q, QUEUE_TRANSFER_PRESERVE, rt, rt, 1);
     fclose(in);
     TEST_ASSERT_EQUAL_INT64(MMAPQ_EINVAL, imported);
     unlink(fpath);
@@ -970,7 +970,7 @@ void test_import_batch_stream_no_append(void)
     char fpath[512];
     snprintf(fpath, sizeof(fpath), "%s/%s_export.bin", TEST_DIR, BQ_QUEUE);
     FILE *in = fopen(fpath, "rb");
-    int64_t imported = queue_transfer_import_batch_stream(in, TEST_DIR, CROSS_Q, 0, QUEUE_TRANSFER_REBASE, rt, rt, 0);
+    int64_t imported = queue_transfer_import_batch_stream(in, TEST_DIR, CROSS_Q, QUEUE_TRANSFER_REBASE, rt, rt, 0);
     fclose(in);
     TEST_ASSERT_EQUAL_INT64(MMAPQ_EEXIST, imported);
     unlink(fpath);
@@ -1002,7 +1002,7 @@ void test_import_flat_to_batch_to_new(void)
     char fpath[512];
     snprintf(fpath, sizeof(fpath), "%s/%s_export.bin", TEST_DIR, QUEUE);
     FILE *in = fopen(fpath, "rb");
-    int64_t imported = batch_queue_transfer_import_flat_stream(in, TEST_DIR, CROSS_Q, 0, BATCH_QUEUE_TRANSFER_REBASE, rt, rt, 0);
+    int64_t imported = batch_queue_transfer_import_flat_stream(in, TEST_DIR, CROSS_Q, BATCH_QUEUE_TRANSFER_REBASE, rt, rt, 0);
     fclose(in);
     TEST_ASSERT_EQUAL_INT64(3, imported);
     unlink(fpath);
@@ -1022,7 +1022,7 @@ void test_import_flat_to_batch_rebase_append(void)
     char fpath[512];
     snprintf(fpath, sizeof(fpath), "%s/%s_export.bin", TEST_DIR, QUEUE);
     FILE *in = fopen(fpath, "rb");
-    int64_t imported = batch_queue_transfer_import_flat_stream(in, TEST_DIR, CROSS_Q, 0, BATCH_QUEUE_TRANSFER_REBASE, rt, rt, 1);
+    int64_t imported = batch_queue_transfer_import_flat_stream(in, TEST_DIR, CROSS_Q, BATCH_QUEUE_TRANSFER_REBASE, rt, rt, 1);
     fclose(in);
     TEST_ASSERT_EQUAL_INT64(3, imported);
     unlink(fpath);
@@ -1042,7 +1042,7 @@ void test_import_flat_to_batch_preserve_append(void)
     char fpath[512];
     snprintf(fpath, sizeof(fpath), "%s/%s_export.bin", TEST_DIR, QUEUE);
     FILE *in = fopen(fpath, "rb");
-    int64_t imported = batch_queue_transfer_import_flat_stream(in, TEST_DIR, CROSS_Q, 0, BATCH_QUEUE_TRANSFER_PRESERVE, rt, rt, 1);
+    int64_t imported = batch_queue_transfer_import_flat_stream(in, TEST_DIR, CROSS_Q, BATCH_QUEUE_TRANSFER_PRESERVE, rt, rt, 1);
     fclose(in);
     TEST_ASSERT_EQUAL_INT64(MMAPQ_EINVAL, imported);
     unlink(fpath);
@@ -1062,7 +1062,7 @@ void test_import_flat_to_batch_no_append(void)
     char fpath[512];
     snprintf(fpath, sizeof(fpath), "%s/%s_export.bin", TEST_DIR, QUEUE);
     FILE *in = fopen(fpath, "rb");
-    int64_t imported = batch_queue_transfer_import_flat_stream(in, TEST_DIR, CROSS_Q, 0, BATCH_QUEUE_TRANSFER_REBASE, rt, rt, 0);
+    int64_t imported = batch_queue_transfer_import_flat_stream(in, TEST_DIR, CROSS_Q, BATCH_QUEUE_TRANSFER_REBASE, rt, rt, 0);
     fclose(in);
     TEST_ASSERT_EQUAL_INT64(MMAPQ_EEXIST, imported);
     unlink(fpath);
@@ -1317,7 +1317,7 @@ void test_batch_import_preserve_to_new(void)
 
     cleanup_queue(CROSS_Q);
     FILE *in = fopen(fpath, "rb");
-    int64_t imported = batch_queue_transfer_import(in, TEST_DIR, CROSS_Q, 0, BATCH_QUEUE_TRANSFER_PRESERVE, rt, rt, 0);
+    int64_t imported = batch_queue_transfer_import(in, TEST_DIR, CROSS_Q, BATCH_QUEUE_TRANSFER_PRESERVE, rt, rt, 0);
     fclose(in);
     TEST_ASSERT_EQUAL_INT64(2, imported);
     verify_batch_index_space(CROSS_Q, 0, 1);
@@ -1341,7 +1341,7 @@ void test_import_batch_stream_preserve_to_new(void)
 
     cleanup_queue(CROSS_Q);
     FILE *in = fopen(fpath, "rb");
-    int64_t imported = queue_transfer_import_batch_stream(in, TEST_DIR, CROSS_Q, 0, QUEUE_TRANSFER_PRESERVE, rt, rt, 0);
+    int64_t imported = queue_transfer_import_batch_stream(in, TEST_DIR, CROSS_Q, QUEUE_TRANSFER_PRESERVE, rt, rt, 0);
     fclose(in);
     TEST_ASSERT_EQUAL_INT64(2, imported);
     verify_index_space(CROSS_Q, 0, 1);
@@ -1364,7 +1364,7 @@ void test_import_flat_to_batch_preserve_to_new(void)
 
     cleanup_queue(CROSS_Q);
     FILE *in = fopen(fpath, "rb");
-    int64_t imported = batch_queue_transfer_import_flat_stream(in, TEST_DIR, CROSS_Q, 0, BATCH_QUEUE_TRANSFER_PRESERVE, rt, rt, 0);
+    int64_t imported = batch_queue_transfer_import_flat_stream(in, TEST_DIR, CROSS_Q, BATCH_QUEUE_TRANSFER_PRESERVE, rt, rt, 0);
     fclose(in);
     TEST_ASSERT_EQUAL_INT64(3, imported);
     verify_batch_index_space(CROSS_Q, 0, 2);
@@ -1440,7 +1440,7 @@ void test_batch_export_preserve(void)
     /* Verify by importing back and checking index space */
     cleanup_queue(CROSS_Q);
     FILE *in = fopen(fpath, "rb");
-    int64_t imported = batch_queue_transfer_import(in, TEST_DIR, CROSS_Q, 0, BATCH_QUEUE_TRANSFER_PRESERVE, rt, rt, 0);
+    int64_t imported = batch_queue_transfer_import(in, TEST_DIR, CROSS_Q, BATCH_QUEUE_TRANSFER_PRESERVE, rt, rt, 0);
     fclose(in);
     TEST_ASSERT_EQUAL_INT64(1, imported);
     verify_batch_index_space(CROSS_Q, 0, 0);
@@ -1467,7 +1467,7 @@ void test_batch_export_import_preserve_roundtrip(void)
 
     cleanup_queue(CROSS_Q);
     FILE *in = fopen(fpath, "rb");
-    int64_t imported = batch_queue_transfer_import(in, TEST_DIR, CROSS_Q, 0, BATCH_QUEUE_TRANSFER_PRESERVE, rt, rt, 0);
+    int64_t imported = batch_queue_transfer_import(in, TEST_DIR, CROSS_Q, BATCH_QUEUE_TRANSFER_PRESERVE, rt, rt, 0);
     fclose(in);
     TEST_ASSERT_EQUAL_INT64(2, imported);
     verify_batch_index_space(CROSS_Q, 0, 1);
@@ -1551,7 +1551,7 @@ void test_import_batch_stream_preserve_nonzero(void)
 
     cleanup_queue(CROSS_Q);
     FILE *in = fopen(fpath, "rb");
-    int64_t imported = queue_transfer_import_batch_stream(in, TEST_DIR, CROSS_Q, 100, QUEUE_TRANSFER_PRESERVE, rt, rt, 0);
+    int64_t imported = queue_transfer_import_batch_stream(in, TEST_DIR, CROSS_Q, QUEUE_TRANSFER_PRESERVE, rt, rt, 0);
     fclose(in);
     TEST_ASSERT_EQUAL_INT64(1, imported);
     verify_index_space(CROSS_Q, 100, 100);
@@ -1575,7 +1575,7 @@ void test_import_flat_to_batch_preserve_nonzero(void)
 
     cleanup_queue(CROSS_Q);
     FILE *in = fopen(fpath, "rb");
-    int64_t imported = batch_queue_transfer_import_flat_stream(in, TEST_DIR, CROSS_Q, 100, BATCH_QUEUE_TRANSFER_PRESERVE, rt, rt, 0);
+    int64_t imported = batch_queue_transfer_import_flat_stream(in, TEST_DIR, CROSS_Q, BATCH_QUEUE_TRANSFER_PRESERVE, rt, rt, 0);
     fclose(in);
     TEST_ASSERT_EQUAL_INT64(1, imported);
     verify_batch_index_space(CROSS_Q, 100, 100);

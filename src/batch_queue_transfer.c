@@ -94,19 +94,20 @@ int64_t batch_queue_transfer_export(
         }
     }
 
-    /* Write BatchExportMeta header */
-    BatchExportMeta meta;
-    batch_export_meta_init(&meta);
+    /* Write ExportMeta header */
+    ExportMeta meta;
+    export_meta_init(&meta);
     meta.schema_version = 1;
     meta.region_size    = queue_meta_region_size(qm);
     meta.max_file_size  = queue_meta_max_file_size(qm);
     meta.start_index    = (start_index_mode == BATCH_QUEUE_TRANSFER_REBASE) ? 0 : start;
-    meta.total_batches  = batch_count;
+    meta.total_entries  = batch_count;
     meta.archivable     = (uint8_t)queue_meta_archivable(qm);
+    meta.queue_type     = QUEUE_TYPE_BATCH;
 
-    uint8_t hdr[BATCH_EXPORT_META_SIZE];
-    batch_export_meta_encode(&meta, hdr);
-    if (write_all(out, hdr, BATCH_EXPORT_META_SIZE)) return -1;
+    uint8_t hdr[EXPORT_META_SIZE];
+    export_meta_encode(&meta, hdr);
+    if (write_all(out, hdr, EXPORT_META_SIZE)) return -1;
 
     /* Second pass: write matching batches and their matching messages */
     BatchReadingContext bctx;
@@ -190,7 +191,7 @@ int64_t batch_queue_transfer_export_chunked(
     int nchunks = 0;
     int64_t chunk_start = start;
     int64_t chunk_cnt   = 0;
-    int64_t chunk_bytes = BATCH_EXPORT_META_SIZE;
+    int64_t chunk_bytes = EXPORT_META_SIZE;
 
     BatchReadingContext bctx;
     for (int64_t b = start; b <= end; b++) {
@@ -230,7 +231,7 @@ int64_t batch_queue_transfer_export_chunked(
             }
             chunk_start = b;
             chunk_cnt   = 0;
-            chunk_bytes = BATCH_EXPORT_META_SIZE;
+            chunk_bytes = EXPORT_META_SIZE;
         }
         chunk_bytes += batch_size;
         chunk_cnt++;
@@ -254,18 +255,19 @@ int64_t batch_queue_transfer_export_chunked(
         FILE *cf = fopen(fpath, "wb");
         if (!cf) return -1;
 
-        BatchExportMeta meta;
-        batch_export_meta_init(&meta);
+        ExportMeta meta;
+        export_meta_init(&meta);
         meta.schema_version = 1;
         meta.region_size    = queue_meta_region_size(qm);
         meta.max_file_size  = queue_meta_max_file_size(qm);
         meta.start_index    = (start_index_mode == BATCH_QUEUE_TRANSFER_REBASE) ? cum_exported : chunks[c].start_idx;
-        meta.total_batches  = chunks[c].count;
+        meta.total_entries  = chunks[c].count;
         meta.archivable     = (uint8_t)queue_meta_archivable(qm);
+        meta.queue_type     = QUEUE_TYPE_BATCH;
 
-        uint8_t hdr[BATCH_EXPORT_META_SIZE];
-        batch_export_meta_encode(&meta, hdr);
-        fwrite(hdr, 1, BATCH_EXPORT_META_SIZE, cf);
+        uint8_t hdr[EXPORT_META_SIZE];
+        export_meta_encode(&meta, hdr);
+        fwrite(hdr, 1, EXPORT_META_SIZE, cf);
 
         /* Write batches in this chunk range */
         for (int64_t b = chunks[c].start_idx; b <= chunks[c].end_idx; b++) {
@@ -322,7 +324,7 @@ int64_t batch_queue_transfer_export_chunked(
 
 int64_t batch_queue_transfer_import(
     FILE *in, const char *directory, const char *queue_name,
-    int64_t start_index, int start_index_mode,
+    int start_index_mode,
     Runtime *write_rt, Runtime *read_rt,
     int allow_append)
 {
@@ -332,19 +334,23 @@ int64_t batch_queue_transfer_import(
                                 start_index_mode == BATCH_QUEUE_TRANSFER_PRESERVE, allow_append);
     if (chk != 0) return chk;
 
-    uint8_t hdr[BATCH_EXPORT_META_SIZE];
-    if (read_all(in, hdr, BATCH_EXPORT_META_SIZE)) return -1;
+    uint8_t hdr[EXPORT_META_SIZE];
+    if (read_all(in, hdr, EXPORT_META_SIZE)) return -1;
 
-    BatchExportMeta meta;
-    batch_export_meta_decode(hdr, &meta);
+    ExportMeta meta;
+    export_meta_decode(hdr, &meta);
+    if (meta.queue_type == QUEUE_TYPE_FIXED8) return MMAPQ_ESCHEMA;
+    if (meta.queue_type != QUEUE_TYPE_BATCH)  return MMAPQ_ESCHEMA;
 
     char dpath[4096];
     snprintf(dpath, sizeof(dpath), "%s/%s", directory, queue_name);
     create_dir(dpath);
 
+    int64_t effective = (start_index_mode == BATCH_QUEUE_TRANSFER_PRESERVE)
+                        ? meta.start_index : 0;
     IndexedBatchQueue *q = indexed_batch_queue_create(
         directory, queue_name,
-        meta.region_size, 4, 1, meta.max_file_size, start_index,
+        meta.region_size, 4, 1, meta.max_file_size, effective,
         10000000000ULL, 0, write_rt, read_rt);
     if (!q) return -1;
 
@@ -352,7 +358,7 @@ int64_t batch_queue_transfer_import(
     if (!appender) { indexed_batch_queue_close(q); return -1; }
 
     int64_t imported = 0;
-    for (int64_t b = 0; b < meta.total_batches; b++) {
+    for (int64_t b = 0; b < meta.total_entries; b++) {
         int32_t msg_cnt;
         if (read_all(in, &msg_cnt, sizeof(int32_t))) break;
         if (msg_cnt < 0) break;
@@ -388,7 +394,7 @@ int64_t batch_queue_transfer_import(
 
 int64_t batch_queue_transfer_import_flat_stream(
     FILE *in, const char *directory, const char *queue_name,
-    int64_t start_index, int start_index_mode,
+    int start_index_mode,
     Runtime *write_rt, Runtime *read_rt,
     int allow_append)
 {
@@ -403,14 +409,18 @@ int64_t batch_queue_transfer_import_flat_stream(
 
     ExportMeta meta;
     export_meta_decode(hdr, &meta);
+    if (meta.queue_type == QUEUE_TYPE_FIXED8) return MMAPQ_ESCHEMA;
+    if (meta.queue_type != QUEUE_TYPE_NORMAL) return MMAPQ_ESCHEMA;
 
     char dpath[4096];
     snprintf(dpath, sizeof(dpath), "%s/%s", directory, queue_name);
     create_dir(dpath);
 
+    int64_t effective = (start_index_mode == BATCH_QUEUE_TRANSFER_PRESERVE)
+                        ? meta.start_index : 0;
     IndexedBatchQueue *q = indexed_batch_queue_create(
         directory, queue_name,
-        meta.region_size, 4, 1, meta.max_file_size, start_index,
+        meta.region_size, 4, 1, meta.max_file_size, effective,
         10000000000ULL, 0, write_rt, read_rt);
     if (!q) return -1;
 
@@ -477,7 +487,9 @@ int64_t batch_queue_transfer_copy(
     if (start > end) return 0;
 
     int no_filter = (!include && !exclude);
-    int64_t dest_start = (start_index_mode == BATCH_QUEUE_TRANSFER_REBASE) ? 0 : start;
+    int64_t bstart = indexed_batch_reader_start_index(reader);
+    int64_t dest_start = (start_index_mode == BATCH_QUEUE_TRANSFER_PRESERVE)
+                         ? bstart : 0;
 
     char dpath[4096];
     snprintf(dpath, sizeof(dpath), "%s/%s", dest_dir, dest_queue);
@@ -558,7 +570,9 @@ int64_t batch_queue_transfer_copy_normal_to_batch(
     if (start > end) return 0;
 
     int no_filter = (!include && !exclude);
-    int64_t dest_start = (start_index_mode == BATCH_QUEUE_TRANSFER_REBASE) ? 0 : start;
+    int64_t nstart = indexed_reader_start_index(reader);
+    int64_t dest_start = (start_index_mode == BATCH_QUEUE_TRANSFER_PRESERVE)
+                         ? nstart : 0;
 
     char dpath[4096];
     snprintf(dpath, sizeof(dpath), "%s/%s", dest_dir, dest_queue);

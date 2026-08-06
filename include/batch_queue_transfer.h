@@ -6,9 +6,9 @@
  *                      to/from a portable batched stream format.
  *
  * EXPORTED STREAM FORMAT (batched):
- *   [BatchExportMeta: 64 bytes]
+ *   [ExportMeta: 64 bytes; queue_type = QUEUE_TYPE_BATCH]
  *     schema_version, region_size, start_index, max_file_size,
- *     total_batches, archivable
+ *     total_entries (= batch count), archivable, queue_type
  *   [batch 0:
  *       int32  msg_count
  *       [int32 payload_length][uint8 payload...] ... (× msg_count)]
@@ -40,7 +40,7 @@
 #include <stdio.h>
 #include "indexed_batch_reader.h"
 #include "runtime.h"
-#include "batch_export_meta.h"
+#include "export_meta.h"
 
 /* Forward declaration for cross-type copy function */
 typedef struct IndexedReader IndexedReader;
@@ -128,6 +128,10 @@ int64_t batch_queue_transfer_export_chunked(
 /**
  * Import a batched stream into a newly created (or appended) batch queue.
  *
+ * Start index determined automatically:
+ *   REBASE  → 0
+ *   PRESERVE → meta.start_index from the stream header
+ *
  * If the destination queue already exists:
  *   - allow_append=0 → returns MMAPQ_EEXIST
  *   - allow_append=1 + PRESERVE → returns MMAPQ_EINVAL
@@ -137,7 +141,6 @@ int64_t batch_queue_transfer_export_chunked(
  * in:               input stream (FILE*) containing batched stream
  * directory:        queue base directory
  * queue_name:       queue subdirectory name
- * start_index:      desired start index for the new queue
  * start_index_mode: BATCH_QUEUE_TRANSFER_REBASE or PRESERVE
  * write_rt:         runtime for writers (NULL = sync)
  * read_rt:          runtime for readers (NULL = sync)
@@ -146,7 +149,7 @@ int64_t batch_queue_transfer_export_chunked(
  */
 int64_t batch_queue_transfer_import(
     FILE *in, const char *directory, const char *queue_name,
-    int64_t start_index, int start_index_mode,
+    int start_index_mode,
     Runtime *write_rt, Runtime *read_rt,
     int allow_append);
 
@@ -154,12 +157,12 @@ int64_t batch_queue_transfer_import(
  * Import a flat (single-message) stream into a batch queue, placing each
  * message into its own 1-element batch.
  *
+ * Start index determined automatically (same rules as batch_queue_transfer_import).
  * Destination-exists enforcement same as batch_queue_transfer_import.
  *
  * in:               input stream (FILE*) containing flat stream
  * directory:        queue base directory
  * queue_name:       queue subdirectory name
- * start_index:      desired start index for the new queue
  * start_index_mode: BATCH_QUEUE_TRANSFER_REBASE or PRESERVE
  * write_rt:         runtime for writers (NULL = sync)
  * read_rt:          runtime for readers (NULL = sync)
@@ -168,7 +171,7 @@ int64_t batch_queue_transfer_import(
  */
 int64_t batch_queue_transfer_import_flat_stream(
     FILE *in, const char *directory, const char *queue_name,
-    int64_t start_index, int start_index_mode,
+    int start_index_mode,
     Runtime *write_rt, Runtime *read_rt,
     int allow_append);
 
