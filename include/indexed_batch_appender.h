@@ -79,6 +79,27 @@ IndexedBatchAppender *indexed_batch_appender_create(
     Runtime    *runtime,
     int64_t     start_index);
 
+/**
+ * Create a batch appender with a specific appender ID.
+ *
+ * Acquires the given ID from the queue's appender ID pool. Returns NULL
+ * if the ID is already in use.
+ *
+ * All parameters same as indexed_batch_appender_create, plus:
+ * appender_id: the desired appender ID (0-254)
+ */
+IndexedBatchAppender *indexed_batch_appender_create_with_id(
+    const char *directory,
+    const char *queue_name,
+    int32_t     region_size,
+    int         ring_size,
+    int64_t     max_file_size,
+    uint64_t    timeout_ns,
+    int         archivable,
+    Runtime    *runtime,
+    uint8_t     appender_id,
+    int64_t     start_index);
+
 /* ── Batch lifecycle ─────────────────────────────────────────────────────── */
 
 /**

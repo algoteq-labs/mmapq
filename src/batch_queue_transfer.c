@@ -6,6 +6,7 @@
 #include "indexed_appender.h"
 #include "indexed_reader.h"
 #include "export_meta.h"
+#include "appender_cache.h"
 #include "mmap_assert.h"
 #include "mmap_platform.h"
 #include <stdlib.h>
@@ -135,7 +136,9 @@ int64_t batch_queue_transfer_export(
         }
         if (msg_matched == 0) continue;
 
-        /* Write msg_count */
+        /* Write appender_id (uint16, matching normal queue framing) + msg_count */
+        uint16_t batch_aid = bctx.appender_id;
+        if (write_all(out, &batch_aid, sizeof(uint16_t))) return -1;
         if (write_all(out, &msg_matched, sizeof(int32_t))) return -1;
 
         /* Write matching messages */
@@ -200,7 +203,7 @@ int64_t batch_queue_transfer_export_chunked(
 
         /* Count/size this batch */
         int msg_matched = 0;
-        int batch_size  = (int)sizeof(int32_t); /* msg_count field */
+        int batch_size  = (int)(sizeof(uint16_t) + sizeof(int32_t)); /* appender_id + msg_count */
         batch_iterator_init(&bctx.batch_iterator, bctx.batch_offset,
                             bctx.message_count, 0);
         while (batch_iterator_advance(&bctx.batch_iterator)) {
@@ -291,6 +294,8 @@ int64_t batch_queue_transfer_export_chunked(
             }
             if (msg_matched == 0) continue;
 
+            uint16_t batch_aid = bctx.appender_id;
+            fwrite(&batch_aid, sizeof(uint16_t), 1, cf);
             fwrite(&msg_matched, sizeof(int32_t), 1, cf);
             batch_iterator_init(&bctx.batch_iterator, bctx.batch_offset,
                                 bctx.message_count, 0);
@@ -326,7 +331,9 @@ int64_t batch_queue_transfer_import(
     FILE *in, const char *directory, const char *queue_name,
     int start_index_mode,
     Runtime *write_rt, Runtime *read_rt,
-    int allow_append)
+    int allow_append,
+    AppenderIdMapper mapper, void *mapper_ctx,
+    ConflictBehavior on_conflict)
 {
     if (!in || !directory || !queue_name) return -1;
 
@@ -354,16 +361,35 @@ int64_t batch_queue_transfer_import(
         10000000000ULL, 0, write_rt, read_rt);
     if (!q) return -1;
 
-    IndexedBatchAppender *appender = indexed_batch_queue_create_appender(q);
-    if (!appender) { indexed_batch_queue_close(q); return -1; }
-
+    void *cache_store[APPENDER_CACHE_SIZE] = {NULL};
+    int32_t mapped_cache[APPENDER_CACHE_SIZE];
     int64_t imported = 0;
+
+    for (int _i = 0; _i < APPENDER_CACHE_SIZE; _i++) mapped_cache[_i] = MAPPED_NOT_COMPUTED;
+
+    AppenderCache ac = {
+        .cache = cache_store, .auto_appender = NULL,
+        .create = (AppenderCreateFn)indexed_batch_queue_create_appender,
+        .create_with_id = (AppenderCreateWithIdFn)indexed_batch_queue_create_appender_with_id,
+        .close = (AppenderCloseFn)indexed_batch_appender_close,
+        .queue_close = (QueueCloseFn)indexed_batch_queue_close,
+    };
+
     for (int64_t b = 0; b < meta.total_entries; b++) {
-        int32_t msg_cnt;
-        if (read_all(in, &msg_cnt, sizeof(int32_t))) break;
+        uint16_t batch_aid;
+        int32_t  msg_cnt;
+        if (read_all(in, &batch_aid, sizeof(uint16_t))) break;
+        if (read_all(in, &msg_cnt, sizeof(int32_t)))  break;
         if (msg_cnt < 0) break;
 
-        MutableBatch *mb = indexed_batch_appender_start_batch(appender);
+        int32_t mapped = appender_cache_map(mapped_cache, batch_aid, mapper, mapper_ctx);
+        int abort_flag;
+        IndexedBatchAppender *a = (IndexedBatchAppender *)appender_cache_get(
+            &ac, mapped, q, on_conflict, &abort_flag);
+        if (abort_flag) return MMAPQ_EIDCONFLICT;
+        if (!a) break;
+
+        MutableBatch *mb = indexed_batch_appender_start_batch(a);
         for (int32_t m = 0; m < msg_cnt; m++) {
             int32_t len;
             if (read_all(in, &len, sizeof(int32_t))) break;
@@ -381,22 +407,25 @@ int64_t batch_queue_transfer_import(
             if (payload != buf) free(payload);
         }
         int64_t off = mutable_batch_complete(mb);
-        indexed_batch_appender_commit_batch(appender, off);
+        indexed_batch_appender_commit_batch(a, off);
         imported++;
     }
 
-    indexed_batch_appender_close(appender);
+    appender_cache_cleanup(&ac);
     indexed_batch_queue_close(q);
     return imported;
 }
 
 /* ── Import (flat stream into batch queue, 1-msg batches) ──────────────────── */
 
+
 int64_t batch_queue_transfer_import_flat_stream(
     FILE *in, const char *directory, const char *queue_name,
     int start_index_mode,
     Runtime *write_rt, Runtime *read_rt,
-    int allow_append)
+    int allow_append,
+    AppenderIdMapper mapper, void *mapper_ctx,
+    ConflictBehavior on_conflict)
 {
     if (!in || !directory || !queue_name) return -1;
 
@@ -424,17 +453,33 @@ int64_t batch_queue_transfer_import_flat_stream(
         10000000000ULL, 0, write_rt, read_rt);
     if (!q) return -1;
 
-    IndexedBatchAppender *appender = indexed_batch_queue_create_appender(q);
-    if (!appender) { indexed_batch_queue_close(q); return -1; }
-
+    void *cache_store[APPENDER_CACHE_SIZE] = {NULL};
+    int32_t mapped_cache[APPENDER_CACHE_SIZE];
     int64_t imported = 0;
+
+    for (int _i = 0; _i < APPENDER_CACHE_SIZE; _i++) mapped_cache[_i] = MAPPED_NOT_COMPUTED;
+
+    AppenderCache ac = {
+        .cache = cache_store, .auto_appender = NULL,
+        .create = (AppenderCreateFn)indexed_batch_queue_create_appender,
+        .create_with_id = (AppenderCreateWithIdFn)indexed_batch_queue_create_appender_with_id,
+        .close = (AppenderCloseFn)indexed_batch_appender_close,
+        .queue_close = (QueueCloseFn)indexed_batch_queue_close,
+    };
+
     for (int64_t i = 0; i < meta.total_entries; i++) {
         uint16_t aid;
         int32_t  len;
         if (read_all(in, &aid, sizeof(uint16_t))) break;
         if (read_all(in, &len,  sizeof(int32_t)))  break;
         if (len < 0) break;
-        (void)aid;
+
+        int32_t mapped = appender_cache_map(mapped_cache, aid, mapper, mapper_ctx);
+        int abort_flag;
+        IndexedBatchAppender *a = (IndexedBatchAppender *)appender_cache_get(
+            &ac, mapped, q, on_conflict, &abort_flag);
+        if (abort_flag) return MMAPQ_EIDCONFLICT;
+        if (!a) break;
 
         uint8_t buf[65536];
         uint8_t *payload = buf;
@@ -446,15 +491,15 @@ int64_t batch_queue_transfer_import_flat_stream(
             if (payload != buf) { free(payload); break; }
         }
 
-        MutableBatch *mb = indexed_batch_appender_start_batch(appender);
+        MutableBatch *mb = indexed_batch_appender_start_batch(a);
         mutable_batch_append(mb, payload, len);
         int64_t off = mutable_batch_complete(mb);
-        indexed_batch_appender_commit_batch(appender, off);
+        indexed_batch_appender_commit_batch(a, off);
         if (payload != buf) free(payload);
         imported++;
     }
 
-    indexed_batch_appender_close(appender);
+    appender_cache_cleanup(&ac);
     indexed_batch_queue_close(q);
     return imported;
 }
@@ -467,7 +512,9 @@ int64_t batch_queue_transfer_copy(
     int64_t start, int64_t end, int start_index_mode,
     BatchQueueFilterFn include, BatchQueueFilterFn exclude, void *ctx,
     Runtime *write_rt, Runtime *read_rt,
-    int allow_append)
+    int allow_append,
+    AppenderIdMapper mapper, void *mapper_ctx,
+    ConflictBehavior on_conflict)
 {
     if (!reader || !dest_dir || !dest_queue) return -1;
     if (start > end) return -1;
@@ -501,14 +548,32 @@ int64_t batch_queue_transfer_copy(
         dest_start, 10000000000ULL, 0, write_rt, read_rt);
     if (!q) return -1;
 
-    IndexedBatchAppender *appender = indexed_batch_queue_create_appender(q);
-    if (!appender) { indexed_batch_queue_close(q); return -1; }
-
+    void *cache_store[APPENDER_CACHE_SIZE] = {NULL};
+    int32_t mapped_cache[APPENDER_CACHE_SIZE];
     int64_t copied = 0;
+
+    for (int _i = 0; _i < APPENDER_CACHE_SIZE; _i++) mapped_cache[_i] = MAPPED_NOT_COMPUTED;
+
+    AppenderCache ac = {
+        .cache = cache_store, .auto_appender = NULL,
+        .create = (AppenderCreateFn)indexed_batch_queue_create_appender,
+        .create_with_id = (AppenderCreateWithIdFn)indexed_batch_queue_create_appender_with_id,
+        .close = (AppenderCloseFn)indexed_batch_appender_close,
+        .queue_close = (QueueCloseFn)indexed_batch_queue_close,
+    };
+
     BatchReadingContext bctx;
     for (int64_t b = start; b <= end; b++) {
         indexed_batch_reader_read(reader, b, &bctx);
         if (bctx.status != BATCH_ENTRY_AVAILABLE) continue;
+
+        uint16_t aid = bctx.appender_id;
+        int32_t mapped = appender_cache_map(mapped_cache, aid, mapper, mapper_ctx);
+        int abort_flag;
+        IndexedBatchAppender *a = (IndexedBatchAppender *)appender_cache_get(
+            &ac, mapped, q, on_conflict, &abort_flag);
+        if (abort_flag) return MMAPQ_EIDCONFLICT;
+        if (!a) break;
 
         MutableBatch *mb = NULL;
         int batch_has_msgs = 0;
@@ -525,19 +590,19 @@ int64_t batch_queue_transfer_copy(
                 int ex = exclude ? exclude(b, m_idx, m_cnt, d, l, ctx) : 0;
                 if (!in || ex) continue;
             }
-            if (!mb) mb = indexed_batch_appender_start_batch(appender);
+            if (!mb) mb = indexed_batch_appender_start_batch(a);
             mutable_batch_append(mb, d, l);
             batch_has_msgs = 1;
         }
 
         if (batch_has_msgs) {
             int64_t off = mutable_batch_complete(mb);
-            indexed_batch_appender_commit_batch(appender, off);
+            indexed_batch_appender_commit_batch(a, off);
             copied++;
         }
     }
 
-    indexed_batch_appender_close(appender);
+    appender_cache_cleanup(&ac);
     indexed_batch_queue_close(q);
     return copied;
 }
@@ -550,7 +615,9 @@ int64_t batch_queue_transfer_copy_normal_to_batch(
     int64_t start, int64_t end, int start_index_mode,
     BatchQueueFilterFn include, BatchQueueFilterFn exclude, void *ctx,
     Runtime *write_rt, Runtime *read_rt,
-    int allow_append)
+    int allow_append,
+    AppenderIdMapper mapper, void *mapper_ctx,
+    ConflictBehavior on_conflict)
 {
     if (!reader || !dest_dir || !dest_queue) return -1;
     if (start > end) return -1;
@@ -584,30 +651,47 @@ int64_t batch_queue_transfer_copy_normal_to_batch(
         dest_start, 10000000000ULL, 0, write_rt, read_rt);
     if (!q) return -1;
 
-    IndexedBatchAppender *appender = indexed_batch_queue_create_appender(q);
-    if (!appender) { indexed_batch_queue_close(q); return -1; }
-
+    void *cache_store[APPENDER_CACHE_SIZE] = {NULL};
+    int32_t mapped_cache[APPENDER_CACHE_SIZE];
     int64_t copied = 0;
+
+    for (int _i = 0; _i < APPENDER_CACHE_SIZE; _i++) mapped_cache[_i] = MAPPED_NOT_COMPUTED;
+
+    AppenderCache ac = {
+        .cache = cache_store, .auto_appender = NULL,
+        .create = (AppenderCreateFn)indexed_batch_queue_create_appender,
+        .create_with_id = (AppenderCreateWithIdFn)indexed_batch_queue_create_appender_with_id,
+        .close = (AppenderCloseFn)indexed_batch_appender_close,
+        .queue_close = (QueueCloseFn)indexed_batch_queue_close,
+    };
+
     ReadingContext rc;
     for (int64_t i = start; i <= end; i++) {
         indexed_reader_read(reader, i, &rc);
         if (rc.status != ENTRY_AVAILABLE) continue;
 
         if (!no_filter) {
-            /* Normal entry becomes 1-msg batch: msg_index=0, msg_count=1 */
             int in = include ? include(i, 0, 1, rc.data, rc.length, ctx) : 1;
             int ex = exclude ? exclude(i, 0, 1, rc.data, rc.length, ctx) : 0;
             if (!in || ex) continue;
         }
 
-        MutableBatch *mb = indexed_batch_appender_start_batch(appender);
+        uint16_t aid = rc.appender_id;
+        int32_t mapped = appender_cache_map(mapped_cache, aid, mapper, mapper_ctx);
+        int abort_flag;
+        IndexedBatchAppender *a = (IndexedBatchAppender *)appender_cache_get(
+            &ac, mapped, q, on_conflict, &abort_flag);
+        if (abort_flag) return MMAPQ_EIDCONFLICT;
+        if (!a) break;
+
+        MutableBatch *mb = indexed_batch_appender_start_batch(a);
         mutable_batch_append(mb, rc.data, rc.length);
         int64_t off = mutable_batch_complete(mb);
-        indexed_batch_appender_commit_batch(appender, off);
+        indexed_batch_appender_commit_batch(a, off);
         copied++;
     }
 
-    indexed_batch_appender_close(appender);
+    appender_cache_cleanup(&ac);
     indexed_batch_queue_close(q);
     return copied;
 }

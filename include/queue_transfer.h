@@ -45,6 +45,34 @@ typedef struct IndexedBatchReader IndexedBatchReader;
 /** Start index in the export stream matches the source range start. */
 #define QUEUE_TRANSFER_PRESERVE  1
 
+/* ── Appender ID mapper ──────────────────────────────────────────────────── */
+
+/** Return -1 to auto-assign the next available appender ID. */
+#define APPENDER_ID_AUTO (-1)
+
+/**
+ * Map a source appender ID to a destination appender ID.
+ *
+ * Called once per entry during import/copy. The returned value is used as
+ * the appender ID in the destination queue.
+ *
+ * source_aid: appender ID from the source (export stream or reader)
+ * ctx:        caller-supplied context (passed through from the API call)
+ * Returns: a valid appender ID (0-254), or APPENDER_ID_AUTO for auto-assign
+ */
+typedef int32_t (*AppenderIdMapper)(uint16_t source_aid, void *ctx);
+
+/**
+ * ConflictBehavior — what to do when a mapped appender ID is already in use.
+ *
+ * CONFLICT_AUTO:  fall back to auto-assign (create_appender) — always succeeds
+ * CONFLICT_ABORT: return MMAPQ_EIDCONFLICT immediately
+ */
+typedef enum {
+    CONFLICT_AUTO  = 0,
+    CONFLICT_ABORT = 1,
+} ConflictBehavior;
+
 /* ── Filter callback ─────────────────────────────────────────────────────── */
 
 /**
@@ -155,13 +183,19 @@ int64_t queue_transfer_export_chunked(
  * write_rt:         runtime for writers (NULL = sync)
  * read_rt:          runtime for readers (NULL = sync)
  * allow_append:     1 to allow appending to an existing queue, 0 to forbid
+ * mapper:           AppenderIdMapper callback (NULL = identity mapping)
+ * mapper_ctx:       caller context passed to the mapper callback
+ * on_conflict:      CONFLICT_AUTO (fall back to auto-assign) or
+ *                   CONFLICT_ABORT (return MMAPQ_EIDCONFLICT)
  * Returns: number of entries imported, or -1 on error
  */
 int64_t queue_transfer_import(
     FILE *in, const char *directory, const char *queue_name,
     int start_index_mode,
     Runtime *write_rt, Runtime *read_rt,
-    int allow_append);
+    int allow_append,
+    AppenderIdMapper mapper, void *mapper_ctx,
+    ConflictBehavior on_conflict);
 
 /**
  * Import a batched (batch queue) stream into a normal queue, flattening
@@ -174,6 +208,10 @@ int64_t queue_transfer_import(
  * Start index determined automatically (same rules as queue_transfer_import).
  * Destination-exists enforcement same as queue_transfer_import.
  *
+ * Each batch in the stream carries a uint16 appender ID (matching the
+ * normal queue framing). The mapper controls how these IDs are assigned
+ * in the destination queue.
+ *
  * in:               input stream (FILE*) containing batch stream
  * directory:        queue base directory
  * queue_name:       queue subdirectory name
@@ -181,13 +219,18 @@ int64_t queue_transfer_import(
  * write_rt:         runtime for writers (NULL = sync)
  * read_rt:          runtime for readers (NULL = sync)
  * allow_append:     1 to allow appending to an existing queue, 0 to forbid
+ * mapper:           AppenderIdMapper callback (NULL = identity mapping)
+ * mapper_ctx:       caller context passed to the mapper callback
+ * on_conflict:      CONFLICT_AUTO or CONFLICT_ABORT
  * Returns: total number of individual messages imported, or -1 on error
  */
 int64_t queue_transfer_import_batch_stream(
     FILE *in, const char *directory, const char *queue_name,
     int start_index_mode,
     Runtime *write_rt, Runtime *read_rt,
-    int allow_append);
+    int allow_append,
+    AppenderIdMapper mapper, void *mapper_ctx,
+    ConflictBehavior on_conflict);
 
 /* ── Copy ────────────────────────────────────────────────────────────────── */
 
@@ -196,6 +239,9 @@ int64_t queue_transfer_import_batch_stream(
  * destination queue.  Supports optional filters.
  *
  * Destination-exists enforcement same as queue_transfer_import.
+ *
+ * Each entry's appender ID (from ReadingContext) is passed through the
+ * mapper to determine its destination appender.
  *
  * reader:          source queue reader
  * dest_dir:        destination queue base directory
@@ -209,6 +255,9 @@ int64_t queue_transfer_import_batch_stream(
  * write_rt:        runtime for writers (NULL = sync)
  * read_rt:         runtime for readers (NULL = sync)
  * allow_append:    1 to allow appending to an existing queue, 0 to forbid
+ * mapper:          AppenderIdMapper callback (NULL = identity mapping)
+ * mapper_ctx:      caller context passed to the mapper callback
+ * on_conflict:     CONFLICT_AUTO or CONFLICT_ABORT
  * Returns: number of entries copied, or -1 on error
  */
 int64_t queue_transfer_copy(
@@ -217,7 +266,9 @@ int64_t queue_transfer_copy(
     int64_t start, int64_t end, int start_index_mode,
     QueueFilterFn include, QueueFilterFn exclude, void *ctx,
     Runtime *write_rt, Runtime *read_rt,
-    int allow_append);
+    int allow_append,
+    AppenderIdMapper mapper, void *mapper_ctx,
+    ConflictBehavior on_conflict);
 
 /**
  * Copy batches [start, end] from a batch queue reader and flatten each
@@ -227,6 +278,10 @@ int64_t queue_transfer_copy(
  * normal queue.  Supports optional message-level filters.
  *
  * Destination-exists enforcement same as queue_transfer_import.
+ *
+ * Each batch's appender ID (from BatchReadingContext.appender_id) is
+ * passed through the mapper to determine its destination appender.
+ * All messages within a batch share the same appender ID.
  *
  * reader:          source batch queue reader
  * dest_dir:        destination normal queue base directory
@@ -240,6 +295,9 @@ int64_t queue_transfer_copy(
  * write_rt:        runtime for writers (NULL = sync)
  * read_rt:         runtime for readers (NULL = sync)
  * allow_append:    1 to allow appending to an existing queue, 0 to forbid
+ * mapper:          AppenderIdMapper callback (NULL = identity mapping)
+ * mapper_ctx:      caller context passed to the mapper callback
+ * on_conflict:     CONFLICT_AUTO or CONFLICT_ABORT
  * Returns: number of individual messages copied, or -1 on error
  */
 int64_t queue_transfer_copy_batch_to_normal(
@@ -248,6 +306,8 @@ int64_t queue_transfer_copy_batch_to_normal(
     int64_t start, int64_t end, int start_index_mode,
     BatchQueueFilterFn include, BatchQueueFilterFn exclude, void *ctx,
     Runtime *write_rt, Runtime *read_rt,
-    int allow_append);
+    int allow_append,
+    AppenderIdMapper mapper, void *mapper_ctx,
+    ConflictBehavior on_conflict);
 
 #endif /* QUEUE_TRANSFER_H */

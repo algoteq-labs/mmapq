@@ -94,6 +94,19 @@ IndexedBatchQueue *indexed_batch_queue_create_default(
 IndexedBatchAppender *indexed_batch_queue_create_appender(IndexedBatchQueue *q);
 
 /**
+ * Create a batch appender with a specific appender ID.
+ *
+ * Acquires the given ID from the queue's appender ID pool. Returns NULL
+ * if the ID is already in use or if the queue is closed.
+ *
+ * q:           the queue (must not be closed)
+ * appender_id: the desired appender ID (0-254)
+ * Returns: a new appender, or NULL if the ID is taken
+ */
+IndexedBatchAppender *indexed_batch_queue_create_appender_with_id(
+    IndexedBatchQueue *q, uint8_t appender_id);
+
+/**
  * Create a batch poller on the read side of this queue.
  *
  * Uses the queue's read_runtime for background region mapping.

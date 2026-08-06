@@ -128,6 +128,7 @@ static void reader_fill_context(IndexedBatchReader *r, int64_t index, BatchReadi
 
     ctx->batch_offset  = payload_position;
     ctx->message_count = message_count;
+    ctx->appender_id   = appender_id;
     ctx->status        = BATCH_ENTRY_AVAILABLE;
 }
 

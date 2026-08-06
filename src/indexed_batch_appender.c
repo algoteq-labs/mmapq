@@ -142,7 +142,7 @@ static void initialise_append_position(IndexedBatchAppender *a, int32_t region_s
 
 /* ── Factory ─────────────────────────────────────────────────────────────── */
 
-IndexedBatchAppender *indexed_batch_appender_create(
+static IndexedBatchAppender *batch_appender_create_internal(
     const char *directory,
     const char *queue_name,
     int32_t     region_size,
@@ -151,15 +151,17 @@ IndexedBatchAppender *indexed_batch_appender_create(
     uint64_t    timeout_ns,
     int         archivable,
     Runtime    *runtime,
+    AppenderIdPool *pool,
+    uint8_t     appender_id,
     int64_t     start_index)
 {
     IndexedBatchAppender *a = calloc(1, sizeof(IndexedBatchAppender));
     MMAP_ASSERT(a != NULL, "out of memory");
 
-    a->directory  = strdup(directory);
-    a->queue_name = strdup(queue_name);
-    a->id_pool    = appender_id_pool_open(directory, queue_name);
-    a->appender_id = (uint8_t)appender_id_pool_acquire(a->id_pool);
+    a->directory    = strdup(directory);
+    a->queue_name   = strdup(queue_name);
+    a->id_pool      = pool;
+    a->appender_id  = appender_id;
 
     a->queue_meta = queue_meta_open_rw(directory, queue_name, start_index, region_size, max_file_size, archivable, QUEUE_TYPE_BATCH);
     if (a->queue_meta == NULL) {
@@ -184,6 +186,54 @@ IndexedBatchAppender *indexed_batch_appender_create(
     initialise_append_position(a, rec_reg, ring_size, rec_max, timeout_ns, runtime, start_index);
 
     return a;
+}
+
+IndexedBatchAppender *indexed_batch_appender_create(
+    const char *directory,
+    const char *queue_name,
+    int32_t     region_size,
+    int         ring_size,
+    int64_t     max_file_size,
+    uint64_t    timeout_ns,
+    int         archivable,
+    Runtime    *runtime,
+    int64_t     start_index)
+{
+    AppenderIdPool *pool = appender_id_pool_open(directory, queue_name);
+    uint8_t id = (uint8_t)appender_id_pool_acquire(pool);
+
+    return batch_appender_create_internal(directory, queue_name, region_size,
+        ring_size, max_file_size, timeout_ns, archivable, runtime,
+        pool, id, start_index);
+}
+
+IndexedBatchAppender *indexed_batch_appender_create_with_id(
+    const char *directory,
+    const char *queue_name,
+    int32_t     region_size,
+    int         ring_size,
+    int64_t     max_file_size,
+    uint64_t    timeout_ns,
+    int         archivable,
+    Runtime    *runtime,
+    uint8_t     appender_id,
+    int64_t     start_index)
+{
+    if (directory  == NULL) return NULL;
+    if (queue_name == NULL) return NULL;
+
+    AppenderIdPool *pool = appender_id_pool_open(directory, queue_name);
+    if (pool == NULL) return NULL;
+
+    int ok = appender_id_pool_try_acquire(pool, appender_id);
+    if (!ok) {
+        appender_id_pool_close(pool);
+        return NULL;
+    }
+
+    return batch_appender_create_internal(directory, queue_name, region_size,
+        ring_size, max_file_size, timeout_ns, archivable, runtime,
+        pool, appender_id, start_index);
 }
 
 /* ── Batch Operations ────────────────────────────────────────────────────── */

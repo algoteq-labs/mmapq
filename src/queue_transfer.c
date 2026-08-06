@@ -6,6 +6,7 @@
 #include "indexed_batch_queue.h"
 #include "indexed_batch_appender.h"
 #include "export_meta.h"
+#include "appender_cache.h"
 #include "mmap_assert.h"
 #include "mmap_platform.h"
 #include <stdlib.h>
@@ -264,8 +265,12 @@ int64_t queue_transfer_export_chunked(
  * is_batch_stream: 1 = batched stream, 0 = flat stream
  * wrt:            runtime for writers (NULL = sync)
  * rrt:            runtime for readers (NULL = sync)
+ * mapper:         AppenderIdMapper callback (NULL = identity mapping)
+ * mapper_ctx:     caller context passed to the mapper callback
+ * on_conflict:    CONFLICT_AUTO or CONFLICT_ABORT
  * Returns: number of entries (individual messages) imported, or -1 on error
  */
+
 static int64_t do_import(
     FILE *in, const char *directory, const char *queue_name,
     int64_t start_index,
@@ -273,7 +278,9 @@ static int64_t do_import(
     uint8_t archivable,
     int64_t total_entries,
     int is_batch_stream,
-    Runtime *wrt, Runtime *rrt)
+    Runtime *wrt, Runtime *rrt,
+    AppenderIdMapper mapper, void *mapper_ctx,
+    ConflictBehavior on_conflict)
 {
     (void)archivable;
     char dpath[4096];
@@ -287,17 +294,36 @@ static int64_t do_import(
 
     if (!q) return -1;
 
-    IndexedAppender *appender = indexed_queue_create_appender(q);
-    if (!appender) { indexed_queue_close(q); return -1; }
-
+    void *cache_store[APPENDER_CACHE_SIZE] = {NULL};
+    int32_t mapped_cache[APPENDER_CACHE_SIZE];
     int64_t imported = 0;
 
+    for (int _i = 0; _i < APPENDER_CACHE_SIZE; _i++) mapped_cache[_i] = MAPPED_NOT_COMPUTED;
+
+    AppenderCache ac = {
+        .cache = cache_store, .auto_appender = NULL,
+        .create = (AppenderCreateFn)indexed_queue_create_appender,
+        .create_with_id = (AppenderCreateWithIdFn)indexed_queue_create_appender_with_id,
+        .close = (AppenderCloseFn)indexed_appender_close,
+        .queue_close = (QueueCloseFn)indexed_queue_close,
+    };
+
     if (is_batch_stream) {
-        /* Flatten batch stream: read batches, append each message individually */
         for (int64_t b = 0; b < total_entries; b++) {
-            int32_t msg_cnt;
-            if (read_all(in, &msg_cnt, sizeof(int32_t))) break;
+            uint16_t batch_aid;
+            int32_t  msg_cnt;
+            if (read_all(in, &batch_aid, sizeof(uint16_t))) break;
+            if (read_all(in, &msg_cnt, sizeof(int32_t)))  break;
             if (msg_cnt < 0) break;
+
+            int32_t mapped = appender_cache_map(mapped_cache, batch_aid, mapper, mapper_ctx);
+
+            int abort_flag;
+            IndexedAppender *a = (IndexedAppender *)appender_cache_get(
+                &ac, mapped, q, on_conflict, &abort_flag);
+            if (abort_flag) return MMAPQ_EIDCONFLICT;
+            if (!a) break;
+
             for (int32_t m = 0; m < msg_cnt; m++) {
                 int32_t len;
                 if (read_all(in, &len, sizeof(int32_t))) break;
@@ -311,19 +337,27 @@ static int64_t do_import(
                 if (len > 0 && read_all(in, payload, (size_t)len)) {
                     if (payload != buf) { free(payload); break; }
                 }
-                indexed_appender_append(appender, payload, len);
+                indexed_appender_append(a, payload, len);
                 if (payload != buf) free(payload);
                 imported++;
             }
         }
     } else {
-        /* Flat stream: read entries directly */
         for (int64_t i = 0; i < total_entries; i++) {
             uint16_t aid;
             int32_t  len;
             if (read_all(in, &aid, sizeof(uint16_t))) break;
             if (read_all(in, &len,  sizeof(int32_t)))  break;
             if (len < 0) break;
+
+            int32_t mapped = appender_cache_map(mapped_cache, aid, mapper, mapper_ctx);
+
+            int abort_flag;
+            IndexedAppender *a = (IndexedAppender *)appender_cache_get(
+                &ac, mapped, q, on_conflict, &abort_flag);
+            if (abort_flag) return MMAPQ_EIDCONFLICT;
+            if (!a) break;
+
             uint8_t buf[65536];
             uint8_t *payload = buf;
             if ((size_t)len > sizeof(buf)) {
@@ -333,13 +367,13 @@ static int64_t do_import(
             if (len > 0 && read_all(in, payload, (size_t)len)) {
                 if (payload != buf) { free(payload); break; }
             }
-            indexed_appender_append(appender, payload, len);
+            indexed_appender_append(a, payload, len);
             if (payload != buf) free(payload);
             imported++;
         }
     }
 
-    indexed_appender_close(appender);
+    appender_cache_cleanup(&ac);
     indexed_queue_close(q);
     return imported;
 }
@@ -350,7 +384,9 @@ int64_t queue_transfer_import(
     FILE *in, const char *directory, const char *queue_name,
     int start_index_mode,
     Runtime *write_rt, Runtime *read_rt,
-    int allow_append)
+    int allow_append,
+    AppenderIdMapper mapper, void *mapper_ctx,
+    ConflictBehavior on_conflict)
 {
     if (!in || !directory || !queue_name) return -1;
 
@@ -370,14 +406,17 @@ int64_t queue_transfer_import(
     return do_import(in, directory, queue_name, effective,
                      meta.region_size, meta.max_file_size,
                      meta.archivable,
-                     meta.total_entries, 0, write_rt, read_rt);
+                     meta.total_entries, 0, write_rt, read_rt,
+                     mapper, mapper_ctx, on_conflict);
 }
 
 int64_t queue_transfer_import_batch_stream(
     FILE *in, const char *directory, const char *queue_name,
     int start_index_mode,
     Runtime *write_rt, Runtime *read_rt,
-    int allow_append)
+    int allow_append,
+    AppenderIdMapper mapper, void *mapper_ctx,
+    ConflictBehavior on_conflict)
 {
     if (!in || !directory || !queue_name) return -1;
 
@@ -397,7 +436,8 @@ int64_t queue_transfer_import_batch_stream(
     return do_import(in, directory, queue_name, effective,
                      meta.region_size, meta.max_file_size,
                      meta.archivable,
-                     meta.total_entries, 1, write_rt, read_rt);
+                     meta.total_entries, 1, write_rt, read_rt,
+                     mapper, mapper_ctx, on_conflict);
 }
 
 /* ── Copy ─────────────────────────────────────────────────────────────────── */
@@ -408,7 +448,9 @@ int64_t queue_transfer_copy(
     int64_t start, int64_t end, int start_index_mode,
     QueueFilterFn include, QueueFilterFn exclude, void *ctx,
     Runtime *write_rt, Runtime *read_rt,
-    int allow_append)
+    int allow_append,
+    AppenderIdMapper mapper, void *mapper_ctx,
+    ConflictBehavior on_conflict)
 {
     if (!reader || !dest_dir || !dest_queue) return -1;
     if (start > end) return -1;
@@ -442,10 +484,20 @@ int64_t queue_transfer_copy(
 
     if (!q) return -1;
 
-    IndexedAppender *appender = indexed_queue_create_appender(q);
-    if (!appender) { indexed_queue_close(q); return -1; }
-
+    void *cache_store[APPENDER_CACHE_SIZE] = {NULL};
+    int32_t mapped_cache[APPENDER_CACHE_SIZE];
     int64_t copied = 0;
+
+    for (int _i = 0; _i < APPENDER_CACHE_SIZE; _i++) mapped_cache[_i] = MAPPED_NOT_COMPUTED;
+
+    AppenderCache ac = {
+        .cache = cache_store, .auto_appender = NULL,
+        .create = (AppenderCreateFn)indexed_queue_create_appender,
+        .create_with_id = (AppenderCreateWithIdFn)indexed_queue_create_appender_with_id,
+        .close = (AppenderCloseFn)indexed_appender_close,
+        .queue_close = (QueueCloseFn)indexed_queue_close,
+    };
+
     ReadingContext rc;
     for (int64_t i = start; i <= end; i++) {
         indexed_reader_read(reader, i, &rc);
@@ -455,11 +507,21 @@ int64_t queue_transfer_copy(
             int ex = exclude ? exclude(i, rc.data, rc.length, ctx) : 0;
             if (!in || ex) continue;
         }
-        indexed_appender_append(appender, rc.data, rc.length);
+
+        uint16_t aid = rc.appender_id;
+        int32_t mapped = appender_cache_map(mapped_cache, aid, mapper, mapper_ctx);
+
+        int abort_flag;
+        IndexedAppender *a = (IndexedAppender *)appender_cache_get(
+            &ac, mapped, q, on_conflict, &abort_flag);
+        if (abort_flag) return MMAPQ_EIDCONFLICT;
+        if (!a) break;
+
+        indexed_appender_append(a, rc.data, rc.length);
         copied++;
     }
 
-    indexed_appender_close(appender);
+    appender_cache_cleanup(&ac);
     indexed_queue_close(q);
     return copied;
 }
@@ -472,7 +534,9 @@ int64_t queue_transfer_copy_batch_to_normal(
     int64_t start, int64_t end, int start_index_mode,
     BatchQueueFilterFn include, BatchQueueFilterFn exclude, void *ctx,
     Runtime *write_rt, Runtime *read_rt,
-    int allow_append)
+    int allow_append,
+    AppenderIdMapper mapper, void *mapper_ctx,
+    ConflictBehavior on_conflict)
 {
     if (!reader || !dest_dir || !dest_queue) return -1;
     if (start > end) return -1;
@@ -506,14 +570,33 @@ int64_t queue_transfer_copy_batch_to_normal(
         dest_start, 10000000000ULL, 0, write_rt, read_rt);
     if (!q) return -1;
 
-    IndexedAppender *appender = indexed_queue_create_appender(q);
-    if (!appender) { indexed_queue_close(q); return -1; }
-
+    void *cache_store[APPENDER_CACHE_SIZE] = {NULL};
+    int32_t mapped_cache[APPENDER_CACHE_SIZE];
     int64_t copied = 0;
+
+    for (int _i = 0; _i < APPENDER_CACHE_SIZE; _i++) mapped_cache[_i] = MAPPED_NOT_COMPUTED;
+
+    AppenderCache ac = {
+        .cache = cache_store, .auto_appender = NULL,
+        .create = (AppenderCreateFn)indexed_queue_create_appender,
+        .create_with_id = (AppenderCreateWithIdFn)indexed_queue_create_appender_with_id,
+        .close = (AppenderCloseFn)indexed_appender_close,
+        .queue_close = (QueueCloseFn)indexed_queue_close,
+    };
+
     BatchReadingContext bctx;
     for (int64_t b = start; b <= end; b++) {
         indexed_batch_reader_read(reader, b, &bctx);
         if (bctx.status != BATCH_ENTRY_AVAILABLE) continue;
+
+        uint16_t aid = bctx.appender_id;
+        int32_t mapped = appender_cache_map(mapped_cache, aid, mapper, mapper_ctx);
+
+        int abort_flag;
+        IndexedAppender *a = (IndexedAppender *)appender_cache_get(
+            &ac, mapped, q, on_conflict, &abort_flag);
+        if (abort_flag) return MMAPQ_EIDCONFLICT;
+        if (!a) break;
 
         batch_iterator_init(&bctx.batch_iterator, bctx.batch_offset,
                             bctx.message_count, 0);
@@ -528,12 +611,12 @@ int64_t queue_transfer_copy_batch_to_normal(
                 int ex = exclude ? exclude(b, m_idx, m_cnt, d, l, ctx) : 0;
                 if (!in || ex) continue;
             }
-            indexed_appender_append(appender, d, l);
+            indexed_appender_append(a, d, l);
             copied++;
         }
     }
 
-    indexed_appender_close(appender);
+    appender_cache_cleanup(&ac);
     indexed_queue_close(q);
     return copied;
 }

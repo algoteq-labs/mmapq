@@ -79,6 +79,7 @@ typedef enum {
  *   - index:          the batch index that was read
  *   - batch_offset:   payload file offset of the batch header
  *   - message_count:  number of messages in the batch
+ *   - appender_id:    appender ID that wrote this batch
  *   - batch_iterator: positioned before the first message; call
  *                     batch_iterator_advance() to move to each message
  *
@@ -93,6 +94,8 @@ typedef struct {
     BatchEntryStatus     status;
     int64_t              batch_offset;
     int32_t              message_count;
+    uint8_t              appender_id;
+    uint8_t              reserved[3];
     BatchPayloadIterator batch_iterator;
 } BatchReadingContext;
 
