@@ -61,6 +61,7 @@ typedef struct IndexedAppender IndexedAppender;
  * archivable:  1 to create the queue archivable (applies at creation only;
  *              existing queues keep their on-disk value). 0 is performant mode.
  * runtime:     region mapper runtime
+ * start_index: logical start index for the queue (0 for fresh, preserved on import/copy)
  *
  * Acquires an appender ID from the pool, initialises append position
  * (including recovery scan), and eager-wraps RW regions.
@@ -75,7 +76,8 @@ IndexedAppender *indexed_appender_create(
     int64_t     max_file_size,
     uint64_t    timeout_ns,
     int         archivable,
-    Runtime    *runtime);
+    Runtime    *runtime,
+    int64_t     start_index);
 
 /**
  * indexed_appender_create_with_id — create an appender with a specific ID.
@@ -92,7 +94,8 @@ IndexedAppender *indexed_appender_create_with_id(
     uint64_t    timeout_ns,
     int         archivable,
     Runtime    *runtime,
-    uint8_t     appender_id);
+    uint8_t     appender_id,
+    int64_t     start_index);
 
 /* ── Append operations ───────────────────────────────────────────────────── */
 

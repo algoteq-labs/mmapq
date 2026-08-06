@@ -35,7 +35,7 @@ column are design decisions, not roadmap items.
 |---|---|---|---|
 | Atomic append-and-commit | ✓ | ✓ | ✓ |
 | Append uncommitted + explicit commit | ✓ | ✓ | ✓ |
-| Appender with specific ID (fixed-ID deployments) | ✓ | ✓ | ✓ |
+| Appender with specific ID (single-message + batch) | ✓ | ✓ | ✓ |
 | Appender ID / current index / start offset accessors | ✓ | ✓ | ◐ id only |
 | Committed / uncommitted payload iterators | ✓ | ◐ via FFI layer | — |
 | Zero-length append rejected (`MMAPQ_EINVAL`) at runtime | ✓ | ✓ `Err(InvalidArgument)` | ✓ raises `ValueError` |
@@ -64,7 +64,7 @@ column are design decisions, not roadmap items.
 
 | Feature | C | Rust | Python |
 |---|---|---|---|
-| Read at arbitrary index; read_first / read_last | ✓ | ✓ (`&mut`, one live message) | ✓ |
+| Read at arbitrary index; read_first / read_last; appender_id per entry | ✓ | ✓ (`&mut`, one live message) | ✓ |
 | Entry status (present / not yet / archived) | ✓ | ✓ | ✓ |
 | last_index / start_index | ✓ | ✓ | ✓ |
 | Batch reader | ✓ | ✓ | ✓ |
@@ -87,6 +87,8 @@ column are design decisions, not roadmap items.
 | Import stream → queue | ✓ | ✓ | ✓ |
 | Queue-to-queue copy | ✓ | ✓ | ✓ |
 | Batch variants (incl. flat-stream import) | ✓ | ✓ | — |
+| Appender ID mapper callback (identity / remap / merge) | ✓ | ✓ | ✓ |
+| ConflictBehavior (AUTO fallback / ABORT error) | ✓ | ✓ | ✓ |
 
 ## Cross-cutting guarantees (all languages, enforced in the C core)
 
@@ -94,7 +96,7 @@ column are design decisions, not roadmap items.
 |---|---|
 | Wire compatibility with Algoteq's Java implementation (tools4j-derived; NOT compatible with upstream tools4j — formats have diverged) | ✓ by construction, single-message queues; batch queues are C-ecosystem only |
 | Up to 256 concurrent appenders, lock-free atomic per-message commit | ✓ |
-| Distinct error codes: `ETIMEDOUT/EINVAL/ECLOSED/ECORRUPT/ESCHEMA` mapped 1:1 — Rust `MmapError` variants, Python exception classes | ✓ |
+| Distinct error codes: `ETIMEDOUT/EINVAL/ECLOSED/ECORRUPT/ESCHEMA/EEXIST/ENOENT/EIDCONFLICT` mapped 1:1 — Rust `MmapError` variants, Python exception classes | ✓ |
 | Corruption refused on open (`ECORRUPT`), never repaired; recreate from export | ✓ |
 | Validation survives release builds (`-DNDEBUG`); regression tests run under exact release flags | ✓ |
 | Multi-process safety: cross-process interop tests (Rust ↔ C echo servers) | ✓ |

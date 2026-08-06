@@ -6,10 +6,11 @@
  *                      to/from a portable batched stream format.
  *
  * EXPORTED STREAM FORMAT (batched):
- *   [BatchExportMeta: 64 bytes]
+ *   [ExportMeta: 64 bytes; queue_type = QUEUE_TYPE_BATCH]
  *     schema_version, region_size, start_index, max_file_size,
- *     total_batches, archivable
+ *     total_entries (= batch count), archivable, queue_type
  *   [batch 0:
+ *       uint16 appender_id
  *       int32  msg_count
  *       [int32 payload_length][uint8 payload...] ... (× msg_count)]
  *   [batch 1: ...]
@@ -19,11 +20,11 @@
  *   batch_queue_transfer_export(breader, stdout, 0, last, BATCH_QUEUE_TRANSFER_REBASE, NULL, NULL, NULL);
  *
  * USAGE — Import:
- *   batch_queue_transfer_import(stdin, "/data/queues", "orders", 0, rt, rt);
+ *   batch_queue_transfer_import(stdin, "/data/queues", "orders", 0, BATCH_QUEUE_TRANSFER_REBASE, rt, rt, 0);
  *
  * USAGE — Copy:
  *   batch_queue_transfer_copy(breader, "/backup/queues", "orders_bak",
- *                             0, last, BATCH_QUEUE_TRANSFER_REBASE, NULL, NULL, NULL, rt, rt);
+ *                             0, last, BATCH_QUEUE_TRANSFER_REBASE, NULL, NULL, NULL, rt, rt, 0);
  *
  * All functions support optional include/exclude filters.  Pass NULL for
  * both to accept all messages.
@@ -40,7 +41,11 @@
 #include <stdio.h>
 #include "indexed_batch_reader.h"
 #include "runtime.h"
-#include "batch_export_meta.h"
+#include "export_meta.h"
+#include "queue_transfer.h"
+
+/* Forward declaration for cross-type copy function */
+typedef struct IndexedReader IndexedReader;
 
 /* ── Start index mode ─────────────────────────────────────────────────────── */
 
@@ -125,40 +130,69 @@ int64_t batch_queue_transfer_export_chunked(
 /**
  * Import a batched stream into a newly created (or appended) batch queue.
  *
- * Reads the BatchExportMeta header, creates the destination batch queue
- * with matching parameters, and commits each batch.
+ * Start index determined automatically:
+ *   REBASE  → 0
+ *   PRESERVE → meta.start_index from the stream header
  *
- * in:           input stream (FILE*) containing batched stream
- * directory:    queue base directory
- * queue_name:   queue subdirectory name
- * start_index:  desired start index for the new queue (0 = rebase)
- * write_rt:     runtime for writers (NULL = sync)
- * read_rt:      runtime for readers (NULL = sync)
+ * If the destination queue already exists:
+ *   - allow_append=0 → returns MMAPQ_EEXIST
+ *   - allow_append=1 + PRESERVE → returns MMAPQ_EINVAL
+ *   - allow_append=1 + REBASE → appends
+ * If destination exists but is a normal queue → returns MMAPQ_ESCHEMA.
+ *
+ * Each batch in the stream carries a uint16 appender ID (matching the
+ * normal queue framing). The mapper controls how these IDs are assigned
+ * in the destination queue.
+ *
+ * in:               input stream (FILE*) containing batched stream
+ * directory:        queue base directory
+ * queue_name:       queue subdirectory name
+ * start_index_mode: BATCH_QUEUE_TRANSFER_REBASE or PRESERVE
+ * write_rt:         runtime for writers (NULL = sync)
+ * read_rt:          runtime for readers (NULL = sync)
+ * allow_append:     1 to allow appending to an existing queue, 0 to forbid
+ * mapper:           AppenderIdMapper callback (NULL = identity mapping)
+ * mapper_ctx:       caller context passed to the mapper callback
+ * on_conflict:      CONFLICT_AUTO or CONFLICT_ABORT
  * Returns: number of batches imported, or -1 on error
  */
 int64_t batch_queue_transfer_import(
     FILE *in, const char *directory, const char *queue_name,
-    int64_t start_index, Runtime *write_rt, Runtime *read_rt);
+    int start_index_mode,
+    Runtime *write_rt, Runtime *read_rt,
+    int allow_append,
+    AppenderIdMapper mapper, void *mapper_ctx,
+    ConflictBehavior on_conflict);
 
 /**
  * Import a flat (single-message) stream into a batch queue, placing each
  * message into its own 1-element batch.
  *
- * Reads the ExportMeta header, creates the destination batch queue,
- * and for each entry starts a new batch, appends the single message,
- * and commits it.
+ * Start index determined automatically (same rules as batch_queue_transfer_import).
+ * Destination-exists enforcement same as batch_queue_transfer_import.
  *
- * in:           input stream (FILE*) containing flat stream
- * directory:    queue base directory
- * queue_name:   queue subdirectory name
- * start_index:  desired start index for the new queue (0 = rebase)
- * write_rt:     runtime for writers (NULL = sync)
- * read_rt:      runtime for readers (NULL = sync)
+ * Each entry in the flat stream carries a uint16 appender ID. The mapper
+ * controls how these IDs are assigned in the destination batch queue.
+ *
+ * in:               input stream (FILE*) containing flat stream
+ * directory:        queue base directory
+ * queue_name:       queue subdirectory name
+ * start_index_mode: BATCH_QUEUE_TRANSFER_REBASE or PRESERVE
+ * write_rt:         runtime for writers (NULL = sync)
+ * read_rt:          runtime for readers (NULL = sync)
+ * allow_append:     1 to allow appending to an existing queue, 0 to forbid
+ * mapper:           AppenderIdMapper callback (NULL = identity mapping)
+ * mapper_ctx:       caller context passed to the mapper callback
+ * on_conflict:      CONFLICT_AUTO or CONFLICT_ABORT
  * Returns: number of batches (and messages) imported, or -1 on error
  */
 int64_t batch_queue_transfer_import_flat_stream(
     FILE *in, const char *directory, const char *queue_name,
-    int64_t start_index, Runtime *write_rt, Runtime *read_rt);
+    int start_index_mode,
+    Runtime *write_rt, Runtime *read_rt,
+    int allow_append,
+    AppenderIdMapper mapper, void *mapper_ctx,
+    ConflictBehavior on_conflict);
 
 /* ── Copy ────────────────────────────────────────────────────────────────── */
 
@@ -166,9 +200,11 @@ int64_t batch_queue_transfer_import_flat_stream(
  * Copy batches [start, end] directly from a source batch reader to a new
  * destination batch queue.  Supports optional filters.
  *
- * When filters are active, a batch is included only if it contains at
- * least one matching message.  Only matching messages are written to the
- * output batch.
+ * Destination-exists enforcement same as batch_queue_transfer_import.
+ *
+ * Each batch's appender ID (from BatchReadingContext.appender_id) is
+ * passed through the mapper to determine its destination appender.
+ * All messages within a batch share the same appender ID.
  *
  * reader:          source batch queue reader
  * dest_dir:        destination queue base directory
@@ -181,6 +217,10 @@ int64_t batch_queue_transfer_import_flat_stream(
  * ctx:             caller context passed to filter callbacks
  * write_rt:        runtime for writers (NULL = sync)
  * read_rt:         runtime for readers (NULL = sync)
+ * allow_append:    1 to allow appending to an existing queue, 0 to forbid
+ * mapper:          AppenderIdMapper callback (NULL = identity mapping)
+ * mapper_ctx:      caller context passed to the mapper callback
+ * on_conflict:     CONFLICT_AUTO or CONFLICT_ABORT
  * Returns: number of batches copied, or -1 on error
  */
 int64_t batch_queue_transfer_copy(
@@ -188,6 +228,48 @@ int64_t batch_queue_transfer_copy(
     const char *dest_dir, const char *dest_queue,
     int64_t start, int64_t end, int start_index_mode,
     BatchQueueFilterFn include, BatchQueueFilterFn exclude, void *ctx,
-    Runtime *write_rt, Runtime *read_rt);
+    Runtime *write_rt, Runtime *read_rt,
+    int allow_append,
+    AppenderIdMapper mapper, void *mapper_ctx,
+    ConflictBehavior on_conflict);
+
+/**
+ * Copy entries [start, end] from a normal queue reader and place each
+ * entry as a single-message batch in a batch queue.
+ *
+ * Each entry in the source becomes its own 1-element batch in the
+ * destination batch queue.  Supports optional message-level filters.
+ *
+ * Destination-exists enforcement same as batch_queue_transfer_import.
+ *
+ * Each entry's appender ID (from ReadingContext) is passed through the
+ * mapper to determine its destination batch appender.
+ *
+ * reader:          source normal queue reader
+ * dest_dir:        destination batch queue base directory
+ * dest_queue:      destination batch queue name
+ * start:           first entry index to copy (inclusive)
+ * end:             last entry index to copy (inclusive)
+ * start_index_mode: BATCH_QUEUE_TRANSFER_REBASE or PRESERVE
+ * include:         optional include filter (NULL = accept all)
+ * exclude:         optional exclude filter (NULL = skip none)
+ * ctx:             caller context passed to filter callbacks
+ * write_rt:        runtime for writers (NULL = sync)
+ * read_rt:         runtime for readers (NULL = sync)
+ * allow_append:    1 to allow appending to an existing queue, 0 to forbid
+ * mapper:          AppenderIdMapper callback (NULL = identity mapping)
+ * mapper_ctx:      caller context passed to the mapper callback
+ * on_conflict:     CONFLICT_AUTO or CONFLICT_ABORT
+ * Returns: number of batches (1 per entry) copied, or -1 on error
+ */
+int64_t batch_queue_transfer_copy_normal_to_batch(
+    IndexedReader *reader,
+    const char *dest_dir, const char *dest_queue,
+    int64_t start, int64_t end, int start_index_mode,
+    BatchQueueFilterFn include, BatchQueueFilterFn exclude, void *ctx,
+    Runtime *write_rt, Runtime *read_rt,
+    int allow_append,
+    AppenderIdMapper mapper, void *mapper_ctx,
+    ConflictBehavior on_conflict);
 
 #endif /* BATCH_QUEUE_TRANSFER_H */

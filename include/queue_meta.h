@@ -78,6 +78,7 @@ typedef struct {
     int64_t         max_file_size;  /* cached — written once at creation      */
     int             archivable;     /* cached — written once at creation      */
     int             queue_type;     /* cached — offset 25, see QUEUE_TYPE_*   */
+    int64_t         start_index;    /* cached for non-archivable; atomic read for archivable */
 } QueueMeta;
 
 /* ── Field accessors ─────────────────────────────────────────────────────── */
@@ -114,16 +115,15 @@ static inline int queue_meta_fixed_size_8bytes(const QueueMeta *m)
 }
 
 /**
- * queue_meta_start_index — read start_index with acquire semantics.
+ * queue_meta_start_index — read the queue's logical start index.
  *
- * For non-archivable queues (this C port) always returns 0.
- * The atomic load is retained for binary compatibility and future archiving support.
+ * For non-archivable queues the value is cached at open time and never
+ * changes.  For archivable queues the archiver may advance it atomically.
  */
 static inline int64_t queue_meta_start_index(const QueueMeta *m)
 {
-    if (!m->archivable) {
-        return QUEUE_META_INITIAL_START_INDEX;
-    }
+    if (!m->archivable)
+        return m->start_index;
     const _Atomic int64_t *p = (const _Atomic int64_t *)(m->base + QUEUE_META_START_INDEX_OFFSET);
     return atomic_load_explicit(p, memory_order_acquire);
 }
@@ -171,22 +171,51 @@ QueueMeta *queue_meta_open_rw(
 /**
  * queue_meta_open_ro — open the meta file for reading only.
  *
+ * On NULL return, *out_err (if non-NULL) is set to the reason:
+ *   MMAPQ_ENOENT     — file does not exist (queue not yet created)
+ *   MMAPQ_ETIMEDOUT  — stat or mapping failure (likely I/O error)
+ *   MMAPQ_ESCHEMA    — file exists but type/schema mismatch
+ *
  * directory:       base directory for the queue
  * queue_name:      queue subdirectory name
  * expected_type:   QUEUE_TYPE_NORMAL or QUEUE_TYPE_BATCH (FIXED8 is refused)
+ * out_err:         optional out-parameter for the error code on failure
  *
  * Returns a heap-allocated QueueMeta on success.
- * Returns NULL if the meta file does not exist yet (queue not created)
- *         or if validation fails (schema/type mismatch).
+ * Returns NULL on failure (reason in *out_err if provided).
  */
 QueueMeta *queue_meta_open_ro(
     const char *directory,
     const char *queue_name,
-    uint8_t     expected_type);
+    uint8_t     expected_type,
+    int        *out_err);
 
 /**
  * queue_meta_close — unmap and free a QueueMeta.
  */
 void queue_meta_close(QueueMeta *m);
+
+/**
+ * queue_meta_dest_check — validate a destination queue for import/copy.
+ *
+ * Returns 0 if the operation may proceed:
+ *   - queue does not exist yet → caller should create it
+ *   - exists and allow_append + REBASE → caller may append
+ *
+ * On failure returns a negative MMAPQ_* code:
+ *   MMAPQ_ETIMEDOUT — stat, mapping, or allocation failure
+ *   MMAPQ_ESCHEMA   — file exists but expected_type doesn't match
+ *   MMAPQ_EEXIST    — exists and allow_append=0
+ *   MMAPQ_EINVAL    — exists, allow_append=1, and preserve=1
+ *
+ * directory:      base queue directory
+ * queue_name:     queue subdirectory name
+ * expected_type:  QUEUE_TYPE_NORMAL or QUEUE_TYPE_BATCH
+ * preserve:       1 if PRESERVE mode, 0 if REBASE
+ * allow_append:   1 if appending to existing queue is permitted
+ */
+int queue_meta_dest_check(
+    const char *directory, const char *queue_name,
+    uint8_t expected_type, int preserve, int allow_append);
 
 #endif /* QUEUE_META_H */

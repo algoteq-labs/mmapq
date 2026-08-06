@@ -39,7 +39,7 @@ static QueueMeta *ro_init(IndexedArchiver *a)
 {
     if (a->ro_meta) return a->ro_meta;
 
-    a->ro_meta = queue_meta_open_ro(a->directory, a->queue_name, QUEUE_TYPE_NORMAL);
+    a->ro_meta = queue_meta_open_ro(a->directory, a->queue_name, QUEUE_TYPE_NORMAL, NULL);
     if (!a->ro_meta) return NULL;
 
     /* Sync mapping (regions_to_map_ahead = 0): the archiver does a single

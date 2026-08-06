@@ -151,7 +151,8 @@ IndexedAppender *indexed_queue_create_appender(IndexedQueue *q)
         q->directory, q->queue_name,
         q->region_size, q->ring_size,
         q->max_file_size, q->timeout_ns,
-        q->archivable, q->write_runtime);
+        q->archivable, q->write_runtime,
+        q->start_index);
 }
 
 IndexedAppender *indexed_queue_create_appender_with_id(
@@ -167,7 +168,8 @@ IndexedAppender *indexed_queue_create_appender_with_id(
         q->directory, q->queue_name,
         q->region_size, q->ring_size,
         q->max_file_size, q->timeout_ns,
-        q->archivable, q->write_runtime, appender_id);
+        q->archivable, q->write_runtime, appender_id,
+        q->start_index);
 }
 
 IndexedPoller *indexed_queue_create_poller(IndexedQueue *q)
@@ -204,7 +206,7 @@ IndexedArchiver *indexed_queue_create_archiver(IndexedQueue *q)
 static void ensure_meta_open(IndexedQueue *q)
 {
     if (q->queue_meta != NULL) return;
-    q->queue_meta = queue_meta_open_ro(q->directory, q->queue_name, QUEUE_TYPE_NORMAL);
+    q->queue_meta = queue_meta_open_ro(q->directory, q->queue_name, QUEUE_TYPE_NORMAL, NULL);
 }
 
 int32_t indexed_queue_region_size(const IndexedQueue *q)

@@ -37,7 +37,7 @@ struct IndexedBatchArchiver {
 static QueueMeta *ro_init(IndexedBatchArchiver *a)
 {
     if (a->ro_meta) return a->ro_meta;
-    a->ro_meta = queue_meta_open_ro(a->directory, a->queue_name, QUEUE_TYPE_BATCH);
+    a->ro_meta = queue_meta_open_ro(a->directory, a->queue_name, QUEUE_TYPE_BATCH, NULL);
     if (!a->ro_meta) return NULL;
     /* Sync mapping: archiver does a single sequential pass, no premap benefit */
     a->ro_acc = queue_region_accessor_create_ro(

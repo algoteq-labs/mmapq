@@ -419,7 +419,7 @@ void test_appender_recovers_position_after_close(void)
 
     /* Phase 2: reopen with same ID — should resume at index 2 */
     IndexedAppender *a2 = indexed_appender_create_with_id(
-        DIR, QUEUE, REGION_SZ, RING_SZ, MAX_FILE, TIMEOUT_NS, 0, rt, id);
+        DIR, QUEUE, REGION_SZ, RING_SZ, MAX_FILE, TIMEOUT_NS, 0, rt, id, 0);
 
     TEST_ASSERT_EQUAL_INT64(before_close, indexed_appender_current_index(a2));
 
@@ -666,7 +666,7 @@ static void test_standalone_factory_rejects_missing_directory(void)
     IndexedAppender *a = indexed_appender_create_with_id(
         "/nonexistent-dir-for-test", "q",
         4096 * 1024, 4, (4096 * 1024) * 256,
-        10000000000, 0, NULL, 7);
+        10000000000, 0, NULL, 7, 0);
     TEST_ASSERT_NULL(a);
 }
 
@@ -748,13 +748,13 @@ static void test_create_with_id_already_in_use(void)
     IndexedAppender *a1 = indexed_appender_create_with_id(
         dir, QUEUE,
         4096 * 1024, 4, (4096 * 1024) * 256,
-        10000000000, 0, NULL, 7);
+        10000000000, 0, NULL, 7, 0);
     TEST_ASSERT_NOT_NULL(a1);
 
     IndexedAppender *a2 = indexed_appender_create_with_id(
         dir, QUEUE,
         4096 * 1024, 4, (4096 * 1024) * 256,
-        10000000000, 0, NULL, 7);
+        10000000000, 0, NULL, 7, 0);
     TEST_ASSERT_NULL(a2);
 
     indexed_appender_close(a1);

@@ -93,7 +93,21 @@ IndexedBatchAppender *indexed_batch_queue_create_appender(IndexedBatchQueue *q)
 {
     MMAP_ASSERT(!q->closed, "queue closed");
     create_queue_directory(q->directory, q->queue_name);
-    return indexed_batch_appender_create(q->directory, q->queue_name, q->region_size, q->ring_size, q->max_file_size, q->timeout_ns, q->archivable, q->write_runtime);
+    return indexed_batch_appender_create(q->directory, q->queue_name, q->region_size, q->ring_size, q->max_file_size, q->timeout_ns, q->archivable, q->write_runtime, q->start_index);
+}
+
+IndexedBatchAppender *indexed_batch_queue_create_appender_with_id(
+    IndexedBatchQueue *q, uint8_t appender_id)
+{
+    if (q == NULL) return NULL;
+    MMAP_ASSERT(!q->closed, "queue closed");
+    if (create_queue_directory(q->directory, q->queue_name) != 0) return NULL;
+    return indexed_batch_appender_create_with_id(
+        q->directory, q->queue_name,
+        q->region_size, q->ring_size,
+        q->max_file_size, q->timeout_ns,
+        q->archivable, q->write_runtime, appender_id,
+        q->start_index);
 }
 
 IndexedBatchPoller *indexed_batch_queue_create_poller(IndexedBatchQueue *q)

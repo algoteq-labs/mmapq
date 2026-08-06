@@ -180,7 +180,7 @@ int32_t indexed_queue_region_size(const IndexedQueue *q);
 int64_t indexed_queue_max_file_size(const IndexedQueue *q);
 
 /**
- * indexed_queue_start_index — current start index (0 for non-archivable queues).
+ * indexed_queue_start_index — current logical start index (set at creation; may be non-zero after PRESERVE import/copy).
  */
 int64_t indexed_queue_start_index(const IndexedQueue *q);
 

@@ -23,7 +23,7 @@
  *   16      8     max_file_size
  *   24      8     total_entries
  *   32      1     archivable
- *   33      1     fixed_size_8bytes
+ *   33      1     queue_type         (QUEUE_TYPE_NORMAL=0, QUEUE_TYPE_FIXED8=1, QUEUE_TYPE_BATCH=2)
  *   34      30    reserved/padding
  *   Total:  64 bytes (one cache line)
  */
@@ -41,7 +41,7 @@
 #define EXPORT_META_TOTAL_ENTRIES_OFF    24
 #define EXPORT_META_TOTAL_ENTRIES_SIZE   8
 #define EXPORT_META_ARCHIVABLE_OFF       32
-#define EXPORT_META_FIXED_SIZE_OFF       33
+#define EXPORT_META_QUEUE_TYPE_OFF       33
 #define EXPORT_META_PAYLOAD_START        34  /* first byte after fixed fields */
 #define EXPORT_META_PAYLOAD_SIZE         (EXPORT_META_SIZE - EXPORT_META_PAYLOAD_START)
 
@@ -52,7 +52,7 @@ typedef struct {
     int64_t max_file_size;      
     int64_t total_entries;      
     uint8_t archivable;         
-    uint8_t fixed_size_8bytes;  
+    uint8_t queue_type;         
     uint8_t reserved[EXPORT_META_PAYLOAD_SIZE];
 } ExportMeta;
 
@@ -75,7 +75,7 @@ static inline void export_meta_encode(const ExportMeta *m, uint8_t *out)
     memcpy(out + EXPORT_META_MAX_FILE_SIZE_OFF,  &m->max_file_size,  EXPORT_META_MAX_FILE_SIZE_SIZE);
     memcpy(out + EXPORT_META_TOTAL_ENTRIES_OFF,  &m->total_entries,  EXPORT_META_TOTAL_ENTRIES_SIZE);
     out[EXPORT_META_ARCHIVABLE_OFF] = m->archivable;
-    out[EXPORT_META_FIXED_SIZE_OFF] = m->fixed_size_8bytes;
+    out[EXPORT_META_QUEUE_TYPE_OFF] = m->queue_type;
 }
 
 /**
@@ -90,8 +90,8 @@ static inline void export_meta_decode(const uint8_t *in, ExportMeta *m)
     memcpy(&m->start_index,    in + EXPORT_META_START_INDEX_OFF,    EXPORT_META_START_INDEX_SIZE);
     memcpy(&m->max_file_size,  in + EXPORT_META_MAX_FILE_SIZE_OFF,  EXPORT_META_MAX_FILE_SIZE_SIZE);
     memcpy(&m->total_entries,  in + EXPORT_META_TOTAL_ENTRIES_OFF,  EXPORT_META_TOTAL_ENTRIES_SIZE);
-    m->archivable        = in[EXPORT_META_ARCHIVABLE_OFF];
-    m->fixed_size_8bytes = in[EXPORT_META_FIXED_SIZE_OFF];
+    m->archivable = in[EXPORT_META_ARCHIVABLE_OFF];
+    m->queue_type = in[EXPORT_META_QUEUE_TYPE_OFF];
     memset(m->reserved, 0, EXPORT_META_PAYLOAD_SIZE);
 }
 
