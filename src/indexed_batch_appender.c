@@ -13,6 +13,10 @@
 #include <string.h>
 #include <stdatomic.h>
 
+/* Bounded linear scan to avoid livelock when the appender is far behind
+ * the queue head. Falls back to a jump-based search for efficient catch-up. */
+#define MAX_LINEAR_ATTEMPTS_BEFORE_SEARCH  100
+
 struct IndexedBatchAppender {
     char                *directory;
     char                *queue_name;
@@ -23,6 +27,11 @@ struct IndexedBatchAppender {
     QueueRegionAccessor *rw_acc;
     RegionAccessor      *header_acc;
     RegionAccessor      *payload_acc;
+
+    /* Read-only accessor for jump-based header search fallback */
+    QueueRegionAccessor *ro_acc;
+    RegionAccessor      *ro_header;
+    Buffer               ro_buf;
 
     int64_t current_index;
     int64_t current_header_position;
@@ -89,21 +98,21 @@ static int64_t skip_to_end_of_stream(IndexedBatchAppender *a, int64_t offset)
     return end_of_stream;
 }
 
-static int64_t appender_start_index_fn(void *ctx)
+static int64_t appender_start_index_from_meta(void *ctx)
 {
-    if (ctx == NULL) return 0;
-    return *(const int64_t *)ctx;
+    return queue_meta_start_index((const QueueMeta *)ctx);
 }
 
-static void initialise_append_position(IndexedBatchAppender *a, int32_t region_size, int ring_size, int64_t max_file_size, uint64_t timeout_ns, Runtime *runtime, int64_t start_index)
+static void initialise_append_position(IndexedBatchAppender *a, int64_t start_index)
 {
-    QueueRegionAccessor *ro_acc = queue_region_accessor_create_ro(
-        a->directory, a->queue_name, region_size, ring_size, 0, max_file_size, timeout_ns, runtime);
+    RegionAccessor *ro_header = a->ro_header;
+    Buffer         *ro_buf   = &a->ro_buf;
 
-    RegionAccessor *ro_header = queue_region_accessor_header(ro_acc);
-    Buffer ro_buf = {0};
-
-    int64_t last_index = header_search_last_index(start_index, appender_start_index_fn, &start_index, ro_header, &ro_buf, a->queue_name);
+    int64_t last_index = header_search_last_index(
+        start_index,
+        appender_start_index_from_meta, a->queue_meta,
+        ro_header, ro_buf,
+        a->queue_name);
 
     if (last_index == HEADER_NULL_INDEX) {
         a->current_index = start_index;
@@ -112,7 +121,7 @@ static void initialise_append_position(IndexedBatchAppender *a, int32_t region_s
         a->current_index = last_index + 1;
         int64_t committed_payload_pos = -1;
         for (int64_t i = last_index; i >= 0; i--) {
-            uint64_t hdr = header_read(ro_header, &ro_buf, i, a->queue_name);
+            uint64_t hdr = header_read(ro_header, ro_buf, i, a->queue_name);
             if (hdr != HEADER_NULL && header_appender_id(hdr) == a->appender_id) {
                 committed_payload_pos = header_payload_position(hdr);
                 break;
@@ -126,7 +135,6 @@ static void initialise_append_position(IndexedBatchAppender *a, int32_t region_s
         }
     }
 
-    queue_region_accessor_close(ro_acc);
     a->current_header_position = header_position(a->current_index);
 
     /* Eager wrap */
@@ -139,6 +147,7 @@ static void initialise_append_position(IndexedBatchAppender *a, int32_t region_s
     (void)r;
     MMAP_ASSERT(r == WRAP_SUCCESS, "batch_appender: failed to eager-wrap payload");
 }
+
 
 /* ── Factory ─────────────────────────────────────────────────────────────── */
 
@@ -176,14 +185,51 @@ static IndexedBatchAppender *batch_appender_create_internal(
     int64_t rec_max = queue_meta_max_file_size(a->queue_meta);
 
     a->appender_meta = appender_meta_open_rw(directory, queue_name, a->appender_id);
+    if (a->appender_meta == NULL) {
+        /* Failure after queue meta + pool opened — free all held resources */
+        if (a->queue_meta) queue_meta_close(a->queue_meta);
+        appender_id_pool_release(a->id_pool, a->appender_id);
+        appender_id_pool_close(a->id_pool);
+        free(a->directory);
+        free(a->queue_name);
+        free(a);
+        return NULL;
+    }
     a->rw_acc = queue_region_accessor_create_rw(directory, queue_name, rec_reg, ring_size, 1, rec_max, timeout_ns, runtime, a->appender_id);
+    if (a->rw_acc == NULL) {
+        appender_meta_close(a->appender_meta);
+        if (a->queue_meta) queue_meta_close(a->queue_meta);
+        appender_id_pool_release(a->id_pool, a->appender_id);
+        appender_id_pool_close(a->id_pool);
+        free(a->directory);
+        free(a->queue_name);
+        free(a);
+        return NULL;
+    }
     a->header_acc = queue_region_accessor_header(a->rw_acc);
     a->payload_acc = queue_region_accessor_payload(a->rw_acc, a->appender_id);
 
     a->batch_iterator.queue_name  = a->queue_name;
     a->batch_iterator.payload_acc = a->payload_acc;
 
-    initialise_append_position(a, rec_reg, ring_size, rec_max, timeout_ns, runtime, start_index);
+    a->ro_acc = queue_region_accessor_create_ro(
+        directory, queue_name,
+        rec_reg, ring_size, 0,
+        rec_max, timeout_ns, runtime);
+    if (a->ro_acc == NULL) {
+        queue_region_accessor_close(a->rw_acc);
+        appender_meta_close(a->appender_meta);
+        if (a->queue_meta) queue_meta_close(a->queue_meta);
+        appender_id_pool_release(a->id_pool, a->appender_id);
+        appender_id_pool_close(a->id_pool);
+        free(a->directory);
+        free(a->queue_name);
+        free(a);
+        return NULL;
+    }
+    a->ro_header = queue_region_accessor_header(a->ro_acc);
+
+    initialise_append_position(a, start_index);
 
     return a;
 }
@@ -200,6 +246,7 @@ IndexedBatchAppender *indexed_batch_appender_create(
     int64_t     start_index)
 {
     AppenderIdPool *pool = appender_id_pool_open(directory, queue_name);
+    if (pool == NULL) return NULL;
     uint8_t id = (uint8_t)appender_id_pool_acquire(pool);
 
     return batch_appender_create_internal(directory, queue_name, region_size,
@@ -261,7 +308,9 @@ int64_t mutable_batch_complete(MutableBatch *b)
 
 static int move_to_last_header(IndexedBatchAppender *a)
 {
-    while (1) {
+    int attempts = 0;
+    while (attempts < MAX_LINEAR_ATTEMPTS_BEFORE_SEARCH) {
+        attempts++;
         a->current_index++;
         a->current_header_position = header_position(a->current_index);
         WrapResult r = region_accessor_wrap(a->header_acc, a->current_header_position, &a->header_buf);
@@ -270,6 +319,30 @@ static int move_to_last_header(IndexedBatchAppender *a)
         _Atomic uint64_t *hp = (_Atomic uint64_t *)a->header_buf.data;
         if (atomic_load_explicit(hp, memory_order_acquire) == HEADER_NULL) return 0;
     }
+
+    int64_t last_index = header_search_last_index(
+        a->current_index + 1,
+        appender_start_index_from_meta, a->queue_meta,
+        a->ro_header, &a->ro_buf,
+        a->queue_name);
+
+    if (last_index == HEADER_NULL_INDEX) {
+        a->current_index++;
+    } else {
+        a->current_index = last_index + 1;
+    }
+
+    int64_t start_index = queue_meta_start_index(a->queue_meta);
+    if (a->current_index < start_index) {
+        a->current_index = start_index;
+    }
+
+    a->current_header_position = header_position(a->current_index);
+
+    WrapResult r = region_accessor_wrap(a->header_acc, a->current_header_position, &a->header_buf);
+    if (r != WRAP_SUCCESS) return -1;
+
+    return 0;
 }
 
 int64_t indexed_batch_appender_commit_batch(IndexedBatchAppender *a, int64_t batch_offset)
@@ -375,6 +448,11 @@ void indexed_batch_appender_close(IndexedBatchAppender *a)
     appender_meta_close(a->appender_meta);
     queue_meta_close(a->queue_meta);
     queue_region_accessor_close(a->rw_acc);
+    if (a->ro_acc) {
+        queue_region_accessor_close(a->ro_acc);
+        a->ro_acc    = NULL;
+        a->ro_header = NULL;
+    }
     appender_id_pool_release(a->id_pool, a->appender_id);
     appender_id_pool_close(a->id_pool);
     free(a->directory);

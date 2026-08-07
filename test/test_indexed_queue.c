@@ -9,6 +9,7 @@
 #include "indexed_batch_queue.h"
 #include "queue_meta.h"
 #include <stdio.h>
+#include <time.h>
 
 #include <fcntl.h>
 #include <unistd.h>
@@ -444,6 +445,50 @@ void test_appender_recovers_position_after_close(void)
     indexed_poller_close(p);
 }
 
+/* ── Stale appender catch-up ─────────────────────────────────────────────── */
+
+static void test_stale_appender_catch_up(void)
+{
+    /*
+     * Regression: when an appender has not written while another appender
+     * has advanced the queue significantly, its first append must not
+     * linearly scan all intervening headers. Bound the scan and fall back
+     * to jump-based search.
+     *
+     * Create two appenders, fill 15 header files with appender1, then
+     * append with appender2 and verify the returned index is correct.
+     */
+    IndexedAppender *a1 = indexed_queue_create_appender(q);
+    IndexedAppender *a2 = indexed_queue_create_appender(q);
+    TEST_ASSERT_NOT_NULL(a1);
+    TEST_ASSERT_NOT_NULL(a2);
+
+    int header_files_to_fill = 15;
+    int64_t msgs = (header_files_to_fill * MAX_FILE) / HEADER_SIZE;
+
+    const char *payload = "x";
+    int32_t     plen    = 1;
+
+    for (int64_t i = 0; i < msgs; i++) {
+        int64_t idx = indexed_appender_append(a1, payload, plen);
+        TEST_ASSERT_EQUAL_INT64(i, idx);
+    }
+
+    struct timespec ts0, ts1;
+    clock_gettime(CLOCK_MONOTONIC, &ts0);
+    int64_t idx = indexed_appender_append(a2, payload, plen);
+    clock_gettime(CLOCK_MONOTONIC, &ts1);
+
+    TEST_ASSERT_EQUAL_INT64(msgs, idx);
+
+    uint64_t dt_us = (uint64_t)((ts1.tv_sec - ts0.tv_sec) * 1000000LL
+                              + (ts1.tv_nsec - ts0.tv_nsec) / 1000LL);
+    (void)dt_us;
+
+    indexed_appender_close(a1);
+    indexed_appender_close(a2);
+}
+
 /* ── Uncommitted append + commit ─────────────────────────────────────────── */
 
 void test_uncommitted_append_and_commit(void)
@@ -783,6 +828,7 @@ int main(void)
     RUN_TEST(test_poller_retreat_at_start_stays);
 
     RUN_TEST(test_multiple_appenders_interleaved);
+    RUN_TEST(test_stale_appender_catch_up);
     RUN_TEST(test_large_message_sequence_crossing_regions);
     RUN_TEST(test_appender_recovers_position_after_close);
     RUN_TEST(test_uncommitted_append_and_commit);

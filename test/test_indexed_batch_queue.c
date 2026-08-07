@@ -10,6 +10,7 @@
 #include "indexed_queue.h"
 #include "queue_meta.h"
 #include <stdio.h>
+#include <time.h>
 
 #include <fcntl.h>
 #include <unistd.h>
@@ -524,6 +525,44 @@ static void test_batch_poll_detects_corrupt_payload(void)
     cleanup();
 }
 
+/* ── Stale appender catch-up ─────────────────────────────────────────────── */
+
+static void test_batch_stale_appender_catch_up(void)
+{
+    /*
+     * Regression: batch appender variant of the stale-appender livelock fix.
+     * Fill many batches with one appender, then append with a second (stale)
+     * appender and verify the returned index is correct.
+     */
+    IndexedBatchAppender *a1 = indexed_batch_queue_create_appender(q);
+    IndexedBatchAppender *a2 = indexed_batch_queue_create_appender(q);
+    TEST_ASSERT_NOT_NULL(a1);
+    TEST_ASSERT_NOT_NULL(a2);
+
+    int64_t batch_count = 200000;
+    const char *payload = "x";
+    int32_t     plen    = 1;
+
+    for (int64_t i = 0; i < batch_count; i++) {
+        int64_t idx = indexed_batch_appender_append_and_commit(a1, payload, plen);
+        TEST_ASSERT_EQUAL_INT64(i, idx);
+    }
+
+    struct timespec ts0, ts1;
+    clock_gettime(CLOCK_MONOTONIC, &ts0);
+    int64_t idx = indexed_batch_appender_append_and_commit(a2, payload, plen);
+    clock_gettime(CLOCK_MONOTONIC, &ts1);
+
+    TEST_ASSERT_EQUAL_INT64(batch_count, idx);
+
+    uint64_t dt_us = (uint64_t)((ts1.tv_sec - ts0.tv_sec) * 1000000LL
+                              + (ts1.tv_nsec - ts0.tv_nsec) / 1000LL);
+    (void)dt_us;
+
+    indexed_batch_appender_close(a1);
+    indexed_batch_appender_close(a2);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -544,5 +583,6 @@ int main(void)
     RUN_TEST(test_open_batch_as_normal_refused);
     RUN_TEST(test_batch_roundtrip_type_stamped);
     RUN_TEST(test_batch_poll_detects_corrupt_payload);
+    RUN_TEST(test_batch_stale_appender_catch_up);
     return UNITY_END();
 }
