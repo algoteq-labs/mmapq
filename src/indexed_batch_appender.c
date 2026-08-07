@@ -247,11 +247,16 @@ IndexedBatchAppender *indexed_batch_appender_create(
 {
     AppenderIdPool *pool = appender_id_pool_open(directory, queue_name);
     if (pool == NULL) return NULL;
-    uint8_t id = (uint8_t)appender_id_pool_acquire(pool);
+
+    int id = appender_id_pool_acquire(pool);
+    if (id < 0) {
+        appender_id_pool_close(pool);
+        return NULL;
+    }
 
     return batch_appender_create_internal(directory, queue_name, region_size,
         ring_size, max_file_size, timeout_ns, archivable, runtime,
-        pool, id, start_index);
+        pool, (uint8_t)id, start_index);
 }
 
 IndexedBatchAppender *indexed_batch_appender_create_with_id(
