@@ -119,6 +119,13 @@ file governs conduct; that file governs design.
   wrong. If you believe the test itself is wrong, stop and report it —
   removing it is not your call.
 
+- **Prefer exact equality in test assertions.** When a return value is
+  deterministically known (e.g. the index returned by `append()` for a
+  sequential single-appender test), assert exact equality with
+  `TEST_ASSERT_EQUAL_INT64`.  Avoid `TEST_ASSERT(x >= 0)` — a loose
+  bound hides off-by-one, stale-index, or silent-corruption bugs and a
+  "passing" test proves nothing the signature doesn't already claim.
+
 - Tests use the vendored Unity framework in `test/`; match the style of
   neighboring tests (setup/teardown, `/tmp` queue dirs cleaned in teardown,
   `RUN_TEST` registration — a test function without registration does not

@@ -18,6 +18,10 @@
 
 /* ── Internal state ──────────────────────────────────────────────────────── */
 
+/* Bounded linear scan to avoid livelock when the appender is far behind
+ * the queue head. Falls back to a jump-based search for efficient catch-up. */
+#define MAX_LINEAR_ATTEMPTS_BEFORE_SEARCH  100
+
 struct IndexedAppender {
     char                *directory;
     char                *queue_name;
@@ -28,6 +32,11 @@ struct IndexedAppender {
     QueueRegionAccessor *rw_acc;   /* RW header + RW payload (this appender) */
     RegionAccessor      *header_acc;
     RegionAccessor      *payload_acc;
+
+    /* Read-only accessor for jump-based header search fallback */
+    QueueRegionAccessor *ro_acc;
+    RegionAccessor      *ro_header;
+    Buffer               ro_buf;
 
     /* Append position state */
     int64_t current_index;
@@ -60,12 +69,11 @@ static int64_t appender_end_of_stream(void *ctx)
     return a->current_payload_position;
 }
 
-/* ── Start index supplier for header search ──────────────────────────────── */
+/* ── Start index suppliers for header search ──────────────────────────────── */
 
-static int64_t appender_start_index_fn(void *ctx)
+static int64_t appender_start_index_from_meta(void *ctx)
 {
-    if (ctx == NULL) return 0;
-    return *(const int64_t *)ctx;
+    return queue_meta_start_index((const QueueMeta *)ctx);
 }
 
 /* ── Write padding at region boundary ───────────────────────────────────── */
@@ -136,7 +144,9 @@ static int write_payload(IndexedAppender *a, const void *data, int32_t length,
 
 static int move_to_last_header(IndexedAppender *a)
 {
-    while (1) {
+    int attempts = 0;
+    while (attempts < MAX_LINEAR_ATTEMPTS_BEFORE_SEARCH) {
+        attempts++;
         a->current_index++;
         a->current_header_position = header_position(a->current_index);
 
@@ -150,6 +160,33 @@ static int move_to_last_header(IndexedAppender *a)
             return 0;
         }
     }
+
+    /* Fall back to jump-based search — the appender is far behind the head */
+    int64_t last_index = header_search_last_index(
+        a->current_index + 1,
+        appender_start_index_from_meta, a->queue_meta,
+        a->ro_header, &a->ro_buf,
+        a->queue_name);
+
+    if (last_index == HEADER_NULL_INDEX) {
+        a->current_index++;
+    } else {
+        a->current_index = last_index + 1;
+    }
+
+    int64_t start_index = queue_meta_start_index(a->queue_meta);
+    if (a->current_index < start_index) {
+        a->current_index = start_index;
+    }
+
+    a->current_header_position = header_position(a->current_index);
+
+    WrapResult r = region_accessor_wrap(a->header_acc,
+                                         a->current_header_position,
+                                         &a->header_buf);
+    if (r != WRAP_SUCCESS) return -1;
+
+    return 0;
 }
 
 static int commit_header(IndexedAppender *a, int64_t payload_offset, int64_t *out_index)
@@ -188,34 +225,20 @@ static int commit_header(IndexedAppender *a, int64_t payload_offset, int64_t *ou
 
 /* ── Initialise append position after (re)start ──────────────────────────── */
 
-static int initialise_append_position(IndexedAppender *a,
-                                       const char *directory,
-                                       const char *queue_name,
-                                       int32_t region_size,
-                                       int ring_size,
-                                       int64_t max_file_size,
-                                       uint64_t timeout_ns,
-                                       Runtime *runtime,
-                                       int64_t start_index)
+static int initialise_append_position(IndexedAppender *a, int64_t start_index)
 {
     /*
-     * Step 1: Use a temporary RO accessor to find lastIndex via
+     * Step 1: Use the stored RO accessor to find lastIndex via
      *         exponential+binary search. RO accessor allows non-sequential
      *         random access jumps without polluting RW region mapping state.
      */
-    QueueRegionAccessor *ro_acc = queue_region_accessor_create_ro(
-        directory, queue_name,
-        region_size, ring_size,
-        0,           /* regions_to_map_ahead = 0 for recovery scan */
-        max_file_size, timeout_ns, runtime);
-
-    RegionAccessor *ro_header = queue_region_accessor_header(ro_acc);
-    Buffer ro_buf = {0};
+    RegionAccessor *ro_header = a->ro_header;
+    Buffer         *ro_buf   = &a->ro_buf;
 
     int64_t last_index = header_search_last_index(
         start_index,
-        appender_start_index_fn, &start_index,
-        ro_header, &ro_buf,
+        appender_start_index_from_meta, a->queue_meta,
+        ro_header, ro_buf,
         a->queue_name);
 
     if (last_index == HEADER_NULL_INDEX) {
@@ -234,7 +257,7 @@ static int initialise_append_position(IndexedAppender *a,
         int64_t committed_payload_pos = PAYLOAD_ITERATOR_NOT_SET;
 
         for (int64_t i = last_index; i >= 0; i--) {
-            uint64_t hdr = header_read(ro_header, &ro_buf, i, a->queue_name);
+            uint64_t hdr = header_read(ro_header, ro_buf, i, a->queue_name);
             if (hdr == HEADER_NULL) break;
             if (header_appender_id(hdr) == a->appender_id) {
                 committed_payload_pos = header_payload_position(hdr);
@@ -252,7 +275,7 @@ static int initialise_append_position(IndexedAppender *a,
              *         of the payload stream.
              */
             RegionAccessor *ro_payload =
-                queue_region_accessor_payload(ro_acc, a->appender_id);
+                queue_region_accessor_payload(a->ro_acc, a->appender_id);
 
             int64_t probing = committed_payload_pos;
             int64_t msg_off = PAYLOAD_ITERATOR_NOT_SET;
@@ -260,9 +283,8 @@ static int initialise_append_position(IndexedAppender *a,
             /* Walk past the committed message itself first */
             int32_t len = payload_walk_advance(a->queue_name,
                                                 &probing, &msg_off,
-                                                ro_payload, &ro_buf);
+                                                ro_payload, ro_buf);
             if (len <= 0) {
-                queue_region_accessor_close(ro_acc);
                 return MMAPQ_ECORRUPT;
             }
 
@@ -271,9 +293,9 @@ static int initialise_append_position(IndexedAppender *a,
                 int64_t next_probing = probing;
                 int64_t next_msg_off = PAYLOAD_ITERATOR_NOT_SET;
                 int32_t next_len = payload_walk_advance(a->queue_name,
-                                                         &next_probing,
-                                                         &next_msg_off,
-                                                         ro_payload, &ro_buf);
+                                                          &next_probing,
+                                                          &next_msg_off,
+                                                          ro_payload, ro_buf);
                 if (next_len == 0) break;
                 probing = next_probing;
             }
@@ -281,8 +303,6 @@ static int initialise_append_position(IndexedAppender *a,
             a->current_payload_position = probing;
         }
     }
-
-    queue_region_accessor_close(ro_acc);
 
     a->current_header_position = header_position(a->current_index);
 
@@ -351,7 +371,16 @@ static IndexedAppender *appender_create_internal(
 
     /* Open appender meta (creates file if new) */
     a->appender_meta = appender_meta_open_rw(directory, queue_name, appender_id);
-    if (a->appender_meta == NULL) { free(a); return NULL; }
+    if (a->appender_meta == NULL) {
+        /* Failure after queue meta + pool opened — free all held resources */
+        if (a->queue_meta) queue_meta_close(a->queue_meta);
+        appender_id_pool_release(a->id_pool, a->appender_id);
+        appender_id_pool_close(a->id_pool);
+        free(a->directory);
+        free(a->queue_name);
+        free(a);
+        return NULL;
+    }
 
     /* Create RW region accessors */
     a->rw_acc = queue_region_accessor_create_rw(
@@ -362,13 +391,35 @@ static IndexedAppender *appender_create_internal(
     a->header_acc  = queue_region_accessor_header(a->rw_acc);
     a->payload_acc = queue_region_accessor_payload(a->rw_acc, appender_id);
 
-    /* Find where to resume appending */
-    if (initialise_append_position(a, directory, queue_name,
-                                     reconciled_region_size, ring_size,
-                                     reconciled_max_file_size, timeout_ns, runtime,
-                                     start_index)) {
+    /* Create RO accessor for header search fallback (used by both
+     * initialise_append_position and move_to_last_header) */
+    a->ro_acc = queue_region_accessor_create_ro(
+        directory, queue_name,
+        reconciled_region_size, ring_size,
+        0,           /* regions_to_map_ahead = 0 for recovery scan */
+        reconciled_max_file_size, timeout_ns, runtime);
+
+    if (a->ro_acc == NULL) {
         queue_region_accessor_close(a->rw_acc);
+        appender_meta_close(a->appender_meta);
         if (a->queue_meta) queue_meta_close(a->queue_meta);
+        appender_id_pool_release(a->id_pool, a->appender_id);
+        appender_id_pool_close(a->id_pool);
+        free(a->directory);
+        free(a->queue_name);
+        free(a);
+        return NULL;
+    }
+    a->ro_header = queue_region_accessor_header(a->ro_acc);
+
+    /* Find where to resume appending */
+    if (initialise_append_position(a, start_index)) {
+        queue_region_accessor_close(a->ro_acc);
+        queue_region_accessor_close(a->rw_acc);
+        appender_meta_close(a->appender_meta);
+        if (a->queue_meta) queue_meta_close(a->queue_meta);
+        appender_id_pool_release(a->id_pool, a->appender_id);
+        appender_id_pool_close(a->id_pool);
         free(a->directory);
         free(a->queue_name);
         free(a);
@@ -591,6 +642,13 @@ void indexed_appender_close(IndexedAppender *a)
     if (a->rw_acc != NULL) {
         queue_region_accessor_close(a->rw_acc);
         a->rw_acc = NULL;
+    }
+
+    if (a->ro_acc != NULL) {
+        /* ro_header is owned by ro_acc — no separate close */
+        queue_region_accessor_close(a->ro_acc);
+        a->ro_acc    = NULL;
+        a->ro_header = NULL;
     }
 
     if (a->id_pool != NULL) {
