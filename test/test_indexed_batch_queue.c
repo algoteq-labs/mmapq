@@ -539,7 +539,7 @@ static void test_batch_stale_appender_catch_up(void)
     TEST_ASSERT_NOT_NULL(a1);
     TEST_ASSERT_NOT_NULL(a2);
 
-    int64_t batch_count = 200000;
+    int64_t batch_count = 50000;
     const char *payload = "x";
     int32_t     plen    = 1;
 

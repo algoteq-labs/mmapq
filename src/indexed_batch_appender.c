@@ -103,7 +103,7 @@ static int64_t appender_start_index_from_meta(void *ctx)
     return queue_meta_start_index((const QueueMeta *)ctx);
 }
 
-static void initialise_append_position(IndexedBatchAppender *a, int64_t start_index)
+static int initialise_append_position(IndexedBatchAppender *a, int64_t start_index)
 {
     RegionAccessor *ro_header = a->ro_header;
     Buffer         *ro_buf   = &a->ro_buf;
@@ -138,14 +138,10 @@ static void initialise_append_position(IndexedBatchAppender *a, int64_t start_in
     a->current_header_position = header_position(a->current_index);
 
     /* Eager wrap */
-    WrapResult r;
-    r = region_accessor_wrap(a->header_acc, a->current_header_position, &a->header_buf);
-    (void)r;
-    MMAP_ASSERT(r == WRAP_SUCCESS, "batch_appender: failed to eager-wrap header");
+    if (region_accessor_wrap(a->header_acc, a->current_header_position, &a->header_buf) != WRAP_SUCCESS) return -1;
+    if (region_accessor_wrap(a->payload_acc, a->current_payload_position, &a->payload_buf) != WRAP_SUCCESS) return -1;
 
-    r = region_accessor_wrap(a->payload_acc, a->current_payload_position, &a->payload_buf);
-    (void)r;
-    MMAP_ASSERT(r == WRAP_SUCCESS, "batch_appender: failed to eager-wrap payload");
+    return 0;
 }
 
 
@@ -229,7 +225,18 @@ static IndexedBatchAppender *batch_appender_create_internal(
     }
     a->ro_header = queue_region_accessor_header(a->ro_acc);
 
-    initialise_append_position(a, start_index);
+    if (initialise_append_position(a, start_index)) {
+        queue_region_accessor_close(a->ro_acc);
+        queue_region_accessor_close(a->rw_acc);
+        appender_meta_close(a->appender_meta);
+        if (a->queue_meta) queue_meta_close(a->queue_meta);
+        appender_id_pool_release(a->id_pool, a->appender_id);
+        appender_id_pool_close(a->id_pool);
+        free(a->directory);
+        free(a->queue_name);
+        free(a);
+        return NULL;
+    }
 
     return a;
 }
@@ -452,8 +459,12 @@ void indexed_batch_appender_close(IndexedBatchAppender *a)
     a->closed = 1;
     appender_meta_close(a->appender_meta);
     queue_meta_close(a->queue_meta);
-    queue_region_accessor_close(a->rw_acc);
+    if (a->rw_acc) {
+        queue_region_accessor_close(a->rw_acc);
+        a->rw_acc = NULL;
+    }
     if (a->ro_acc) {
+        /* ro_header is owned by ro_acc — no separate close */
         queue_region_accessor_close(a->ro_acc);
         a->ro_acc    = NULL;
         a->ro_header = NULL;

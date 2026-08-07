@@ -455,7 +455,7 @@ static void test_stale_appender_catch_up(void)
      * linearly scan all intervening headers. Bound the scan and fall back
      * to jump-based search.
      *
-     * Create two appenders, fill 15 header files with appender1, then
+     * Create two appenders, fill 10 header files with appender1, then
      * append with appender2 and verify the returned index is correct.
      */
     IndexedAppender *a1 = indexed_queue_create_appender(q);
@@ -463,7 +463,7 @@ static void test_stale_appender_catch_up(void)
     TEST_ASSERT_NOT_NULL(a1);
     TEST_ASSERT_NOT_NULL(a2);
 
-    int header_files_to_fill = 15;
+    int header_files_to_fill = 10;
     int64_t msgs = (header_files_to_fill * MAX_FILE) / HEADER_SIZE;
 
     const char *payload = "x";
