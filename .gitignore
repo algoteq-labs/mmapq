@@ -30,6 +30,7 @@ core.*
 latency_bench
 batch_latency_bench
 echo_server
+batch_demo
 batch_echo_server
 interop_producer
 interop_consumer

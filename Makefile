@@ -17,9 +17,9 @@ SRCS    = $(wildcard src/*.c)
 OBJS    = $(SRCS:.c=.o)
 LIB     = libmmapq.a
 
-.PHONY: all demo bench echo_server batch_bench batch_echo_server bench-suite batch-bench-suite interop test test-asan test-tsan test-multi clean
+.PHONY: all demo bench echo_server batch_demo batch_bench batch_echo_server bench-suite batch-bench-suite interop test test-asan test-tsan test-multi clean
 
-all: $(LIB) demo bench echo_server batch_bench batch_echo_server
+all: $(LIB) demo bench echo_server batch_demo batch_bench batch_echo_server
 
 $(LIB): $(OBJS)
 	ar rcs $@ $^
@@ -30,6 +30,10 @@ $(LIB): $(OBJS)
 demo: $(LIB)
 	$(CC) $(CFLAGS) examples/demo.c -L. -lmmapq $(LDFLAGS) -o demo
 	@echo "built: demo"
+
+batch_demo: $(LIB)
+	$(CC) $(CFLAGS) examples/batch_demo.c -L. -lmmapq $(LDFLAGS) -o batch_demo
+	@echo "built: batch_demo"
 
 bench: $(LIB)
 	$(CC) $(CFLAGS) examples/latency_bench.c -L. -lmmapq $(LDFLAGS) -o latency_bench
@@ -75,4 +79,4 @@ scripts/test.sh test/multiprocess/test_multiprocess.sh:
 	chmod +x $@
 
 clean:
-	rm -f $(OBJS) $(LIB) demo latency_bench echo_server batch_latency_bench batch_echo_server
+	rm -f $(OBJS) $(LIB) demo latency_bench echo_server batch_demo batch_latency_bench batch_echo_server
