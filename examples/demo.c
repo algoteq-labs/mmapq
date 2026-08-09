@@ -158,10 +158,8 @@ int main(void)
     /* Create appender and poller */
     IndexedAppender *appender = NULL;
     if (indexed_queue_create_appender(q, &appender) != 0) return 1;
-    if (appender == NULL) return 1;
     IndexedPoller *poller = NULL;
     if (indexed_queue_create_poller(q, &poller) != 0) return 1;
-    if (poller == NULL) return 1;
 
     printf("appender ID: %d\n", indexed_appender_id(appender));
 

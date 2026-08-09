@@ -48,13 +48,18 @@ int region_ring_sync_create(
     if (regions == NULL) return MMAPQ_ENOMEM;
 
     for (int i = 0; i < ring_size; i++) {
-        region_sync_create(
+        int rc = region_sync_create(
             file_mapper,
             region_size,
             timeout_ns,
             REGION_MAX_FILE_NOT_FOUND_ERRORS,
             REGION_MAX_BEYOND_FILE_SIZE_ERRORS,
             &regions[i]);
+        if (rc != 0) {
+            for (int j = 0; j < i; j++) region_destroy(regions[j]);
+            free(regions);
+            return rc;
+        }
     }
 
     SyncRingImpl *impl = calloc(1, sizeof(SyncRingImpl));
@@ -235,13 +240,18 @@ int region_ring_async_create(
     if (regions == NULL) return MMAPQ_ENOMEM;
 
     for (int i = 0; i < ring_size; i++) {
-        region_async_create(
+        int rc = region_async_create(
             file_mapper,
             region_size,
             timeout_ns,
             REGION_MAX_FILE_NOT_FOUND_ERRORS,
             REGION_MAX_BEYOND_FILE_SIZE_ERRORS,
             &regions[i]);
+        if (rc != 0) {
+            for (int j = 0; j < i; j++) region_destroy(regions[j]);
+            free(regions);
+            return rc;
+        }
     }
 
     /* Create and register the AsyncMappingExecutable */

@@ -96,7 +96,8 @@ column are design decisions, not roadmap items.
 |---|---|
 | Wire compatibility with Algoteq's Java implementation (tools4j-derived; NOT compatible with upstream tools4j — formats have diverged) | ✓ by construction, single-message queues; batch queues are C-ecosystem only |
 | Up to 256 concurrent appenders, lock-free atomic per-message commit | ✓ |
-| Distinct error codes: `ETIMEDOUT/EINVAL/ECLOSED/ECORRUPT/ESCHEMA/EEXIST/ENOENT/EIDCONFLICT` mapped 1:1 — Rust `MmapError` variants, Python exception classes | ✓ |
+| Distinct error codes: `ETIMEDOUT/EINVAL/ECLOSED/ECORRUPT/ESCHEMA/EEXIST/ENOENT/EIDCONFLICT/ENOMEM` mapped 1:1 — Rust `MmapError` variants, Python exception classes | ✓ |
+| Factory functions return `int` (0 success, negative `MMAPQ_*` error code) with `**out` parameter instead of raw pointer | ✓ |
 | Corruption refused on open (`ECORRUPT`), never repaired; recreate from export | ✓ |
 | Validation survives release builds (`-DNDEBUG`); regression tests run under exact release flags | ✓ |
 | Multi-process safety: cross-process interop tests (Rust ↔ C echo servers) | ✓ |
