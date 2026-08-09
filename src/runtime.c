@@ -820,16 +820,16 @@ int runtime_get_instance(
         }
     }
 
-    if (registry_count >= MAX_RUNTIME_INSTANCES) { pthread_mutex_unlock(&registry_mutex); return MMAPQ_ENOMEM; }
+    if (registry_count >= MAX_RUNTIME_INSTANCES) { pthread_mutex_unlock(&registry_mutex); idle_strategy_destroy(idle); return MMAPQ_ENOMEM; }
 
     int *id_copy = malloc(sizeof(int));
-    if (id_copy == NULL) { pthread_mutex_unlock(&registry_mutex); return MMAPQ_ENOMEM; }
+    if (id_copy == NULL) { pthread_mutex_unlock(&registry_mutex); idle_strategy_destroy(idle); return MMAPQ_ENOMEM; }
     *id_copy = runtime_id;
 
     Runtime *rt = NULL;
     int rc = runtime_create(name, idle, close_timeout_ns,
                             registry_on_close, id_copy, &rt);
-    if (rc != 0) { pthread_mutex_unlock(&registry_mutex); free(id_copy); return rc; }
+    if (rc != 0) { pthread_mutex_unlock(&registry_mutex); idle_strategy_destroy(idle); free(id_copy); return rc; }
 
     registry[registry_count].runtime_id = runtime_id;
     registry[registry_count].runtime    = rt;

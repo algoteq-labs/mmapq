@@ -117,9 +117,9 @@ int indexed_queue_create(
     return 0;
 }
 
-/* ── indexed_queue_create_default_opt ────────────────────────────────────── */
+/* ── indexed_queue_create_default ────────────────────────────────────────── */
 
-int indexed_queue_create_default_opt(
+int indexed_queue_create_default(
     const char *directory,
     const char *queue_name,
     Runtime    *write_runtime,
@@ -140,16 +140,16 @@ int indexed_queue_create_default_opt(
         out_queue);
 }
 
-/* ── indexed_queue_create_default ────────────────────────────────────────── */
+/* ── indexed_queue_create_default_opt ────────────────────────────────────── */
 
-int indexed_queue_create_default(
+int indexed_queue_create_default_opt(
     const char *directory,
     const char *queue_name,
     Runtime    *write_runtime,
     Runtime    *read_runtime,
     IndexedQueue **out_queue)
 {
-    return indexed_queue_create_default_opt(directory, queue_name, write_runtime, read_runtime, out_queue);
+    return indexed_queue_create_default(directory, queue_name, write_runtime, read_runtime, out_queue);
 }
 
 /* ── Participant factories ────────────────────────────────────────────────── */

@@ -231,7 +231,8 @@ static int batch_appender_create_internal(
     }
     a->ro_header = queue_region_accessor_header(a->ro_acc);
 
-    if (initialise_append_position(a, start_index)) {
+    int init_rc = initialise_append_position(a, start_index);
+    if (init_rc != 0) {
         queue_region_accessor_close(a->ro_acc);
         queue_region_accessor_close(a->rw_acc);
         appender_meta_close(a->appender_meta);
@@ -241,7 +242,7 @@ static int batch_appender_create_internal(
         free(a->directory);
         free(a->queue_name);
         free(a);
-        return MMAPQ_ECLOSED;
+        return init_rc;
     }
 
     *out = a;
