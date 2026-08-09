@@ -80,10 +80,8 @@ static void *internal_server_thread_fn(void *arg)
     
     IndexedPoller *poller = NULL;
     if (indexed_queue_create_poller(q_req, &poller) != 0) { fprintf(stderr, "create poller failed\n"); exit(1); }
-    if (poller == NULL) { fprintf(stderr, "create poller returned NULL\n"); exit(1); }
     IndexedAppender *appender = NULL;
     if (indexed_queue_create_appender(q_res, &appender) != 0) { fprintf(stderr, "create appender failed\n"); exit(1); }
-    if (appender == NULL) { fprintf(stderr, "create appender returned NULL\n"); exit(1); }
     
     InternalServerCtx ctx = {
         .response_appender = appender,

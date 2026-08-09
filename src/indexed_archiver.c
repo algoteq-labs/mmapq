@@ -6,6 +6,7 @@
 #include "header_reader.h"
 #include "header_codec.h"
 #include "payload_walk.h"
+#include "mmap_platform.h"
 #include "mmap_assert.h"
 
 #include <stdlib.h>

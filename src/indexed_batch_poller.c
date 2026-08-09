@@ -48,7 +48,7 @@ static BatchPayloadIterator *get_iterator(IndexedBatchPoller *p, uint8_t appende
     if (it) return it;
 
     it = calloc(1, sizeof(BatchPayloadIterator));
-    MMAP_ASSERT(it != NULL, "out of memory");
+    if (it == NULL) return NULL;
     it->queue_name  = p->queue_name;
     it->payload_acc = queue_region_accessor_payload(p->ro_acc, appender_id);
     p->iterators[appender_id] = it;
@@ -71,7 +71,7 @@ int indexed_batch_poller_create(
     if (queue_name == NULL) return MMAPQ_EINVAL;
 
     IndexedBatchPoller *p = calloc(1, sizeof(IndexedBatchPoller));
-    MMAP_ASSERT(p != NULL, "out of memory");
+    if (p == NULL) return MMAPQ_ENOMEM;
 
     p->directory  = strdup(directory);
     p->queue_name = strdup(queue_name);

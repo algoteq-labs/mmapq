@@ -472,8 +472,7 @@ int runtime_create(
 
 int runtime_register(Runtime *rt, Executable *exec)
 {
-    MMAP_ASSERT(rt   != NULL, "runtime_register: rt is NULL");
-    MMAP_ASSERT(exec != NULL, "runtime_register: exec is NULL");
+    if (rt == NULL || exec == NULL) return 0;
 
     if (atomic_load(&rt->closed)) {
         return 0;
@@ -500,8 +499,7 @@ int runtime_register(Runtime *rt, Executable *exec)
 
 int runtime_unregister(Runtime *rt, Executable *exec)
 {
-    MMAP_ASSERT(rt   != NULL, "runtime_unregister: rt is NULL");
-    MMAP_ASSERT(exec != NULL, "runtime_unregister: exec is NULL");
+    if (rt == NULL || exec == NULL) return 0;
 
     /* Threading contract enforcement */
     MMAP_ASSERT(pthread_equal(pthread_self(), rt->runtime_thread_id),
@@ -740,10 +738,8 @@ static void unregister_wait_close(Executable *self)
 
 void runtime_unregister_and_wait(Runtime *rt, Executable *exec)
 {
-    MMAP_ASSERT(rt   != NULL, "runtime_unregister_and_wait: rt is NULL");
-    MMAP_ASSERT(exec != NULL, "runtime_unregister_and_wait: exec is NULL");
-    MMAP_ASSERT(!runtime_is_closed(rt),
-        "runtime_unregister_and_wait: runtime is already closed");
+    if (rt == NULL || exec == NULL) return;
+    if (runtime_is_closed(rt)) return;
 
     /*
      * Stack-allocate the helper — it must stay valid until done=1.

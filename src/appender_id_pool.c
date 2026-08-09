@@ -85,7 +85,7 @@ static inline int bit_position(uint8_t id) { return id % 32; }
 
 int appender_id_pool_acquire(AppenderIdPool *pool)
 {
-    MMAP_ASSERT(pool != NULL, "appender_id_pool_acquire: pool is NULL");
+    if (pool == NULL) return -1;
 
     for (int retry = 0; retry < APPENDER_ID_POOL_MAX_RETRIES; retry++) {
         for (int w = 0; w < APPENDER_ID_POOL_WORD_COUNT; w++) {
@@ -115,7 +115,7 @@ int appender_id_pool_acquire(AppenderIdPool *pool)
 
 int appender_id_pool_try_acquire(AppenderIdPool *pool, uint8_t id)
 {
-    MMAP_ASSERT(pool != NULL, "appender_id_pool_try_acquire: pool is NULL");
+    if (pool == NULL) return 0;
 
     _Atomic uint32_t *ap = word_ptr(pool, word_index(id));
     int bit = bit_position(id);

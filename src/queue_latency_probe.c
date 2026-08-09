@@ -129,7 +129,7 @@ int queue_latency_probe_create(
     p->response_poller = NULL;
     {
         int rc = indexed_queue_create_poller(p->response_queue, &p->response_poller);
-        if (rc != 0) { indexed_queue_close(p->response_queue); indexed_queue_close(p->request_queue); free(p->msg_buffer); free(p); return rc; }
+        if (rc != 0) { indexed_appender_close(p->request_appender); indexed_queue_close(p->response_queue); indexed_queue_close(p->request_queue); free(p->msg_buffer); free(p); return rc; }
     }
     
     atomic_store(&p->validation_errors, 0);

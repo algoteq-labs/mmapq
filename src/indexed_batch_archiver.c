@@ -6,6 +6,7 @@
 #include "header_reader.h"
 #include "header_codec.h"
 #include "batch_payload_iterator.h"
+#include "mmap_platform.h"
 #include "mmap_assert.h"
 
 #include <stdlib.h>
@@ -91,7 +92,7 @@ static BatchPayloadIterator *get_iterator(IndexedBatchArchiver *a, uint8_t id)
 {
     if (!a->iterators[id]) {
         BatchPayloadIterator *it = calloc(1, sizeof(BatchPayloadIterator));
-        MMAP_ASSERT(it != NULL, "get_iterator: out of memory");
+        if (it == NULL) return NULL;
         it->queue_name  = a->queue_name;
         it->payload_acc = queue_region_accessor_payload(a->ro_acc, id);
         a->iterators[id] = it;
