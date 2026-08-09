@@ -5,7 +5,6 @@
 #include "indexed_queue.h"
 #include "indexed_appender.h"
 #include "indexed_poller.h"
-#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -80,11 +79,11 @@ static void *internal_server_thread_fn(void *arg)
     if (indexed_queue_create_default(a->dir, a->res, rt, rt, &q_res) != 0) { fprintf(stderr, "create response queue failed\n"); exit(1); }
     
     IndexedPoller *poller = NULL;
-    assert(indexed_queue_create_poller(q_req, &poller) == 0);
-    assert(poller != NULL);
+    if (indexed_queue_create_poller(q_req, &poller) != 0) { fprintf(stderr, "create poller failed\n"); exit(1); }
+    if (poller == NULL) { fprintf(stderr, "create poller returned NULL\n"); exit(1); }
     IndexedAppender *appender = NULL;
-    assert(indexed_queue_create_appender(q_res, &appender) == 0);
-    assert(appender != NULL);
+    if (indexed_queue_create_appender(q_res, &appender) != 0) { fprintf(stderr, "create appender failed\n"); exit(1); }
+    if (appender == NULL) { fprintf(stderr, "create appender returned NULL\n"); exit(1); }
     
     InternalServerCtx ctx = {
         .response_appender = appender,

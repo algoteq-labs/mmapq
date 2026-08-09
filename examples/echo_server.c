@@ -3,7 +3,6 @@
 #include "indexed_poller.h"
 #include "runtime.h"
 #include "mmap_platform.h"
-#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -101,11 +100,11 @@ int main(int argc, char *argv[])
     if (indexed_queue_create_default(dir, res_name, write_rt, read_rt, &q_res) != 0) return 1;
     
     IndexedPoller *poller = NULL;
-    assert(indexed_queue_create_poller(q_req, &poller) == 0);
-    assert(poller != NULL);
+    if (indexed_queue_create_poller(q_req, &poller) != 0) return 1;
+    if (poller == NULL) return 1;
     IndexedAppender *appender = NULL;
-    assert(indexed_queue_create_appender(q_res, &appender) == 0);
-    assert(appender != NULL);
+    if (indexed_queue_create_appender(q_res, &appender) != 0) return 1;
+    if (appender == NULL) return 1;
     
     ServerCtx ctx = {
         .response_appender = appender,

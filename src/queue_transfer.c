@@ -35,6 +35,28 @@ static int read_all(FILE *f, void *buf, size_t n)
     return fread(buf, 1, n, f) == n ? 0 : -1;
 }
 
+/* ── Typed bridge functions for AppenderCache (avoids UB casts) ──────────── */
+
+static int appender_create_bridge(void *q, void **out)
+{
+    return indexed_queue_create_appender((IndexedQueue *)q, (IndexedAppender **)out);
+}
+
+static int appender_create_with_id_bridge(void *q, uint8_t id, void **out)
+{
+    return indexed_queue_create_appender_with_id((IndexedQueue *)q, id, (IndexedAppender **)out);
+}
+
+static void appender_close_bridge(void *a)
+{
+    indexed_appender_close((IndexedAppender *)a);
+}
+
+static void queue_close_bridge(void *q)
+{
+    indexed_queue_close((IndexedQueue *)q);
+}
+
 static int write_framed_entry(FILE *out, uint16_t aid, const void *data, int32_t len)
 {
     if (write_all(out, &aid, sizeof(uint16_t))) return -1;
@@ -303,10 +325,10 @@ static int64_t do_import(
 
     AppenderCache ac = {
         .cache = cache_store, .auto_appender = NULL,
-        .create = (AppenderCreateFn)indexed_queue_create_appender,
-        .create_with_id = (AppenderCreateWithIdFn)indexed_queue_create_appender_with_id,
-        .close = (AppenderCloseFn)indexed_appender_close,
-        .queue_close = (QueueCloseFn)indexed_queue_close,
+        .create = appender_create_bridge,
+        .create_with_id = appender_create_with_id_bridge,
+        .close = appender_close_bridge,
+        .queue_close = queue_close_bridge,
     };
 
     if (is_batch_stream) {
@@ -496,10 +518,10 @@ int64_t queue_transfer_copy(
 
     AppenderCache ac = {
         .cache = cache_store, .auto_appender = NULL,
-        .create = (AppenderCreateFn)indexed_queue_create_appender,
-        .create_with_id = (AppenderCreateWithIdFn)indexed_queue_create_appender_with_id,
-        .close = (AppenderCloseFn)indexed_appender_close,
-        .queue_close = (QueueCloseFn)indexed_queue_close,
+        .create = appender_create_bridge,
+        .create_with_id = appender_create_with_id_bridge,
+        .close = appender_close_bridge,
+        .queue_close = queue_close_bridge,
     };
 
     ReadingContext rc;
@@ -583,10 +605,10 @@ int64_t queue_transfer_copy_batch_to_normal(
 
     AppenderCache ac = {
         .cache = cache_store, .auto_appender = NULL,
-        .create = (AppenderCreateFn)indexed_queue_create_appender,
-        .create_with_id = (AppenderCreateWithIdFn)indexed_queue_create_appender_with_id,
-        .close = (AppenderCloseFn)indexed_appender_close,
-        .queue_close = (QueueCloseFn)indexed_queue_close,
+        .create = appender_create_bridge,
+        .create_with_id = appender_create_with_id_bridge,
+        .close = appender_close_bridge,
+        .queue_close = queue_close_bridge,
     };
 
     BatchReadingContext bctx;
