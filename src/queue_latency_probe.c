@@ -118,18 +118,18 @@ int queue_latency_probe_create(
     }
     {
         int rc = indexed_queue_create_default_opt(directory, response_name, write_runtime, read_runtime, &p->response_queue);
-        if (rc != 0) { free(p->msg_buffer); free(p->request_queue); free(p); return rc; }
+        if (rc != 0) { indexed_queue_close(p->request_queue); free(p->msg_buffer); free(p); return rc; }
     }
     
     p->request_appender = NULL;
     {
         int rc = indexed_queue_create_appender(p->request_queue, &p->request_appender);
-        if (rc != 0) { free(p->msg_buffer); free(p); return rc; }
+        if (rc != 0) { indexed_queue_close(p->response_queue); indexed_queue_close(p->request_queue); free(p->msg_buffer); free(p); return rc; }
     }
     p->response_poller = NULL;
     {
         int rc = indexed_queue_create_poller(p->response_queue, &p->response_poller);
-        if (rc != 0) { free(p->request_appender); free(p->msg_buffer); free(p->request_queue); free(p); return rc; }
+        if (rc != 0) { indexed_queue_close(p->response_queue); indexed_queue_close(p->request_queue); free(p->msg_buffer); free(p); return rc; }
     }
     
     atomic_store(&p->validation_errors, 0);

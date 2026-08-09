@@ -293,7 +293,7 @@ static int64_t do_import(
         region_size, 4, 1, max_file_size, start_index,
         10000000000ULL, 0, wrt, rrt, &q);
 
-    if (rc != 0) return -1;
+    if (rc != 0) return rc;
 
     void *cache_store[APPENDER_CACHE_SIZE] = {NULL};
     int32_t mapped_cache[APPENDER_CACHE_SIZE];
@@ -486,7 +486,7 @@ int64_t queue_transfer_copy(
         queue_meta_region_size(qm), 4, 1, queue_meta_max_file_size(qm),
         dest_start, 10000000000ULL, 0, write_rt, read_rt, &q);
 
-    if (create_rc != 0) return -1;
+    if (create_rc != 0) return create_rc;
 
     void *cache_store[APPENDER_CACHE_SIZE] = {NULL};
     int32_t mapped_cache[APPENDER_CACHE_SIZE];
