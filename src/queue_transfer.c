@@ -573,7 +573,7 @@ int64_t queue_transfer_copy_batch_to_normal(
     int rc = indexed_queue_create(dest_dir, dest_queue,
         queue_meta_region_size(qm), 4, 1, queue_meta_max_file_size(qm),
         dest_start, 10000000000ULL, 0, write_rt, read_rt, &q);
-    if (rc != 0) return -1;
+    if (rc != 0) return rc;
 
     void *cache_store[APPENDER_CACHE_SIZE] = {NULL};
     int32_t mapped_cache[APPENDER_CACHE_SIZE];

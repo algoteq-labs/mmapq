@@ -168,10 +168,13 @@ int main(int argc, char *argv[])
 
     if (client_cpu >= 0) thread_set_affinity(client_cpu);
 
-    BatchQueueLatencyProbe *probe = batch_queue_latency_probe_create(
+    BatchQueueLatencyProbe *probe = NULL;
+    if (batch_queue_latency_probe_create(
         1, dir, "request", "response", msg_size,
         validate_server, validate_client,
-        write_rt, read_rt);
+        write_rt, read_rt, &probe) != 0) {
+        fprintf(stderr, "probe create failed\n"); return 1;
+    }
 
     printf("Warming up...\n");
     batch_queue_latency_probe_move_to_end(probe);
