@@ -45,11 +45,12 @@ typedef struct IndexedArchiver IndexedArchiver;
  * runtime:    background region-mapper runtime for header access
  * Returns: a new archiver; never NULL (asserts on allocation failure)
  */
-IndexedArchiver *indexed_archiver_create(
+int indexed_archiver_create(
     const char *directory,
     const char *queue_name,
     int         ring_size,
-    Runtime    *runtime);
+    Runtime    *runtime,
+    IndexedArchiver **out);
 
 /* ── Archiving ───────────────────────────────────────────────────────────── */
 

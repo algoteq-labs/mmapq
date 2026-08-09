@@ -1,5 +1,6 @@
 #include "appender_meta.h"
 #include "mmap_assert.h"
+#include "mmap_platform.h"
 #include "file_initialiser.h"
 
 #include <stdlib.h>
@@ -43,80 +44,93 @@ static int appender_meta_file_init(int fd, size_t size, void *ctx)
 
 /* ── Internal open helper ────────────────────────────────────────────────── */
 
-static AppenderMeta *appender_meta_open_internal(
+static int appender_meta_open_internal(
     const char      *directory,
     const char      *queue_name,
     uint8_t          appender_id,
     FileInitialiser  initialiser,
-    void            *initialiser_ctx)
+    void            *initialiser_ctx,
+    AppenderMeta   **out)
 {
+    if (out == NULL) return MMAPQ_EINVAL;
+    *out = NULL;
+
     char path[4096];
     appender_meta_file_path(directory, queue_name, appender_id, path, sizeof(path));
 
-    RegionAccessor *region = fixed_size_region_create(
+    RegionAccessor *region = NULL;
+    int fsrerr = fixed_size_region_create(
         path,
         APPENDER_META_ENCODED_LENGTH,
         initialiser,
-        initialiser_ctx);
+        initialiser_ctx,
+        &region);
 
-    if (region == NULL) return NULL;
+    if (fsrerr != 0) return fsrerr;
 
     Buffer buf = {0};
     WrapResult r = region_accessor_wrap(region, 0, &buf);
     if (r != WRAP_SUCCESS) {
         fixed_size_region_destroy(region);
-        return NULL;
+        return MMAPQ_ENOMEM;
     }
 
     AppenderMeta *m = calloc(1, sizeof(AppenderMeta));
-    if (m == NULL) return NULL;
+    if (m == NULL) {
+        fixed_size_region_destroy(region);
+        return MMAPQ_ENOMEM;
+    }
 
     m->region      = region;
     m->base        = buf.data;
     m->appender_id = appender_id;
 
-    return m;
+    *out = m;
+    return 0;
 }
 
 /* ── appender_meta_open_rw ───────────────────────────────────────────────── */
 
-AppenderMeta *appender_meta_open_rw(
+int appender_meta_open_rw(
     const char *directory,
     const char *queue_name,
-    uint8_t     appender_id)
+    uint8_t     appender_id,
+    AppenderMeta **out)
 {
-    if (directory  == NULL) return NULL;
-    if (queue_name == NULL) return NULL;
+    if (out == NULL) return MMAPQ_EINVAL;
+    *out = NULL;
+    if (directory  == NULL) return MMAPQ_EINVAL;
+    if (queue_name == NULL) return MMAPQ_EINVAL;
 
     AppenderMetaInitCtx ctx = { .appender_id = appender_id };
 
-    AppenderMeta *m = appender_meta_open_internal(
+    return appender_meta_open_internal(
         directory, queue_name, appender_id,
-        appender_meta_file_init, &ctx);
-
-    if (m == NULL) return NULL;
-    return m;
+        appender_meta_file_init, &ctx, out);
 }
 
 /* ── appender_meta_open_ro ───────────────────────────────────────────────── */
 
-AppenderMeta *appender_meta_open_ro(
+int appender_meta_open_ro(
     const char *directory,
     const char *queue_name,
-    uint8_t     appender_id)
+    uint8_t     appender_id,
+    AppenderMeta **out)
 {
-    if (directory  == NULL) return NULL;
-    if (queue_name == NULL) return NULL;
+    if (out == NULL) return MMAPQ_EINVAL;
+    *out = NULL;
+    if (directory  == NULL) return MMAPQ_EINVAL;
+    if (queue_name == NULL) return MMAPQ_EINVAL;
 
     char path[4096];
     appender_meta_file_path(directory, queue_name, appender_id, path, sizeof(path));
 
     struct stat st;
-    if (stat(path, &st) != 0) return NULL;
+    if (stat(path, &st) != 0) return MMAPQ_ENOENT;
 
     return appender_meta_open_internal(
         directory, queue_name, appender_id,
-        file_init_none, NULL);
+        file_init_none, NULL, out);
 }
 
 /* ── appender_meta_close ─────────────────────────────────────────────────── */

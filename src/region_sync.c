@@ -196,19 +196,22 @@ static int32_t sync_size(RegionAccessor *self)
 
 /* ── Factory ─────────────────────────────────────────────────────────────── */
 
-Region *region_sync_create(
+int region_sync_create(
     FileMapper *file_mapper,
     int32_t     region_size,
     uint64_t    timeout_ns,
     int         max_file_not_found_errors,
-    int         max_beyond_file_size_errors)
+    int         max_beyond_file_size_errors,
+    Region    **out)
 {
-    if (file_mapper == NULL) return NULL;
-    if (region_size <= 0) return NULL;
-    if ((region_size & (region_size - 1)) != 0) return NULL;
+    if (out == NULL) return MMAPQ_EINVAL;
+    *out = NULL;
+    if (file_mapper == NULL) return MMAPQ_EINVAL;
+    if (region_size <= 0) return MMAPQ_EINVAL;
+    if ((region_size & (region_size - 1)) != 0) return MMAPQ_EINVAL;
 
     SyncRegionImpl *impl = calloc(1, sizeof(SyncRegionImpl));
-    if (impl == NULL) return NULL;
+    if (impl == NULL) return MMAPQ_ENOMEM;
 
     impl->file_mapper                = file_mapper;
     impl->region_size                = region_size;
@@ -219,7 +222,7 @@ Region *region_sync_create(
     impl->current_address            = 0;
 
     Region *r = calloc(1, sizeof(Region));
-    if (r == NULL) { free(impl); return NULL; }
+    if (r == NULL) { free(impl); return MMAPQ_ENOMEM; }
 
     /* RegionAccessor vtable via embedded base */
     r->base.wrap           = sync_wrap;
@@ -232,7 +235,8 @@ Region *region_sync_create(
     r->map   = sync_map;
     r->unmap = sync_unmap;
 
-    return r;
+    *out = r;
+    return 0;
 }
 
 /* ── Destroy ─────────────────────────────────────────────────────────────── */

@@ -29,43 +29,48 @@ static void sync_ring_close(RegionRing *self)
     file_mapper_close(impl->file_mapper);
 }
 
-RegionRing *region_ring_sync_create(
+int region_ring_sync_create(
     int         ring_size,
     int32_t     region_size,
     FileMapper *file_mapper,
-    uint64_t    timeout_ns)
+    uint64_t    timeout_ns,
+    RegionRing **out)
 {
-    if (file_mapper == NULL) return NULL;
-    if (ring_size <= 0) return NULL;
-    if ((ring_size & (ring_size - 1)) != 0) return NULL;
-    if (region_size <= 0) return NULL;
-    if ((region_size & (region_size - 1)) != 0) return NULL;
+    if (out == NULL) return MMAPQ_EINVAL;
+    *out = NULL;
+    if (file_mapper == NULL) return MMAPQ_EINVAL;
+    if (ring_size <= 0) return MMAPQ_EINVAL;
+    if ((ring_size & (ring_size - 1)) != 0) return MMAPQ_EINVAL;
+    if (region_size <= 0) return MMAPQ_EINVAL;
+    if ((region_size & (region_size - 1)) != 0) return MMAPQ_EINVAL;
 
     Region **regions = calloc((size_t)ring_size, sizeof(Region *));
-    if (regions == NULL) return NULL;
+    if (regions == NULL) return MMAPQ_ENOMEM;
 
     for (int i = 0; i < ring_size; i++) {
-        regions[i] = region_sync_create(
+        region_sync_create(
             file_mapper,
             region_size,
             timeout_ns,
             REGION_MAX_FILE_NOT_FOUND_ERRORS,
-            REGION_MAX_BEYOND_FILE_SIZE_ERRORS);
+            REGION_MAX_BEYOND_FILE_SIZE_ERRORS,
+            &regions[i]);
     }
 
     SyncRingImpl *impl = calloc(1, sizeof(SyncRingImpl));
-    if (impl == NULL) { free(regions); return NULL; }
+    if (impl == NULL) { free(regions); return MMAPQ_ENOMEM; }
     impl->file_mapper = file_mapper;
 
     RegionRing *ring = calloc(1, sizeof(RegionRing));
-    if (ring == NULL) { free(impl); free(regions); return NULL; }
+    if (ring == NULL) { free(impl); free(regions); return MMAPQ_ENOMEM; }
     ring->close     = sync_ring_close;
     ring->regions   = (Region **)regions;
     ring->ring_size = ring_size;
     ring->is_async  = 0;
     ring->impl      = impl;
 
-    return ring;
+    *out = ring;
+    return 0;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -208,36 +213,40 @@ static void async_ring_close(RegionRing *self)
     file_mapper_close(impl->file_mapper);
 }
 
-RegionRing *region_ring_async_create(
+int region_ring_async_create(
     int         ring_size,
     int32_t     region_size,
     FileMapper *file_mapper,
     uint64_t    timeout_ns,
-    Runtime    *runtime)
+    Runtime    *runtime,
+    RegionRing **out)
 {
-    if (file_mapper == NULL) return NULL;
-    if (runtime     == NULL) return NULL;
-    if (ring_size <= 0) return NULL;
-    if ((ring_size & (ring_size - 1)) != 0) return NULL;
-    if (region_size <= 0) return NULL;
-    if ((region_size & (region_size - 1)) != 0) return NULL;
+    if (out == NULL) return MMAPQ_EINVAL;
+    *out = NULL;
+    if (file_mapper == NULL) return MMAPQ_EINVAL;
+    if (runtime     == NULL) return MMAPQ_EINVAL;
+    if (ring_size <= 0) return MMAPQ_EINVAL;
+    if ((ring_size & (ring_size - 1)) != 0) return MMAPQ_EINVAL;
+    if (region_size <= 0) return MMAPQ_EINVAL;
+    if ((region_size & (region_size - 1)) != 0) return MMAPQ_EINVAL;
 
     /* Create regions */
     Region **regions = calloc((size_t)ring_size, sizeof(Region *));
-    if (regions == NULL) return NULL;
+    if (regions == NULL) return MMAPQ_ENOMEM;
 
     for (int i = 0; i < ring_size; i++) {
-        regions[i] = region_async_create(
+        region_async_create(
             file_mapper,
             region_size,
             timeout_ns,
             REGION_MAX_FILE_NOT_FOUND_ERRORS,
-            REGION_MAX_BEYOND_FILE_SIZE_ERRORS);
+            REGION_MAX_BEYOND_FILE_SIZE_ERRORS,
+            &regions[i]);
     }
 
     /* Create and register the AsyncMappingExecutable */
     AsyncMappingImpl *mapping_impl = calloc(1, sizeof(AsyncMappingImpl));
-    if (mapping_impl == NULL) { free(regions); return NULL; }
+    if (mapping_impl == NULL) { free(regions); return MMAPQ_ENOMEM; }
     mapping_impl->regions   = regions;
     mapping_impl->ring_size = ring_size;
     mapping_impl->exec.execute = async_mapping_execute;
@@ -246,26 +255,27 @@ RegionRing *region_ring_async_create(
 
     if (!runtime_register(runtime, &mapping_impl->exec)) {
         free(mapping_impl);
-        return NULL;
+        return MMAPQ_ETIMEDOUT;
     }
 
     /* Create async ring impl */
     AsyncRingImpl *impl = calloc(1, sizeof(AsyncRingImpl));
-    if (impl == NULL) { free(mapping_impl); return NULL; }
+    if (impl == NULL) { free(mapping_impl); return MMAPQ_ENOMEM; }
     impl->file_mapper   = file_mapper;
     impl->runtime       = runtime;
     impl->mapping_impl  = mapping_impl;
     atomic_store(&impl->closed, 0);
 
     RegionRing *ring = calloc(1, sizeof(RegionRing));
-    if (ring == NULL) { free(mapping_impl); free(impl); free(regions); return NULL; }
+    if (ring == NULL) { free(mapping_impl); free(impl); free(regions); return MMAPQ_ENOMEM; }
     ring->close     = async_ring_close;
     ring->regions   = regions;
     ring->ring_size = ring_size;
     ring->is_async  = 1;
     ring->impl      = impl;
 
-    return ring;
+    *out = ring;
+    return 0;
 }
 
 /* ── Destroy ─────────────────────────────────────────────────────────────── */

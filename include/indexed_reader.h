@@ -83,12 +83,13 @@ typedef struct IndexedReader IndexedReader;
  *
  * Lazy init — region accessors created on first use.
  */
-IndexedReader *indexed_reader_create(
+int indexed_reader_create(
     const char *directory,
     const char *queue_name,
     int         ring_size,
     uint64_t    timeout_ns,
-    Runtime    *runtime);
+    Runtime    *runtime,
+    IndexedReader **out);
 
 /* ── Read operations ─────────────────────────────────────────────────────── */
 

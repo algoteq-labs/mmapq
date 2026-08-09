@@ -67,7 +67,7 @@ static NextMove client_handler(int64_t b_idx, BatchReadingContext *batch_ctx, vo
     return NEXT_ADVANCE;
 }
 
-BatchQueueLatencyProbe *batch_queue_latency_probe_create(
+int batch_queue_latency_probe_create(
     uint16_t    instance_id,
     const char *directory,
     const char *request_name,
@@ -76,10 +76,14 @@ BatchQueueLatencyProbe *batch_queue_latency_probe_create(
     int         validate_on_server,
     int         validate_on_client,
     Runtime    *write_runtime,
-    Runtime    *read_runtime)
+    Runtime    *read_runtime,
+    BatchQueueLatencyProbe **out)
 {
+    if (out == NULL) return MMAPQ_EINVAL;
+    *out = NULL;
+
     BatchQueueLatencyProbe *p = calloc(1, sizeof(BatchQueueLatencyProbe));
-    if (p == NULL) return NULL;
+    if (p == NULL) return MMAPQ_ENOMEM;
 
     p->instance_id = instance_id;
     p->message_size = message_size;
@@ -87,15 +91,28 @@ BatchQueueLatencyProbe *batch_queue_latency_probe_create(
     p->validate_on_client = validate_on_client;
 
     p->msg_buffer = malloc((size_t)message_size);
-    if (p->msg_buffer == NULL) { free(p); return NULL; }
+    if (p->msg_buffer == NULL) { free(p); return MMAPQ_ENOMEM; }
 
-    p->request_queue = indexed_batch_queue_create_default(directory, request_name, write_runtime, read_runtime);
-    p->response_queue = indexed_batch_queue_create_default(directory, response_name, write_runtime, read_runtime);
+    {
+        int rc = indexed_batch_queue_create_default(directory, request_name, write_runtime, read_runtime, &p->request_queue);
+        if (rc != 0) { free(p->msg_buffer); free(p); return rc; }
+    }
+    {
+        int rc = indexed_batch_queue_create_default(directory, response_name, write_runtime, read_runtime, &p->response_queue);
+        if (rc != 0) { free(p->msg_buffer); free(p); return rc; }
+    }
 
-    p->request_appender = indexed_batch_queue_create_appender(p->request_queue);
-    p->response_poller = indexed_batch_queue_create_poller(p->response_queue);
+    {
+        int rc = indexed_batch_queue_create_appender(p->request_queue, &p->request_appender);
+        if (rc != 0) { free(p->msg_buffer); free(p); return rc; }
+    }
+    {
+        int rc = indexed_batch_queue_create_poller(p->response_queue, &p->response_poller);
+        if (rc != 0) { free(p->msg_buffer); free(p); return rc; }
+    }
 
-    return p;
+    *out = p;
+    return 0;
 }
 
 void batch_queue_latency_probe_move_to_end(BatchQueueLatencyProbe *p)

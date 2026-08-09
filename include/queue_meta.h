@@ -156,39 +156,39 @@ static inline void queue_meta_set_start_index(QueueMeta *m, int64_t index)
  * max_file_size:  maximum rolled file size
  * archivable:     0 or 1
  * queue_type:     QUEUE_TYPE_NORMAL or QUEUE_TYPE_BATCH (FIXED8 is refused)
+ * out:            out-parameter for the created QueueMeta (NULL on failure)
  *
- * Returns a heap-allocated QueueMeta on success, NULL on validation failure.
+ * Returns 0 on success, MMAPQ_EINVAL for NULL/invalid args,
+ * MMAPQ_ENOMEM on allocation failure, MMAPQ_ETIMEDOUT on I/O error,
+ * MMAPQ_ESCHEMA on schema mismatch. Sets *out to NULL on failure.
  */
-QueueMeta *queue_meta_open_rw(
+int queue_meta_open_rw(
     const char *directory,
     const char *queue_name,
     int64_t     start_index,
     int32_t     region_size,
     int64_t     max_file_size,
     int         archivable,
-    uint8_t     queue_type);
+    uint8_t     queue_type,
+    QueueMeta **out);
 
 /**
  * queue_meta_open_ro — open the meta file for reading only.
  *
- * On NULL return, *out_err (if non-NULL) is set to the reason:
- *   MMAPQ_ENOENT     — file does not exist (queue not yet created)
- *   MMAPQ_ETIMEDOUT  — stat or mapping failure (likely I/O error)
- *   MMAPQ_ESCHEMA    — file exists but type/schema mismatch
- *
  * directory:       base directory for the queue
  * queue_name:      queue subdirectory name
  * expected_type:   QUEUE_TYPE_NORMAL or QUEUE_TYPE_BATCH (FIXED8 is refused)
- * out_err:         optional out-parameter for the error code on failure
+ * out:             out-parameter for the created QueueMeta (NULL on failure)
  *
- * Returns a heap-allocated QueueMeta on success.
- * Returns NULL on failure (reason in *out_err if provided).
+ * Returns 0 on success, MMAPQ_ENOENT if file does not exist,
+ * MMAPQ_ETIMEDOUT on I/O error, MMAPQ_ESCHEMA on type/schema mismatch,
+ * MMAPQ_EINVAL for NULL args. Sets *out to NULL on failure.
  */
-QueueMeta *queue_meta_open_ro(
+int queue_meta_open_ro(
     const char *directory,
     const char *queue_name,
     uint8_t     expected_type,
-    int        *out_err);
+    QueueMeta **out);
 
 /**
  * queue_meta_close — unmap and free a QueueMeta.

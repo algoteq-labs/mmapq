@@ -132,16 +132,19 @@ static void ro_close(FileMapper *self)
 
 /* ── Factory ─────────────────────────────────────────────────────────────── */
 
-FileMapper *file_mapper_single_ro_create(
+int file_mapper_single_ro_create(
     const char      *file_path,
     FileInitialiser  initialiser,
     void            *initialiser_ctx,
-    int              check_file_size)
+    int              check_file_size,
+    FileMapper     **out)
 {
-    if (file_path == NULL) return NULL;
+    if (out == NULL) return MMAPQ_EINVAL;
+    *out = NULL;
+    if (file_path == NULL) return MMAPQ_EINVAL;
 
     SingleFileRoImpl *impl = calloc(1, sizeof(SingleFileRoImpl));
-    if (impl == NULL) return NULL;
+    if (impl == NULL) return MMAPQ_ENOMEM;
 
     impl->file_path       = strdup(file_path);
     impl->initialiser     = initialiser;
@@ -151,12 +154,13 @@ FileMapper *file_mapper_single_ro_create(
     impl->cached_size     = -1;
 
     FileMapper *fm = calloc(1, sizeof(FileMapper));
-    if (fm == NULL) { free(impl); return NULL; }
+    if (fm == NULL) { free(impl); return MMAPQ_ENOMEM; }
 
     fm->map   = ro_map;
     fm->unmap = ro_unmap;
     fm->close = ro_close;
     fm->impl  = impl;
 
-    return fm;
+    *out = fm;
+    return 0;
 }

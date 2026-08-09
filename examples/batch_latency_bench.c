@@ -75,10 +75,10 @@ static void *internal_server_thread(void *arg)
     InternalServerArgs *a = (InternalServerArgs *)arg;
     if (a->cpu >= 0) thread_set_affinity(a->cpu);
 
-    a->q_req   = indexed_batch_queue_create_default(a->dir, "request",  a->write_rt, a->read_rt);
-    a->q_res   = indexed_batch_queue_create_default(a->dir, "response", a->write_rt, a->read_rt);
-    a->poller  = indexed_batch_queue_create_poller(a->q_req);
-    a->appender = indexed_batch_queue_create_appender(a->q_res);
+    if (indexed_batch_queue_create_default(a->dir, "request", a->write_rt, a->read_rt, &a->q_req) != 0) return NULL;
+    if (indexed_batch_queue_create_default(a->dir, "response", a->write_rt, a->read_rt, &a->q_res) != 0) return NULL;
+    if (indexed_batch_queue_create_poller(a->q_req, &a->poller) != 0) return NULL;
+    if (indexed_batch_queue_create_appender(a->q_res, &a->appender) != 0) return NULL;
     a->ctx.response_appender = a->appender;
     a->ctx.shutdown_requested = 0;
 
@@ -134,7 +134,9 @@ int main(int argc, char *argv[])
 
     Runtime *write_rt = NULL, *read_rt = NULL;
     if (!use_sync) {
-        Runtime *rt = runtime_region_mapper();
+        Runtime *rt = NULL;
+        int rc_rt = runtime_region_mapper(&rt);
+        if (rc_rt != 0) { fprintf(stderr, "runtime_region_mapper failed\n"); return 1; }
         if (mapper_cpu >= 0) runtime_set_affinity(rt, mapper_cpu);
         if (use_mixed) { write_rt = rt; read_rt = NULL; }
         else           { write_rt = rt; read_rt = rt;   }

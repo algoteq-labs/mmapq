@@ -33,10 +33,10 @@ struct IndexedBatchPoller {
 static int poller_init(IndexedBatchPoller *p)
 {
     if (p->queue_meta) return 1;
-    p->queue_meta = queue_meta_open_ro(p->directory, p->queue_name, QUEUE_TYPE_BATCH, NULL);
-    if (!p->queue_meta) return 0;
+    if (queue_meta_open_ro(p->directory, p->queue_name, QUEUE_TYPE_BATCH, &p->queue_meta) != 0)
+        return 0;
 
-    p->ro_acc = queue_region_accessor_create_ro(p->directory, p->queue_name, queue_meta_region_size(p->queue_meta), p->ring_size, 1, queue_meta_max_file_size(p->queue_meta), p->timeout_ns, p->runtime);
+    if (queue_region_accessor_create_ro(p->directory, p->queue_name, queue_meta_region_size(p->queue_meta), p->ring_size, 1, queue_meta_max_file_size(p->queue_meta), p->timeout_ns, p->runtime, &p->ro_acc) != 0) return 0;
     p->header_acc = queue_region_accessor_header(p->ro_acc);
     p->current_batch_index = queue_meta_start_index(p->queue_meta);
     return 1;
@@ -57,13 +57,19 @@ static BatchPayloadIterator *get_iterator(IndexedBatchPoller *p, uint8_t appende
 
 /* ── Factory ─────────────────────────────────────────────────────────────── */
 
-IndexedBatchPoller *indexed_batch_poller_create(
+int indexed_batch_poller_create(
     const char *directory,
     const char *queue_name,
     int         ring_size,
     uint64_t    timeout_ns,
-    Runtime    *runtime)
+    Runtime    *runtime,
+    IndexedBatchPoller **out)
 {
+    if (out == NULL) return MMAPQ_EINVAL;
+    *out = NULL;
+    if (directory  == NULL) return MMAPQ_EINVAL;
+    if (queue_name == NULL) return MMAPQ_EINVAL;
+
     IndexedBatchPoller *p = calloc(1, sizeof(IndexedBatchPoller));
     MMAP_ASSERT(p != NULL, "out of memory");
 
@@ -74,7 +80,8 @@ IndexedBatchPoller *indexed_batch_poller_create(
     p->runtime    = runtime;
     p->closed     = 0;
 
-    return p;
+    *out = p;
+    return 0;
 }
 
 /* ── Polling ─────────────────────────────────────────────────────────────── */

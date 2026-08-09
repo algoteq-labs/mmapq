@@ -351,12 +351,13 @@ static IndexedAppender *appender_create_internal(
      *   - If file is new: use parameters passed to create().
      *   - If file exists: adopt its parameters and IGNORE create() args.
      */
-    a->queue_meta = queue_meta_open_rw(directory, queue_name,
-                                        start_index,
-                                        region_size, max_file_size,
-                                        archivable,
-                                        QUEUE_TYPE_NORMAL);
-    if (a->queue_meta == NULL) {
+    int qmerr = queue_meta_open_rw(directory, queue_name,
+                                    start_index,
+                                    region_size, max_file_size,
+                                    archivable,
+                                    QUEUE_TYPE_NORMAL,
+                                    &a->queue_meta);
+    if (qmerr != 0) {
         appender_id_pool_release(a->id_pool, a->appender_id);
         appender_id_pool_close(a->id_pool);
         free(a->directory);
@@ -370,8 +371,7 @@ static IndexedAppender *appender_create_internal(
     int64_t reconciled_max_file_size = queue_meta_max_file_size(a->queue_meta);
 
     /* Open appender meta (creates file if new) */
-    a->appender_meta = appender_meta_open_rw(directory, queue_name, appender_id);
-    if (a->appender_meta == NULL) {
+    if (appender_meta_open_rw(directory, queue_name, appender_id, &a->appender_meta) != 0) {
         /* Failure after queue meta + pool opened — free all held resources */
         if (a->queue_meta) queue_meta_close(a->queue_meta);
         appender_id_pool_release(a->id_pool, a->appender_id);
@@ -383,23 +383,23 @@ static IndexedAppender *appender_create_internal(
     }
 
     /* Create RW region accessors */
-    a->rw_acc = queue_region_accessor_create_rw(
+    queue_region_accessor_create_rw(
         directory, queue_name, reconciled_region_size, ring_size,
         REGION_RING_ACCESSOR_DEFAULT_REGIONS_AHEAD,
-        reconciled_max_file_size, timeout_ns, runtime, appender_id);
+        reconciled_max_file_size, timeout_ns, runtime, appender_id,
+        &a->rw_acc);
 
     a->header_acc  = queue_region_accessor_header(a->rw_acc);
     a->payload_acc = queue_region_accessor_payload(a->rw_acc, appender_id);
 
     /* Create RO accessor for header search fallback (used by both
      * initialise_append_position and move_to_last_header) */
-    a->ro_acc = queue_region_accessor_create_ro(
+    if (queue_region_accessor_create_ro(
         directory, queue_name,
         reconciled_region_size, ring_size,
         0,           /* regions_to_map_ahead = 0 for recovery scan */
-        reconciled_max_file_size, timeout_ns, runtime);
-
-    if (a->ro_acc == NULL) {
+        reconciled_max_file_size, timeout_ns, runtime,
+        &a->ro_acc) != 0) {
         queue_region_accessor_close(a->rw_acc);
         appender_meta_close(a->appender_meta);
         if (a->queue_meta) queue_meta_close(a->queue_meta);
@@ -431,7 +431,7 @@ static IndexedAppender *appender_create_internal(
 
 /* ── Factory functions ───────────────────────────────────────────────────── */
 
-IndexedAppender *indexed_appender_create(
+int indexed_appender_create(
     const char *directory,
     const char *queue_name,
     int32_t     region_size,
@@ -440,27 +440,32 @@ IndexedAppender *indexed_appender_create(
     uint64_t    timeout_ns,
     int         archivable,
     Runtime    *runtime,
-    int64_t     start_index)
+    int64_t     start_index,
+    IndexedAppender **out)
 {
-    if (directory  == NULL) return NULL;
-    if (queue_name == NULL) return NULL;
+    if (out == NULL) return MMAPQ_EINVAL;
+    *out = NULL;
+    if (directory  == NULL) return MMAPQ_EINVAL;
+    if (queue_name == NULL) return MMAPQ_EINVAL;
 
     /* Acquire an ID from the pool — pool is opened here and owned by the appender */
-    AppenderIdPool *pool = appender_id_pool_open(directory, queue_name);
-    if (pool == NULL) return NULL;
+    AppenderIdPool *pool = NULL;
+    if (appender_id_pool_open(directory, queue_name, &pool) != 0) return -1;
 
     int id = appender_id_pool_acquire(pool);
     if (id < 0) {
         appender_id_pool_close(pool);
-        return NULL;
+        return -1;
     }
 
-    return appender_create_internal(directory, queue_name, region_size, ring_size,
+    *out = appender_create_internal(directory, queue_name, region_size, ring_size,
                                       max_file_size, timeout_ns, archivable, runtime,
                                       pool, (uint8_t)id, start_index);
+    if (*out == NULL) return -1;
+    return 0;
 }
 
-IndexedAppender *indexed_appender_create_with_id(
+int indexed_appender_create_with_id(
     const char *directory,
     const char *queue_name,
     int32_t     region_size,
@@ -470,23 +475,28 @@ IndexedAppender *indexed_appender_create_with_id(
     int         archivable,
     Runtime    *runtime,
     uint8_t     appender_id,
-    int64_t     start_index)
+    int64_t     start_index,
+    IndexedAppender **out)
 {
-    if (directory  == NULL) return NULL;
-    if (queue_name == NULL) return NULL;
+    if (out == NULL) return MMAPQ_EINVAL;
+    *out = NULL;
+    if (directory  == NULL) return MMAPQ_EINVAL;
+    if (queue_name == NULL) return MMAPQ_EINVAL;
 
-    AppenderIdPool *pool = appender_id_pool_open(directory, queue_name);
-    if (pool == NULL) return NULL;
+    AppenderIdPool *pool = NULL;
+    if (appender_id_pool_open(directory, queue_name, &pool) != 0) return -1;
 
     int ok = appender_id_pool_try_acquire(pool, appender_id);
     if (!ok) {
         appender_id_pool_close(pool);
-        return NULL;
+        return -1;
     }
 
-    return appender_create_internal(directory, queue_name, region_size, ring_size,
+    *out = appender_create_internal(directory, queue_name, region_size, ring_size,
                                       max_file_size, timeout_ns, archivable, runtime,
                                       pool, appender_id, start_index);
+    if (*out == NULL) return -1;
+    return 0;
 }
 
 /* ── indexed_appender_append ─────────────────────────────────────────────── */
@@ -545,13 +555,14 @@ PayloadIterator *indexed_appender_iterator(
     if (a == NULL) return NULL;
 
     if (a->payload_iter == NULL) {
-        a->payload_iter = payload_iterator_create(
+        payload_iterator_create(
             a->queue_name,
             a->payload_acc,
             appender_start_of_stream,
             appender_end_of_stream,
             a,
-            0 /* live end-of-stream */);
+            0, /* live end-of-stream */
+            &a->payload_iter);
     }
 
     return payload_iterator_init(a->payload_iter, start_offset, end_offset);
@@ -566,24 +577,26 @@ UncommittedPayloadIterator *indexed_appender_uncommitted_iterator(
 
     /* Create inner iterator with fixed end-of-stream */
     if (a->uncommitted_inner == NULL) {
-        a->uncommitted_inner = payload_iterator_create(
+        payload_iterator_create(
             a->queue_name,
             a->payload_acc,
             appender_start_of_stream,
             appender_end_of_stream,
             a,
-            1 /* fix end-of-stream at init time */);
+            1, /* fix end-of-stream at init time */
+            &a->uncommitted_inner);
     }
 
     if (a->uncommitted_iter == NULL) {
-        a->uncommitted_iter = uncommitted_iterator_create(
+        uncommitted_iterator_create(
             a->queue_name,
             a->appender_id,
             appender_start_of_stream,
             appender_end_of_stream,
             a,
             a->header_acc,
-            a->uncommitted_inner);
+            a->uncommitted_inner,
+            &a->uncommitted_iter);
     }
 
     return uncommitted_iterator_init(a->uncommitted_iter, start_offset, end_offset);

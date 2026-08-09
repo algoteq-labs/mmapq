@@ -154,8 +154,14 @@ int main(void)
         TIMEOUT_NS, /* archivable = */ 0, rt, rt);
 
     /* Create appender and poller */
-    IndexedAppender *appender = indexed_queue_create_appender(q);
-    IndexedPoller   *poller   = indexed_queue_create_poller(q);
+    IndexedAppender *appender = NULL;
+    int rc_appender = indexed_queue_create_appender(q, &appender);
+    TEST_ASSERT_EQUAL_INT(0, rc_appender);
+    TEST_ASSERT_NOT_NULL(appender);
+    IndexedPoller *poller = NULL;
+    int rc_poller = indexed_queue_create_poller(q, &poller);
+    TEST_ASSERT_EQUAL_INT(0, rc_poller);
+    TEST_ASSERT_NOT_NULL(poller);
 
     printf("appender ID: %d\n", indexed_appender_id(appender));
 

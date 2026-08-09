@@ -101,8 +101,14 @@ int main(int argc, char *argv[])
     IndexedQueue *q_req = indexed_queue_create_default(dir, req_name, write_rt, read_rt);
     IndexedQueue *q_res = indexed_queue_create_default(dir, res_name, write_rt, read_rt);
     
-    IndexedPoller   *poller   = indexed_queue_create_poller(q_req);
-    IndexedAppender *appender = indexed_queue_create_appender(q_res);
+    IndexedPoller *poller = NULL;
+    int rc_poller = indexed_queue_create_poller(q_req, &poller);
+    TEST_ASSERT_EQUAL_INT(0, rc_poller);
+    TEST_ASSERT_NOT_NULL(poller);
+    IndexedAppender *appender = NULL;
+    int rc_appender = indexed_queue_create_appender(q_res, &appender);
+    TEST_ASSERT_EQUAL_INT(0, rc_appender);
+    TEST_ASSERT_NOT_NULL(appender);
     
     ServerCtx ctx = {
         .response_appender = appender,

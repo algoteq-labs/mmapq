@@ -1,5 +1,6 @@
 #include "appender_id_pool.h"
 #include "mmap_assert.h"
+#include "mmap_platform.h"
 #include "file_initialiser.h"
 
 #include <stdlib.h>
@@ -19,42 +20,48 @@ static void pool_file_path(const char *directory, const char *queue_name,
 
 /* ── appender_id_pool_open ───────────────────────────────────────────────── */
 
-AppenderIdPool *appender_id_pool_open(
+int appender_id_pool_open(
     const char *directory,
-    const char *queue_name)
+    const char *queue_name,
+    AppenderIdPool **out_pool)
 {
-    if (directory  == NULL) return NULL;
-    if (queue_name == NULL) return NULL;
+    if (out_pool == NULL) return MMAPQ_EINVAL;
+    *out_pool = NULL;
+    if (directory  == NULL) return MMAPQ_EINVAL;
+    if (queue_name == NULL) return MMAPQ_EINVAL;
 
     char path[4096];
     pool_file_path(directory, queue_name, path, sizeof(path));
 
     /* file_init_zeros initialises all bits to 0 (all IDs free) on first creation */
-    RegionAccessor *region = fixed_size_region_create(
+    RegionAccessor *region = NULL;
+    int fsrerr = fixed_size_region_create(
         path,
         APPENDER_ID_POOL_REGION_SIZE,
         file_init_zeros,
-        NULL);
+        NULL,
+        &region);
 
-    if (region == NULL) return NULL;
+    if (fsrerr != 0) return fsrerr;
 
     Buffer buf = {0};
     WrapResult r = region_accessor_wrap(region, 0, &buf);
     if (r != WRAP_SUCCESS) {
         fixed_size_region_destroy(region);
-        return NULL;
+        return MMAPQ_ENOMEM;
     }
 
     AppenderIdPool *pool = calloc(1, sizeof(AppenderIdPool));
     if (pool == NULL) {
         fixed_size_region_destroy(region);
-        return NULL;
+        return MMAPQ_ENOMEM;
     }
 
     pool->region = region;
     pool->base   = buf.data;
 
-    return pool;
+    *out_pool = pool;
+    return 0;
 }
 
 /* ── Bitset helpers ──────────────────────────────────────────────────────── */

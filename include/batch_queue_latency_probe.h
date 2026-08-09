@@ -7,7 +7,7 @@
 
 typedef struct BatchQueueLatencyProbe BatchQueueLatencyProbe;
 
-BatchQueueLatencyProbe *batch_queue_latency_probe_create(
+int batch_queue_latency_probe_create(
     uint16_t    instance_id,
     const char *directory,
     const char *request_name,
@@ -16,7 +16,8 @@ BatchQueueLatencyProbe *batch_queue_latency_probe_create(
     int         validate_on_server,
     int         validate_on_client,
     Runtime    *write_runtime,
-    Runtime    *read_runtime);
+    Runtime    *read_runtime,
+    BatchQueueLatencyProbe **out);
 
 void batch_queue_latency_probe_move_to_end(BatchQueueLatencyProbe *p);
 

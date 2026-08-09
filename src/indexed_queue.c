@@ -50,7 +50,7 @@ static int create_queue_directory(const char *directory, const char *queue_name)
 
 /* ── indexed_queue_create ────────────────────────────────────────────────── */
 
-IndexedQueue *indexed_queue_create(
+int indexed_queue_create(
     const char *directory,
     const char *queue_name,
     int32_t     region_size,
@@ -61,23 +61,29 @@ IndexedQueue *indexed_queue_create(
     uint64_t    timeout_ns,
     int         archivable,
     Runtime    *write_runtime,
-    Runtime    *read_runtime)
+    Runtime    *read_runtime,
+    IndexedQueue **out_queue)
 {
-    if (directory  == NULL) return NULL;
-    if (queue_name == NULL) return NULL;
-    if (region_size <= 0) return NULL;
-    if ((region_size & (region_size - 1)) != 0) return NULL;
-    if (ring_size <= 0) return NULL;
-    if ((ring_size & (ring_size - 1)) != 0) return NULL;
-    if (max_file_size <= 0) return NULL;
-    if (max_file_size % region_size != 0) return NULL;
-    if (start_index < 0) return NULL;
+    if (out_queue == NULL) return MMAPQ_EINVAL;
+    *out_queue = NULL;
+
+    if (directory  == NULL) return MMAPQ_EINVAL;
+    if (queue_name == NULL) return MMAPQ_EINVAL;
+    if (region_size <= 0) return MMAPQ_EINVAL;
+    if ((region_size & (region_size - 1)) != 0) return MMAPQ_EINVAL;
+    if (ring_size <= 0) return MMAPQ_EINVAL;
+    if ((ring_size & (ring_size - 1)) != 0) return MMAPQ_EINVAL;
+    if (max_file_size <= 0) return MMAPQ_EINVAL;
+    if (max_file_size % region_size != 0) return MMAPQ_EINVAL;
+    if (start_index < 0) return MMAPQ_EINVAL;
 
     IndexedQueue *q = calloc(1, sizeof(IndexedQueue));
-    if (q == NULL) return NULL;
+    if (q == NULL) return MMAPQ_ENOMEM;
 
     q->directory            = strdup(directory);
+    if (q->directory == NULL) { free(q); return MMAPQ_ENOMEM; }
     q->queue_name           = strdup(queue_name);
+    if (q->queue_name == NULL) { free(q->directory); free(q); return MMAPQ_ENOMEM; }
     q->region_size          = region_size;
     q->ring_size            = ring_size;
     q->regions_to_map_ahead = regions_to_map_ahead;
@@ -97,33 +103,28 @@ IndexedQueue *indexed_queue_create(
         _Atomic uint32_t test32 = 0;
         (void)test64;
         (void)test32;
-        MMAP_ASSERT(atomic_is_lock_free(&test64),
-            "indexed_queue_create: uint64_t atomics are not lock-free on this platform.");
-        MMAP_ASSERT(atomic_is_lock_free(&test32),
-            "indexed_queue_create: uint32_t atomics are not lock-free on this platform.");
+        if (!atomic_is_lock_free(&test64)) {
+            free(q->queue_name); free(q->directory); free(q);
+            return MMAPQ_ENOMEM;
+        }
+        if (!atomic_is_lock_free(&test32)) {
+            free(q->queue_name); free(q->directory); free(q);
+            return MMAPQ_ENOMEM;
+        }
     }
 
-    return q;
-}
-
-/* ── indexed_queue_create_default ────────────────────────────────────────── */
-
-IndexedQueue *indexed_queue_create_default(
-    const char *directory,
-    const char *queue_name,
-    Runtime    *write_runtime,
-    Runtime    *read_runtime)
-{
-    return indexed_queue_create_default_opt(directory, queue_name, write_runtime, read_runtime);
+    *out_queue = q;
+    return 0;
 }
 
 /* ── indexed_queue_create_default_opt ────────────────────────────────────── */
 
-IndexedQueue *indexed_queue_create_default_opt(
+int indexed_queue_create_default_opt(
     const char *directory,
     const char *queue_name,
     Runtime    *write_runtime,
-    Runtime    *read_runtime)
+    Runtime    *read_runtime,
+    IndexedQueue **out_queue)
 {
     return indexed_queue_create(
         directory, queue_name,
@@ -131,74 +132,98 @@ IndexedQueue *indexed_queue_create_default_opt(
         INDEXED_QUEUE_DEFAULT_RING_SIZE,
         INDEXED_QUEUE_DEFAULT_REGIONS_TO_MAP_AHEAD,
         INDEXED_QUEUE_DEFAULT_MAX_FILE_SIZE,
-        /* start_index = */ 0,
+        0,
         INDEXED_QUEUE_DEFAULT_TIMEOUT_NS,
-        /* archivable = */ 0,
+        0,
         write_runtime,
-        read_runtime);
+        read_runtime,
+        out_queue);
+}
+
+/* ── indexed_queue_create_default ────────────────────────────────────────── */
+
+int indexed_queue_create_default(
+    const char *directory,
+    const char *queue_name,
+    Runtime    *write_runtime,
+    Runtime    *read_runtime,
+    IndexedQueue **out_queue)
+{
+    return indexed_queue_create_default_opt(directory, queue_name, write_runtime, read_runtime, out_queue);
 }
 
 /* ── Participant factories ────────────────────────────────────────────────── */
 
-IndexedAppender *indexed_queue_create_appender(IndexedQueue *q)
+int indexed_queue_create_appender(IndexedQueue *q, IndexedAppender **out)
 {
-    if (q == NULL) return NULL;
-    if (atomic_load_explicit(&q->closed, memory_order_relaxed)) return NULL;
+    if (out == NULL) return MMAPQ_EINVAL;
+    *out = NULL;
+    if (q == NULL) return MMAPQ_EINVAL;
+    if (atomic_load_explicit(&q->closed, memory_order_relaxed)) return MMAPQ_ECLOSED;
 
-    if (create_queue_directory(q->directory, q->queue_name) != 0) return NULL;
+    if (create_queue_directory(q->directory, q->queue_name) != 0) return MMAPQ_ECLOSED;
 
     return indexed_appender_create(
         q->directory, q->queue_name,
         q->region_size, q->ring_size,
         q->max_file_size, q->timeout_ns,
         q->archivable, q->write_runtime,
-        q->start_index);
+        q->start_index, out);
 }
 
-IndexedAppender *indexed_queue_create_appender_with_id(
+int indexed_queue_create_appender_with_id(
     IndexedQueue *q,
-    uint8_t       appender_id)
+    uint8_t       appender_id,
+    IndexedAppender **out)
 {
-    if (q == NULL) return NULL;
-    if (atomic_load_explicit(&q->closed, memory_order_relaxed)) return NULL;
+    if (out == NULL) return MMAPQ_EINVAL;
+    *out = NULL;
+    if (q == NULL) return MMAPQ_EINVAL;
+    if (atomic_load_explicit(&q->closed, memory_order_relaxed)) return MMAPQ_ECLOSED;
 
-    if (create_queue_directory(q->directory, q->queue_name) != 0) return NULL;
+    if (create_queue_directory(q->directory, q->queue_name) != 0) return MMAPQ_ECLOSED;
 
     return indexed_appender_create_with_id(
         q->directory, q->queue_name,
         q->region_size, q->ring_size,
         q->max_file_size, q->timeout_ns,
         q->archivable, q->write_runtime, appender_id,
-        q->start_index);
+        q->start_index, out);
 }
 
-IndexedPoller *indexed_queue_create_poller(IndexedQueue *q)
+int indexed_queue_create_poller(IndexedQueue *q, IndexedPoller **out)
 {
-    if (q == NULL) return NULL;
-    if (atomic_load_explicit(&q->closed, memory_order_relaxed)) return NULL;
+    if (out == NULL) return MMAPQ_EINVAL;
+    *out = NULL;
+    if (q == NULL) return MMAPQ_EINVAL;
+    if (atomic_load_explicit(&q->closed, memory_order_relaxed)) return MMAPQ_ECLOSED;
 
     return indexed_poller_create(
         q->directory, q->queue_name,
-        q->ring_size, q->timeout_ns, q->read_runtime);
+        q->ring_size, q->timeout_ns, q->read_runtime, out);
 }
 
-IndexedReader *indexed_queue_create_reader(IndexedQueue *q)
+int indexed_queue_create_reader(IndexedQueue *q, IndexedReader **out)
 {
-    if (q == NULL) return NULL;
-    if (atomic_load_explicit(&q->closed, memory_order_relaxed)) return NULL;
+    if (out == NULL) return MMAPQ_EINVAL;
+    *out = NULL;
+    if (q == NULL) return MMAPQ_EINVAL;
+    if (atomic_load_explicit(&q->closed, memory_order_relaxed)) return MMAPQ_ECLOSED;
 
     return indexed_reader_create(
         q->directory, q->queue_name,
-        q->ring_size, q->timeout_ns, q->read_runtime);
+        q->ring_size, q->timeout_ns, q->read_runtime, out);
 }
 
-IndexedArchiver *indexed_queue_create_archiver(IndexedQueue *q)
+int indexed_queue_create_archiver(IndexedQueue *q, IndexedArchiver **out)
 {
-    if (q == NULL) return NULL;
-    if (atomic_load_explicit(&q->closed, memory_order_relaxed)) return NULL;
+    if (out == NULL) return MMAPQ_EINVAL;
+    *out = NULL;
+    if (q == NULL) return MMAPQ_EINVAL;
+    if (atomic_load_explicit(&q->closed, memory_order_relaxed)) return MMAPQ_ECLOSED;
 
     return indexed_archiver_create(
-        q->directory, q->queue_name, q->ring_size, q->read_runtime);
+        q->directory, q->queue_name, q->ring_size, q->read_runtime, out);
 }
 
 /* ── Metadata ─────────────────────────────────────────────────────────────── */
@@ -206,7 +231,7 @@ IndexedArchiver *indexed_queue_create_archiver(IndexedQueue *q)
 static void ensure_meta_open(IndexedQueue *q)
 {
     if (q->queue_meta != NULL) return;
-    q->queue_meta = queue_meta_open_ro(q->directory, q->queue_name, QUEUE_TYPE_NORMAL, NULL);
+    queue_meta_open_ro(q->directory, q->queue_name, QUEUE_TYPE_NORMAL, &q->queue_meta);
 }
 
 int32_t indexed_queue_region_size(const IndexedQueue *q)

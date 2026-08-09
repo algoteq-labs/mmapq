@@ -207,17 +207,20 @@ static void rw_close(FileMapper *self)
 
 /* ── Factory ─────────────────────────────────────────────────────────────── */
 
-FileMapper *file_mapper_single_rw_create(
+int file_mapper_single_rw_create(
     const char      *file_path,
     int64_t          max_size,
     FileInitialiser  initialiser,
-    void            *initialiser_ctx)
+    void            *initialiser_ctx,
+    FileMapper     **out)
 {
-    if (file_path == NULL) return NULL;
-    if (max_size <= 0) return NULL;
+    if (out == NULL) return MMAPQ_EINVAL;
+    *out = NULL;
+    if (file_path == NULL) return MMAPQ_EINVAL;
+    if (max_size <= 0) return MMAPQ_EINVAL;
 
     SingleFileRwImpl *impl = calloc(1, sizeof(SingleFileRwImpl));
-    MMAP_ASSERT(impl != NULL, "file_mapper_single_rw_create: out of memory");
+    if (impl == NULL) return MMAPQ_ENOMEM;
 
     impl->file_path       = strdup(file_path);
     impl->max_size        = max_size;
@@ -227,12 +230,13 @@ FileMapper *file_mapper_single_rw_create(
     impl->length_cache    = 0;
 
     FileMapper *fm = calloc(1, sizeof(FileMapper));
-    MMAP_ASSERT(fm != NULL, "file_mapper_single_rw_create: out of memory");
+    if (fm == NULL) { free(impl); return MMAPQ_ENOMEM; }
 
     fm->map   = rw_map;
     fm->unmap = rw_unmap;
     fm->close = rw_close;
     fm->impl  = impl;
 
-    return fm;
+    *out = fm;
+    return 0;
 }

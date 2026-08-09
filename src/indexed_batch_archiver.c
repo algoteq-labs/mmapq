@@ -37,16 +37,17 @@ struct IndexedBatchArchiver {
 static QueueMeta *ro_init(IndexedBatchArchiver *a)
 {
     if (a->ro_meta) return a->ro_meta;
-    a->ro_meta = queue_meta_open_ro(a->directory, a->queue_name, QUEUE_TYPE_BATCH, NULL);
-    if (!a->ro_meta) return NULL;
+    if (queue_meta_open_ro(a->directory, a->queue_name, QUEUE_TYPE_BATCH, &a->ro_meta) != 0)
+        return NULL;
     /* Sync mapping: archiver does a single sequential pass, no premap benefit */
-    a->ro_acc = queue_region_accessor_create_ro(
+    if (queue_region_accessor_create_ro(
         a->directory, a->queue_name,
         queue_meta_region_size(a->ro_meta),
         a->ring_size,
         0,   /* regions_to_map_ahead = 0 — sync, no background mapper needed */
         queue_meta_max_file_size(a->ro_meta),
-        10000000000ULL, a->runtime);
+        10000000000ULL, a->runtime,
+        &a->ro_acc) != 0) { return NULL; }
     a->header_acc = queue_region_accessor_header(a->ro_acc);
     return a->ro_meta;
 }
@@ -63,12 +64,13 @@ static QueueMeta *ro_init(IndexedBatchArchiver *a)
 static QueueMeta *rw_meta_open(IndexedBatchArchiver *a)
 {
     if (a->rw_meta) return a->rw_meta;
-    a->rw_meta = queue_meta_open_rw(a->directory, a->queue_name,
+    if (queue_meta_open_rw(a->directory, a->queue_name,
         queue_meta_start_index(a->ro_meta),
         queue_meta_region_size(a->ro_meta),
         queue_meta_max_file_size(a->ro_meta),
         queue_meta_archivable(a->ro_meta),
-        QUEUE_TYPE_BATCH);
+        QUEUE_TYPE_BATCH,
+        &a->rw_meta) != 0) { a->rw_meta = NULL; }
     return a->rw_meta;
 }
 
@@ -79,8 +81,8 @@ static AppenderMeta *get_appender_meta(IndexedBatchArchiver *a, uint8_t id)
         snprintf(path, sizeof(path), "%s/%s/appender_meta_%u",
                  a->directory, a->queue_name, (unsigned)id);
         if (!queue_file_exists(path)) return NULL;
-        a->appender_metas[id] = appender_meta_open_rw(
-            a->directory, a->queue_name, id);
+        if (appender_meta_open_rw(
+                a->directory, a->queue_name, id, &a->appender_metas[id]) != 0) return NULL;
     }
     return a->appender_metas[id];
 }
@@ -99,22 +101,27 @@ static BatchPayloadIterator *get_iterator(IndexedBatchArchiver *a, uint8_t id)
 
 /* ── Factory ─────────────────────────────────────────────────────────────── */
 
-IndexedBatchArchiver *indexed_batch_archiver_create(
+int indexed_batch_archiver_create(
     const char *directory,
     const char *queue_name,
     int         ring_size,
-    Runtime    *runtime)
+    Runtime    *runtime,
+    IndexedBatchArchiver **out)
 {
-    if (directory == NULL || queue_name == NULL) return NULL;
+    if (out == NULL) return MMAPQ_EINVAL;
+    *out = NULL;
+    if (directory == NULL) return MMAPQ_EINVAL;
+    if (queue_name == NULL) return MMAPQ_EINVAL;
 
     IndexedBatchArchiver *a = calloc(1, sizeof(IndexedBatchArchiver));
-    if (a == NULL) return NULL;
+    if (a == NULL) return MMAPQ_ENOMEM;
 
     a->directory  = strdup(directory);
     a->queue_name = strdup(queue_name);
     a->ring_size  = ring_size > 0 ? ring_size : 4;
     a->runtime    = runtime;
-    return a;
+    *out = a;
+    return 0;
 }
 
 /* ── Archiving ───────────────────────────────────────────────────────────── */

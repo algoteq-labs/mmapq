@@ -408,19 +408,22 @@ void region_async_unmanage(Region *r)
 
 /* ── Factory ─────────────────────────────────────────────────────────────── */
 
-Region *region_async_create(
+int region_async_create(
     FileMapper *file_mapper,
     int32_t     region_size,
     uint64_t    timeout_ns,
     int         max_file_not_found_errors,
-    int         max_beyond_file_size_errors)
+    int         max_beyond_file_size_errors,
+    Region    **out)
 {
-    if (file_mapper == NULL) return NULL;
-    if (region_size <= 0) return NULL;
-    if ((region_size & (region_size - 1)) != 0) return NULL;
+    if (out == NULL) return MMAPQ_EINVAL;
+    *out = NULL;
+    if (file_mapper == NULL) return MMAPQ_EINVAL;
+    if (region_size <= 0) return MMAPQ_EINVAL;
+    if ((region_size & (region_size - 1)) != 0) return MMAPQ_EINVAL;
 
     AsyncRegionImpl *impl = calloc(1, sizeof(AsyncRegionImpl));
-    if (impl == NULL) return NULL;
+    if (impl == NULL) return MMAPQ_ENOMEM;
 
     impl->file_mapper                 = file_mapper;
     impl->region_size                 = region_size;
@@ -436,7 +439,7 @@ Region *region_async_create(
     atomic_store_explicit(&impl->state, &UNMAPPED_OPS, memory_order_relaxed);
 
     Region *r = calloc(1, sizeof(Region));
-    if (r == NULL) { free(impl); return NULL; }
+    if (r == NULL) { free(impl); return MMAPQ_ENOMEM; }
 
     r->base.wrap           = async_wrap;
     r->base.wrap_no_premap = async_wrap_no_premap;
@@ -447,5 +450,6 @@ Region *region_async_create(
     r->map   = async_map;
     r->unmap = async_unmap;
 
-    return r;
+    *out = r;
+    return 0;
 }

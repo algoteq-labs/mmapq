@@ -70,18 +70,21 @@ static int32_t fixed_size(RegionAccessor *self)
 
 /* ── Factory ─────────────────────────────────────────────────────────────── */
 
-RegionAccessor *fixed_size_region_create(
+int fixed_size_region_create(
     const char      *file_path,
     int32_t          size,
     FileInitialiser  initialiser,
-    void            *initialiser_ctx)
+    void            *initialiser_ctx,
+    RegionAccessor **out)
 {
-    if (file_path == NULL) return NULL;
-    if (size <= 0)         return NULL;
+    if (out == NULL) return MMAPQ_EINVAL;
+    *out = NULL;
+    if (file_path == NULL) return MMAPQ_EINVAL;
+    if (size <= 0)         return MMAPQ_EINVAL;
 
     /* Open or create the backing file */
     int fd = open(file_path, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
-    if (fd < 0) return NULL;
+    if (fd < 0) return MMAPQ_ETIMEDOUT;
 
     /*
      * Coordination for multi-process initialisation:
@@ -96,7 +99,7 @@ RegionAccessor *fixed_size_region_create(
             if (fstat(fd, &st) == 0 && st.st_size == 0) {
                 if (initialiser(fd, (size_t)size, initialiser_ctx) != 0) {
                     close(fd);
-                    return NULL;
+                    return MMAPQ_ETIMEDOUT;
                 }
             }
             flock(fd, LOCK_UN);
@@ -115,7 +118,7 @@ RegionAccessor *fixed_size_region_create(
                       MAP_SHARED | MAP_POPULATE, fd, 0);
     if (addr == MAP_FAILED) {
         close(fd);
-        return NULL;
+        return MMAPQ_ETIMEDOUT;
     }
 
     huge_pages_hint(addr, map_len);
@@ -124,7 +127,7 @@ RegionAccessor *fixed_size_region_create(
     if (impl == NULL) {
         munmap(addr, map_len);
         close(fd);
-        return NULL;
+        return MMAPQ_ENOMEM;
     }
 
     impl->file_path = strdup(file_path);  /* keep for toString/debugging */
@@ -138,7 +141,7 @@ RegionAccessor *fixed_size_region_create(
         free(impl);
         munmap(addr, map_len);
         close(fd);
-        return NULL;
+        return MMAPQ_ENOMEM;
     }
 
     acc->wrap           = fixed_wrap;
@@ -152,7 +155,8 @@ RegionAccessor *fixed_size_region_create(
     acc->active_base    = 0;
     acc->active_end     = size;
 
-    return acc;
+    *out = acc;
+    return 0;
 }
 
 /* ── Destroy ─────────────────────────────────────────────────────────────── */

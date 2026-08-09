@@ -102,14 +102,15 @@ typedef struct {
  * inner:                   PayloadIterator for gap traversal (ownership NOT taken;
  *                          caller must keep it alive for the iterator's lifetime)
  */
-UncommittedPayloadIterator *uncommitted_iterator_create(
+int uncommitted_iterator_create(
     const char     *queue_name,
     uint8_t         appender_id,
     int64_t       (*start_of_stream_offset)(void *ctx),
     int64_t       (*end_of_stream_offset)(void *ctx),
     void           *stream_ctx,
     RegionAccessor *header_accessor,
-    PayloadIterator *inner);
+    PayloadIterator *inner,
+    UncommittedPayloadIterator **out);
 
 /**
  * uncommitted_iterator_init — scan header and initialise gap traversal.

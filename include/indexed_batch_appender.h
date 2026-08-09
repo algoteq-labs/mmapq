@@ -68,7 +68,7 @@ struct MutableBatch {
  * start_index: logical start index for the queue (0 for fresh, preserved on import/copy)
  * Returns: a new appender; never NULL (asserts on allocation failure)
  */
-IndexedBatchAppender *indexed_batch_appender_create(
+int indexed_batch_appender_create(
     const char *directory,
     const char *queue_name,
     int32_t     region_size,
@@ -77,7 +77,8 @@ IndexedBatchAppender *indexed_batch_appender_create(
     uint64_t    timeout_ns,
     int         archivable,
     Runtime    *runtime,
-    int64_t     start_index);
+    int64_t     start_index,
+    IndexedBatchAppender **out);
 
 /**
  * Create a batch appender with a specific appender ID.
@@ -88,7 +89,7 @@ IndexedBatchAppender *indexed_batch_appender_create(
  * All parameters same as indexed_batch_appender_create, plus:
  * appender_id: the desired appender ID (0-254)
  */
-IndexedBatchAppender *indexed_batch_appender_create_with_id(
+int indexed_batch_appender_create_with_id(
     const char *directory,
     const char *queue_name,
     int32_t     region_size,
@@ -98,7 +99,8 @@ IndexedBatchAppender *indexed_batch_appender_create_with_id(
     int         archivable,
     Runtime    *runtime,
     uint8_t     appender_id,
-    int64_t     start_index);
+    int64_t     start_index,
+    IndexedBatchAppender **out);
 
 /* ── Batch lifecycle ─────────────────────────────────────────────────────── */
 

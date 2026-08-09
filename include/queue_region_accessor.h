@@ -86,8 +86,13 @@ typedef struct QueueRegionAccessor {
  * created if it does not exist.
  *
  * runtime: the region mapper runtime for async mapping.
+ * out:     out-parameter for the created accessor (NULL on failure)
+ *
+ * Returns 0 on success, MMAPQ_EINVAL for NULL/invalid args,
+ * MMAPQ_ENOMEM on allocation failure, MMAPQ_ETIMEDOUT on I/O error.
+ * Sets *out to NULL on failure.
  */
-QueueRegionAccessor *queue_region_accessor_create_rw(
+int queue_region_accessor_create_rw(
     const char *directory,
     const char *queue_name,
     int32_t     region_size,
@@ -96,7 +101,8 @@ QueueRegionAccessor *queue_region_accessor_create_rw(
     int64_t     max_file_size,
     uint64_t    timeout_ns,
     Runtime    *runtime,
-    uint8_t     appender_id);
+    uint8_t     appender_id,
+    QueueRegionAccessor **out);
 
 /**
  * queue_region_accessor_create_ro — create read-only accessors (for pollers/readers).
@@ -105,8 +111,13 @@ QueueRegionAccessor *queue_region_accessor_create_rw(
  * first access via queue_region_accessor_payload().
  *
  * runtime: the region mapper runtime for async mapping.
+ * out:     out-parameter for the created accessor (NULL on failure)
+ *
+ * Returns 0 on success, MMAPQ_EINVAL for NULL/invalid args,
+ * MMAPQ_ENOMEM on allocation failure, MMAPQ_ETIMEDOUT on I/O error.
+ * Sets *out to NULL on failure.
  */
-QueueRegionAccessor *queue_region_accessor_create_ro(
+int queue_region_accessor_create_ro(
     const char *directory,
     const char *queue_name,
     int32_t     region_size,
@@ -114,7 +125,8 @@ QueueRegionAccessor *queue_region_accessor_create_ro(
     int         regions_to_map_ahead,
     int64_t     max_file_size,
     uint64_t    timeout_ns,
-    Runtime    *runtime);
+    Runtime    *runtime,
+    QueueRegionAccessor **out);
 
 /* ── Accessor retrieval ──────────────────────────────────────────────────── */
 

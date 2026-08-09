@@ -58,11 +58,13 @@ typedef struct {
  * Creates the file if it does not exist, initialised to all zeros (all IDs free).
  * The file is opened read-write since both readers and writers acquire IDs.
  *
- * Returns a heap-allocated AppenderIdPool. Aborts on failure.
+ * Returns 0 on success and sets *out_pool. Returns MMAPQ_EINVAL for NULL args,
+ * MMAPQ_ENOMEM for allocation failures. Sets *out_pool to NULL on failure.
  */
-AppenderIdPool *appender_id_pool_open(
+int appender_id_pool_open(
     const char *directory,
-    const char *queue_name);
+    const char *queue_name,
+    AppenderIdPool **out_pool);
 
 /* ── Operations ──────────────────────────────────────────────────────────── */
 

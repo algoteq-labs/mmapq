@@ -86,23 +86,27 @@ static inline uint8_t appender_meta_appender_id(const AppenderMeta *m)
  *
  * Creates the file if it does not exist, initialised with the given
  * appender_id and start_offset = INITIAL_PAYLOAD_POSITION.
- * Returns a heap-allocated AppenderMeta. Aborts on failure.
+ * Returns 0 on success. Returns MMAPQ_EINVAL for NULL args,
+ * MMAPQ_ENOMEM for allocation failures. Sets *out to NULL on failure.
  */
-AppenderMeta *appender_meta_open_rw(
+int appender_meta_open_rw(
     const char *directory,
     const char *queue_name,
-    uint8_t     appender_id);
+    uint8_t     appender_id,
+    AppenderMeta **out);
 
 /**
  * appender_meta_open_ro — open the appender meta file for reading.
  *
- * Returns NULL if the file does not exist.
- * Returns a heap-allocated AppenderMeta on success.
+ * Returns 0 on success, MMAPQ_ENOENT if the file does not exist,
+ * MMAPQ_EINVAL for NULL args, MMAPQ_ENOMEM for allocation failures.
+ * Sets *out to NULL on failure.
  */
-AppenderMeta *appender_meta_open_ro(
+int appender_meta_open_ro(
     const char *directory,
     const char *queue_name,
-    uint8_t     appender_id);
+    uint8_t     appender_id,
+    AppenderMeta **out);
 
 /**
  * appender_meta_close — unmap and free an AppenderMeta.

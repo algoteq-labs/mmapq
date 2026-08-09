@@ -39,15 +39,17 @@ static RegionAccessor *make_ring_accessor(
     uint64_t    timeout_ns,
     Runtime    *runtime)
 {
-    RegionRing *ring;
+    RegionRing *ring = NULL;
     if (runtime == NULL) {
-        ring = region_ring_sync_create(ring_size, region_size, mapper, timeout_ns);
+        region_ring_sync_create(ring_size, region_size, mapper, timeout_ns, &ring);
     } else {
-        ring = region_ring_async_create(ring_size, region_size, mapper, timeout_ns, runtime);
+        region_ring_async_create(ring_size, region_size, mapper, timeout_ns, runtime, &ring);
     }
 
-    return region_ring_accessor_create(
-        ring, region_size, regions_to_map_ahead, premap_ratio);
+    RegionAccessor *rra = NULL;
+    region_ring_accessor_create(
+        ring, region_size, regions_to_map_ahead, premap_ratio, &rra);
+    return rra;
 }
 
 /* ── Allocate and zero a QueueRegionAccessor ─────────────────────────────── */
@@ -81,7 +83,7 @@ static QueueRegionAccessor *acc_alloc(
 
 /* ── queue_region_accessor_create_rw ─────────────────────────────────────── */
 
-QueueRegionAccessor *queue_region_accessor_create_rw(
+int queue_region_accessor_create_rw(
     const char *directory,
     const char *queue_name,
     int32_t     region_size,
@@ -90,25 +92,31 @@ QueueRegionAccessor *queue_region_accessor_create_rw(
     int64_t     max_file_size,
     uint64_t    timeout_ns,
     Runtime    *runtime,
-    uint8_t     appender_id)
+    uint8_t     appender_id,
+    QueueRegionAccessor **out)
 {
-    if (directory  == NULL) return NULL;
-    if (queue_name == NULL) return NULL;
+    if (out == NULL) return MMAPQ_EINVAL;
+    *out = NULL;
+    if (directory  == NULL) return MMAPQ_EINVAL;
+    if (queue_name == NULL) return MMAPQ_EINVAL;
 
     QueueRegionAccessor *acc = acc_alloc(directory, queue_name, region_size,
                                           ring_size, regions_to_map_ahead,
                                           max_file_size, timeout_ns, runtime, 0);
+    if (acc == NULL) return MMAPQ_ENOMEM;
 
     /* ── RW header accessor ─────────────────────────────────────────────── */
     char hdr_path[4096];
     header_file_path(directory, queue_name, hdr_path, sizeof(hdr_path));
 
-    FileMapper *hdr_mapper = file_mapper_rolled_create(
+    FileMapper *hdr_mapper = NULL;
+    file_mapper_rolled_create(
         hdr_path, max_file_size, region_size,
         file_init_none, NULL,
         MAP_MODE_READ_WRITE,
         ring_size + 2,
-        /* check_file_size = */ 1);  /* cache > ring_size */
+        /* check_file_size = */ 1,
+        &hdr_mapper);
 
     /*
      * Writer premap ratio = QUEUE_RW_PREMAP_RATIO (0.0):
@@ -125,12 +133,14 @@ QueueRegionAccessor *queue_region_accessor_create_rw(
     char pay_path[4096];
     payload_file_path(directory, queue_name, appender_id, pay_path, sizeof(pay_path));
 
-    FileMapper *pay_mapper = file_mapper_rolled_create(
+    FileMapper *pay_mapper = NULL;
+    file_mapper_rolled_create(
         pay_path, max_file_size, region_size,
         file_init_none, NULL,
         MAP_MODE_READ_WRITE,
         ring_size + 2,
-        /* check_file_size = */ 1);
+        /* check_file_size = */ 1,
+        &pay_mapper);
 
     acc->payload[appender_id].accessor = make_ring_accessor(
         pay_mapper, region_size, ring_size,
@@ -138,12 +148,13 @@ QueueRegionAccessor *queue_region_accessor_create_rw(
         timeout_ns, runtime);
     acc->payload[appender_id].occupied = 1;
 
-    return acc;
+    *out = acc;
+    return 0;
 }
 
 /* ── queue_region_accessor_create_ro ─────────────────────────────────────── */
 
-QueueRegionAccessor *queue_region_accessor_create_ro(
+int queue_region_accessor_create_ro(
     const char *directory,
     const char *queue_name,
     int32_t     region_size,
@@ -151,25 +162,31 @@ QueueRegionAccessor *queue_region_accessor_create_ro(
     int         regions_to_map_ahead,
     int64_t     max_file_size,
     uint64_t    timeout_ns,
-    Runtime    *runtime)
+    Runtime    *runtime,
+    QueueRegionAccessor **out)
 {
-    if (directory  == NULL) return NULL;
-    if (queue_name == NULL) return NULL;
+    if (out == NULL) return MMAPQ_EINVAL;
+    *out = NULL;
+    if (directory  == NULL) return MMAPQ_EINVAL;
+    if (queue_name == NULL) return MMAPQ_EINVAL;
 
     QueueRegionAccessor *acc = acc_alloc(directory, queue_name, region_size,
                                           ring_size, regions_to_map_ahead,
                                           max_file_size, timeout_ns, runtime, 1);
+    if (acc == NULL) return MMAPQ_ENOMEM;
 
     /* ── RO header accessor ─────────────────────────────────────────────── */
     char hdr_path[4096];
     header_file_path(directory, queue_name, hdr_path, sizeof(hdr_path));
 
-    FileMapper *hdr_mapper = file_mapper_rolled_create(
+    FileMapper *hdr_mapper = NULL;
+    file_mapper_rolled_create(
         hdr_path, max_file_size, region_size,
         file_init_none, NULL,
         MAP_MODE_READ_ONLY,
         ring_size + 2,
-        /* check_file_size = */ 1);
+        /* check_file_size = */ 1,
+        &hdr_mapper);
 
     /*
      * Reader premap ratio = QUEUE_RO_PREMAP_RATIO (0.5):
@@ -181,7 +198,8 @@ QueueRegionAccessor *queue_region_accessor_create_ro(
                                      timeout_ns, runtime);
 
     /* Payload accessors are created lazily in queue_region_accessor_payload() */
-    return acc;
+    *out = acc;
+    return 0;
 }
 
 /* ── queue_region_accessor_payload ───────────────────────────────────────── */
@@ -207,12 +225,14 @@ RegionAccessor *queue_region_accessor_payload(QueueRegionAccessor *acc,
      * mapped without file-size checks (mirrors Java CHECK_FILE_SIZE_FALSE).
      */
     int check_file_size = acc->read_only ? 0 : 1;
-    FileMapper *pay_mapper = file_mapper_rolled_create(
+    FileMapper *pay_mapper = NULL;
+    file_mapper_rolled_create(
         pay_path, acc->max_file_size, acc->region_size,
         file_init_none, NULL,
         mode,
         acc->ring_size + 2,
-        check_file_size);
+        check_file_size,
+        &pay_mapper);
 
     double premap_ratio = acc->read_only
         ? QUEUE_RO_PREMAP_RATIO

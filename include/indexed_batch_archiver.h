@@ -40,11 +40,12 @@ typedef struct IndexedBatchArchiver IndexedBatchArchiver;
  * runtime:    background region-mapper runtime for header/payload access
  * Returns: a new archiver; never NULL (asserts on allocation failure)
  */
-IndexedBatchArchiver *indexed_batch_archiver_create(
+int indexed_batch_archiver_create(
     const char *directory,
     const char *queue_name,
     int         ring_size,
-    Runtime    *runtime);
+    Runtime    *runtime,
+    IndexedBatchArchiver **out);
 
 /* ── Archiving ───────────────────────────────────────────────────────────── */
 

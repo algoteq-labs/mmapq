@@ -113,7 +113,8 @@ library you audit today is the library you run in five years.
 Runtime *rt = runtime_region_mapper();
 
 /* Open or create a queue (separate write and read runtimes — same here) */
-IndexedQueue *q = indexed_queue_create_default("/tmp", "orders", rt, rt);
+IndexedQueue *q = NULL;
+int rc = indexed_queue_create_default("/tmp", "orders", rt, rt, &q);
 
 /* Append a message */
 IndexedAppender *a = indexed_queue_create_appender(q);

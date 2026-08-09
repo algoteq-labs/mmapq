@@ -62,9 +62,15 @@ int main(int argc, char *argv[])
 
     IndexedAppender *a;
     if (requested_id >= 0) {
-        a = indexed_queue_create_appender_with_id(q, (uint8_t)requested_id);
+        if (indexed_queue_create_appender_with_id(q, (uint8_t)requested_id, &a) != 0) {
+            fprintf(stderr, "producer: create appender with id failed\n");
+            return 1;
+        }
     } else {
-        a = indexed_queue_create_appender(q);
+        if (indexed_queue_create_appender(q, &a) != 0) {
+            fprintf(stderr, "producer: create appender failed\n");
+            return 1;
+        }
     }
 
     fprintf(stderr, "producer: appender_id=%d writing %ld messages\n",

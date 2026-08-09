@@ -85,12 +85,13 @@ typedef struct IndexedPoller IndexedPoller;
  * The poller begins at startIndex (typically 0 or the queue's current
  * start_index). Lazy init — region accessors are created on first use.
  */
-IndexedPoller *indexed_poller_create(
+int indexed_poller_create(
     const char *directory,
     const char *queue_name,
     int         ring_size,
     uint64_t    timeout_ns,
-    Runtime    *runtime);
+    Runtime    *runtime,
+    IndexedPoller **out);
 
 /* ── Poll ────────────────────────────────────────────────────────────────── */
 

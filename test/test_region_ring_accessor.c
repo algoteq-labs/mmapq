@@ -31,20 +31,30 @@ static void cleanup_files(void)
 void setUp(void)
 {
     cleanup_files();
-    rt = runtime_region_mapper();
+    int rc_rt = runtime_region_mapper(&rt);
+    TEST_ASSERT_EQUAL_INT(0, rc_rt);
+    TEST_ASSERT_NOT_NULL(rt);
 
-    fm = file_mapper_rolled_create(
+    int fmerr = file_mapper_rolled_create(
         FILE_PREFIX, MAX_FILE_SIZE, REGION_SIZE,
         file_init_zeros, NULL, MAP_MODE_READ_WRITE,
-        RING_SIZE + 2, 1);  /* cache > ring_size, check_file_size=1 */
+        RING_SIZE + 2, 1, &fm);
+    TEST_ASSERT_EQUAL_INT(0, fmerr);
+    TEST_ASSERT_NOT_NULL(fm);
 
-    RegionRing *ring = region_ring_async_create(
-        RING_SIZE, REGION_SIZE, fm, TIMEOUT_NS, rt);
+    RegionRing *ring = NULL;
+    int rerr = region_ring_async_create(
+        RING_SIZE, REGION_SIZE, fm, TIMEOUT_NS, rt, &ring);
+    TEST_ASSERT_EQUAL_INT(0, rerr);
+    TEST_ASSERT_NOT_NULL(ring);
 
-    acc = region_ring_accessor_create(
+    int rerr2 = region_ring_accessor_create(
         ring, REGION_SIZE,
         REGION_RING_ACCESSOR_DEFAULT_REGIONS_AHEAD,
-        REGION_RING_ACCESSOR_DEFAULT_PREMAP_RATIO);
+        REGION_RING_ACCESSOR_DEFAULT_PREMAP_RATIO,
+        &acc);
+    TEST_ASSERT_EQUAL_INT(0, rerr2);
+    TEST_ASSERT_NOT_NULL(acc);
 }
 
 void tearDown(void)

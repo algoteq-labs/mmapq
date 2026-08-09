@@ -89,12 +89,17 @@ static inline void file_mapper_close(FileMapper *fm)
  * check_file_size: if true, verifies position < file_size before mapping.
  *                  Returns FILE_MAPPER_BEYOND_FILE_SIZE if exceeded.
  *                  Set false when file size is known to be pre-allocated.
+ * out:            out-parameter for the created FileMapper (NULL on failure)
+ *
+ * Returns 0 on success, MMAPQ_EINVAL for NULL args,
+ * MMAPQ_ENOMEM on allocation failure. Sets *out to NULL on failure.
  */
-FileMapper *file_mapper_single_ro_create(
+int file_mapper_single_ro_create(
     const char      *file_path,
     FileInitialiser  initialiser,
     void            *initialiser_ctx,
-    int              check_file_size);
+    int              check_file_size,
+    FileMapper     **out);
 
 /**
  * Single-file read-write mapper.
@@ -102,12 +107,18 @@ FileMapper *file_mapper_single_ro_create(
  * Creates the file if it does not exist. Extends file length as needed
  * up to max_size. Pre-touches newly extended pages to avoid page faults
  * on the hot path.
+ *
+ * out:            out-parameter for the created FileMapper (NULL on failure)
+ *
+ * Returns 0 on success, MMAPQ_EINVAL for NULL/invalid args,
+ * MMAPQ_ENOMEM on allocation failure. Sets *out to NULL on failure.
  */
-FileMapper *file_mapper_single_rw_create(
+int file_mapper_single_rw_create(
     const char      *file_path,
     int64_t          max_size,
     FileInitialiser  initialiser,
-    void            *initialiser_ctx);
+    void            *initialiser_ctx,
+    FileMapper     **out);
 
 /**
  * Rolled (multi-file) mapper.
@@ -126,8 +137,12 @@ FileMapper *file_mapper_single_rw_create(
  * INVARIANT: max_cache_size >= ring_size (enforced at creation with MMAP_ASSERT)
  *
  * mode: MAP_MODE_READ_ONLY or MAP_MODE_READ_WRITE
+ * out:  out-parameter for the created FileMapper (NULL on failure)
+ *
+ * Returns 0 on success, MMAPQ_EINVAL for NULL/invalid args,
+ * MMAPQ_ENOMEM on allocation failure. Sets *out to NULL on failure.
  */
-FileMapper *file_mapper_rolled_create(
+int file_mapper_rolled_create(
     const char      *file_prefix,
     int64_t          max_file_size,
     int32_t          region_size,
@@ -135,7 +150,8 @@ FileMapper *file_mapper_rolled_create(
     void            *initialiser_ctx,
     MapMode          mode,
     int              max_cache_size,
-    int              check_file_size);
+    int              check_file_size,
+    FileMapper     **out);
 
 /**
  * Destroy a FileMapper and free all associated memory.

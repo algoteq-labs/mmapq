@@ -115,22 +115,25 @@ static FileCacheEntry *cache_get_or_open(RolledImpl *impl, int file_index)
     build_file_name(impl->file_prefix, file_index, file_name, sizeof(file_name));
 
     /* Create the appropriate single-file mapper */
-    FileMapper *mapper;
+    FileMapper *mapper = NULL;
+    int fmerr;
     if (impl->mode == MAP_MODE_READ_ONLY) {
-        mapper = file_mapper_single_ro_create(
+        fmerr = file_mapper_single_ro_create(
             file_name,
             impl->initialiser,
             impl->initialiser_ctx,
-            impl->check_file_size);
+            impl->check_file_size,
+            &mapper);
     } else {
-        mapper = file_mapper_single_rw_create(
+        fmerr = file_mapper_single_rw_create(
             file_name,
             impl->max_file_size,
             impl->initialiser,
-            impl->initialiser_ctx);
+            impl->initialiser_ctx,
+            &mapper);
     }
 
-    if (mapper == NULL) return NULL;
+    if (fmerr != 0) return NULL;
 
     /* Add to cache */
     FileCacheEntry *new_entry = &impl->cache[impl->cache_count++];
@@ -235,7 +238,7 @@ static void rolled_close(FileMapper *self)
 
 /* ── Factory ─────────────────────────────────────────────────────────────── */
 
-FileMapper *file_mapper_rolled_create(
+int file_mapper_rolled_create(
     const char      *file_prefix,
     int64_t          max_file_size,
     int32_t          region_size,
@@ -243,16 +246,19 @@ FileMapper *file_mapper_rolled_create(
     void            *initialiser_ctx,
     MapMode          mode,
     int              max_cache_size,
-    int              check_file_size)
+    int              check_file_size,
+    FileMapper     **out)
 {
-    if (file_prefix == NULL) return NULL;
-    if (max_file_size <= 0) return NULL;
-    if (region_size <= 0) return NULL;
-    if (max_file_size % region_size != 0) return NULL;
-    if (max_cache_size <= 0) return NULL;
+    if (out == NULL) return MMAPQ_EINVAL;
+    *out = NULL;
+    if (file_prefix == NULL) return MMAPQ_EINVAL;
+    if (max_file_size <= 0) return MMAPQ_EINVAL;
+    if (region_size <= 0) return MMAPQ_EINVAL;
+    if (max_file_size % region_size != 0) return MMAPQ_EINVAL;
+    if (max_cache_size <= 0) return MMAPQ_EINVAL;
 
     RolledImpl *impl = calloc(1, sizeof(RolledImpl));
-    if (impl == NULL) return NULL;
+    if (impl == NULL) return MMAPQ_ENOMEM;
 
     impl->file_prefix      = strdup(file_prefix);
     impl->max_file_size    = max_file_size;
@@ -266,17 +272,18 @@ FileMapper *file_mapper_rolled_create(
     impl->insert_tick      = 0;
 
     impl->cache = calloc((size_t)max_cache_size, sizeof(FileCacheEntry));
-    if (impl->cache == NULL) { free(impl); return NULL; }
+    if (impl->cache == NULL) { free(impl); return MMAPQ_ENOMEM; }
 
     FileMapper *fm = calloc(1, sizeof(FileMapper));
-    if (fm == NULL) { free(impl->cache); free(impl); return NULL; }
+    if (fm == NULL) { free(impl->cache); free(impl); return MMAPQ_ENOMEM; }
 
     fm->map   = rolled_map;
     fm->unmap = rolled_unmap;
     fm->close = rolled_close;
     fm->impl  = impl;
 
-    return fm;
+    *out = fm;
+    return 0;
 }
 
 /* ── Destroy ─────────────────────────────────────────────────────────────── */

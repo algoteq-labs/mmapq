@@ -141,7 +141,10 @@ int main(int argc, char *argv[])
         }
     }
 
-    IndexedPoller *p = indexed_queue_create_poller(q);
+    IndexedPoller *p = NULL;
+    int rc_p = indexed_queue_create_poller(q, &p);
+    TEST_ASSERT_EQUAL_INT(0, rc_p);
+    TEST_ASSERT_NOT_NULL(p);
 
     fprintf(stderr, "consumer: reading %ld messages (timeout %ld ms)\n",
             count, timeout_ms);

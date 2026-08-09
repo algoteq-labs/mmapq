@@ -76,8 +76,14 @@ static void *internal_server_thread_fn(void *arg)
     IndexedQueue *q_req = indexed_queue_create_default(a->dir, a->req, rt, rt);
     IndexedQueue *q_res = indexed_queue_create_default(a->dir, a->res, rt, rt);
     
-    IndexedPoller   *poller   = indexed_queue_create_poller(q_req);
-    IndexedAppender *appender = indexed_queue_create_appender(q_res);
+    IndexedPoller *poller = NULL;
+    int rc_poller = indexed_queue_create_poller(q_req, &poller);
+    TEST_ASSERT_EQUAL_INT(0, rc_poller);
+    TEST_ASSERT_NOT_NULL(poller);
+    IndexedAppender *appender = NULL;
+    int rc_appender = indexed_queue_create_appender(q_res, &appender);
+    TEST_ASSERT_EQUAL_INT(0, rc_appender);
+    TEST_ASSERT_NOT_NULL(appender);
     
     InternalServerCtx ctx = {
         .response_appender = appender,

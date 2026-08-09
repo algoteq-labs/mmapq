@@ -52,14 +52,24 @@ static void cleanup(void)
 void setUp(void)
 {
     cleanup();
-    rt = runtime_region_mapper();
+    int rc_rt = runtime_region_mapper(&rt);
+    TEST_ASSERT_EQUAL_INT(0, rc_rt);
+    TEST_ASSERT_NOT_NULL(rt);
 
-    FileMapper *fm = file_mapper_rolled_create(
+    FileMapper *fm = NULL;
+    int fmerr = file_mapper_rolled_create(
         FILE_PREFIX, MAX_FILE, REGION_SIZE,
-        file_init_zeros, NULL, MAP_MODE_READ_WRITE, 6, 1);
+        file_init_zeros, NULL, MAP_MODE_READ_WRITE, 6, 1, &fm);
+    TEST_ASSERT_EQUAL_INT(0, fmerr);
+    TEST_ASSERT_NOT_NULL(fm);
 
-    RegionRing *ring = region_ring_async_create(4, REGION_SIZE, fm, 2000000000ULL, rt);
-    acc = region_ring_accessor_create(ring, REGION_SIZE, 1, 0.5);
+    RegionRing *ring = NULL;
+    int rerr = region_ring_async_create(4, REGION_SIZE, fm, 2000000000ULL, rt, &ring);
+    TEST_ASSERT_EQUAL_INT(0, rerr);
+    TEST_ASSERT_NOT_NULL(ring);
+    int rerr2 = region_ring_accessor_create(ring, REGION_SIZE, 1, 0.5, &acc);
+    TEST_ASSERT_EQUAL_INT(0, rerr2);
+    TEST_ASSERT_NOT_NULL(acc);
 }
 
 void tearDown(void)

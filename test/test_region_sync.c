@@ -26,12 +26,17 @@ static void cleanup_files(void)
 void setUp(void)
 {
     cleanup_files();
-    fm = file_mapper_rolled_create(
+    int fmerr = file_mapper_rolled_create(
         FILE_PREFIX, MAX_FILE_SIZE, REGION_SIZE,
-        file_init_zeros, NULL, MAP_MODE_READ_WRITE, 4, 1);
-    reg = region_sync_create(fm, REGION_SIZE, TIMEOUT_NS,
+        file_init_zeros, NULL, MAP_MODE_READ_WRITE, 4, 1, &fm);
+    TEST_ASSERT_EQUAL_INT(0, fmerr);
+    TEST_ASSERT_NOT_NULL(fm);
+    int rerr = region_sync_create(fm, REGION_SIZE, TIMEOUT_NS,
                               REGION_MAX_FILE_NOT_FOUND_ERRORS,
-                              REGION_MAX_BEYOND_FILE_SIZE_ERRORS);
+                              REGION_MAX_BEYOND_FILE_SIZE_ERRORS,
+                              &reg);
+    TEST_ASSERT_EQUAL_INT(0, rerr);
+    TEST_ASSERT_NOT_NULL(reg);
 }
 
 void tearDown(void)

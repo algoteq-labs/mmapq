@@ -39,11 +39,15 @@ static void cleanup(void)
 void setUp(void)
 {
     cleanup();
-    rt = runtime_region_mapper();
-    q  = indexed_batch_queue_create(DIR, QUEUE,
-             REGION_SZ, RING_SZ, 1,
-             MAX_FILE, 0, TIMEOUT,
-             0, rt, rt);
+    int rc_rt = runtime_region_mapper(&rt);
+    TEST_ASSERT_EQUAL_INT(0, rc_rt);
+    TEST_ASSERT_NOT_NULL(rt);
+    int rc_q  = indexed_batch_queue_create(DIR, QUEUE,
+              REGION_SZ, RING_SZ, 1,
+              MAX_FILE, 0, TIMEOUT,
+              0, rt, rt, &q);
+    TEST_ASSERT_EQUAL_INT(0, rc_q);
+    TEST_ASSERT_NOT_NULL(q);
 }
 
 void tearDown(void)
@@ -101,7 +105,10 @@ static NextMove advance_all_handler(
 
 void test_batch_poll_end_of_stream(void)
 {
-    IndexedBatchPoller *p = indexed_batch_queue_create_poller(q);
+    IndexedBatchPoller *p = NULL;
+    int rc_p = indexed_batch_queue_create_poller(q, &p);
+    TEST_ASSERT_EQUAL_INT(0, rc_p);
+    TEST_ASSERT_NOT_NULL(p);
 
     BatchPollCapture cap = { .directive = NEXT_ADVANCE };
     BatchPollResult pr = indexed_batch_poller_poll(p, capture_handler, &cap);
@@ -112,8 +119,18 @@ void test_batch_poll_end_of_stream(void)
 
 void test_batch_poll_single_batch(void)
 {
-    IndexedBatchAppender *a = indexed_batch_queue_create_appender(q);
-    IndexedBatchPoller   *p = indexed_batch_queue_create_poller(q);
+    IndexedBatchAppender *a = NULL;
+    int rc_a = indexed_batch_queue_create_appender(q, &a);
+    TEST_ASSERT_EQUAL_INT(0, rc_a);
+    TEST_ASSERT_NOT_NULL(a);
+
+    IndexedBatchPoller *p = NULL;
+
+    int rc_p = indexed_batch_queue_create_poller(q, &p);
+
+    TEST_ASSERT_EQUAL_INT(0, rc_p);
+
+    TEST_ASSERT_NOT_NULL(p);
 
     MutableBatch *b = indexed_batch_appender_start_batch(a);
     mutable_batch_append(b, "msg0", 4);
@@ -139,8 +156,18 @@ void test_batch_poll_single_batch(void)
 
 void test_batch_poll_multiple_batches(void)
 {
-    IndexedBatchAppender *a = indexed_batch_queue_create_appender(q);
-    IndexedBatchPoller   *p = indexed_batch_queue_create_poller(q);
+    IndexedBatchAppender *a = NULL;
+    int rc_a = indexed_batch_queue_create_appender(q, &a);
+    TEST_ASSERT_EQUAL_INT(0, rc_a);
+    TEST_ASSERT_NOT_NULL(a);
+
+    IndexedBatchPoller *p = NULL;
+
+    int rc_p = indexed_batch_queue_create_poller(q, &p);
+
+    TEST_ASSERT_EQUAL_INT(0, rc_p);
+
+    TEST_ASSERT_NOT_NULL(p);
 
     MutableBatch *b = indexed_batch_appender_start_batch(a);
     mutable_batch_append(b, "b0m0", 4);
@@ -174,8 +201,18 @@ void test_batch_poll_multiple_batches(void)
 
 void test_batch_poll_advance_all_messages(void)
 {
-    IndexedBatchAppender *a = indexed_batch_queue_create_appender(q);
-    IndexedBatchPoller   *p = indexed_batch_queue_create_poller(q);
+    IndexedBatchAppender *a = NULL;
+    int rc_a = indexed_batch_queue_create_appender(q, &a);
+    TEST_ASSERT_EQUAL_INT(0, rc_a);
+    TEST_ASSERT_NOT_NULL(a);
+
+    IndexedBatchPoller *p = NULL;
+
+    int rc_p = indexed_batch_queue_create_poller(q, &p);
+
+    TEST_ASSERT_EQUAL_INT(0, rc_p);
+
+    TEST_ASSERT_NOT_NULL(p);
 
     MutableBatch *b = indexed_batch_appender_start_batch(a);
     mutable_batch_append(b, "m0", 2);
@@ -194,8 +231,18 @@ void test_batch_poll_advance_all_messages(void)
 
 void test_batch_poll_stop(void)
 {
-    IndexedBatchAppender *a = indexed_batch_queue_create_appender(q);
-    IndexedBatchPoller   *p = indexed_batch_queue_create_poller(q);
+    IndexedBatchAppender *a = NULL;
+    int rc_a = indexed_batch_queue_create_appender(q, &a);
+    TEST_ASSERT_EQUAL_INT(0, rc_a);
+    TEST_ASSERT_NOT_NULL(a);
+
+    IndexedBatchPoller *p = NULL;
+
+    int rc_p = indexed_batch_queue_create_poller(q, &p);
+
+    TEST_ASSERT_EQUAL_INT(0, rc_p);
+
+    TEST_ASSERT_NOT_NULL(p);
 
     MutableBatch *b = indexed_batch_appender_start_batch(a);
     mutable_batch_append(b, "msg", 3);
@@ -212,8 +259,18 @@ void test_batch_poll_stop(void)
 
 void test_batch_poll_retreat(void)
 {
-    IndexedBatchAppender *a = indexed_batch_queue_create_appender(q);
-    IndexedBatchPoller   *p = indexed_batch_queue_create_poller(q);
+    IndexedBatchAppender *a = NULL;
+    int rc_a = indexed_batch_queue_create_appender(q, &a);
+    TEST_ASSERT_EQUAL_INT(0, rc_a);
+    TEST_ASSERT_NOT_NULL(a);
+
+    IndexedBatchPoller *p = NULL;
+
+    int rc_p = indexed_batch_queue_create_poller(q, &p);
+
+    TEST_ASSERT_EQUAL_INT(0, rc_p);
+
+    TEST_ASSERT_NOT_NULL(p);
 
     MutableBatch *b = indexed_batch_appender_start_batch(a);
     mutable_batch_append(b, "batch0", 6);
@@ -245,8 +302,18 @@ void test_batch_poll_retreat(void)
 
 void test_batch_poll_retreat_at_start(void)
 {
-    IndexedBatchAppender *a = indexed_batch_queue_create_appender(q);
-    IndexedBatchPoller   *p = indexed_batch_queue_create_poller(q);
+    IndexedBatchAppender *a = NULL;
+    int rc_a = indexed_batch_queue_create_appender(q, &a);
+    TEST_ASSERT_EQUAL_INT(0, rc_a);
+    TEST_ASSERT_NOT_NULL(a);
+
+    IndexedBatchPoller *p = NULL;
+
+    int rc_p = indexed_batch_queue_create_poller(q, &p);
+
+    TEST_ASSERT_EQUAL_INT(0, rc_p);
+
+    TEST_ASSERT_NOT_NULL(p);
 
     MutableBatch *b = indexed_batch_appender_start_batch(a);
     mutable_batch_append(b, "msg", 3);
@@ -262,8 +329,18 @@ void test_batch_poll_retreat_at_start(void)
 
 void test_batch_poller_exists(void)
 {
-    IndexedBatchAppender *a = indexed_batch_queue_create_appender(q);
-    IndexedBatchPoller   *p = indexed_batch_queue_create_poller(q);
+    IndexedBatchAppender *a = NULL;
+    int rc_a = indexed_batch_queue_create_appender(q, &a);
+    TEST_ASSERT_EQUAL_INT(0, rc_a);
+    TEST_ASSERT_NOT_NULL(a);
+
+    IndexedBatchPoller *p = NULL;
+
+    int rc_p = indexed_batch_queue_create_poller(q, &p);
+
+    TEST_ASSERT_EQUAL_INT(0, rc_p);
+
+    TEST_ASSERT_NOT_NULL(p);
 
     TEST_ASSERT_FALSE(indexed_batch_poller_exists(p, 0));
 
@@ -280,8 +357,18 @@ void test_batch_poller_exists(void)
 
 void test_batch_poller_move_to_last_existing(void)
 {
-    IndexedBatchAppender *a = indexed_batch_queue_create_appender(q);
-    IndexedBatchPoller   *p = indexed_batch_queue_create_poller(q);
+    IndexedBatchAppender *a = NULL;
+    int rc_a = indexed_batch_queue_create_appender(q, &a);
+    TEST_ASSERT_EQUAL_INT(0, rc_a);
+    TEST_ASSERT_NOT_NULL(a);
+
+    IndexedBatchPoller *p = NULL;
+
+    int rc_p = indexed_batch_queue_create_poller(q, &p);
+
+    TEST_ASSERT_EQUAL_INT(0, rc_p);
+
+    TEST_ASSERT_NOT_NULL(p);
 
     TEST_ASSERT_FALSE(indexed_batch_poller_move_to_last_existing_batch(p));
 
@@ -304,8 +391,18 @@ void test_batch_poller_move_to_last_existing(void)
 
 void test_reader_read_by_index(void)
 {
-    IndexedBatchAppender *a = indexed_batch_queue_create_appender(q);
-    IndexedBatchReader   *r = indexed_batch_queue_create_reader(q);
+    IndexedBatchAppender *a = NULL;
+    int rc_a = indexed_batch_queue_create_appender(q, &a);
+    TEST_ASSERT_EQUAL_INT(0, rc_a);
+    TEST_ASSERT_NOT_NULL(a);
+
+    IndexedBatchReader *r = NULL;
+
+    int rc_r = indexed_batch_queue_create_reader(q, &r);
+
+    TEST_ASSERT_EQUAL_INT(0, rc_r);
+
+    TEST_ASSERT_NOT_NULL(r);
 
     MutableBatch *b = indexed_batch_appender_start_batch(a);
     mutable_batch_append(b, "first0", 6);
@@ -352,8 +449,18 @@ void test_reader_read_by_index(void)
 
 void test_reader_read_first_and_last(void)
 {
-    IndexedBatchAppender *a = indexed_batch_queue_create_appender(q);
-    IndexedBatchReader   *r = indexed_batch_queue_create_reader(q);
+    IndexedBatchAppender *a = NULL;
+    int rc_a = indexed_batch_queue_create_appender(q, &a);
+    TEST_ASSERT_EQUAL_INT(0, rc_a);
+    TEST_ASSERT_NOT_NULL(a);
+
+    IndexedBatchReader *r = NULL;
+
+    int rc_r = indexed_batch_queue_create_reader(q, &r);
+
+    TEST_ASSERT_EQUAL_INT(0, rc_r);
+
+    TEST_ASSERT_NOT_NULL(r);
 
     MutableBatch *b = indexed_batch_appender_start_batch(a);
     mutable_batch_append(b, "only", 4);
@@ -385,7 +492,10 @@ void test_reader_read_first_and_last(void)
 
 void test_reader_end_of_stream_when_empty(void)
 {
-    IndexedBatchReader *r = indexed_batch_queue_create_reader(q);
+    IndexedBatchReader *r = NULL;
+    int rc_r = indexed_batch_queue_create_reader(q, &r);
+    TEST_ASSERT_EQUAL_INT(0, rc_r);
+    TEST_ASSERT_NOT_NULL(r);
 
     TEST_ASSERT_EQUAL_INT64(HEADER_NULL_INDEX, indexed_batch_reader_last_index(r));
 
@@ -399,8 +509,18 @@ void test_reader_end_of_stream_when_empty(void)
 
 void test_reader_has_entry(void)
 {
-    IndexedBatchAppender *a = indexed_batch_queue_create_appender(q);
-    IndexedBatchReader   *r = indexed_batch_queue_create_reader(q);
+    IndexedBatchAppender *a = NULL;
+    int rc_a = indexed_batch_queue_create_appender(q, &a);
+    TEST_ASSERT_EQUAL_INT(0, rc_a);
+    TEST_ASSERT_NOT_NULL(a);
+
+    IndexedBatchReader *r = NULL;
+
+    int rc_r = indexed_batch_queue_create_reader(q, &r);
+
+    TEST_ASSERT_EQUAL_INT(0, rc_r);
+
+    TEST_ASSERT_NOT_NULL(r);
 
     TEST_ASSERT_FALSE(indexed_batch_reader_has_entry(r, 0));
 
@@ -417,7 +537,11 @@ void test_reader_has_entry(void)
 
 void test_batch_append_rejects_zero_length(void)
 {
-    IndexedBatchAppender *a = indexed_batch_queue_create_appender(q);
+    IndexedBatchAppender *a = NULL;
+    int rc_a = indexed_batch_queue_create_appender(q, &a);
+    TEST_ASSERT_EQUAL_INT(0, rc_a);
+    TEST_ASSERT_NOT_NULL(a);
+
     MutableBatch *b = indexed_batch_appender_start_batch(a);
 
     int32_t ok = mutable_batch_append(b, "valid", 5);
@@ -435,15 +559,25 @@ void test_batch_append_rejects_zero_length(void)
 
 void test_open_batch_as_normal_refused(void)
 {
-    IndexedBatchAppender *a = indexed_batch_queue_create_appender(q);
+    IndexedBatchAppender *a = NULL;
+    int rc_a = indexed_batch_queue_create_appender(q, &a);
+    TEST_ASSERT_EQUAL_INT(0, rc_a);
+    TEST_ASSERT_NOT_NULL(a);
+
     MutableBatch *b = indexed_batch_appender_start_batch(a);
     mutable_batch_append(b, "msg", 3);
     indexed_batch_appender_commit_batch(a, mutable_batch_complete(b));
     indexed_batch_appender_close(a);
 
     /* Attempt to create a normal participant on the same queue */
-    IndexedQueue *nq = indexed_queue_create_default(DIR, QUEUE, rt, rt);
-    IndexedAppender *na = indexed_queue_create_appender(nq);
+    IndexedQueue *nq = NULL;
+    int rc_nq = indexed_queue_create_default(DIR, QUEUE, rt, rt, &nq);
+    TEST_ASSERT_EQUAL_INT(0, rc_nq);
+    TEST_ASSERT_NOT_NULL(nq);
+
+    IndexedAppender *na = NULL;
+    int rc_na = indexed_queue_create_appender(nq, &na);
+    TEST_ASSERT_TRUE(rc_na != 0);
     TEST_ASSERT_NULL(na);
 
     if (nq) indexed_queue_close(nq);
@@ -451,7 +585,11 @@ void test_open_batch_as_normal_refused(void)
 
 void test_batch_roundtrip_type_stamped(void)
 {
-    IndexedBatchAppender *a = indexed_batch_queue_create_appender(q);
+    IndexedBatchAppender *a = NULL;
+    int rc_a = indexed_batch_queue_create_appender(q, &a);
+    TEST_ASSERT_EQUAL_INT(0, rc_a);
+    TEST_ASSERT_NOT_NULL(a);
+
     MutableBatch *b = indexed_batch_appender_start_batch(a);
     mutable_batch_append(b, "x", 1);
     indexed_batch_appender_commit_batch(a, mutable_batch_complete(b));
@@ -487,11 +625,20 @@ static void test_batch_poll_detects_corrupt_payload(void)
     snprintf(cmd, sizeof(cmd), "rm -rf %s/%s", DIR, qname);
     int rc = system(cmd); (void)rc;
 
-    IndexedBatchQueue *q = indexed_batch_queue_create(
-        DIR, qname, REGION_SZ, RING_SZ, 1, MAX_FILE, 0, TIMEOUT, 0, NULL, NULL);
+    IndexedBatchQueue *q = NULL;
+    int rc_q = indexed_batch_queue_create(
+        DIR, qname, REGION_SZ, RING_SZ, 1, MAX_FILE, 0, TIMEOUT, 0, NULL, NULL, &q);
+    TEST_ASSERT_EQUAL_INT(0, rc_q);
     TEST_ASSERT_NOT_NULL(q);
 
-    IndexedBatchAppender *a = indexed_batch_queue_create_appender(q);
+    IndexedBatchAppender *a = NULL;
+
+    int rc_a = indexed_batch_queue_create_appender(q, &a);
+
+    TEST_ASSERT_EQUAL_INT(0, rc_a);
+
+    TEST_ASSERT_NOT_NULL(a);
+
     TEST_ASSERT_NOT_NULL(a);
     MutableBatch *mb = indexed_batch_appender_start_batch(a);
     TEST_ASSERT_NOT_NULL(mb);
@@ -513,7 +660,14 @@ static void test_batch_poll_detects_corrupt_payload(void)
     ssize_t written = pwrite(fd, &zero, sizeof(zero), off); (void)written;
     close(fd);
 
-    IndexedBatchPoller *p = indexed_batch_queue_create_poller(q);
+    IndexedBatchPoller *p = NULL;
+
+    int rc_p = indexed_batch_queue_create_poller(q, &p);
+
+    TEST_ASSERT_EQUAL_INT(0, rc_p);
+
+    TEST_ASSERT_NOT_NULL(p);
+
     TEST_ASSERT_NOT_NULL(p);
     batch_corrupt_handler_count = 0;
     PollResult pr = indexed_batch_poller_poll(p, batch_corrupt_handler, NULL);
@@ -534,8 +688,16 @@ static void test_batch_stale_appender_catch_up(void)
      * Fill many batches with one appender, then append with a second (stale)
      * appender and verify the returned index is correct.
      */
-    IndexedBatchAppender *a1 = indexed_batch_queue_create_appender(q);
-    IndexedBatchAppender *a2 = indexed_batch_queue_create_appender(q);
+    IndexedBatchAppender *a1 = NULL;
+    int rc_a1 = indexed_batch_queue_create_appender(q, &a1);
+    TEST_ASSERT_EQUAL_INT(0, rc_a1);
+    TEST_ASSERT_NOT_NULL(a1);
+
+    IndexedBatchAppender *a2 = NULL;
+    int rc_a2 = indexed_batch_queue_create_appender(q, &a2);
+    TEST_ASSERT_EQUAL_INT(0, rc_a2);
+    TEST_ASSERT_NOT_NULL(a2);
+
     TEST_ASSERT_NOT_NULL(a1);
     TEST_ASSERT_NOT_NULL(a2);
 

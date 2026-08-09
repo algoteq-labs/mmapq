@@ -228,23 +228,26 @@ static int switch_to_next_gap(UncommittedPayloadIterator *it)
 
 /* ── uncommitted_iterator_create ─────────────────────────────────────────── */
 
-UncommittedPayloadIterator *uncommitted_iterator_create(
+int uncommitted_iterator_create(
     const char      *queue_name,
     uint8_t          appender_id,
     int64_t        (*start_of_stream_offset)(void *ctx),
     int64_t        (*end_of_stream_offset)(void *ctx),
     void            *stream_ctx,
     RegionAccessor  *header_accessor,
-    PayloadIterator *inner)
+    PayloadIterator *inner,
+    UncommittedPayloadIterator **out)
 {
-    if (queue_name == NULL) return NULL;
-    if (start_of_stream_offset == NULL) return NULL;
-    if (end_of_stream_offset == NULL) return NULL;
-    if (header_accessor == NULL) return NULL;
-    if (inner == NULL) return NULL;
+    if (out == NULL) return MMAPQ_EINVAL;
+    *out = NULL;
+    if (queue_name == NULL) return MMAPQ_EINVAL;
+    if (start_of_stream_offset == NULL) return MMAPQ_EINVAL;
+    if (end_of_stream_offset == NULL) return MMAPQ_EINVAL;
+    if (header_accessor == NULL) return MMAPQ_EINVAL;
+    if (inner == NULL) return MMAPQ_EINVAL;
 
     UncommittedPayloadIterator *it = calloc(1, sizeof(UncommittedPayloadIterator));
-    if (it == NULL) return NULL;
+    if (it == NULL) return MMAPQ_ENOMEM;
 
     it->queue_name              = queue_name;
     it->appender_id             = appender_id;
@@ -259,7 +262,8 @@ UncommittedPayloadIterator *uncommitted_iterator_create(
     it->fixed_end_of_stream     = PAYLOAD_ITERATOR_NOT_SET;
     it->initialised             = 0;
 
-    return it;
+    *out = it;
+    return 0;
 }
 
 /* ── uncommitted_iterator_init ───────────────────────────────────────────── */

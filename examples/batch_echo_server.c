@@ -72,7 +72,9 @@ int main(int argc, char *argv[])
 
     Runtime *write_rt = NULL, *read_rt = NULL;
     if (!use_sync) {
-        Runtime *rt = runtime_region_mapper();
+        Runtime *rt = NULL;
+        int rc_rt = runtime_region_mapper(&rt);
+        if (rc_rt != 0) { fprintf(stderr, "runtime_region_mapper failed\n"); return 1; }
         if (mapper_cpu >= 0) runtime_set_affinity(rt, mapper_cpu);
         if (use_mixed) { write_rt = rt; read_rt = NULL; }
         else           { write_rt = rt; read_rt = rt;   }
@@ -80,10 +82,19 @@ int main(int argc, char *argv[])
 
     if (cpu_core >= 0) thread_set_affinity(cpu_core);
 
-    IndexedBatchQueue    *q_req    = indexed_batch_queue_create_default(dir, req, write_rt, read_rt);
-    IndexedBatchQueue    *q_res    = indexed_batch_queue_create_default(dir, res, write_rt, read_rt);
-    IndexedBatchPoller   *poller   = indexed_batch_queue_create_poller(q_req);
-    IndexedBatchAppender *appender = indexed_batch_queue_create_appender(q_res);
+    IndexedBatchQueue    *q_req    = NULL;
+    IndexedBatchQueue    *q_res    = NULL;
+    IndexedBatchPoller   *poller   = NULL;
+    IndexedBatchAppender *appender = NULL;
+
+    int rc_qr = indexed_batch_queue_create_default(dir, req, write_rt, read_rt, &q_req);
+    if (rc_qr != 0) { fprintf(stderr, "failed to create request queue\n"); return 1; }
+    int rc_qs = indexed_batch_queue_create_default(dir, res, write_rt, read_rt, &q_res);
+    if (rc_qs != 0) { fprintf(stderr, "failed to create response queue\n"); return 1; }
+    int rc_p = indexed_batch_queue_create_poller(q_req, &poller);
+    if (rc_p != 0) { fprintf(stderr, "failed to create poller\n"); return 1; }
+    int rc_ap = indexed_batch_queue_create_appender(q_res, &appender);
+    if (rc_ap != 0) { fprintf(stderr, "failed to create appender\n"); return 1; }
 
     ServerCtx ctx = { .response_appender = appender, .shutdown_requested = 0 };
 

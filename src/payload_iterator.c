@@ -1,6 +1,7 @@
 #include "payload_iterator.h"
 #include "payload_walk.h"
 #include "mmap_assert.h"
+#include "mmap_platform.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -8,21 +9,24 @@
 
 /* ── payload_iterator_create ─────────────────────────────────────────────── */
 
-PayloadIterator *payload_iterator_create(
+int payload_iterator_create(
     const char     *queue_name,
     RegionAccessor *payload_accessor,
     int64_t       (*start_of_stream_offset)(void *ctx),
     int64_t       (*end_of_stream_offset)(void *ctx),
     void           *stream_ctx,
-    int             fix_end_of_stream)
+    int             fix_end_of_stream,
+    PayloadIterator **out)
 {
-    if (queue_name == NULL) return NULL;
-    if (payload_accessor == NULL) return NULL;
-    if (start_of_stream_offset == NULL) return NULL;
-    if (end_of_stream_offset == NULL) return NULL;
+    if (out == NULL) return MMAPQ_EINVAL;
+    *out = NULL;
+    if (queue_name == NULL) return MMAPQ_EINVAL;
+    if (payload_accessor == NULL) return MMAPQ_EINVAL;
+    if (start_of_stream_offset == NULL) return MMAPQ_EINVAL;
+    if (end_of_stream_offset == NULL) return MMAPQ_EINVAL;
 
     PayloadIterator *it = calloc(1, sizeof(PayloadIterator));
-    if (it == NULL) return NULL;
+    if (it == NULL) return MMAPQ_ENOMEM;
 
     it->queue_name             = queue_name;
     it->payload_accessor       = payload_accessor;
@@ -39,7 +43,8 @@ PayloadIterator *payload_iterator_create(
     it->end_offset             = PAYLOAD_ITERATOR_NOT_SET;
     it->end_of_stream_at_init  = PAYLOAD_ITERATOR_NOT_SET;
 
-    return it;
+    *out = it;
+    return 0;
 }
 
 /* ── payload_iterator_init ───────────────────────────────────────────────── */

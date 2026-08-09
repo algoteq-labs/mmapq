@@ -89,12 +89,13 @@ typedef NextMove (*BatchHandler)(
  * runtime:    background region-mapper runtime
  * Returns: a new poller; never NULL (asserts on allocation failure)
  */
-IndexedBatchPoller *indexed_batch_poller_create(
+int indexed_batch_poller_create(
     const char *directory,
     const char *queue_name,
     int         ring_size,
     uint64_t    timeout_ns,
-    Runtime    *runtime);
+    Runtime    *runtime,
+    IndexedBatchPoller **out);
 
 /* ── Polling ─────────────────────────────────────────────────────────────── */
 

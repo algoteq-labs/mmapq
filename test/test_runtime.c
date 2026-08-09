@@ -10,10 +10,16 @@ static Runtime *rt = NULL;
 
 void setUp(void)
 {
-    rt = runtime_create("test-rt",
-                        idle_strategy_busy_spin_create(),
-                        RUNTIME_DEFAULT_CLOSE_TIMEOUT_NS,
-                        NULL, NULL);
+    IdleStrategy *idle = NULL;
+    int rc_idle = idle_strategy_busy_spin_create(&idle);
+    TEST_ASSERT_EQUAL_INT(0, rc_idle);
+    TEST_ASSERT_NOT_NULL(idle);
+    int rc_rt = runtime_create("test-rt",
+                               idle,
+                               RUNTIME_DEFAULT_CLOSE_TIMEOUT_NS,
+                               NULL, NULL, &rt);
+    TEST_ASSERT_EQUAL_INT(0, rc_rt);
+    TEST_ASSERT_NOT_NULL(rt);
 }
 
 void tearDown(void)
@@ -172,7 +178,10 @@ void test_runtime_is_closed_after_close(void)
 
 void test_idle_strategy_busy_spin(void)
 {
-    IdleStrategy *s = idle_strategy_busy_spin_create();
+    IdleStrategy *s = NULL;
+    int rc = idle_strategy_busy_spin_create(&s);
+    TEST_ASSERT_EQUAL_INT(0, rc);
+    TEST_ASSERT_NOT_NULL(s);
     /* Should not crash with any work count */
     s->idle(s, 0);
     s->idle(s, 1);
@@ -182,7 +191,10 @@ void test_idle_strategy_busy_spin(void)
 
 void test_idle_strategy_yield(void)
 {
-    IdleStrategy *s = idle_strategy_yield_create();
+    IdleStrategy *s = NULL;
+    int rc = idle_strategy_yield_create(&s);
+    TEST_ASSERT_EQUAL_INT(0, rc);
+    TEST_ASSERT_NOT_NULL(s);
     s->idle(s, 0);
     s->idle(s, 1);
     idle_strategy_destroy(s);
@@ -190,7 +202,10 @@ void test_idle_strategy_yield(void)
 
 void test_idle_strategy_backoff(void)
 {
-    IdleStrategy *s = idle_strategy_backoff_create(10, 10, 1000000ULL);
+    IdleStrategy *s = NULL;
+    int rc = idle_strategy_backoff_create(10, 10, 1000000ULL, &s);
+    TEST_ASSERT_EQUAL_INT(0, rc);
+    TEST_ASSERT_NOT_NULL(s);
     for (int i = 0; i < 30; i++) {
         s->idle(s, 0);  /* progress through spin → yield → sleep phases */
     }
@@ -253,18 +268,24 @@ void test_runtime_double_acquire(void)
 {
     /* Verify that runtime_get_instance/clone/destroy cycle doesn't
      * orphan the registry entry. Regression for P0.4 refcount fix. */
-    Runtime *rt1 = runtime_region_mapper();
+    Runtime *rt1 = NULL;
+    int rc = runtime_region_mapper(&rt1);
+    TEST_ASSERT_EQUAL_INT(0, rc);
     TEST_ASSERT_NOT_NULL(rt1);
     TEST_ASSERT_FALSE(runtime_is_closed(rt1));
 
-    Runtime *rt2 = runtime_clone(rt1);
+    Runtime *rt2 = NULL;
+    rc = runtime_clone(rt1, &rt2);
+    TEST_ASSERT_EQUAL_INT(0, rc);
     TEST_ASSERT_NOT_NULL(rt2);
 
     runtime_destroy(rt1);
     runtime_destroy(rt2);
 
     /* Re-acquire — should return a valid entry (registry still holds ref) */
-    Runtime *rt3 = runtime_region_mapper();
+    Runtime *rt3 = NULL;
+    rc = runtime_region_mapper(&rt3);
+    TEST_ASSERT_EQUAL_INT(0, rc);
     TEST_ASSERT_NOT_NULL(rt3);
     TEST_ASSERT_FALSE(runtime_is_closed(rt3));
 
