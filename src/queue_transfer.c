@@ -35,6 +35,28 @@ static int read_all(FILE *f, void *buf, size_t n)
     return fread(buf, 1, n, f) == n ? 0 : -1;
 }
 
+/* ── Typed bridge functions for AppenderCache (avoids UB casts) ──────────── */
+
+static int appender_create_bridge(void *q, void **out)
+{
+    return indexed_queue_create_appender((IndexedQueue *)q, (IndexedAppender **)out);
+}
+
+static int appender_create_with_id_bridge(void *q, uint8_t id, void **out)
+{
+    return indexed_queue_create_appender_with_id((IndexedQueue *)q, id, (IndexedAppender **)out);
+}
+
+static void appender_close_bridge(void *a)
+{
+    indexed_appender_close((IndexedAppender *)a);
+}
+
+static void queue_close_bridge(void *q)
+{
+    indexed_queue_close((IndexedQueue *)q);
+}
+
 static int write_framed_entry(FILE *out, uint16_t aid, const void *data, int32_t len)
 {
     if (write_all(out, &aid, sizeof(uint16_t))) return -1;
@@ -287,12 +309,13 @@ static int64_t do_import(
     snprintf(dpath, sizeof(dpath), "%s/%s", directory, queue_name);
     create_dir(dpath);
 
-    IndexedQueue *q = indexed_queue_create(
+    IndexedQueue *q = NULL;
+    int rc = indexed_queue_create(
         directory, queue_name,
         region_size, 4, 1, max_file_size, start_index,
-        10000000000ULL, 0, wrt, rrt);
+        10000000000ULL, 0, wrt, rrt, &q);
 
-    if (!q) return -1;
+    if (rc != 0) return rc;
 
     void *cache_store[APPENDER_CACHE_SIZE] = {NULL};
     int32_t mapped_cache[APPENDER_CACHE_SIZE];
@@ -302,10 +325,10 @@ static int64_t do_import(
 
     AppenderCache ac = {
         .cache = cache_store, .auto_appender = NULL,
-        .create = (AppenderCreateFn)indexed_queue_create_appender,
-        .create_with_id = (AppenderCreateWithIdFn)indexed_queue_create_appender_with_id,
-        .close = (AppenderCloseFn)indexed_appender_close,
-        .queue_close = (QueueCloseFn)indexed_queue_close,
+        .create = appender_create_bridge,
+        .create_with_id = appender_create_with_id_bridge,
+        .close = appender_close_bridge,
+        .queue_close = queue_close_bridge,
     };
 
     if (is_batch_stream) {
@@ -480,11 +503,12 @@ int64_t queue_transfer_copy(
     snprintf(dpath, sizeof(dpath), "%s/%s", dest_dir, dest_queue);
     create_dir(dpath);
 
-    IndexedQueue *q = indexed_queue_create(dest_dir, dest_queue,
+    IndexedQueue *q = NULL;
+    int create_rc = indexed_queue_create(dest_dir, dest_queue,
         queue_meta_region_size(qm), 4, 1, queue_meta_max_file_size(qm),
-        dest_start, 10000000000ULL, 0, write_rt, read_rt);
+        dest_start, 10000000000ULL, 0, write_rt, read_rt, &q);
 
-    if (!q) return -1;
+    if (create_rc != 0) return create_rc;
 
     void *cache_store[APPENDER_CACHE_SIZE] = {NULL};
     int32_t mapped_cache[APPENDER_CACHE_SIZE];
@@ -494,10 +518,10 @@ int64_t queue_transfer_copy(
 
     AppenderCache ac = {
         .cache = cache_store, .auto_appender = NULL,
-        .create = (AppenderCreateFn)indexed_queue_create_appender,
-        .create_with_id = (AppenderCreateWithIdFn)indexed_queue_create_appender_with_id,
-        .close = (AppenderCloseFn)indexed_appender_close,
-        .queue_close = (QueueCloseFn)indexed_queue_close,
+        .create = appender_create_bridge,
+        .create_with_id = appender_create_with_id_bridge,
+        .close = appender_close_bridge,
+        .queue_close = queue_close_bridge,
     };
 
     ReadingContext rc;
@@ -567,10 +591,11 @@ int64_t queue_transfer_copy_batch_to_normal(
     snprintf(dpath, sizeof(dpath), "%s/%s", dest_dir, dest_queue);
     create_dir(dpath);
 
-    IndexedQueue *q = indexed_queue_create(dest_dir, dest_queue,
+    IndexedQueue *q = NULL;
+    int rc = indexed_queue_create(dest_dir, dest_queue,
         queue_meta_region_size(qm), 4, 1, queue_meta_max_file_size(qm),
-        dest_start, 10000000000ULL, 0, write_rt, read_rt);
-    if (!q) return -1;
+        dest_start, 10000000000ULL, 0, write_rt, read_rt, &q);
+    if (rc != 0) return rc;
 
     void *cache_store[APPENDER_CACHE_SIZE] = {NULL};
     int32_t mapped_cache[APPENDER_CACHE_SIZE];
@@ -580,10 +605,10 @@ int64_t queue_transfer_copy_batch_to_normal(
 
     AppenderCache ac = {
         .cache = cache_store, .auto_appender = NULL,
-        .create = (AppenderCreateFn)indexed_queue_create_appender,
-        .create_with_id = (AppenderCreateWithIdFn)indexed_queue_create_appender_with_id,
-        .close = (AppenderCloseFn)indexed_appender_close,
-        .queue_close = (QueueCloseFn)indexed_queue_close,
+        .create = appender_create_bridge,
+        .create_with_id = appender_create_with_id_bridge,
+        .close = appender_close_bridge,
+        .queue_close = queue_close_bridge,
     };
 
     BatchReadingContext bctx;

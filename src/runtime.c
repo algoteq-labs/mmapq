@@ -25,14 +25,17 @@ static void busy_spin_idle(IdleStrategy *self, int work_done)
 
 static void idle_noop_close(IdleStrategy *self) { (void)self; }
 
-IdleStrategy *idle_strategy_busy_spin_create(void)
+int idle_strategy_busy_spin_create(IdleStrategy **out)
 {
+    if (out == NULL) return MMAPQ_EINVAL;
+    *out = NULL;
     IdleStrategy *s = calloc(1, sizeof(IdleStrategy));
-    if (s == NULL) return NULL;
+    if (s == NULL) return MMAPQ_ENOMEM;
     s->idle  = busy_spin_idle;
     s->close = idle_noop_close;
     s->ctx   = NULL;
-    return s;
+    *out = s;
+    return 0;
 }
 
 /* ── Yield ───────────────────────────────────────────────────────────────── */
@@ -45,14 +48,17 @@ static void yield_idle(IdleStrategy *self, int work_done)
     }
 }
 
-IdleStrategy *idle_strategy_yield_create(void)
+int idle_strategy_yield_create(IdleStrategy **out)
 {
+    if (out == NULL) return MMAPQ_EINVAL;
+    *out = NULL;
     IdleStrategy *s = calloc(1, sizeof(IdleStrategy));
-    if (s == NULL) return NULL;
+    if (s == NULL) return MMAPQ_ENOMEM;
     s->idle  = yield_idle;
     s->close = idle_noop_close;
     s->ctx   = NULL;
-    return s;
+    *out = s;
+    return 0;
 }
 
 /* ── Sleep ───────────────────────────────────────────────────────────────── */
@@ -87,23 +93,26 @@ static void sleep_close(IdleStrategy *self)
     free(self->ctx);
 }
 
-IdleStrategy *idle_strategy_sleep_create(uint64_t min_sleep_ns, uint64_t max_sleep_ns)
+int idle_strategy_sleep_create(uint64_t min_sleep_ns, uint64_t max_sleep_ns, IdleStrategy **out)
 {
-    if (min_sleep_ns <= 0) return NULL;
-    if (max_sleep_ns < min_sleep_ns) return NULL;
+    if (out == NULL) return MMAPQ_EINVAL;
+    *out = NULL;
+    if (min_sleep_ns <= 0) return MMAPQ_EINVAL;
+    if (max_sleep_ns < min_sleep_ns) return MMAPQ_EINVAL;
 
     SleepCtx *ctx = calloc(1, sizeof(SleepCtx));
-    if (ctx == NULL) return NULL;
+    if (ctx == NULL) return MMAPQ_ENOMEM;
     ctx->min_sleep_ns     = min_sleep_ns;
     ctx->max_sleep_ns     = max_sleep_ns;
     ctx->current_sleep_ns = min_sleep_ns;
 
     IdleStrategy *s = calloc(1, sizeof(IdleStrategy));
-    if (s == NULL) return NULL;
+    if (s == NULL) { free(ctx); return MMAPQ_ENOMEM; }
     s->idle  = sleep_idle;
     s->close = sleep_close;
     s->ctx   = ctx;
-    return s;
+    *out = s;
+    return 0;
 }
 
 /* ── Backoff — spin → yield → sleep ─────────────────────────────────────── */
@@ -156,13 +165,17 @@ static void backoff_close(IdleStrategy *self)
     free(self->ctx);
 }
 
-IdleStrategy *idle_strategy_backoff_create(
+int idle_strategy_backoff_create(
     int      spin_count,
     int      yield_count,
-    uint64_t max_sleep_ns)
+    uint64_t max_sleep_ns,
+    IdleStrategy **out)
 {
+    if (out == NULL) return MMAPQ_EINVAL;
+    *out = NULL;
+
     BackoffCtx *ctx = calloc(1, sizeof(BackoffCtx));
-    if (ctx == NULL) return NULL;
+    if (ctx == NULL) return MMAPQ_ENOMEM;
     ctx->spin_count   = spin_count;
     ctx->yield_count  = yield_count;
     ctx->max_sleep_ns = max_sleep_ns;
@@ -171,11 +184,12 @@ IdleStrategy *idle_strategy_backoff_create(
     ctx->sleep_ns     = UINT64_C(1000);
 
     IdleStrategy *s = calloc(1, sizeof(IdleStrategy));
-    if (s == NULL) return NULL;
+    if (s == NULL) { free(ctx); return MMAPQ_ENOMEM; }
     s->idle  = backoff_idle;
     s->close = backoff_close;
     s->ctx   = ctx;
-    return s;
+    *out = s;
+    return 0;
 }
 
 void idle_strategy_destroy(IdleStrategy *strategy)
@@ -398,18 +412,21 @@ static void *runtime_thread_fn(void *arg)
 
 /* ── Factory ─────────────────────────────────────────────────────────────── */
 
-Runtime *runtime_create(
+int runtime_create(
     const char   *name,
     IdleStrategy *idle,
     uint64_t      close_timeout_ns,
     void        (*on_close)(Runtime *rt, void *ctx),
-    void         *on_close_ctx)
+    void         *on_close_ctx,
+    Runtime     **out)
 {
-    if (name == NULL) return NULL;
-    if (idle == NULL) return NULL;
+    if (out == NULL) return MMAPQ_EINVAL;
+    *out = NULL;
+    if (name == NULL) return MMAPQ_EINVAL;
+    if (idle == NULL) return MMAPQ_EINVAL;
 
     Runtime *rt = calloc(1, sizeof(Runtime));
-    if (rt == NULL) return NULL;
+    if (rt == NULL) return MMAPQ_ENOMEM;
 
     strncpy(rt->name, name, sizeof(rt->name) - 1);
     rt->idle             = idle;
@@ -447,15 +464,15 @@ Runtime *runtime_create(
         spin_hint();
     }
 
-    return rt;
+    *out = rt;
+    return 0;
 }
 
 /* ── register ────────────────────────────────────────────────────────────── */
 
 int runtime_register(Runtime *rt, Executable *exec)
 {
-    MMAP_ASSERT(rt   != NULL, "runtime_register: rt is NULL");
-    MMAP_ASSERT(exec != NULL, "runtime_register: exec is NULL");
+    if (rt == NULL || exec == NULL) return 0;
 
     if (atomic_load(&rt->closed)) {
         return 0;
@@ -482,8 +499,7 @@ int runtime_register(Runtime *rt, Executable *exec)
 
 int runtime_unregister(Runtime *rt, Executable *exec)
 {
-    MMAP_ASSERT(rt   != NULL, "runtime_unregister: rt is NULL");
-    MMAP_ASSERT(exec != NULL, "runtime_unregister: exec is NULL");
+    if (rt == NULL || exec == NULL) return 0;
 
     /* Threading contract enforcement */
     MMAP_ASSERT(pthread_equal(pthread_self(), rt->runtime_thread_id),
@@ -597,11 +613,14 @@ void runtime_close(Runtime *rt)
     }
 }
 
-Runtime *runtime_clone(Runtime *rt)
+int runtime_clone(Runtime *rt, Runtime **out)
 {
-    if (rt == NULL) return NULL;
+    if (out == NULL) return MMAPQ_EINVAL;
+    *out = NULL;
+    if (rt == NULL) return MMAPQ_EINVAL;
     __atomic_fetch_add(&rt->refcount, 1, __ATOMIC_RELAXED);
-    return rt;
+    *out = rt;
+    return 0;
 }
 
 void runtime_destroy(Runtime *rt)
@@ -657,19 +676,22 @@ static void deregister_close(Executable *self)
     free(impl);
 }
 
-Executable *deregister_executable_create(Runtime *runtime, Executable *target)
+int deregister_executable_create(
+    Runtime *runtime, Executable *target, Executable **out)
 {
-    return deregister_executable_create_with_free(runtime, target, NULL);
+    return deregister_executable_create_with_free(runtime, target, NULL, out);
 }
 
-Executable *deregister_executable_create_with_free(
-    Runtime *runtime, Executable *target, void *ctx_to_free)
+int deregister_executable_create_with_free(
+    Runtime *runtime, Executable *target, void *ctx_to_free, Executable **out)
 {
-    if (runtime == NULL) return NULL;
-    if (target == NULL) return NULL;
+    if (out == NULL) return MMAPQ_EINVAL;
+    *out = NULL;
+    if (runtime == NULL) return MMAPQ_EINVAL;
+    if (target == NULL) return MMAPQ_EINVAL;
 
     DeregisterImpl *impl = calloc(1, sizeof(DeregisterImpl));
-    if (impl == NULL) return NULL;
+    if (impl == NULL) return MMAPQ_ENOMEM;
 
     impl->runtime              = runtime;
     impl->target               = target;
@@ -678,7 +700,8 @@ Executable *deregister_executable_create_with_free(
     impl->self_exec.close      = deregister_close;
     impl->self_exec.ctx        = impl;
 
-    return &impl->self_exec;
+    *out = &impl->self_exec;
+    return 0;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -715,10 +738,8 @@ static void unregister_wait_close(Executable *self)
 
 void runtime_unregister_and_wait(Runtime *rt, Executable *exec)
 {
-    MMAP_ASSERT(rt   != NULL, "runtime_unregister_and_wait: rt is NULL");
-    MMAP_ASSERT(exec != NULL, "runtime_unregister_and_wait: exec is NULL");
-    MMAP_ASSERT(!runtime_is_closed(rt),
-        "runtime_unregister_and_wait: runtime is already closed");
+    if (rt == NULL || exec == NULL) return;
+    if (runtime_is_closed(rt)) return;
 
     /*
      * Stack-allocate the helper — it must stay valid until done=1.
@@ -773,12 +794,16 @@ static void registry_on_close(Runtime *rt, void *ctx)
     free(runtime_id);
 }
 
-Runtime *runtime_get_instance(
+int runtime_get_instance(
     int           runtime_id,
     const char   *name,
     IdleStrategy *idle,
-    uint64_t      close_timeout_ns)
+    uint64_t      close_timeout_ns,
+    Runtime     **out)
 {
+    if (out == NULL) return MMAPQ_EINVAL;
+    *out = NULL;
+
     pthread_mutex_lock(&registry_mutex);
 
     for (int i = 0; i < registry_count; i++) {
@@ -787,18 +812,20 @@ Runtime *runtime_get_instance(
             pthread_mutex_unlock(&registry_mutex);
             /* Caller provided idle but won't be used — destroy it */
             idle_strategy_destroy(idle);
-            return runtime_clone(existing);
+            return runtime_clone(existing, out);
         }
     }
 
-    if (registry_count >= MAX_RUNTIME_INSTANCES) return NULL;
+    if (registry_count >= MAX_RUNTIME_INSTANCES) { pthread_mutex_unlock(&registry_mutex); idle_strategy_destroy(idle); return MMAPQ_ENOMEM; }
 
     int *id_copy = malloc(sizeof(int));
-    if (id_copy == NULL) return NULL;
+    if (id_copy == NULL) { pthread_mutex_unlock(&registry_mutex); idle_strategy_destroy(idle); return MMAPQ_ENOMEM; }
     *id_copy = runtime_id;
 
-    Runtime *rt = runtime_create(name, idle, close_timeout_ns,
-                                  registry_on_close, id_copy);
+    Runtime *rt = NULL;
+    int rc = runtime_create(name, idle, close_timeout_ns,
+                            registry_on_close, id_copy, &rt);
+    if (rc != 0) { pthread_mutex_unlock(&registry_mutex); idle_strategy_destroy(idle); free(id_copy); return rc; }
 
     registry[registry_count].runtime_id = runtime_id;
     registry[registry_count].runtime    = rt;
@@ -808,23 +835,31 @@ Runtime *runtime_get_instance(
     /* Registry holds one permanent reference (refcount 1 from runtime_create).
      * Every caller, including the first, receives a clone — caller owns their
      * own reference and destroy-all-handles never drops the registry's hold. */
-    return runtime_clone(rt);
+    return runtime_clone(rt, out);
 }
 
-Runtime *runtime_region_mapper(void)
+int runtime_region_mapper(Runtime **out)
 {
+    IdleStrategy *idle = NULL;
+    int rc = idle_strategy_backoff_create(100, 10, UINT64_C(1000000), &idle);
+    if (rc != 0) return rc;
     return runtime_get_instance(
         RUNTIME_ID_REGION_MAPPER,
         "region-mapper",
-        idle_strategy_backoff_create(100, 10, UINT64_C(1000000)),
-        RUNTIME_DEFAULT_CLOSE_TIMEOUT_NS);
+        idle,
+        RUNTIME_DEFAULT_CLOSE_TIMEOUT_NS,
+        out);
 }
 
-Runtime *runtime_metrics_processor(void)
+int runtime_metrics_processor(Runtime **out)
 {
+    IdleStrategy *idle = NULL;
+    int rc = idle_strategy_backoff_create(100, 100, UINT64_C(1000000), &idle);
+    if (rc != 0) return rc;
     return runtime_get_instance(
         RUNTIME_ID_METRICS_PROCESSOR,
         "metrics-proc",
-        idle_strategy_backoff_create(100, 100, UINT64_C(1000000)),
-        RUNTIME_DEFAULT_CLOSE_TIMEOUT_NS);
+        idle,
+        RUNTIME_DEFAULT_CLOSE_TIMEOUT_NS,
+        out);
 }

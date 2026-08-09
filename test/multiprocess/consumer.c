@@ -118,20 +118,23 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    Runtime      *rt = runtime_region_mapper();
+    Runtime      *rt = NULL;
+    if (runtime_region_mapper(&rt) != 0) { fprintf(stderr, "runtime_region_mapper failed\n"); return 1; }
     IndexedQueue *q  = NULL;
 
     uint64_t start_ns    = monotonic_nanos();
     uint64_t deadline_ns = start_ns + (uint64_t)timeout_ms * 1000000ULL;
 
+    int rc;
     while (q == NULL) {
-        q = indexed_queue_create(
+        rc = indexed_queue_create(
             dir, name,
             REGION_SIZE, RING_SIZE, 1,
             MAX_FILE_SIZE, 0,
-            TIMEOUT_NS, rt, rt);
+            TIMEOUT_NS, 0, rt, rt, &q);
 
-        if (q == NULL) {
+        if (rc != 0) {
+            q = NULL;
             if (monotonic_nanos() >= deadline_ns) {
                 fprintf(stderr, "consumer: timed out waiting for queue to appear\n");
                 return 1;
@@ -141,7 +144,11 @@ int main(int argc, char *argv[])
         }
     }
 
-    IndexedPoller *p = indexed_queue_create_poller(q);
+    IndexedPoller *p = NULL;
+    if (indexed_queue_create_poller(q, &p) != 0) {
+        fprintf(stderr, "consumer: create poller failed\n");
+        return 1;
+    }
 
     fprintf(stderr, "consumer: reading %ld messages (timeout %ld ms)\n",
             count, timeout_ms);

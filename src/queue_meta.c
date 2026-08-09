@@ -100,19 +100,22 @@ static int meta_validate(const QueueMeta *m, uint8_t expected_type,
 
 /* ── queue_meta_open_rw ──────────────────────────────────────────────────── */
 
-QueueMeta *queue_meta_open_rw(
+int queue_meta_open_rw(
     const char *directory,
     const char *queue_name,
     int64_t     start_index,
     int32_t     region_size,
     int64_t     max_file_size,
     int         archivable,
-    uint8_t     queue_type)
+    uint8_t     queue_type,
+    QueueMeta **out)
 {
-    if (directory  == NULL) return NULL;
-    if (queue_name == NULL) return NULL;
-    if (region_size <= 0) return NULL;
-    if (max_file_size <= 0) return NULL;
+    if (out == NULL) return MMAPQ_EINVAL;
+    *out = NULL;
+    if (directory  == NULL) return MMAPQ_EINVAL;
+    if (queue_name == NULL) return MMAPQ_EINVAL;
+    if (region_size <= 0) return MMAPQ_EINVAL;
+    if (max_file_size <= 0) return MMAPQ_EINVAL;
 
     char path[4096];
     meta_file_path(directory, queue_name, path, sizeof(path));
@@ -125,21 +128,22 @@ QueueMeta *queue_meta_open_rw(
         .queue_type   = queue_type,
     };
 
-    RegionAccessor *region = fixed_size_region_create(
+    RegionAccessor *region = NULL;
+    int fsrerr = fixed_size_region_create(
         path,
         QUEUE_META_ENCODED_LENGTH,
         meta_file_init,
-        &ctx);
+        &ctx,
+        &region);
 
-    if (region == NULL) return NULL;
+    if (fsrerr != 0) return fsrerr;
 
     Buffer buf = {0};
     WrapResult r = region_accessor_wrap(region, 0, &buf);
-    (void)r;
-    if (r != WRAP_SUCCESS) { fixed_size_region_destroy(region); return NULL; }
+    if (r != WRAP_SUCCESS) { fixed_size_region_destroy(region); return MMAPQ_ETIMEDOUT; }
 
     QueueMeta *m = calloc(1, sizeof(QueueMeta));
-    if (m == NULL) { fixed_size_region_destroy(region); return NULL; }
+    if (m == NULL) { fixed_size_region_destroy(region); return MMAPQ_ENOMEM; }
 
     m->region = region;
     m->base   = buf.data;
@@ -148,22 +152,25 @@ QueueMeta *queue_meta_open_rw(
     if (meta_validate(m, queue_type, directory, queue_name) != 0) {
         fixed_size_region_destroy(region);
         free(m);
-        return NULL;
+        return MMAPQ_ESCHEMA;
     }
 
-    return m;
+    *out = m;
+    return 0;
 }
 
 /* ── queue_meta_open_ro ──────────────────────────────────────────────────── */
 
-QueueMeta *queue_meta_open_ro(
+int queue_meta_open_ro(
     const char *directory,
     const char *queue_name,
     uint8_t     expected_type,
-    int        *out_err)
+    QueueMeta **out)
 {
-    if (directory  == NULL) { if (out_err) *out_err = MMAPQ_EINVAL; return NULL; }
-    if (queue_name == NULL) { if (out_err) *out_err = MMAPQ_EINVAL; return NULL; }
+    if (out == NULL) return MMAPQ_EINVAL;
+    *out = NULL;
+    if (directory  == NULL) return MMAPQ_EINVAL;
+    if (queue_name == NULL) return MMAPQ_EINVAL;
 
     char path[4096];
     meta_file_path(directory, queue_name, path, sizeof(path));
@@ -171,37 +178,35 @@ QueueMeta *queue_meta_open_ro(
     /* Check file exists before trying to map it */
     struct stat st;
     if (stat(path, &st) != 0) {
-        if (out_err) *out_err = (errno == ENOENT) ? MMAPQ_ENOENT : MMAPQ_ETIMEDOUT;
-        return NULL;
+        return (errno == ENOENT) ? MMAPQ_ENOENT : MMAPQ_ETIMEDOUT;
     }
     if (st.st_size < QUEUE_META_ENCODED_LENGTH) {
-        if (out_err) *out_err = MMAPQ_ESCHEMA;
-        return NULL;  /* file exists but not yet fully written */
+        return MMAPQ_ESCHEMA;  /* file exists but not yet fully written */
     }
 
-    RegionAccessor *region = fixed_size_region_create(
+    RegionAccessor *region = NULL;
+    int fsrerr = fixed_size_region_create(
         path,
         QUEUE_META_ENCODED_LENGTH,
         file_init_none,
-        NULL);
+        NULL,
+        &region);
 
-    if (region == NULL) { if (out_err) *out_err = MMAPQ_ETIMEDOUT; return NULL; }
+    if (fsrerr != 0) return fsrerr;
 
     Buffer buf = {0};
     WrapResult r = region_accessor_wrap(region, 0, &buf);
     if (r != WRAP_SUCCESS) {
         region_accessor_close(region);
         fixed_size_region_destroy(region);
-        if (out_err) *out_err = MMAPQ_ETIMEDOUT;
-        return NULL;
+        return MMAPQ_ETIMEDOUT;
     }
 
     QueueMeta *m = calloc(1, sizeof(QueueMeta));
     if (m == NULL) {
         region_accessor_close(region);
         fixed_size_region_destroy(region);
-        if (out_err) *out_err = MMAPQ_ETIMEDOUT;
-        return NULL;
+        return MMAPQ_ENOMEM;
     }
 
     m->region = region;
@@ -212,11 +217,11 @@ QueueMeta *queue_meta_open_ro(
         region_accessor_close(region);
         fixed_size_region_destroy(region);
         free(m);
-        if (out_err) *out_err = MMAPQ_ESCHEMA;
-        return NULL;
+        return MMAPQ_ESCHEMA;
     }
 
-    return m;
+    *out = m;
+    return 0;
 }
 
 /* ── queue_meta_close ────────────────────────────────────────────────────── */
@@ -237,11 +242,11 @@ int queue_meta_dest_check(
     const char *directory, const char *queue_name,
     uint8_t expected_type, int preserve, int allow_append)
 {
-    int qerr = 0;
-    QueueMeta *dm = queue_meta_open_ro(directory, queue_name, expected_type, &qerr);
-    if (dm == NULL) {
+    QueueMeta *dm = NULL;
+    int qerr = queue_meta_open_ro(directory, queue_name, expected_type, &dm);
+    if (qerr != 0) {
         if (qerr == MMAPQ_ENOENT) return 0;
-        return qerr ? qerr : MMAPQ_ETIMEDOUT;
+        return qerr;
     }
     queue_meta_close(dm);
 

@@ -44,11 +44,13 @@ typedef struct IndexedBatchQueue IndexedBatchQueue;
  * max_file_size:      maximum size of a single rolled payload file
  * start_index:        initial batch index (typically 0)
  * timeout_ns:         region-mapping timeout in nanoseconds
+ * archivable:         1 to create archivable queue (0 = default, not archivable)
  * write_runtime:      background mapper runtime for the appender side
  * read_runtime:       background mapper runtime for the poller/reader side
- * Returns: a new queue; never NULL (asserts on allocation failure)
+ * out:                on success, set to the new queue
+ * Returns: 0 on success, or an MMAPQ_* error code
  */
-IndexedBatchQueue *indexed_batch_queue_create(
+int indexed_batch_queue_create(
     const char *directory,
     const char *queue_name,
     int32_t     region_size,
@@ -59,7 +61,8 @@ IndexedBatchQueue *indexed_batch_queue_create(
     uint64_t    timeout_ns,
     int         archivable,
     Runtime    *write_runtime,
-    Runtime    *read_runtime);
+    Runtime    *read_runtime,
+    IndexedBatchQueue **out);
 
 /**
  * Create an indexed batch queue with default parameters.
@@ -72,13 +75,15 @@ IndexedBatchQueue *indexed_batch_queue_create(
  * queue_name:   logical name of the queue
  * write_runtime: background mapper runtime for the appender side
  * read_runtime: background mapper runtime for the poller/reader side
- * Returns: a new queue with default configuration
+ * out:          on success, set to the new queue
+ * Returns: 0 on success, or an MMAPQ_* error code
  */
-IndexedBatchQueue *indexed_batch_queue_create_default(
+int indexed_batch_queue_create_default(
     const char *directory,
     const char *queue_name,
     Runtime    *write_runtime,
-    Runtime    *read_runtime);
+    Runtime    *read_runtime,
+    IndexedBatchQueue **out);
 
 /* ── Component factories ─────────────────────────────────────────────────── */
 
@@ -88,23 +93,26 @@ IndexedBatchQueue *indexed_batch_queue_create_default(
  * Uses the queue's write_runtime for background region mapping.
  * The appender must be closed independently with indexed_batch_appender_close().
  *
- * q: the queue (must not be closed)
- * Returns: a new appender
+ * q:   the queue (must not be closed)
+ * out: on success, set to the new appender
+ * Returns: 0 on success, or an MMAPQ_* error code
  */
-IndexedBatchAppender *indexed_batch_queue_create_appender(IndexedBatchQueue *q);
+int indexed_batch_queue_create_appender(
+    IndexedBatchQueue *q, IndexedBatchAppender **out);
 
 /**
  * Create a batch appender with a specific appender ID.
  *
- * Acquires the given ID from the queue's appender ID pool. Returns NULL
- * if the ID is already in use or if the queue is closed.
+ * Acquires the given ID from the queue's appender ID pool. Returns an error
+ * code if the ID is already in use or if the queue is closed.
  *
  * q:           the queue (must not be closed)
  * appender_id: the desired appender ID (0-254)
- * Returns: a new appender, or NULL if the ID is taken
+ * out:         on success, set to the new appender
+ * Returns: 0 on success, or an MMAPQ_* error code
  */
-IndexedBatchAppender *indexed_batch_queue_create_appender_with_id(
-    IndexedBatchQueue *q, uint8_t appender_id);
+int indexed_batch_queue_create_appender_with_id(
+    IndexedBatchQueue *q, uint8_t appender_id, IndexedBatchAppender **out);
 
 /**
  * Create a batch poller on the read side of this queue.
@@ -112,10 +120,12 @@ IndexedBatchAppender *indexed_batch_queue_create_appender_with_id(
  * Uses the queue's read_runtime for background region mapping.
  * The poller must be closed independently with indexed_batch_poller_close().
  *
- * q: the queue (must not be closed)
- * Returns: a new poller positioned at the queue's start index
+ * q:   the queue (must not be closed)
+ * out: on success, set to the new poller positioned at the queue's start index
+ * Returns: 0 on success, or an MMAPQ_* error code
  */
-IndexedBatchPoller *indexed_batch_queue_create_poller(IndexedBatchQueue *q);
+int indexed_batch_queue_create_poller(
+    IndexedBatchQueue *q, IndexedBatchPoller **out);
 
 /**
  * Create a batch reader on the read side of this queue.
@@ -123,10 +133,12 @@ IndexedBatchPoller *indexed_batch_queue_create_poller(IndexedBatchQueue *q);
  * Uses the queue's read_runtime for background region mapping.
  * The reader must be closed independently with indexed_batch_reader_close().
  *
- * q: the queue (must not be closed)
- * Returns: a new reader
+ * q:   the queue (must not be closed)
+ * out: on success, set to the new reader
+ * Returns: 0 on success, or an MMAPQ_* error code
  */
-IndexedBatchReader *indexed_batch_queue_create_reader(IndexedBatchQueue *q);
+int indexed_batch_queue_create_reader(
+    IndexedBatchQueue *q, IndexedBatchReader **out);
 
 /* ── Lifecycle ────────────────────────────────────────────────────────────── */
 
@@ -137,10 +149,12 @@ IndexedBatchReader *indexed_batch_queue_create_reader(IndexedBatchQueue *q);
  * (via queue_meta_open_rw with archivable=1). The archiver must be closed
  * independently with indexed_batch_archiver_close().
  *
- * q: the queue (must not be closed)
- * Returns: a new batch archiver
+ * q:   the queue (must not be closed)
+ * out: on success, set to the new batch archiver
+ * Returns: 0 on success, or an MMAPQ_* error code
  */
-IndexedBatchArchiver *indexed_batch_queue_create_archiver(IndexedBatchQueue *q);
+int indexed_batch_queue_create_archiver(
+    IndexedBatchQueue *q, IndexedBatchArchiver **out);
 
 /**
  * Close the queue and release its configuration resources.

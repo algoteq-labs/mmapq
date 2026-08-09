@@ -30,6 +30,26 @@ static int write_all(FILE *f, const void *buf, size_t n)
     return fwrite(buf, 1, n, f) == n ? 0 : -1;
 }
 
+static int batch_appender_create_bridge(void *q, void **out)
+{
+    return indexed_batch_queue_create_appender((IndexedBatchQueue *)q, (IndexedBatchAppender **)out);
+}
+
+static int batch_appender_create_with_id_bridge(void *q, uint8_t id, void **out)
+{
+    return indexed_batch_queue_create_appender_with_id((IndexedBatchQueue *)q, id, (IndexedBatchAppender **)out);
+}
+
+static void batch_appender_close_bridge(void *a)
+{
+    indexed_batch_appender_close((IndexedBatchAppender *)a);
+}
+
+static void batch_queue_close_bridge(void *q)
+{
+    indexed_batch_queue_close((IndexedBatchQueue *)q);
+}
+
 static int read_all(FILE *f, void *buf, size_t n)
 {
     return fread(buf, 1, n, f) == n ? 0 : -1;
@@ -355,11 +375,12 @@ int64_t batch_queue_transfer_import(
 
     int64_t effective = (start_index_mode == BATCH_QUEUE_TRANSFER_PRESERVE)
                         ? meta.start_index : 0;
-    IndexedBatchQueue *q = indexed_batch_queue_create(
+    IndexedBatchQueue *q = NULL;
+    int rc_q = indexed_batch_queue_create(
         directory, queue_name,
         meta.region_size, 4, 1, meta.max_file_size, effective,
-        10000000000ULL, 0, write_rt, read_rt);
-    if (!q) return -1;
+        10000000000ULL, 0, write_rt, read_rt, &q);
+    if (rc_q != 0) return rc_q;
 
     void *cache_store[APPENDER_CACHE_SIZE] = {NULL};
     int32_t mapped_cache[APPENDER_CACHE_SIZE];
@@ -369,10 +390,10 @@ int64_t batch_queue_transfer_import(
 
     AppenderCache ac = {
         .cache = cache_store, .auto_appender = NULL,
-        .create = (AppenderCreateFn)indexed_batch_queue_create_appender,
-        .create_with_id = (AppenderCreateWithIdFn)indexed_batch_queue_create_appender_with_id,
-        .close = (AppenderCloseFn)indexed_batch_appender_close,
-        .queue_close = (QueueCloseFn)indexed_batch_queue_close,
+        .create = batch_appender_create_bridge,
+        .create_with_id = batch_appender_create_with_id_bridge,
+        .close = batch_appender_close_bridge,
+        .queue_close = batch_queue_close_bridge,
     };
 
     for (int64_t b = 0; b < meta.total_entries; b++) {
@@ -453,11 +474,12 @@ int64_t batch_queue_transfer_import_flat_stream(
 
     int64_t effective = (start_index_mode == BATCH_QUEUE_TRANSFER_PRESERVE)
                         ? meta.start_index : 0;
-    IndexedBatchQueue *q = indexed_batch_queue_create(
+    IndexedBatchQueue *q = NULL;
+    int rc_q = indexed_batch_queue_create(
         directory, queue_name,
         meta.region_size, 4, 1, meta.max_file_size, effective,
-        10000000000ULL, 0, write_rt, read_rt);
-    if (!q) return -1;
+        10000000000ULL, 0, write_rt, read_rt, &q);
+    if (rc_q != 0) return rc_q;
 
     void *cache_store[APPENDER_CACHE_SIZE] = {NULL};
     int32_t mapped_cache[APPENDER_CACHE_SIZE];
@@ -467,10 +489,10 @@ int64_t batch_queue_transfer_import_flat_stream(
 
     AppenderCache ac = {
         .cache = cache_store, .auto_appender = NULL,
-        .create = (AppenderCreateFn)indexed_batch_queue_create_appender,
-        .create_with_id = (AppenderCreateWithIdFn)indexed_batch_queue_create_appender_with_id,
-        .close = (AppenderCloseFn)indexed_batch_appender_close,
-        .queue_close = (QueueCloseFn)indexed_batch_queue_close,
+        .create = batch_appender_create_bridge,
+        .create_with_id = batch_appender_create_with_id_bridge,
+        .close = batch_appender_close_bridge,
+        .queue_close = batch_queue_close_bridge,
     };
 
     for (int64_t i = 0; i < meta.total_entries; i++) {
@@ -548,11 +570,12 @@ int64_t batch_queue_transfer_copy(
     snprintf(dpath, sizeof(dpath), "%s/%s", dest_dir, dest_queue);
     create_dir(dpath);
 
-    IndexedBatchQueue *q = indexed_batch_queue_create(
+    IndexedBatchQueue *q = NULL;
+    int rc_q = indexed_batch_queue_create(
         dest_dir, dest_queue,
         queue_meta_region_size(qm), 4, 1, queue_meta_max_file_size(qm),
-        dest_start, 10000000000ULL, 0, write_rt, read_rt);
-    if (!q) return -1;
+        dest_start, 10000000000ULL, 0, write_rt, read_rt, &q);
+    if (rc_q != 0) return rc_q;
 
     void *cache_store[APPENDER_CACHE_SIZE] = {NULL};
     int32_t mapped_cache[APPENDER_CACHE_SIZE];
@@ -562,10 +585,10 @@ int64_t batch_queue_transfer_copy(
 
     AppenderCache ac = {
         .cache = cache_store, .auto_appender = NULL,
-        .create = (AppenderCreateFn)indexed_batch_queue_create_appender,
-        .create_with_id = (AppenderCreateWithIdFn)indexed_batch_queue_create_appender_with_id,
-        .close = (AppenderCloseFn)indexed_batch_appender_close,
-        .queue_close = (QueueCloseFn)indexed_batch_queue_close,
+        .create = batch_appender_create_bridge,
+        .create_with_id = batch_appender_create_with_id_bridge,
+        .close = batch_appender_close_bridge,
+        .queue_close = batch_queue_close_bridge,
     };
 
     BatchReadingContext bctx;
@@ -651,11 +674,12 @@ int64_t batch_queue_transfer_copy_normal_to_batch(
     snprintf(dpath, sizeof(dpath), "%s/%s", dest_dir, dest_queue);
     create_dir(dpath);
 
-    IndexedBatchQueue *q = indexed_batch_queue_create(
+    IndexedBatchQueue *q = NULL;
+    int rc_q = indexed_batch_queue_create(
         dest_dir, dest_queue,
         queue_meta_region_size(qm), 4, 1, queue_meta_max_file_size(qm),
-        dest_start, 10000000000ULL, 0, write_rt, read_rt);
-    if (!q) return -1;
+        dest_start, 10000000000ULL, 0, write_rt, read_rt, &q);
+    if (rc_q != 0) return rc_q;
 
     void *cache_store[APPENDER_CACHE_SIZE] = {NULL};
     int32_t mapped_cache[APPENDER_CACHE_SIZE];
@@ -665,10 +689,10 @@ int64_t batch_queue_transfer_copy_normal_to_batch(
 
     AppenderCache ac = {
         .cache = cache_store, .auto_appender = NULL,
-        .create = (AppenderCreateFn)indexed_batch_queue_create_appender,
-        .create_with_id = (AppenderCreateWithIdFn)indexed_batch_queue_create_appender_with_id,
-        .close = (AppenderCloseFn)indexed_batch_appender_close,
-        .queue_close = (QueueCloseFn)indexed_batch_queue_close,
+        .create = batch_appender_create_bridge,
+        .create_with_id = batch_appender_create_with_id_bridge,
+        .close = batch_appender_close_bridge,
+        .queue_close = batch_queue_close_bridge,
     };
 
     ReadingContext rc;

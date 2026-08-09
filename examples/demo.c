@@ -143,19 +143,23 @@ int main(void)
     cleanup();
 
     /* Create runtime — the background region mapping thread */
-    Runtime *rt = runtime_region_mapper();
+    Runtime *rt = NULL;
+    if (runtime_region_mapper(&rt) != 0) return 1;
 
     /* Create the queue */
-    IndexedQueue *q = indexed_queue_create(
+    IndexedQueue *q = NULL;
+    if (indexed_queue_create(
         QUEUE_DIR, QUEUE_NAME,
         REGION_SIZE, RING_SIZE,
-        1,            /* regions_to_map_ahead — async premap depth */
+        1,
         MAX_FILE_SIZE, 0,
-        TIMEOUT_NS, /* archivable = */ 0, rt, rt);
+        TIMEOUT_NS, 0, rt, rt, &q) != 0) return 1;
 
     /* Create appender and poller */
-    IndexedAppender *appender = indexed_queue_create_appender(q);
-    IndexedPoller   *poller   = indexed_queue_create_poller(q);
+    IndexedAppender *appender = NULL;
+    if (indexed_queue_create_appender(q, &appender) != 0) return 1;
+    IndexedPoller *poller = NULL;
+    if (indexed_queue_create_poller(q, &poller) != 0) return 1;
 
     printf("appender ID: %d\n", indexed_appender_id(appender));
 

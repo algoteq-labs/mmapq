@@ -71,14 +71,19 @@ typedef struct {
  * end_of_stream_offset:    callback returning current append position
  * stream_ctx:              opaque context for both callbacks
  * fix_end_of_stream:       1 = snapshot end-of-stream at init, 0 = live
+ * out:                     out-parameter for the created iterator (NULL on failure)
+ *
+ * Returns 0 on success, MMAPQ_EINVAL for NULL args,
+ * MMAPQ_ENOMEM on allocation failure. Sets *out to NULL on failure.
  */
-PayloadIterator *payload_iterator_create(
+int payload_iterator_create(
     const char     *queue_name,
     RegionAccessor *payload_accessor,
     int64_t       (*start_of_stream_offset)(void *ctx),
     int64_t       (*end_of_stream_offset)(void *ctx),
     void           *stream_ctx,
-    int             fix_end_of_stream);
+    int             fix_end_of_stream,
+    PayloadIterator **out);
 
 /**
  * payload_iterator_init — initialise the iterator to a range.

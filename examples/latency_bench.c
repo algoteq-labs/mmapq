@@ -68,16 +68,20 @@ static void *internal_server_thread_fn(void *arg)
     }
     thread_set_name(pthread_self(), "echo-server");
 
-    Runtime *rt = runtime_region_mapper();
+    Runtime *rt = NULL;
+    if (runtime_region_mapper(&rt) != 0) { fprintf(stderr, "runtime_region_mapper failed\n"); exit(1); }
     if (a->mapper_cpu >= 0) {
         runtime_set_affinity(rt, a->mapper_cpu);
     }
     
-    IndexedQueue *q_req = indexed_queue_create_default(a->dir, a->req, rt, rt);
-    IndexedQueue *q_res = indexed_queue_create_default(a->dir, a->res, rt, rt);
+    IndexedQueue *q_req = NULL, *q_res = NULL;
+    if (indexed_queue_create_default(a->dir, a->req, rt, rt, &q_req) != 0) { fprintf(stderr, "create request queue failed\n"); exit(1); }
+    if (indexed_queue_create_default(a->dir, a->res, rt, rt, &q_res) != 0) { fprintf(stderr, "create response queue failed\n"); exit(1); }
     
-    IndexedPoller   *poller   = indexed_queue_create_poller(q_req);
-    IndexedAppender *appender = indexed_queue_create_appender(q_res);
+    IndexedPoller *poller = NULL;
+    if (indexed_queue_create_poller(q_req, &poller) != 0) { fprintf(stderr, "create poller failed\n"); exit(1); }
+    IndexedAppender *appender = NULL;
+    if (indexed_queue_create_appender(q_res, &appender) != 0) { fprintf(stderr, "create appender failed\n"); exit(1); }
     
     InternalServerCtx ctx = {
         .response_appender = appender,
@@ -149,11 +153,11 @@ int main(int argc, char *argv[])
     if (use_sync) {
         /* Both NULL */
     } else if (use_mixed) {
-        write_rt = runtime_region_mapper();
+        if (runtime_region_mapper(&write_rt) != 0) { fprintf(stderr, "runtime_region_mapper failed\n"); return 1; }
         read_rt  = NULL;
         if (mapper_cpu >= 0) runtime_set_affinity(write_rt, mapper_cpu);
     } else {
-        write_rt = runtime_region_mapper();
+        if (runtime_region_mapper(&write_rt) != 0) { fprintf(stderr, "runtime_region_mapper failed\n"); return 1; }
         read_rt  = write_rt;
         if (mapper_cpu >= 0) runtime_set_affinity(write_rt, mapper_cpu);
     }
@@ -177,9 +181,12 @@ int main(int argc, char *argv[])
         printf("  Internal Server started on Core %d\n", server_cpu);
     }
 
-    QueueLatencyProbe *probe = queue_latency_probe_create(
+    QueueLatencyProbe *probe = NULL;
+    if (queue_latency_probe_create(
         1, dir, name_req, name_res, msg_size,
-        val_server, val_client, write_rt, read_rt);
+        val_server, val_client, write_rt, read_rt, &probe) != 0) {
+        fprintf(stderr, "probe create failed\n"); return 1;
+    }
 
     /* Client Pinning */
     if (client_cpu >= 0) {

@@ -83,9 +83,11 @@ typedef struct IndexedQueue IndexedQueue;
  * Does NOT create the queue files or directory immediately. The queue is
  * created when the first appender is created.
  *
- * Returns a heap-allocated IndexedQueue. Aborts on failure.
+ * Returns 0 on success and sets *out_queue. Returns a negative MMAPQ_* error
+ * code on failure (EINVAL for bad arguments, ECLOSED for allocation failures)
+ * and sets *out_queue to NULL.
  */
-IndexedQueue *indexed_queue_create(
+int indexed_queue_create(
     const char *directory,
     const char *queue_name,
     int32_t     region_size,
@@ -96,7 +98,8 @@ IndexedQueue *indexed_queue_create(
     uint64_t    timeout_ns,
     int         archivable,
     Runtime    *write_runtime,
-    Runtime    *read_runtime);
+    Runtime    *read_runtime,
+    IndexedQueue **out_queue);
 
 /**
  * indexed_queue_create_default — create with default parameters.
@@ -104,20 +107,22 @@ IndexedQueue *indexed_queue_create(
  * Uses INDEXED_QUEUE_DEFAULT_* constants.
  * runtimes must be provided — typically runtime_region_mapper() or NULL.
  */
-IndexedQueue *indexed_queue_create_default(
+int indexed_queue_create_default(
     const char *directory,
     const char *queue_name,
     Runtime    *write_runtime,
-    Runtime    *read_runtime);
+    Runtime    *read_runtime,
+    IndexedQueue **out_queue);
 
 /**
  * indexed_queue_create_default_opt — create with default parameters and options.
  */
-IndexedQueue *indexed_queue_create_default_opt(
+int indexed_queue_create_default_opt(
     const char *directory,
     const char *queue_name,
     Runtime    *write_runtime,
-    Runtime    *read_runtime);
+    Runtime    *read_runtime,
+    IndexedQueue **out_queue);
 
 /* ── Participant factories ────────────────────────────────────────────────── */
 
@@ -126,32 +131,50 @@ IndexedQueue *indexed_queue_create_default_opt(
  *
  * Acquires an appender ID from the pool. The returned appender must be
  * closed with indexed_appender_close() before indexed_queue_close().
+ *
+ * q:   the queue (must not be closed)
+ * out: on success, set to the new appender
+ * Returns: 0 on success, or an MMAPQ_* error code
  */
-IndexedAppender *indexed_queue_create_appender(IndexedQueue *q);
+int indexed_queue_create_appender(IndexedQueue *q, IndexedAppender **out);
 
 /**
  * indexed_queue_create_appender_with_id — create an appender with a specific ID.
  *
- * Fails (MMAP_ASSERT) if the ID is already in use.
+ * Returns MMAPQ_EIDCONFLICT if the ID is already in use.
+ *
+ * q:           the queue (must not be closed)
+ * appender_id: the desired appender ID (0-255)
+ * out:         on success, set to the new appender
+ * Returns: 0 on success, or an MMAPQ_* error code
  */
-IndexedAppender *indexed_queue_create_appender_with_id(
+int indexed_queue_create_appender_with_id(
     IndexedQueue *q,
-    uint8_t       appender_id);
+    uint8_t       appender_id,
+    IndexedAppender **out);
 
 /**
  * indexed_queue_create_poller — create a new sequential poller.
  *
  * The poller starts at the queue's current start_index (0 for non-archivable).
  * Close with indexed_poller_close() before indexed_queue_close().
+ *
+ * q:   the queue (must not be closed)
+ * out: on success, set to the new poller
+ * Returns: 0 on success, or an MMAPQ_* error code
  */
-IndexedPoller *indexed_queue_create_poller(IndexedQueue *q);
+int indexed_queue_create_poller(IndexedQueue *q, IndexedPoller **out);
 
 /**
  * indexed_queue_create_reader — create a new random-access reader.
  *
  * Close with indexed_reader_close() before indexed_queue_close().
+ *
+ * q:   the queue (must not be closed)
+ * out: on success, set to the new reader
+ * Returns: 0 on success, or an MMAPQ_* error code
  */
-IndexedReader *indexed_queue_create_reader(IndexedQueue *q);
+int indexed_queue_create_reader(IndexedQueue *q, IndexedReader **out);
 
 /**
  * indexed_queue_create_archiver — create an archiver for this queue.
@@ -160,12 +183,15 @@ IndexedReader *indexed_queue_create_reader(IndexedQueue *q);
  * advance the start index, update per-appender start offsets, and obtain
  * the list of files that can be safely deleted or moved.
  *
+ * Returns MMAPQ_EINVAL if the queue is not archivable.
+ *
  * The archiver must be closed independently with indexed_archiver_close().
  *
- * q: the queue (must not be closed, must be archivable)
- * Returns: a new archiver; asserts if the queue is not archivable
+ * q:   the queue (must not be closed, must be archivable)
+ * out: on success, set to the new archiver
+ * Returns: 0 on success, or an MMAPQ_* error code
  */
-IndexedArchiver *indexed_queue_create_archiver(IndexedQueue *q);
+int indexed_queue_create_archiver(IndexedQueue *q, IndexedArchiver **out);
 
 /* ── Metadata ─────────────────────────────────────────────────────────────── */
 

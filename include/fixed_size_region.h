@@ -35,15 +35,18 @@
  * size:            exact size of the region in bytes (must be page-aligned)
  * initialiser:     called when file is newly created (typically file_init_zeros)
  * initialiser_ctx: context passed to initialiser (may be NULL)
+ * out:             out-parameter for the created accessor (NULL on failure)
  *
- * Returns a RegionAccessor* on success.
- * Aborts via MMAP_ASSERT if the mmap fails — this is a fatal configuration error.
+ * Returns 0 on success, MMAPQ_EINVAL for NULL/invalid args,
+ * MMAPQ_ENOMEM on allocation failure, MMAPQ_ETIMEDOUT on mmap failure.
+ * Sets *out to NULL on failure.
  */
-RegionAccessor *fixed_size_region_create(
+int fixed_size_region_create(
     const char      *file_path,
     int32_t          size,
     FileInitialiser  initialiser,
-    void            *initialiser_ctx);
+    void            *initialiser_ctx,
+    RegionAccessor **out);
 
 /**
  * Destroy a FixedSizeRegion and free all memory.

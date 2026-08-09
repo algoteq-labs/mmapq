@@ -30,7 +30,9 @@ void setUp(void)
 
     close(fd);
 
-    fm = file_mapper_single_ro_create(TEST_FILE, file_init_none, NULL, 1);
+    int fmerr = file_mapper_single_ro_create(TEST_FILE, file_init_none, NULL, 1, &fm);
+    TEST_ASSERT_EQUAL_INT(0, fmerr);
+    TEST_ASSERT_NOT_NULL(fm);
 }
 
 void tearDown(void)
@@ -79,8 +81,10 @@ void test_ro_map_second_region(void)
 
 void test_ro_map_missing_file_returns_file_not_found(void)
 {
-    FileMapper *missing = file_mapper_single_ro_create(
-        MISSING_FILE, file_init_none, NULL, 1);
+    FileMapper *missing = NULL;
+    int fmerr2 = file_mapper_single_ro_create(
+        MISSING_FILE, file_init_none, NULL, 1, &missing);
+    TEST_ASSERT_EQUAL_INT(0, fmerr2);
     TEST_ASSERT_NOT_NULL(missing);
 
     uintptr_t addr = file_mapper_map(missing, 0, REGION_SIZE);

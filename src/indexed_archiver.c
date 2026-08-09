@@ -6,6 +6,7 @@
 #include "header_reader.h"
 #include "header_codec.h"
 #include "payload_walk.h"
+#include "mmap_platform.h"
 #include "mmap_assert.h"
 
 #include <stdlib.h>
@@ -39,18 +40,19 @@ static QueueMeta *ro_init(IndexedArchiver *a)
 {
     if (a->ro_meta) return a->ro_meta;
 
-    a->ro_meta = queue_meta_open_ro(a->directory, a->queue_name, QUEUE_TYPE_NORMAL, NULL);
-    if (!a->ro_meta) return NULL;
+    if (queue_meta_open_ro(a->directory, a->queue_name, QUEUE_TYPE_NORMAL, &a->ro_meta) != 0)
+        return NULL;
 
     /* Sync mapping (regions_to_map_ahead = 0): the archiver does a single
      * sequential pass over headers and never benefits from background premap. */
-    a->ro_acc = queue_region_accessor_create_ro(
+    if (queue_region_accessor_create_ro(
         a->directory, a->queue_name,
         queue_meta_region_size(a->ro_meta),
         a->ring_size,
         0,   /* regions_to_map_ahead — sync, no background mapper needed */
         queue_meta_max_file_size(a->ro_meta),
-        10000000000ULL, a->runtime);
+        10000000000ULL, a->runtime,
+        &a->ro_acc) != 0) { return NULL; }
     a->header_acc = queue_region_accessor_header(a->ro_acc);
     return a->ro_meta;
 }
@@ -68,12 +70,13 @@ static QueueMeta *ro_init(IndexedArchiver *a)
 static QueueMeta *rw_meta_open(IndexedArchiver *a)
 {
     if (a->rw_meta) return a->rw_meta;
-    a->rw_meta = queue_meta_open_rw(a->directory, a->queue_name,
+    if (queue_meta_open_rw(a->directory, a->queue_name,
         queue_meta_start_index(a->ro_meta),
         queue_meta_region_size(a->ro_meta),
         queue_meta_max_file_size(a->ro_meta),
         queue_meta_archivable(a->ro_meta),
-        QUEUE_TYPE_NORMAL);
+        QUEUE_TYPE_NORMAL,
+        &a->rw_meta) != 0) { a->rw_meta = NULL; }
     return a->rw_meta;
 }
 
@@ -84,30 +87,36 @@ static AppenderMeta *get_appender_meta(IndexedArchiver *a, uint8_t id)
         snprintf(path, sizeof(path), "%s/%s/appender_meta_%u",
                  a->directory, a->queue_name, (unsigned)id);
         if (!queue_file_exists(path)) return NULL;
-        a->appender_metas[id] = appender_meta_open_rw(
-            a->directory, a->queue_name, id);
+        if (appender_meta_open_rw(
+                a->directory, a->queue_name, id, &a->appender_metas[id]) != 0) return NULL;
     }
     return a->appender_metas[id];
 }
 
 /* ── Factory ─────────────────────────────────────────────────────────────── */
 
-IndexedArchiver *indexed_archiver_create(
+int indexed_archiver_create(
     const char *directory,
     const char *queue_name,
     int         ring_size,
-    Runtime    *runtime)
+    Runtime    *runtime,
+    IndexedArchiver **out)
 {
-    if (directory == NULL || queue_name == NULL || ring_size <= 0) return NULL;
+    if (out == NULL) return MMAPQ_EINVAL;
+    *out = NULL;
+    if (directory == NULL) return MMAPQ_EINVAL;
+    if (queue_name == NULL) return MMAPQ_EINVAL;
+    if (ring_size <= 0) return MMAPQ_EINVAL;
 
     IndexedArchiver *a = calloc(1, sizeof(IndexedArchiver));
-    if (a == NULL) return NULL;
+    if (a == NULL) return MMAPQ_ENOMEM;
 
     a->directory  = strdup(directory);
     a->queue_name = strdup(queue_name);
     a->ring_size  = ring_size;
     a->runtime    = runtime;
-    return a;
+    *out = a;
+    return 0;
 }
 
 /* ── Archiving ───────────────────────────────────────────────────────────── */

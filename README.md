@@ -110,17 +110,25 @@ library you audit today is the library you run in five years.
 
 /* Background mapper thread — handles file mapping asynchronously.
  * It is a process-wide singleton; call once at startup. */
-Runtime *rt = runtime_region_mapper();
+Runtime *rt = NULL;
+int rc = runtime_region_mapper(&rt);
+assert(rc == 0);
 
 /* Open or create a queue (separate write and read runtimes — same here) */
-IndexedQueue *q = indexed_queue_create_default("/tmp", "orders", rt, rt);
+IndexedQueue *q = NULL;
+rc = indexed_queue_create_default("/tmp", "orders", rt, rt, &q);
+assert(rc == 0);
 
 /* Append a message */
-IndexedAppender *a = indexed_queue_create_appender(q);
+IndexedAppender *a = NULL;
+rc = indexed_queue_create_appender(q, &a);
+assert(rc == 0);
 int64_t idx = indexed_appender_append(a, "hello", 5);
 
 /* Poll messages */
-IndexedPoller *p = indexed_queue_create_poller(q);
+IndexedPoller *p = NULL;
+rc = indexed_queue_create_poller(q, &p);
+assert(rc == 0);
 
 static NextMove my_handler(int64_t index, uint8_t appender_id,
                             const void *data, int32_t length, void *ctx) {

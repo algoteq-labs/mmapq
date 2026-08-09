@@ -21,8 +21,8 @@
 #define MAPPED_NOT_COMPUTED (-2)
 
 /* Type-erased appender factory — callers pass the typed function pointer. */
-typedef void *(*AppenderCreateFn)(void *q);
-typedef void *(*AppenderCreateWithIdFn)(void *q, uint8_t id);
+typedef int (*AppenderCreateFn)(void *q, void **out);
+typedef int (*AppenderCreateWithIdFn)(void *q, uint8_t id, void **out);
 typedef void  (*AppenderCloseFn)(void *a);
 typedef void  (*QueueCloseFn)(void *q);
 
@@ -66,25 +66,32 @@ static inline void *appender_cache_get(
     AppenderCache *c, int32_t mapped, void *q,
     ConflictBehavior on_conflict, int *out_abort)
 {
+    void *a;
     *out_abort = 0;
 
     if (mapped == APPENDER_ID_AUTO) {
-        if (!c->auto_appender)
-            c->auto_appender = c->create(q);
+        if (!c->auto_appender) {
+            a = NULL;
+            if (c->create(q, &a) != 0) return NULL;
+            c->auto_appender = a;
+        }
         return c->auto_appender;
     }
 
     if (mapped < 0 || mapped >= APPENDER_CACHE_SIZE) {
-        if (!c->auto_appender)
-            c->auto_appender = c->create(q);
+        if (!c->auto_appender) {
+            a = NULL;
+            if (c->create(q, &a) != 0) return NULL;
+            c->auto_appender = a;
+        }
         return c->auto_appender;
     }
 
-    void *a = c->cache[mapped];
+    a = c->cache[mapped];
     if (a) return a;
 
-    a = c->create_with_id(q, (uint8_t)mapped);
-    if (a) {
+    a = NULL;
+    if (c->create_with_id(q, (uint8_t)mapped, &a) == 0) {
         c->cache[mapped] = a;
         return a;
     }
@@ -97,8 +104,9 @@ static inline void *appender_cache_get(
         return NULL;
     }
 
-    a = c->create(q);
-    if (a) c->cache[mapped] = a;
+    a = NULL;
+    if (c->create(q, &a) != 0) return NULL;
+    c->cache[mapped] = a;
     return a;
 }
 

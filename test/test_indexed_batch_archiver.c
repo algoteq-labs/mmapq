@@ -33,13 +33,18 @@ static IndexedBatchAppender *create_archivable_batch_appender(void)
     snprintf(dir_path, sizeof(dir_path), "%s/%s", DIR, QUEUE);
     mkdir(dir_path, 0775);
 
-    QueueMeta *m = queue_meta_open_rw(DIR, QUEUE, 0,
-        REGION_SZ, MAX_FILE, /* archivable= */ 1, QUEUE_TYPE_BATCH);
+    QueueMeta *m = NULL;
+    int qmerr = queue_meta_open_rw(DIR, QUEUE, 0,
+        REGION_SZ, MAX_FILE, /* archivable= */ 1, QUEUE_TYPE_BATCH, &m);
+    TEST_ASSERT_EQUAL_INT(0, qmerr);
     TEST_ASSERT_NOT_NULL(m);
     queue_meta_close(m);
 
-    return indexed_batch_appender_create(DIR, QUEUE,
-        REGION_SZ, RING_SZ, MAX_FILE, TIMEOUT, 0, rt, 0);
+    IndexedBatchAppender *a = NULL;
+    int rc = indexed_batch_appender_create(DIR, QUEUE,
+        REGION_SZ, RING_SZ, MAX_FILE, TIMEOUT, 0, rt, 0, &a);
+    if (rc != 0) return NULL;
+    return a;
 }
 
 static NextMove advance_handler(int64_t bi, BatchReadingContext *ctx, void *user_ctx)
@@ -51,7 +56,9 @@ static NextMove advance_handler(int64_t bi, BatchReadingContext *ctx, void *user
 void setUp(void)
 {
     cleanup();
-    rt = runtime_region_mapper();
+    int rc_rt = runtime_region_mapper(&rt);
+    TEST_ASSERT_EQUAL_INT(0, rc_rt);
+    TEST_ASSERT_NOT_NULL(rt);
 }
 
 void tearDown(void)
@@ -69,7 +76,10 @@ void test_batch_archiver_start_index_initially_zero(void)
     indexed_batch_appender_commit_batch(a, mutable_batch_complete(b));
     indexed_batch_appender_close(a);
 
-    IndexedBatchArchiver *arch = indexed_batch_archiver_create(DIR, QUEUE, RING_SZ, rt);
+    IndexedBatchArchiver *arch = NULL;
+    int rc_ba = indexed_batch_archiver_create(DIR, QUEUE, RING_SZ, rt, &arch);
+    TEST_ASSERT_EQUAL_INT(0, rc_ba);
+    TEST_ASSERT_NOT_NULL(arch);
     TEST_ASSERT_EQUAL_INT64(0, indexed_batch_archiver_start_index(arch));
     TEST_ASSERT_EQUAL_INT(1, indexed_batch_archiver_archivable(arch));
     indexed_batch_archiver_close(arch);
@@ -87,7 +97,10 @@ void test_batch_archiver_archive_forward_updates_start_index(void)
     }
     indexed_batch_appender_close(a);
 
-    IndexedBatchArchiver *arch = indexed_batch_archiver_create(DIR, QUEUE, RING_SZ, rt);
+    IndexedBatchArchiver *arch = NULL;
+    int rc_ba = indexed_batch_archiver_create(DIR, QUEUE, RING_SZ, rt, &arch);
+    TEST_ASSERT_EQUAL_INT(0, rc_ba);
+    TEST_ASSERT_NOT_NULL(arch);
     indexed_batch_archiver_archive_up_to_index(arch, 3);
     TEST_ASSERT_EQUAL_INT64(3, indexed_batch_archiver_start_index(arch));
     indexed_batch_archiver_close(arch);
@@ -104,7 +117,10 @@ void test_batch_archiver_poller_returns_archived_below_start(void)
     indexed_batch_appender_close(a);
 
     /* Create poller BEFORE archiving — cursor starts at 0 */
-    IndexedBatchPoller *p = indexed_batch_poller_create(DIR, QUEUE, RING_SZ, TIMEOUT, rt);
+    IndexedBatchPoller *p = NULL;
+    int rc_p = indexed_batch_poller_create(DIR, QUEUE, RING_SZ, TIMEOUT, rt, &p);
+    TEST_ASSERT_EQUAL_INT(0, rc_p);
+    TEST_ASSERT_NOT_NULL(p);
 
     /* Verify batch 0 is readable before archive */
     BatchPollResult r = indexed_batch_poller_poll(p, advance_handler, NULL);
@@ -114,7 +130,10 @@ void test_batch_archiver_poller_returns_archived_below_start(void)
     indexed_batch_poller_move_to_index(p, 0);
 
     /* Archive batches 0..2 */
-    IndexedBatchArchiver *arch = indexed_batch_archiver_create(DIR, QUEUE, RING_SZ, rt);
+    IndexedBatchArchiver *arch = NULL;
+    int rc_ba = indexed_batch_archiver_create(DIR, QUEUE, RING_SZ, rt, &arch);
+    TEST_ASSERT_EQUAL_INT(0, rc_ba);
+    TEST_ASSERT_NOT_NULL(arch);
     indexed_batch_archiver_archive_up_to_index(arch, 3);
     indexed_batch_archiver_close(arch);
 
@@ -125,7 +144,10 @@ void test_batch_archiver_poller_returns_archived_below_start(void)
     indexed_batch_poller_close(p);
 
     /* New poller starts at start_index=3 automatically */
-    IndexedBatchPoller *p2 = indexed_batch_poller_create(DIR, QUEUE, RING_SZ, TIMEOUT, rt);
+    IndexedBatchPoller *p2 = NULL;
+    int rc_p2 = indexed_batch_poller_create(DIR, QUEUE, RING_SZ, TIMEOUT, rt, &p2);
+    TEST_ASSERT_EQUAL_INT(0, rc_p2);
+    TEST_ASSERT_NOT_NULL(p2);
     r = indexed_batch_poller_poll(p2, advance_handler, NULL);
     TEST_ASSERT_EQUAL_INT(POLL_ADVANCED, r); /* batch 3 */
 
@@ -149,7 +171,10 @@ void test_batch_archiver_start_offset_advances_after_archive(void)
     }
     indexed_batch_appender_close(a);
 
-    IndexedBatchArchiver *arch = indexed_batch_archiver_create(DIR, QUEUE, RING_SZ, rt);
+    IndexedBatchArchiver *arch = NULL;
+    int rc_ba = indexed_batch_archiver_create(DIR, QUEUE, RING_SZ, rt, &arch);
+    TEST_ASSERT_EQUAL_INT(0, rc_ba);
+    TEST_ASSERT_NOT_NULL(arch);
     int64_t before = 0;
     int ok = indexed_batch_archiver_start_offset(arch, appender_id, &before);
     TEST_ASSERT_EQUAL_INT(1, ok);
@@ -172,7 +197,10 @@ void test_batch_archiver_archivable_files_none_at_start_zero(void)
     indexed_batch_appender_commit_batch(a, mutable_batch_complete(b));
     indexed_batch_appender_close(a);
 
-    IndexedBatchArchiver *arch = indexed_batch_archiver_create(DIR, QUEUE, RING_SZ, rt);
+    IndexedBatchArchiver *arch = NULL;
+    int rc_ba = indexed_batch_archiver_create(DIR, QUEUE, RING_SZ, rt, &arch);
+    TEST_ASSERT_EQUAL_INT(0, rc_ba);
+    TEST_ASSERT_NOT_NULL(arch);
     char *paths[64];
     int n = indexed_batch_archiver_archivable_files(arch, paths, 64);
     TEST_ASSERT_EQUAL_INT(0, n);
@@ -189,7 +217,10 @@ void test_batch_archiver_backward_unarchive(void)
     }
     indexed_batch_appender_close(a);
 
-    IndexedBatchArchiver *arch = indexed_batch_archiver_create(DIR, QUEUE, RING_SZ, rt);
+    IndexedBatchArchiver *arch = NULL;
+    int rc_ba = indexed_batch_archiver_create(DIR, QUEUE, RING_SZ, rt, &arch);
+    TEST_ASSERT_EQUAL_INT(0, rc_ba);
+    TEST_ASSERT_NOT_NULL(arch);
     indexed_batch_archiver_archive_up_to_index(arch, 3);
     TEST_ASSERT_EQUAL_INT64(3, indexed_batch_archiver_start_index(arch));
 
@@ -206,7 +237,10 @@ void test_batch_archiver_noop_when_index_equals_start(void)
     indexed_batch_appender_commit_batch(a, mutable_batch_complete(b));
     indexed_batch_appender_close(a);
 
-    IndexedBatchArchiver *arch = indexed_batch_archiver_create(DIR, QUEUE, RING_SZ, rt);
+    IndexedBatchArchiver *arch = NULL;
+    int rc_ba = indexed_batch_archiver_create(DIR, QUEUE, RING_SZ, rt, &arch);
+    TEST_ASSERT_EQUAL_INT(0, rc_ba);
+    TEST_ASSERT_NOT_NULL(arch);
     indexed_batch_archiver_archive_up_to_index(arch, 0); /* no-op */
     TEST_ASSERT_EQUAL_INT64(0, indexed_batch_archiver_start_index(arch));
     indexed_batch_archiver_close(arch);
@@ -218,15 +252,20 @@ void test_batch_archive_up_to_index_rejects_non_archivable(void)
     snprintf(dir_path, sizeof(dir_path), "%s/%s", DIR, QUEUE);
     mkdir(dir_path, 0775);
 
-    IndexedBatchAppender *a = indexed_batch_appender_create(DIR, QUEUE,
-        REGION_SZ, RING_SZ, MAX_FILE, TIMEOUT, 0, rt, 0);
+    IndexedBatchAppender *a = NULL;
+    int rc_a = indexed_batch_appender_create(DIR, QUEUE,
+        REGION_SZ, RING_SZ, MAX_FILE, TIMEOUT, 0, rt, 0, &a);
+    TEST_ASSERT_EQUAL_INT(0, rc_a);
     TEST_ASSERT_NOT_NULL(a);
     MutableBatch *b = indexed_batch_appender_start_batch(a);
     mutable_batch_append(b, "msg", 3);
     indexed_batch_appender_commit_batch(a, mutable_batch_complete(b));
     indexed_batch_appender_close(a);
 
-    IndexedBatchArchiver *arch = indexed_batch_archiver_create(DIR, QUEUE, RING_SZ, rt);
+    IndexedBatchArchiver *arch = NULL;
+    int rc_ba = indexed_batch_archiver_create(DIR, QUEUE, RING_SZ, rt, &arch);
+    TEST_ASSERT_EQUAL_INT(0, rc_ba);
+    TEST_ASSERT_NOT_NULL(arch);
     TEST_ASSERT_NOT_NULL(arch);
     int rc = indexed_batch_archiver_archive_up_to_index(arch, 1);
     TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL, rc);

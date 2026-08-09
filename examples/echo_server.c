@@ -3,8 +3,6 @@
 #include "indexed_poller.h"
 #include "runtime.h"
 #include "mmap_platform.h"
-#include "mmap_assert.h"
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -79,14 +77,13 @@ int main(int argc, char *argv[])
     Runtime *read_rt  = NULL;
 
     if (use_sync) {
-        /* Both NULL */
+        write_rt = NULL; read_rt = NULL;
     } else if (use_mixed) {
-        /* Server: Read is Sync (NULL), Write is Async (rt) */
-        write_rt = runtime_region_mapper();
+        if (runtime_region_mapper(&write_rt) != 0) { fprintf(stderr, "runtime_region_mapper failed\n"); return 1; }
         read_rt  = NULL;
         if (mapper_cpu >= 0) runtime_set_affinity(write_rt, mapper_cpu);
     } else {
-        write_rt = runtime_region_mapper();
+        if (runtime_region_mapper(&write_rt) != 0) { fprintf(stderr, "runtime_region_mapper failed\n"); return 1; }
         read_rt  = write_rt;
         if (mapper_cpu >= 0) runtime_set_affinity(write_rt, mapper_cpu);
     }
@@ -98,11 +95,16 @@ int main(int argc, char *argv[])
         }
     }
     
-    IndexedQueue *q_req = indexed_queue_create_default(dir, req_name, write_rt, read_rt);
-    IndexedQueue *q_res = indexed_queue_create_default(dir, res_name, write_rt, read_rt);
+    IndexedQueue *q_req = NULL, *q_res = NULL;
+    if (indexed_queue_create_default(dir, req_name, write_rt, read_rt, &q_req) != 0) return 1;
+    if (indexed_queue_create_default(dir, res_name, write_rt, read_rt, &q_res) != 0) return 1;
     
-    IndexedPoller   *poller   = indexed_queue_create_poller(q_req);
-    IndexedAppender *appender = indexed_queue_create_appender(q_res);
+    IndexedPoller *poller = NULL;
+    if (indexed_queue_create_poller(q_req, &poller) != 0) return 1;
+    if (poller == NULL) return 1;
+    IndexedAppender *appender = NULL;
+    if (indexed_queue_create_appender(q_res, &appender) != 0) return 1;
+    if (appender == NULL) return 1;
     
     ServerCtx ctx = {
         .response_appender = appender,

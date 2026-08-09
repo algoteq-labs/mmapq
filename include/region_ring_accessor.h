@@ -49,15 +49,17 @@
  *                         (used for writers at the frontier).
  *                         0.5 = trigger at halfway point (used for readers).
  *                         Ignored when effective regions_to_map_ahead == 0.
+ * out:                    out-parameter for the created accessor (NULL on failure)
  *
- * Returns a RegionAccessor* — callers use the RegionAccessor interface only.
- * The underlying RegionRingAccessor is hidden behind the interface.
+ * Returns 0 on success, MMAPQ_EINVAL for NULL/invalid args,
+ * MMAPQ_ENOMEM on allocation failure. Sets *out to NULL on failure.
  */
-RegionAccessor *region_ring_accessor_create(
-    RegionRing *ring,
-    int32_t     region_size,
-    int         regions_to_map_ahead,
-    double      premap_trigger_ratio);
+int region_ring_accessor_create(
+    RegionRing    *ring,
+    int32_t        region_size,
+    int            regions_to_map_ahead,
+    double         premap_trigger_ratio,
+    RegionAccessor **out);
 
 /**
  * Destroy a RegionRingAccessor created by region_ring_accessor_create().

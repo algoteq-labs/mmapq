@@ -16,8 +16,10 @@ static FileMapper *fm = NULL;
 void setUp(void)
 {
     unlink(TEST_FILE);
-    fm = file_mapper_single_rw_create(
-        TEST_FILE, MAX_SIZE, file_init_zeros, NULL);
+    int fmerr = file_mapper_single_rw_create(
+        TEST_FILE, MAX_SIZE, file_init_zeros, NULL, &fm);
+    TEST_ASSERT_EQUAL_INT(0, fmerr);
+    TEST_ASSERT_NOT_NULL(fm);
 }
 
 void tearDown(void)
@@ -65,8 +67,11 @@ void test_rw_map_write_persists(void)
     fm = NULL;
 
     /* Read back with RO mapper */
-    FileMapper *ro = file_mapper_single_ro_create(
-        TEST_FILE, file_init_none, NULL, 0);
+    FileMapper *ro = NULL;
+    int rw_ro_err = file_mapper_single_ro_create(
+        TEST_FILE, file_init_none, NULL, 0, &ro);
+    TEST_ASSERT_EQUAL_INT(0, rw_ro_err);
+    TEST_ASSERT_NOT_NULL(ro);
     uintptr_t ro_addr = file_mapper_map(ro, 0, REGION_SIZE);
     TEST_ASSERT_NOT_EQUAL(FILE_MAPPER_NULL_ADDRESS, ro_addr);
 
@@ -104,8 +109,11 @@ void test_rw_map_sequential_regions(void)
     }
 
     /* Read back */
-    FileMapper *ro = file_mapper_single_ro_create(
-        TEST_FILE, file_init_none, NULL, 0);
+    FileMapper *ro = NULL;
+    int rw_ro2 = file_mapper_single_ro_create(
+        TEST_FILE, file_init_none, NULL, 0, &ro);
+    TEST_ASSERT_EQUAL_INT(0, rw_ro2);
+    TEST_ASSERT_NOT_NULL(ro);
     for (int i = 0; i < 4; i++) {
         int64_t pos  = (int64_t)i * REGION_SIZE;
         uintptr_t addr = file_mapper_map(ro, pos, REGION_SIZE);

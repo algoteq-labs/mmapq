@@ -22,7 +22,8 @@ void setUp(void)
 {
     cleanup();
     mkdir("/tmp/mmap_test_id_pool_q", 0775);
-    pool = appender_id_pool_open(DIR, QUEUE);
+    TEST_ASSERT_EQUAL_INT(0, appender_id_pool_open(DIR, QUEUE, &pool));
+    TEST_ASSERT_NOT_NULL(pool);
 }
 
 void tearDown(void)
@@ -106,7 +107,8 @@ void test_persists_across_reopen(void)
     appender_id_pool_close(pool);
 
     /* Reopen — ID 4 should still be marked as taken */
-    pool = appender_id_pool_open(DIR, QUEUE);
+    TEST_ASSERT_EQUAL_INT(0, appender_id_pool_open(DIR, QUEUE, &pool));
+    TEST_ASSERT_NOT_NULL(pool);
     int ok = appender_id_pool_try_acquire(pool, 4);
     TEST_ASSERT_EQUAL_INT(0, ok);  /* still held */
     appender_id_pool_release(pool, 4);

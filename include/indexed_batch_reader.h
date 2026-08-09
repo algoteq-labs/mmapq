@@ -115,12 +115,13 @@ typedef struct {
  * runtime:    background region-mapper runtime
  * Returns: a new reader; never NULL (asserts on allocation failure)
  */
-IndexedBatchReader *indexed_batch_reader_create(
+int indexed_batch_reader_create(
     const char *directory,
     const char *queue_name,
     int         ring_size,
     uint64_t    timeout_ns,
-    Runtime    *runtime);
+    Runtime    *runtime,
+    IndexedBatchReader **out);
 
 /* ── Random-access reads ─────────────────────────────────────────────────── */
 

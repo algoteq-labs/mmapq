@@ -28,7 +28,7 @@ typedef struct QueueLatencyProbe QueueLatencyProbe;
  * validate_on_client: if 1, the client verifies response payload pattern.
  * runtime:        region mapper runtime.
  */
-QueueLatencyProbe *queue_latency_probe_create(
+int queue_latency_probe_create(
     uint16_t    instance_id,
     const char *directory,
     const char *request_name,
@@ -37,7 +37,8 @@ QueueLatencyProbe *queue_latency_probe_create(
     int         validate_on_server,
     int         validate_on_client,
     Runtime    *write_runtime,
-    Runtime    *read_runtime);
+    Runtime    *read_runtime,
+    QueueLatencyProbe **out);
 
 /**
  * Returns the total number of validation errors detected so far.

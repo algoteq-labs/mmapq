@@ -68,7 +68,7 @@ typedef struct IndexedAppender IndexedAppender;
  *
  * Aborts if the appender ID pool is exhausted or initialisation fails.
  */
-IndexedAppender *indexed_appender_create(
+int indexed_appender_create(
     const char *directory,
     const char *queue_name,
     int32_t     region_size,
@@ -77,7 +77,8 @@ IndexedAppender *indexed_appender_create(
     uint64_t    timeout_ns,
     int         archivable,
     Runtime    *runtime,
-    int64_t     start_index);
+    int64_t     start_index,
+    IndexedAppender **out);
 
 /**
  * indexed_appender_create_with_id — create an appender with a specific ID.
@@ -85,7 +86,7 @@ IndexedAppender *indexed_appender_create(
  * Fails (MMAP_ASSERT) if the requested appender_id is already in use.
  * Used when an appender must resume with its previous ID after restart.
  */
-IndexedAppender *indexed_appender_create_with_id(
+int indexed_appender_create_with_id(
     const char *directory,
     const char *queue_name,
     int32_t     region_size,
@@ -95,7 +96,8 @@ IndexedAppender *indexed_appender_create_with_id(
     int         archivable,
     Runtime    *runtime,
     uint8_t     appender_id,
-    int64_t     start_index);
+    int64_t     start_index,
+    IndexedAppender **out);
 
 /* ── Append operations ───────────────────────────────────────────────────── */
 

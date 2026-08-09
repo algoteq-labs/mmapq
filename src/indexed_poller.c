@@ -50,16 +50,17 @@ static int poller_init(IndexedPoller *p)
 {
     if (p->queue_meta != NULL) return 1;
 
-    p->queue_meta = queue_meta_open_ro(p->directory, p->queue_name, QUEUE_TYPE_NORMAL, NULL);
-    if (p->queue_meta == NULL) return 0;  /* queue not created yet */
+    if (queue_meta_open_ro(p->directory, p->queue_name, QUEUE_TYPE_NORMAL, &p->queue_meta) != 0)
+        return 0;  /* queue not created yet */
 
-    p->ro_acc = queue_region_accessor_create_ro(
+    if (queue_region_accessor_create_ro(
         p->directory, p->queue_name,
         queue_meta_region_size(p->queue_meta),
         p->ring_size,
         p->regions_to_map_ahead,
         queue_meta_max_file_size(p->queue_meta),
-        p->timeout_ns, p->runtime);
+        p->timeout_ns, p->runtime,
+        &p->ro_acc) != 0) return 0;
 
     p->header_acc = queue_region_accessor_header(p->ro_acc);
 
@@ -71,18 +72,21 @@ static int poller_init(IndexedPoller *p)
 
 /* ── Factory ─────────────────────────────────────────────────────────────── */
 
-IndexedPoller *indexed_poller_create(
+int indexed_poller_create(
     const char *directory,
     const char *queue_name,
     int         ring_size,
     uint64_t    timeout_ns,
-    Runtime    *runtime)
+    Runtime    *runtime,
+    IndexedPoller **out)
 {
-    if (directory  == NULL) return NULL;
-    if (queue_name == NULL) return NULL;
+    if (out == NULL) return MMAPQ_EINVAL;
+    *out = NULL;
+    if (directory  == NULL) return MMAPQ_EINVAL;
+    if (queue_name == NULL) return MMAPQ_EINVAL;
 
     IndexedPoller *p = calloc(1, sizeof(IndexedPoller));
-    if (p == NULL) return NULL;
+    if (p == NULL) return MMAPQ_ENOMEM;
 
     p->directory           = strdup(directory);
     p->queue_name          = strdup(queue_name);
@@ -93,7 +97,8 @@ IndexedPoller *indexed_poller_create(
     p->current_index       = QUEUE_META_INITIAL_START_INDEX;
     p->closed              = 0;
 
-    return p;
+    *out = p;
+    return 0;
 }
 
 /* ── indexed_poller_poll ─────────────────────────────────────────────────── */

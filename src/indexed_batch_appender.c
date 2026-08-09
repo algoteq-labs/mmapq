@@ -147,7 +147,7 @@ static int initialise_append_position(IndexedBatchAppender *a, int64_t start_ind
 
 /* ── Factory ─────────────────────────────────────────────────────────────── */
 
-static IndexedBatchAppender *batch_appender_create_internal(
+static int batch_appender_create_internal(
     const char *directory,
     const char *queue_name,
     int32_t     region_size,
@@ -158,41 +158,46 @@ static IndexedBatchAppender *batch_appender_create_internal(
     Runtime    *runtime,
     AppenderIdPool *pool,
     uint8_t     appender_id,
-    int64_t     start_index)
+    int64_t     start_index,
+    IndexedBatchAppender **out)
 {
+    if (out == NULL) return MMAPQ_EINVAL;
+    *out = NULL;
+
     IndexedBatchAppender *a = calloc(1, sizeof(IndexedBatchAppender));
-    MMAP_ASSERT(a != NULL, "out of memory");
+    if (a == NULL) return MMAPQ_ENOMEM;
 
     a->directory    = strdup(directory);
+    if (a->directory == NULL) { free(a); return MMAPQ_ENOMEM; }
     a->queue_name   = strdup(queue_name);
+    if (a->queue_name == NULL) { free(a->directory); free(a); return MMAPQ_ENOMEM; }
     a->id_pool      = pool;
     a->appender_id  = appender_id;
 
-    a->queue_meta = queue_meta_open_rw(directory, queue_name, start_index, region_size, max_file_size, archivable, QUEUE_TYPE_BATCH);
-    if (a->queue_meta == NULL) {
+    int rc = queue_meta_open_rw(directory, queue_name, start_index, region_size, max_file_size, archivable, QUEUE_TYPE_BATCH, &a->queue_meta);
+    if (rc != 0) {
         appender_id_pool_release(a->id_pool, a->appender_id);
         appender_id_pool_close(a->id_pool);
         free(a->directory);
         free(a->queue_name);
         free(a);
-        return NULL;
+        return rc;
     }
     int32_t rec_reg = queue_meta_region_size(a->queue_meta);
     int64_t rec_max = queue_meta_max_file_size(a->queue_meta);
 
-    a->appender_meta = appender_meta_open_rw(directory, queue_name, a->appender_id);
-    if (a->appender_meta == NULL) {
-        /* Failure after queue meta + pool opened — free all held resources */
+    rc = appender_meta_open_rw(directory, queue_name, a->appender_id, &a->appender_meta);
+    if (rc != 0) {
         if (a->queue_meta) queue_meta_close(a->queue_meta);
         appender_id_pool_release(a->id_pool, a->appender_id);
         appender_id_pool_close(a->id_pool);
         free(a->directory);
         free(a->queue_name);
         free(a);
-        return NULL;
+        return rc;
     }
-    a->rw_acc = queue_region_accessor_create_rw(directory, queue_name, rec_reg, ring_size, 1, rec_max, timeout_ns, runtime, a->appender_id);
-    if (a->rw_acc == NULL) {
+    rc = queue_region_accessor_create_rw(directory, queue_name, rec_reg, ring_size, 1, rec_max, timeout_ns, runtime, a->appender_id, &a->rw_acc);
+    if (rc != 0) {
         appender_meta_close(a->appender_meta);
         if (a->queue_meta) queue_meta_close(a->queue_meta);
         appender_id_pool_release(a->id_pool, a->appender_id);
@@ -200,7 +205,7 @@ static IndexedBatchAppender *batch_appender_create_internal(
         free(a->directory);
         free(a->queue_name);
         free(a);
-        return NULL;
+        return rc;
     }
     a->header_acc = queue_region_accessor_header(a->rw_acc);
     a->payload_acc = queue_region_accessor_payload(a->rw_acc, a->appender_id);
@@ -208,11 +213,12 @@ static IndexedBatchAppender *batch_appender_create_internal(
     a->batch_iterator.queue_name  = a->queue_name;
     a->batch_iterator.payload_acc = a->payload_acc;
 
-    a->ro_acc = queue_region_accessor_create_ro(
+    rc = queue_region_accessor_create_ro(
         directory, queue_name,
         rec_reg, ring_size, 0,
-        rec_max, timeout_ns, runtime);
-    if (a->ro_acc == NULL) {
+        rec_max, timeout_ns, runtime,
+        &a->ro_acc);
+    if (rc != 0) {
         queue_region_accessor_close(a->rw_acc);
         appender_meta_close(a->appender_meta);
         if (a->queue_meta) queue_meta_close(a->queue_meta);
@@ -221,11 +227,12 @@ static IndexedBatchAppender *batch_appender_create_internal(
         free(a->directory);
         free(a->queue_name);
         free(a);
-        return NULL;
+        return rc;
     }
     a->ro_header = queue_region_accessor_header(a->ro_acc);
 
-    if (initialise_append_position(a, start_index)) {
+    int init_rc = initialise_append_position(a, start_index);
+    if (init_rc != 0) {
         queue_region_accessor_close(a->ro_acc);
         queue_region_accessor_close(a->rw_acc);
         appender_meta_close(a->appender_meta);
@@ -235,13 +242,14 @@ static IndexedBatchAppender *batch_appender_create_internal(
         free(a->directory);
         free(a->queue_name);
         free(a);
-        return NULL;
+        return init_rc;
     }
 
-    return a;
+    *out = a;
+    return 0;
 }
 
-IndexedBatchAppender *indexed_batch_appender_create(
+int indexed_batch_appender_create(
     const char *directory,
     const char *queue_name,
     int32_t     region_size,
@@ -250,23 +258,30 @@ IndexedBatchAppender *indexed_batch_appender_create(
     uint64_t    timeout_ns,
     int         archivable,
     Runtime    *runtime,
-    int64_t     start_index)
+    int64_t     start_index,
+    IndexedBatchAppender **out)
 {
-    AppenderIdPool *pool = appender_id_pool_open(directory, queue_name);
-    if (pool == NULL) return NULL;
+    if (out == NULL) return MMAPQ_EINVAL;
+    *out = NULL;
+    if (directory  == NULL) return MMAPQ_EINVAL;
+    if (queue_name == NULL) return MMAPQ_EINVAL;
+
+    AppenderIdPool *pool = NULL;
+    int rc = appender_id_pool_open(directory, queue_name, &pool);
+    if (rc != 0) return rc;
 
     int id = appender_id_pool_acquire(pool);
     if (id < 0) {
         appender_id_pool_close(pool);
-        return NULL;
+        return MMAPQ_EIDCONFLICT;
     }
 
     return batch_appender_create_internal(directory, queue_name, region_size,
         ring_size, max_file_size, timeout_ns, archivable, runtime,
-        pool, (uint8_t)id, start_index);
+        pool, (uint8_t)id, start_index, out);
 }
 
-IndexedBatchAppender *indexed_batch_appender_create_with_id(
+int indexed_batch_appender_create_with_id(
     const char *directory,
     const char *queue_name,
     int32_t     region_size,
@@ -276,23 +291,27 @@ IndexedBatchAppender *indexed_batch_appender_create_with_id(
     int         archivable,
     Runtime    *runtime,
     uint8_t     appender_id,
-    int64_t     start_index)
+    int64_t     start_index,
+    IndexedBatchAppender **out)
 {
-    if (directory  == NULL) return NULL;
-    if (queue_name == NULL) return NULL;
+    if (out == NULL) return MMAPQ_EINVAL;
+    *out = NULL;
+    if (directory  == NULL) return MMAPQ_EINVAL;
+    if (queue_name == NULL) return MMAPQ_EINVAL;
 
-    AppenderIdPool *pool = appender_id_pool_open(directory, queue_name);
-    if (pool == NULL) return NULL;
+    AppenderIdPool *pool = NULL;
+    int rc = appender_id_pool_open(directory, queue_name, &pool);
+    if (rc != 0) return rc;
 
     int ok = appender_id_pool_try_acquire(pool, appender_id);
     if (!ok) {
         appender_id_pool_close(pool);
-        return NULL;
+        return MMAPQ_EIDCONFLICT;
     }
 
     return batch_appender_create_internal(directory, queue_name, region_size,
         ring_size, max_file_size, timeout_ns, archivable, runtime,
-        pool, appender_id, start_index);
+        pool, appender_id, start_index, out);
 }
 
 /* ── Batch Operations ────────────────────────────────────────────────────── */

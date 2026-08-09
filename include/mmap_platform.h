@@ -16,6 +16,7 @@
 #define MMAPQ_EEXIST     (-6)   /* destination queue already exists */
 #define MMAPQ_ENOENT     (-7)   /* file or queue does not exist */
 #define MMAPQ_EIDCONFLICT (-8)  /* requested appender ID already in use */
+#define MMAPQ_ENOMEM     (-9)   /* internal allocation failure (calloc, strdup, etc.) — back off, do not retry hot-loop */
 
 #if defined(__linux__) && !defined(_GNU_SOURCE)
 #  define _GNU_SOURCE

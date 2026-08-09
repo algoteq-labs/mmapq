@@ -53,18 +53,26 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    Runtime      *rt = runtime_region_mapper();
-    IndexedQueue *q  = indexed_queue_create(
+    Runtime      *rt = NULL;
+    if (runtime_region_mapper(&rt) != 0) { fprintf(stderr, "runtime_region_mapper failed\n"); return 1; }
+    IndexedQueue *q  = NULL;
+    if (indexed_queue_create(
         dir, name,
         REGION_SIZE, RING_SIZE, 1,
         MAX_FILE_SIZE, 0,
-        TIMEOUT_NS, rt, rt);
+        TIMEOUT_NS, 0, rt, rt, &q) != 0) { fprintf(stderr, "indexed_queue_create failed\n"); return 1; }
 
     IndexedAppender *a;
     if (requested_id >= 0) {
-        a = indexed_queue_create_appender_with_id(q, (uint8_t)requested_id);
+        if (indexed_queue_create_appender_with_id(q, (uint8_t)requested_id, &a) != 0) {
+            fprintf(stderr, "producer: create appender with id failed\n");
+            return 1;
+        }
     } else {
-        a = indexed_queue_create_appender(q);
+        if (indexed_queue_create_appender(q, &a) != 0) {
+            fprintf(stderr, "producer: create appender failed\n");
+            return 1;
+        }
     }
 
     fprintf(stderr, "producer: appender_id=%d writing %ld messages\n",

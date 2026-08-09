@@ -59,12 +59,17 @@ typedef struct Runtime Runtime;
  * region_size: size of each region in bytes (power of two, page-aligned)
  * file_mapper: the FileMapper backing all regions in this ring
  * timeout_ns:  per-wrap timeout in nanoseconds
+ * out:         out-parameter for the created RegionRing (NULL on failure)
+ *
+ * Returns 0 on success, MMAPQ_EINVAL for NULL/invalid args,
+ * MMAPQ_ENOMEM on allocation failure. Sets *out to NULL on failure.
  */
-RegionRing *region_ring_sync_create(
+int region_ring_sync_create(
     int         ring_size,
     int32_t     region_size,
     FileMapper *file_mapper,
-    uint64_t    timeout_ns);
+    uint64_t    timeout_ns,
+    RegionRing **out);
 
 /**
  * Create an asynchronous RegionRing.
@@ -77,13 +82,19 @@ RegionRing *region_ring_sync_create(
  *
  * INVARIANT: max_cache_size in the rolled FileMapper must be >= ring_size.
  *            The caller is responsible for enforcing this at construction.
+ *
+ * out:         out-parameter for the created RegionRing (NULL on failure)
+ *
+ * Returns 0 on success, MMAPQ_EINVAL for NULL/invalid args,
+ * MMAPQ_ENOMEM on allocation failure. Sets *out to NULL on failure.
  */
-RegionRing *region_ring_async_create(
+int region_ring_async_create(
     int         ring_size,
     int32_t     region_size,
     FileMapper *file_mapper,
     uint64_t    timeout_ns,
-    Runtime    *runtime);
+    Runtime    *runtime,
+    RegionRing **out);
 
 /**
  * Destroy a RegionRing and free all associated memory.

@@ -45,11 +45,15 @@ void setUp(void)
 {
     cleanup();
     mkdir("/tmp/mmap_test_iq", 0775);
-    rt = runtime_region_mapper();
-    q  = indexed_queue_create(DIR, QUEUE,
-                               REGION_SZ, RING_SZ, 1,
-                               MAX_FILE, 0,
-                               TIMEOUT_NS, 0, rt, rt);
+    int rc_rt = runtime_region_mapper(&rt);
+    TEST_ASSERT_EQUAL_INT(0, rc_rt);
+    TEST_ASSERT_NOT_NULL(rt);
+    int rc_q  = indexed_queue_create(DIR, QUEUE,
+                                      REGION_SZ, RING_SZ, 1,
+                                      MAX_FILE, 0,
+                                      TIMEOUT_NS, 0, rt, rt, &q);
+    TEST_ASSERT_EQUAL_INT(0, rc_q);
+    TEST_ASSERT_NOT_NULL(q);
 }
 
 void tearDown(void)
@@ -91,8 +95,14 @@ static NextMove capture_handler(
 
 void test_append_and_poll_single_message(void)
 {
-    IndexedAppender *a = indexed_queue_create_appender(q);
-    IndexedPoller   *p = indexed_queue_create_poller(q);
+    IndexedAppender *a = NULL;
+    int rc_a = indexed_queue_create_appender(q, &a);
+    TEST_ASSERT_EQUAL_INT(0, rc_a);
+    TEST_ASSERT_NOT_NULL(a);
+    IndexedPoller *p = NULL;
+    int rc_p = indexed_queue_create_poller(q, &p);
+    TEST_ASSERT_EQUAL_INT(0, rc_p);
+    TEST_ASSERT_NOT_NULL(p);
 
     const char *msg = "hello queue";
     int64_t idx = indexed_appender_append(a, msg, (int32_t)strlen(msg));
@@ -112,7 +122,10 @@ void test_append_and_poll_single_message(void)
 
 void test_poll_end_of_stream_when_empty(void)
 {
-    IndexedPoller *p = indexed_queue_create_poller(q);
+    IndexedPoller *p = NULL;
+    int rc_p = indexed_queue_create_poller(q, &p);
+    TEST_ASSERT_EQUAL_INT(0, rc_p);
+    TEST_ASSERT_NOT_NULL(p);
 
     PollCapture cap = { .directive = NEXT_ADVANCE };
     PollResult r = indexed_poller_poll(p, capture_handler, &cap);
@@ -125,8 +138,14 @@ void test_poll_end_of_stream_when_empty(void)
 
 void test_append_multiple_and_poll_all(void)
 {
-    IndexedAppender *a = indexed_queue_create_appender(q);
-    IndexedPoller   *p = indexed_queue_create_poller(q);
+    IndexedAppender *a = NULL;
+    int rc_a = indexed_queue_create_appender(q, &a);
+    TEST_ASSERT_EQUAL_INT(0, rc_a);
+    TEST_ASSERT_NOT_NULL(a);
+    IndexedPoller *p = NULL;
+    int rc_p = indexed_queue_create_poller(q, &p);
+    TEST_ASSERT_EQUAL_INT(0, rc_p);
+    TEST_ASSERT_NOT_NULL(p);
 
     const char *msgs[] = { "alpha", "beta", "gamma", "delta" };
     int n = 4;
@@ -157,8 +176,14 @@ void test_append_multiple_and_poll_all(void)
 
 void test_reader_read_at_index(void)
 {
-    IndexedAppender *a = indexed_queue_create_appender(q);
-    IndexedReader   *r = indexed_queue_create_reader(q);
+    IndexedAppender *a = NULL;
+    int rc_a = indexed_queue_create_appender(q, &a);
+    TEST_ASSERT_EQUAL_INT(0, rc_a);
+    TEST_ASSERT_NOT_NULL(a);
+    IndexedReader *r = NULL;
+    int rc_r = indexed_queue_create_reader(q, &r);
+    TEST_ASSERT_EQUAL_INT(0, rc_r);
+    TEST_ASSERT_NOT_NULL(r);
 
     indexed_appender_append(a, "first",  5);
     indexed_appender_append(a, "second", 6);
@@ -176,7 +201,10 @@ void test_reader_read_at_index(void)
 
 void test_reader_end_of_stream_beyond_last(void)
 {
-    IndexedReader *r = indexed_queue_create_reader(q);
+    IndexedReader *r = NULL;
+    int rc_r = indexed_queue_create_reader(q, &r);
+    TEST_ASSERT_EQUAL_INT(0, rc_r);
+    TEST_ASSERT_NOT_NULL(r);
     ReadingContext ctx = {0};
     indexed_reader_read(r, 0, &ctx);
     TEST_ASSERT_EQUAL_INT(ENTRY_END_OF_STREAM, ctx.status);
@@ -185,8 +213,14 @@ void test_reader_end_of_stream_beyond_last(void)
 
 void test_reader_last_index(void)
 {
-    IndexedAppender *a = indexed_queue_create_appender(q);
-    IndexedReader   *r = indexed_queue_create_reader(q);
+    IndexedAppender *a = NULL;
+    int rc_a = indexed_queue_create_appender(q, &a);
+    TEST_ASSERT_EQUAL_INT(0, rc_a);
+    TEST_ASSERT_NOT_NULL(a);
+    IndexedReader *r = NULL;
+    int rc_r = indexed_queue_create_reader(q, &r);
+    TEST_ASSERT_EQUAL_INT(0, rc_r);
+    TEST_ASSERT_NOT_NULL(r);
 
     TEST_ASSERT_EQUAL_INT64(HEADER_NULL_INDEX, indexed_reader_last_index(r));
 
@@ -202,8 +236,14 @@ void test_reader_last_index(void)
 
 void test_reader_read_first_and_last(void)
 {
-    IndexedAppender *a = indexed_queue_create_appender(q);
-    IndexedReader   *r = indexed_queue_create_reader(q);
+    IndexedAppender *a = NULL;
+    int rc_a = indexed_queue_create_appender(q, &a);
+    TEST_ASSERT_EQUAL_INT(0, rc_a);
+    TEST_ASSERT_NOT_NULL(a);
+    IndexedReader *r = NULL;
+    int rc_r = indexed_queue_create_reader(q, &r);
+    TEST_ASSERT_EQUAL_INT(0, rc_r);
+    TEST_ASSERT_NOT_NULL(r);
 
     indexed_appender_append(a, "first",  5);
     indexed_appender_append(a, "middle", 6);
@@ -229,8 +269,14 @@ void test_reader_read_first_and_last(void)
 
 void test_poller_move_to_end(void)
 {
-    IndexedAppender *a = indexed_queue_create_appender(q);
-    IndexedPoller   *p = indexed_queue_create_poller(q);
+    IndexedAppender *a = NULL;
+    int rc_a = indexed_queue_create_appender(q, &a);
+    TEST_ASSERT_EQUAL_INT(0, rc_a);
+    TEST_ASSERT_NOT_NULL(a);
+    IndexedPoller *p = NULL;
+    int rc_p = indexed_queue_create_poller(q, &p);
+    TEST_ASSERT_EQUAL_INT(0, rc_p);
+    TEST_ASSERT_NOT_NULL(p);
 
     indexed_appender_append(a, "a", 1);
     indexed_appender_append(a, "b", 1);
@@ -249,8 +295,14 @@ void test_poller_move_to_end(void)
 
 void test_poller_move_to_start(void)
 {
-    IndexedAppender *a = indexed_queue_create_appender(q);
-    IndexedPoller   *p = indexed_queue_create_poller(q);
+    IndexedAppender *a = NULL;
+    int rc_a = indexed_queue_create_appender(q, &a);
+    TEST_ASSERT_EQUAL_INT(0, rc_a);
+    TEST_ASSERT_NOT_NULL(a);
+    IndexedPoller *p = NULL;
+    int rc_p = indexed_queue_create_poller(q, &p);
+    TEST_ASSERT_EQUAL_INT(0, rc_p);
+    TEST_ASSERT_NOT_NULL(p);
 
     indexed_appender_append(a, "x", 1);
     indexed_appender_append(a, "y", 1);
@@ -265,8 +317,14 @@ void test_poller_move_to_start(void)
 
 void test_poller_move_to_index(void)
 {
-    IndexedAppender *a = indexed_queue_create_appender(q);
-    IndexedPoller   *p = indexed_queue_create_poller(q);
+    IndexedAppender *a = NULL;
+    int rc_a = indexed_queue_create_appender(q, &a);
+    TEST_ASSERT_EQUAL_INT(0, rc_a);
+    TEST_ASSERT_NOT_NULL(a);
+    IndexedPoller *p = NULL;
+    int rc_p = indexed_queue_create_poller(q, &p);
+    TEST_ASSERT_EQUAL_INT(0, rc_p);
+    TEST_ASSERT_NOT_NULL(p);
 
     for (int i = 0; i < 5; i++)
         indexed_appender_append(a, "x", 1);
@@ -281,8 +339,14 @@ void test_poller_move_to_index(void)
 
 void test_poller_handler_stop(void)
 {
-    IndexedAppender *a = indexed_queue_create_appender(q);
-    IndexedPoller   *p = indexed_queue_create_poller(q);
+    IndexedAppender *a = NULL;
+    int rc_a = indexed_queue_create_appender(q, &a);
+    TEST_ASSERT_EQUAL_INT(0, rc_a);
+    TEST_ASSERT_NOT_NULL(a);
+    IndexedPoller *p = NULL;
+    int rc_p = indexed_queue_create_poller(q, &p);
+    TEST_ASSERT_EQUAL_INT(0, rc_p);
+    TEST_ASSERT_NOT_NULL(p);
 
     indexed_appender_append(a, "stop_me", 7);
 
@@ -298,8 +362,14 @@ void test_poller_handler_stop(void)
 
 void test_poller_handler_retreat(void)
 {
-    IndexedAppender *a = indexed_queue_create_appender(q);
-    IndexedPoller   *p = indexed_queue_create_poller(q);
+    IndexedAppender *a = NULL;
+    int rc_a = indexed_queue_create_appender(q, &a);
+    TEST_ASSERT_EQUAL_INT(0, rc_a);
+    TEST_ASSERT_NOT_NULL(a);
+    IndexedPoller *p = NULL;
+    int rc_p = indexed_queue_create_poller(q, &p);
+    TEST_ASSERT_EQUAL_INT(0, rc_p);
+    TEST_ASSERT_NOT_NULL(p);
 
     indexed_appender_append(a, "a", 1);
     indexed_appender_append(a, "b", 1);
@@ -321,8 +391,14 @@ void test_poller_handler_retreat(void)
 
 void test_poller_retreat_at_start_stays(void)
 {
-    IndexedAppender *a = indexed_queue_create_appender(q);
-    IndexedPoller   *p = indexed_queue_create_poller(q);
+    IndexedAppender *a = NULL;
+    int rc_a = indexed_queue_create_appender(q, &a);
+    TEST_ASSERT_EQUAL_INT(0, rc_a);
+    TEST_ASSERT_NOT_NULL(a);
+    IndexedPoller *p = NULL;
+    int rc_p = indexed_queue_create_poller(q, &p);
+    TEST_ASSERT_EQUAL_INT(0, rc_p);
+    TEST_ASSERT_NOT_NULL(p);
 
     indexed_appender_append(a, "x", 1);
 
@@ -340,9 +416,18 @@ void test_poller_retreat_at_start_stays(void)
 
 void test_multiple_appenders_interleaved(void)
 {
-    IndexedAppender *a0 = indexed_queue_create_appender(q);
-    IndexedAppender *a1 = indexed_queue_create_appender(q);
-    IndexedPoller   *p  = indexed_queue_create_poller(q);
+    IndexedAppender *a0 = NULL;
+    int rc_a0 = indexed_queue_create_appender(q, &a0);
+    TEST_ASSERT_EQUAL_INT(0, rc_a0);
+    TEST_ASSERT_NOT_NULL(a0);
+    IndexedAppender *a1 = NULL;
+    int rc_a1 = indexed_queue_create_appender(q, &a1);
+    TEST_ASSERT_EQUAL_INT(0, rc_a1);
+    TEST_ASSERT_NOT_NULL(a1);
+    IndexedPoller *p = NULL;
+    int rc_p = indexed_queue_create_poller(q, &p);
+    TEST_ASSERT_EQUAL_INT(0, rc_p);
+    TEST_ASSERT_NOT_NULL(p);
 
     /* Interleave appends from two appenders */
     indexed_appender_append(a0, "from_a0_0", 9);
@@ -374,8 +459,14 @@ void test_multiple_appenders_interleaved(void)
 
 void test_large_message_sequence_crossing_regions(void)
 {
-    IndexedAppender *a = indexed_queue_create_appender(q);
-    IndexedPoller   *p = indexed_queue_create_poller(q);
+    IndexedAppender *a = NULL;
+    int rc_a = indexed_queue_create_appender(q, &a);
+    TEST_ASSERT_EQUAL_INT(0, rc_a);
+    TEST_ASSERT_NOT_NULL(a);
+    IndexedPoller *p = NULL;
+    int rc_p = indexed_queue_create_poller(q, &p);
+    TEST_ASSERT_EQUAL_INT(0, rc_p);
+    TEST_ASSERT_NOT_NULL(p);
 
     /*
      * Write messages large enough to force region crossings.
@@ -410,7 +501,10 @@ void test_large_message_sequence_crossing_regions(void)
 void test_appender_recovers_position_after_close(void)
 {
     /* Phase 1: append some messages and close the appender */
-    IndexedAppender *a = indexed_queue_create_appender(q);
+    IndexedAppender *a = NULL;
+    int rc_a = indexed_queue_create_appender(q, &a);
+    TEST_ASSERT_EQUAL_INT(0, rc_a);
+    TEST_ASSERT_NOT_NULL(a);
     uint8_t id = indexed_appender_id(a);
 
     indexed_appender_append(a, "msg_0", 5);
@@ -419,8 +513,11 @@ void test_appender_recovers_position_after_close(void)
     indexed_appender_close(a);
 
     /* Phase 2: reopen with same ID — should resume at index 2 */
-    IndexedAppender *a2 = indexed_appender_create_with_id(
-        DIR, QUEUE, REGION_SZ, RING_SZ, MAX_FILE, TIMEOUT_NS, 0, rt, id, 0);
+    IndexedAppender *a2 = NULL;
+    int rc_a2 = indexed_appender_create_with_id(
+        DIR, QUEUE, REGION_SZ, RING_SZ, MAX_FILE, TIMEOUT_NS, 0, rt, id, 0, &a2);
+    TEST_ASSERT_EQUAL_INT(0, rc_a2);
+    TEST_ASSERT_NOT_NULL(a2);
 
     TEST_ASSERT_EQUAL_INT64(before_close, indexed_appender_current_index(a2));
 
@@ -431,7 +528,10 @@ void test_appender_recovers_position_after_close(void)
     TEST_ASSERT_EQUAL_INT64(3, idx3);
 
     /* Phase 4: poll all 4 messages */
-    IndexedPoller *p = indexed_queue_create_poller(q);
+    IndexedPoller *p = NULL;
+    int rc_p = indexed_queue_create_poller(q, &p);
+    TEST_ASSERT_EQUAL_INT(0, rc_p);
+    TEST_ASSERT_NOT_NULL(p);
     const char *expected[] = { "msg_0", "msg_1", "msg_2", "msg_3" };
 
     for (int i = 0; i < 4; i++) {
@@ -458,9 +558,14 @@ static void test_stale_appender_catch_up(void)
      * Create two appenders, fill 10 header files with appender1, then
      * append with appender2 and verify the returned index is correct.
      */
-    IndexedAppender *a1 = indexed_queue_create_appender(q);
-    IndexedAppender *a2 = indexed_queue_create_appender(q);
+    IndexedAppender *a1 = NULL;
+    int rc_a1 = indexed_queue_create_appender(q, &a1);
+    TEST_ASSERT_EQUAL_INT(0, rc_a1);
     TEST_ASSERT_NOT_NULL(a1);
+    IndexedAppender *a2 = NULL;
+    int rc_a2 = indexed_queue_create_appender(q, &a2);
+    TEST_ASSERT_EQUAL_INT(0, rc_a2);
+    TEST_ASSERT_NOT_NULL(a2);
     TEST_ASSERT_NOT_NULL(a2);
 
     int header_files_to_fill = 10;
@@ -493,8 +598,14 @@ static void test_stale_appender_catch_up(void)
 
 void test_uncommitted_append_and_commit(void)
 {
-    IndexedAppender *a = indexed_queue_create_appender(q);
-    IndexedPoller   *p = indexed_queue_create_poller(q);
+    IndexedAppender *a = NULL;
+    int rc_a = indexed_queue_create_appender(q, &a);
+    TEST_ASSERT_EQUAL_INT(0, rc_a);
+    TEST_ASSERT_NOT_NULL(a);
+    IndexedPoller *p = NULL;
+    int rc_p = indexed_queue_create_poller(q, &p);
+    TEST_ASSERT_EQUAL_INT(0, rc_p);
+    TEST_ASSERT_NOT_NULL(p);
 
     /* Append uncommitted — not visible to poller yet */
     int64_t offset = indexed_appender_append_uncommitted(a, "deferred", 8);
@@ -521,7 +632,10 @@ void test_uncommitted_append_and_commit(void)
 
 void test_uncommitted_iterator_finds_uncommitted(void)
 {
-    IndexedAppender *a = indexed_queue_create_appender(q);
+    IndexedAppender *a = NULL;
+    int rc_a = indexed_queue_create_appender(q, &a);
+    TEST_ASSERT_EQUAL_INT(0, rc_a);
+    TEST_ASSERT_NOT_NULL(a);
 
     /* Append one committed, one uncommitted */
     indexed_appender_append(a, "committed", 9);
@@ -556,8 +670,14 @@ void test_uncommitted_iterator_finds_uncommitted(void)
 
 void test_reader_entry_status(void)
 {
-    IndexedAppender *a = indexed_queue_create_appender(q);
-    IndexedReader   *r = indexed_queue_create_reader(q);
+    IndexedAppender *a = NULL;
+    int rc_a = indexed_queue_create_appender(q, &a);
+    TEST_ASSERT_EQUAL_INT(0, rc_a);
+    TEST_ASSERT_NOT_NULL(a);
+    IndexedReader *r = NULL;
+    int rc_r = indexed_queue_create_reader(q, &r);
+    TEST_ASSERT_EQUAL_INT(0, rc_r);
+    TEST_ASSERT_NOT_NULL(r);
 
     indexed_appender_append(a, "x", 1);
 
@@ -574,8 +694,14 @@ void test_reader_entry_status(void)
 
 void test_poller_exists(void)
 {
-    IndexedAppender *a = indexed_queue_create_appender(q);
-    IndexedPoller   *p = indexed_queue_create_poller(q);
+    IndexedAppender *a = NULL;
+    int rc_a = indexed_queue_create_appender(q, &a);
+    TEST_ASSERT_EQUAL_INT(0, rc_a);
+    TEST_ASSERT_NOT_NULL(a);
+    IndexedPoller *p = NULL;
+    int rc_p = indexed_queue_create_poller(q, &p);
+    TEST_ASSERT_EQUAL_INT(0, rc_p);
+    TEST_ASSERT_NOT_NULL(p);
 
     TEST_ASSERT_FALSE(indexed_poller_exists(p, 0));
     indexed_appender_append(a, "y", 1);
@@ -590,22 +716,34 @@ void test_poller_automatically_discovers_region_size(void)
 {
     /* Phase 1: Create a queue with 8MB regions and write a message */
     int32_t LARGE_REGION = 8 * 1024 * 1024;
-    IndexedQueue *q1 = indexed_queue_create(DIR, QUEUE, LARGE_REGION, RING_SZ, 1, 
-                                             LARGE_REGION * 16, 0, TIMEOUT_NS, 0, rt, rt);
-    IndexedAppender *a = indexed_queue_create_appender(q1);
+    IndexedQueue *q1 = NULL;
+    int rc_q1 = indexed_queue_create(DIR, QUEUE, LARGE_REGION, RING_SZ, 1, 
+                                      LARGE_REGION * 16, 0, TIMEOUT_NS, 0, rt, rt, &q1);
+    TEST_ASSERT_EQUAL_INT(0, rc_q1);
+    TEST_ASSERT_NOT_NULL(q1);
+    IndexedAppender *a = NULL;
+    int rc_a = indexed_queue_create_appender(q1, &a);
+    TEST_ASSERT_EQUAL_INT(0, rc_a);
+    TEST_ASSERT_NOT_NULL(a);
     indexed_appender_append(a, "hello", 5);
     indexed_appender_close(a);
     indexed_queue_close(q1);
 
     /* Phase 2: Create a second queue instance with "wrong" default (4KB) */
-    IndexedQueue *q2 = indexed_queue_create(DIR, QUEUE, REGION_SZ, RING_SZ, 1,
-                                             MAX_FILE, 0, TIMEOUT_NS, 0, rt, rt);
+    IndexedQueue *q2 = NULL;
+    int rc_q2 = indexed_queue_create(DIR, QUEUE, REGION_SZ, RING_SZ, 1,
+                                      MAX_FILE, 0, TIMEOUT_NS, 0, rt, rt, &q2);
+    TEST_ASSERT_EQUAL_INT(0, rc_q2);
+    TEST_ASSERT_NOT_NULL(q2);
     
     /* Verify metadata reported by q2 is correct (8MB) */
     TEST_ASSERT_EQUAL_INT32(LARGE_REGION, indexed_queue_region_size(q2));
 
     /* Create poller from q2 and poll the message */
-    IndexedPoller *p = indexed_queue_create_poller(q2);
+    IndexedPoller *p = NULL;
+    int rc_p = indexed_queue_create_poller(q2, &p);
+    TEST_ASSERT_EQUAL_INT(0, rc_p);
+    TEST_ASSERT_NOT_NULL(p);
     PollCapture cap = { .directive = NEXT_ADVANCE };
     PollResult r = indexed_poller_poll(p, capture_handler, &cap);
 
@@ -618,8 +756,14 @@ void test_poller_automatically_discovers_region_size(void)
 
 void test_append_rejects_zero_length(void)
 {
-    IndexedQueue      *q = indexed_queue_create_default(DIR, QUEUE, rt, rt);
-    IndexedAppender   *a = indexed_queue_create_appender(q);
+    IndexedQueue      *q = NULL;
+    int rc_q = indexed_queue_create_default(DIR, QUEUE, rt, rt, &q);
+    TEST_ASSERT_EQUAL_INT(0, rc_q);
+    TEST_ASSERT_NOT_NULL(q);
+    IndexedAppender *a = NULL;
+    int rc_a = indexed_queue_create_appender(q, &a);
+    TEST_ASSERT_EQUAL_INT(0, rc_a);
+    TEST_ASSERT_NOT_NULL(a);
 
     int64_t idx = indexed_appender_append(a, "first", 5);
     TEST_ASSERT_EQUAL_INT64(0, idx);
@@ -637,15 +781,27 @@ void test_append_rejects_zero_length(void)
 
 void test_open_normal_as_batch_refused(void)
 {
-    IndexedQueue *q = indexed_queue_create_default(DIR, QUEUE, rt, rt);
-    IndexedAppender *a = indexed_queue_create_appender(q);
+    IndexedQueue *q = NULL;
+    int rc_q = indexed_queue_create_default(DIR, QUEUE, rt, rt, &q);
+    TEST_ASSERT_EQUAL_INT(0, rc_q);
+    TEST_ASSERT_NOT_NULL(q);
+    IndexedAppender *a = NULL;
+    int rc_a = indexed_queue_create_appender(q, &a);
+    TEST_ASSERT_EQUAL_INT(0, rc_a);
+    TEST_ASSERT_NOT_NULL(a);
     indexed_appender_append(a, "msg", 3);
     indexed_appender_close(a);
     indexed_queue_close(q);
 
     /* Attempt to create a batch participant on the same queue */
-    IndexedBatchQueue *bq = indexed_batch_queue_create_default(DIR, QUEUE, rt, rt);
-    IndexedBatchAppender *ba = indexed_batch_queue_create_appender(bq);
+    IndexedBatchQueue *bq = NULL;
+    int rc_bq = indexed_batch_queue_create_default(DIR, QUEUE, rt, rt, &bq);
+    TEST_ASSERT_EQUAL_INT(0, rc_bq);
+    TEST_ASSERT_NOT_NULL(bq);
+    IndexedBatchAppender *ba = NULL;
+    int rc_ba = indexed_batch_queue_create_appender(bq, &ba);
+    TEST_ASSERT_TRUE(rc_ba != 0);
+    TEST_ASSERT(rc_ba != MMAPQ_ETIMEDOUT);
     TEST_ASSERT_NULL(ba);
 
     if (bq) indexed_batch_queue_close(bq);
@@ -653,8 +809,14 @@ void test_open_normal_as_batch_refused(void)
 
 void test_meta_schema_mismatch_refused(void)
 {
-    IndexedQueue *q = indexed_queue_create_default(DIR, QUEUE, rt, rt);
-    IndexedAppender *a = indexed_queue_create_appender(q);
+    IndexedQueue *q = NULL;
+    int rc_q = indexed_queue_create_default(DIR, QUEUE, rt, rt, &q);
+    TEST_ASSERT_EQUAL_INT(0, rc_q);
+    TEST_ASSERT_NOT_NULL(q);
+    IndexedAppender *a = NULL;
+    int rc_a = indexed_queue_create_appender(q, &a);
+    TEST_ASSERT_EQUAL_INT(0, rc_a);
+    TEST_ASSERT_NOT_NULL(a);
     indexed_appender_append(a, "msg", 3);
     indexed_appender_close(a);
     indexed_queue_close(q);
@@ -670,8 +832,14 @@ void test_meta_schema_mismatch_refused(void)
     }
 
     /* Appender creation should now fail */
-    IndexedQueue *q2 = indexed_queue_create_default(DIR, QUEUE, rt, rt);
-    IndexedAppender *a2 = indexed_queue_create_appender(q2);
+    IndexedQueue *q2 = NULL;
+    int rc_q2 = indexed_queue_create_default(DIR, QUEUE, rt, rt, &q2);
+    TEST_ASSERT_EQUAL_INT(0, rc_q2);
+    TEST_ASSERT_NOT_NULL(q2);
+    IndexedAppender *a2 = NULL;
+    int rc_a2 = indexed_queue_create_appender(q2, &a2);
+    TEST_ASSERT_TRUE(rc_a2 != 0);
+    TEST_ASSERT(rc_a2 != MMAPQ_ETIMEDOUT);
     TEST_ASSERT_NULL(a2);
 
     if (q2) indexed_queue_close(q2);
@@ -679,8 +847,14 @@ void test_meta_schema_mismatch_refused(void)
 
 void test_meta_fixed8_refused(void)
 {
-    IndexedQueue *q = indexed_queue_create_default(DIR, QUEUE, rt, rt);
-    IndexedAppender *a = indexed_queue_create_appender(q);
+    IndexedQueue *q = NULL;
+    int rc_q = indexed_queue_create_default(DIR, QUEUE, rt, rt, &q);
+    TEST_ASSERT_EQUAL_INT(0, rc_q);
+    TEST_ASSERT_NOT_NULL(q);
+    IndexedAppender *a = NULL;
+    int rc_a = indexed_queue_create_appender(q, &a);
+    TEST_ASSERT_EQUAL_INT(0, rc_a);
+    TEST_ASSERT_NOT_NULL(a);
     indexed_appender_append(a, "msg", 3);
     indexed_appender_close(a);
     indexed_queue_close(q);
@@ -697,8 +871,13 @@ void test_meta_fixed8_refused(void)
     }
 
     /* Appender creation should now fail */
-    IndexedQueue *q2 = indexed_queue_create_default(DIR, QUEUE, rt, rt);
-    IndexedAppender *a2 = indexed_queue_create_appender(q2);
+    IndexedQueue *q2 = NULL;
+    int rc_q2 = indexed_queue_create_default(DIR, QUEUE, rt, rt, &q2);
+    TEST_ASSERT_EQUAL_INT(0, rc_q2);
+    TEST_ASSERT_NOT_NULL(q2);
+    IndexedAppender *a2 = NULL;
+    int rc_a2 = indexed_queue_create_appender(q2, &a2);
+    TEST_ASSERT_TRUE(rc_a2 != 0);
     TEST_ASSERT_NULL(a2);
 
     if (q2) indexed_queue_close(q2);
@@ -708,10 +887,12 @@ void test_meta_fixed8_refused(void)
 
 static void test_standalone_factory_rejects_missing_directory(void)
 {
-    IndexedAppender *a = indexed_appender_create_with_id(
+    IndexedAppender *a = NULL;
+    int rc_a = indexed_appender_create_with_id(
         "/nonexistent-dir-for-test", "q",
         4096 * 1024, 4, (4096 * 1024) * 256,
-        10000000000, 0, NULL, 7, 0);
+        10000000000, 0, NULL, 7, 0, &a);
+    TEST_ASSERT_TRUE(rc_a != 0);
     TEST_ASSERT_NULL(a);
 }
 
@@ -736,13 +917,17 @@ static void test_poll_detects_corrupt_payload(void)
     int rc = system(cmd); (void)rc;
 
     /* Create queue, append one message */
-    IndexedQueue *q = indexed_queue_create(
+    IndexedQueue *q = NULL;
+    int rc_q = indexed_queue_create(
         DIR, qname,
         REGION_SZ, RING_SZ, 1, MAX_FILE,
-        0, TIMEOUT_NS, 0, NULL, NULL);
+        0, TIMEOUT_NS, 0, NULL, NULL, &q);
+    TEST_ASSERT_EQUAL_INT(0, rc_q);
     TEST_ASSERT_NOT_NULL(q);
 
-    IndexedAppender *a = indexed_queue_create_appender(q);
+    IndexedAppender *a = NULL;
+    int rc_a = indexed_queue_create_appender(q, &a);
+    TEST_ASSERT_EQUAL_INT(0, rc_a);
     TEST_ASSERT_NOT_NULL(a);
     int64_t idx = indexed_appender_append(a, "hello", 5);
     TEST_ASSERT(idx >= 0);
@@ -750,7 +935,9 @@ static void test_poll_detects_corrupt_payload(void)
 
     /* Corrupt the payload: find the header at index 0, decode payload offset,
        write zero at that offset (the 4-byte length prefix) */
-    IndexedReader *r = indexed_reader_create(DIR, qname, 4, 5000000000ULL, NULL);
+    IndexedReader *r = NULL;
+    int rc_r = indexed_reader_create(DIR, qname, 4, 5000000000ULL, NULL, &r);
+    TEST_ASSERT_EQUAL_INT(0, rc_r);
     TEST_ASSERT_NOT_NULL(r);
     ReadingContext ctx = {0};
     indexed_reader_read(r, 0, &ctx);
@@ -767,7 +954,9 @@ static void test_poll_detects_corrupt_payload(void)
     indexed_reader_close(r);
 
     /* Now poll — should get POLL_CORRUPT */
-    IndexedPoller *p = indexed_queue_create_poller(q);
+    IndexedPoller *p = NULL;
+    int rc_p = indexed_queue_create_poller(q, &p);
+    TEST_ASSERT_EQUAL_INT(0, rc_p);
     TEST_ASSERT_NOT_NULL(p);
     corrupt_handler_count = 0;
     PollResult pr = indexed_poller_poll(p, corrupt_handler, NULL);
@@ -790,16 +979,21 @@ static void test_create_with_id_already_in_use(void)
     snprintf(qdir, sizeof(qdir), "%s/%s", dir, QUEUE);
     mkdir(qdir, 0755);
 
-    IndexedAppender *a1 = indexed_appender_create_with_id(
+    IndexedAppender *a1 = NULL;
+    int rc_a1 = indexed_appender_create_with_id(
         dir, QUEUE,
         4096 * 1024, 4, (4096 * 1024) * 256,
-        10000000000, 0, NULL, 7, 0);
+        10000000000, 0, NULL, 7, 0, &a1);
+    TEST_ASSERT_EQUAL_INT(0, rc_a1);
     TEST_ASSERT_NOT_NULL(a1);
 
-    IndexedAppender *a2 = indexed_appender_create_with_id(
+    IndexedAppender *a2 = NULL;
+    int rc_a2 = indexed_appender_create_with_id(
         dir, QUEUE,
         4096 * 1024, 4, (4096 * 1024) * 256,
-        10000000000, 0, NULL, 7, 0);
+        10000000000, 0, NULL, 7, 0, &a2);
+    TEST_ASSERT_TRUE(rc_a2 != 0);
+    TEST_ASSERT(rc_a2 != MMAPQ_ETIMEDOUT);
     TEST_ASSERT_NULL(a2);
 
     indexed_appender_close(a1);

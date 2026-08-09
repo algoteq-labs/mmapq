@@ -83,7 +83,7 @@ static NextMove client_handler(
 
 /* ── Public API ──────────────────────────────────────────────────────────── */
 
-QueueLatencyProbe *queue_latency_probe_create(
+int queue_latency_probe_create(
     uint16_t    instance_id,
     const char *directory,
     const char *request_name,
@@ -92,12 +92,15 @@ QueueLatencyProbe *queue_latency_probe_create(
     int         validate_on_server,
     int         validate_on_client,
     Runtime    *write_runtime,
-    Runtime    *read_runtime)
+    Runtime    *read_runtime,
+    QueueLatencyProbe **out)
 {
-    if (message_size < (int32_t)sizeof(LatencyHeader)) return NULL;
+    if (out == NULL) return MMAPQ_EINVAL;
+    *out = NULL;
+    if (message_size < (int32_t)sizeof(LatencyHeader)) return MMAPQ_EINVAL;
 
     QueueLatencyProbe *p = calloc(1, sizeof(QueueLatencyProbe));
-    if (p == NULL) return NULL;
+    if (p == NULL) return MMAPQ_ENOMEM;
     
     p->instance_id        = instance_id;
     p->message_size       = message_size;
@@ -105,19 +108,34 @@ QueueLatencyProbe *queue_latency_probe_create(
     p->validate_on_client = validate_on_client;
     
     if (posix_memalign((void **)&p->msg_buffer, 64, (size_t)message_size) != 0) {
-        MMAP_ASSERT(0, "out of memory (msg_buffer)");
+        free(p); return MMAPQ_ENOMEM;
     }
     memset(p->msg_buffer, 0, (size_t)message_size);
     
-    p->request_queue = indexed_queue_create_default_opt(directory, request_name, write_runtime, read_runtime);
-    p->response_queue = indexed_queue_create_default_opt(directory, response_name, write_runtime, read_runtime);
+    {
+        int rc = indexed_queue_create_default_opt(directory, request_name, write_runtime, read_runtime, &p->request_queue);
+        if (rc != 0) { free(p->msg_buffer); free(p); return rc; }
+    }
+    {
+        int rc = indexed_queue_create_default_opt(directory, response_name, write_runtime, read_runtime, &p->response_queue);
+        if (rc != 0) { indexed_queue_close(p->request_queue); free(p->msg_buffer); free(p); return rc; }
+    }
     
-    p->request_appender = indexed_queue_create_appender(p->request_queue);
-    p->response_poller  = indexed_queue_create_poller(p->response_queue);
+    p->request_appender = NULL;
+    {
+        int rc = indexed_queue_create_appender(p->request_queue, &p->request_appender);
+        if (rc != 0) { indexed_queue_close(p->response_queue); indexed_queue_close(p->request_queue); free(p->msg_buffer); free(p); return rc; }
+    }
+    p->response_poller = NULL;
+    {
+        int rc = indexed_queue_create_poller(p->response_queue, &p->response_poller);
+        if (rc != 0) { indexed_appender_close(p->request_appender); indexed_queue_close(p->response_queue); indexed_queue_close(p->request_queue); free(p->msg_buffer); free(p); return rc; }
+    }
     
     atomic_store(&p->validation_errors, 0);
     
-    return p;
+    *out = p;
+    return 0;
 }
 
 int64_t queue_latency_probe_validation_errors(QueueLatencyProbe *p)

@@ -36,7 +36,9 @@ static void cleanup_queue(const char *name)
 
 void setUp(void)
 {
-    rt = runtime_region_mapper();
+    int rc_rt = runtime_region_mapper(&rt);
+    TEST_ASSERT_EQUAL_INT(0, rc_rt);
+    TEST_ASSERT_NOT_NULL(rt);
 }
 
 void tearDown(void)
@@ -57,10 +59,16 @@ static IndexedQueue *create_queue(const char *name, const char **msgs, int n, in
     snprintf(path, sizeof(path), "%s/%s", TEST_DIR, name);
     mkdir(path, 0775);
 
-    IndexedQueue *q = indexed_queue_create(TEST_DIR, name, 4096, 4, 1, 4096LL * 64,
-                                            start_index, 5000000000ULL, 0, rt, rt);
+    IndexedQueue *q = NULL;
+    int rc_q = indexed_queue_create(TEST_DIR, name, 4096, 4, 1, 4096LL * 64,
+                                     start_index, 5000000000ULL, 0, rt, rt, &q);
+    TEST_ASSERT_EQUAL_INT(0, rc_q);
+    TEST_ASSERT_NOT_NULL(q);
 
-    IndexedAppender *a = indexed_queue_create_appender(q);
+    IndexedAppender *a = NULL;
+    int rc_a = indexed_queue_create_appender(q, &a);
+    TEST_ASSERT_EQUAL_INT(0, rc_a);
+    TEST_ASSERT_NOT_NULL(a);
     for (int i = 0; i < n; i++)
         indexed_appender_append(a, msgs[i], (int32_t)strlen(msgs[i]) + 1);
     indexed_appender_close(a);
@@ -69,9 +77,15 @@ static IndexedQueue *create_queue(const char *name, const char **msgs, int n, in
 
 static int load_messages(const char *name, char out[][100], int max)
 {
-    IndexedQueue *q = indexed_queue_create(TEST_DIR, name, 4096, 4, 1, 4096LL * 64,
-                                             0, 5000000000ULL, 0, rt, rt);
-    IndexedReader *r = indexed_queue_create_reader(q);
+    IndexedQueue *q = NULL;
+    int rc_q = indexed_queue_create(TEST_DIR, name, 4096, 4, 1, 4096LL * 64,
+                                     0, 5000000000ULL, 0, rt, rt, &q);
+    TEST_ASSERT_EQUAL_INT(0, rc_q);
+    TEST_ASSERT_NOT_NULL(q);
+    IndexedReader *r = NULL;
+    int rc_r = indexed_queue_create_reader(q, &r);
+    TEST_ASSERT_EQUAL_INT(0, rc_r);
+    TEST_ASSERT_NOT_NULL(r);
     int count = 0;
     int64_t last = indexed_reader_last_index(r);
     if (last < 0) { indexed_reader_close(r); indexed_queue_close(q); return 0; }
@@ -91,9 +105,15 @@ static int load_messages(const char *name, char out[][100], int max)
 
 static void verify_batch_index_space(const char *name, int64_t expected_start, int64_t expected_end)
 {
-    IndexedBatchQueue *vq = indexed_batch_queue_create(TEST_DIR, name, 4096, 4, 1, 4096LL * 64,
-                                                         0, 5000000000ULL, 0, rt, rt);
-    IndexedBatchReader *vr = indexed_batch_queue_create_reader(vq);
+    IndexedBatchQueue *vq = NULL;
+    int rc_vq = indexed_batch_queue_create(TEST_DIR, name, 4096, 4, 1, 4096LL * 64,
+                                             0, 5000000000ULL, 0, rt, rt, &vq);
+    TEST_ASSERT_EQUAL_INT(0, rc_vq);
+    TEST_ASSERT_NOT_NULL(vq);
+    IndexedBatchReader *vr = NULL;
+    int rc_vr = indexed_batch_queue_create_reader(vq, &vr);
+    TEST_ASSERT_EQUAL_INT(0, rc_vr);
+    TEST_ASSERT_NOT_NULL(vr);
     int64_t si = indexed_batch_reader_start_index(vr);
     int64_t li = indexed_batch_reader_last_index(vr);
     TEST_ASSERT_EQUAL_INT64(expected_start, si);
@@ -114,9 +134,15 @@ static void verify_batch_index_space(const char *name, int64_t expected_start, i
 
 static void verify_index_space(const char *name, int64_t expected_start, int64_t expected_end)
 {
-    IndexedQueue *vq = indexed_queue_create(TEST_DIR, name, 4096, 4, 1, 4096LL * 64,
-                                              expected_start, 5000000000ULL, 0, rt, rt);
-    IndexedReader *vr = indexed_queue_create_reader(vq);
+    IndexedQueue *vq = NULL;
+    int rc_vq = indexed_queue_create(TEST_DIR, name, 4096, 4, 1, 4096LL * 64,
+                                      expected_start, 5000000000ULL, 0, rt, rt, &vq);
+    TEST_ASSERT_EQUAL_INT(0, rc_vq);
+    TEST_ASSERT_NOT_NULL(vq);
+    IndexedReader *vr = NULL;
+    int rc_vr = indexed_queue_create_reader(vq, &vr);
+    TEST_ASSERT_EQUAL_INT(0, rc_vr);
+    TEST_ASSERT_NOT_NULL(vr);
     TEST_ASSERT_EQUAL_INT64(expected_start, indexed_reader_start_index(vr));
     TEST_ASSERT_EQUAL_INT64(expected_end, indexed_reader_last_index(vr));
 
@@ -141,9 +167,15 @@ static IndexedBatchQueue *create_batch_queue(const char *name, const char *batch
     snprintf(path, sizeof(path), "%s/%s", TEST_DIR, name);
     mkdir(path, 0775);
 
-    IndexedBatchQueue *q = indexed_batch_queue_create(TEST_DIR, name, 4096, 4, 1, 4096LL * 64,
-                                                       0, 5000000000ULL, 0, rt, rt);
-    IndexedBatchAppender *a = indexed_batch_queue_create_appender(q);
+    IndexedBatchQueue *q = NULL;
+    int rc_q = indexed_batch_queue_create(TEST_DIR, name, 4096, 4, 1, 4096LL * 64,
+                                           0, 5000000000ULL, 0, rt, rt, &q);
+    TEST_ASSERT_EQUAL_INT(0, rc_q);
+    TEST_ASSERT_NOT_NULL(q);
+    IndexedBatchAppender *a = NULL;
+    int rc_a = indexed_batch_queue_create_appender(q, &a);
+    TEST_ASSERT_EQUAL_INT(0, rc_a);
+    TEST_ASSERT_NOT_NULL(a);
     for (int b = 0; b < nb; b++) {
         MutableBatch *mb = indexed_batch_appender_start_batch(a);
         for (int m = 0; m < batch_sizes[b]; m++) {
@@ -162,7 +194,10 @@ void test_export_import_roundtrip(void)
 {
     const char *msgs[] = {"msg1", "msg2", "msg3"};
     IndexedQueue *src = create_queue(QUEUE, msgs, 3, 0);
-    IndexedReader *reader = indexed_queue_create_reader(src);
+    IndexedReader *reader = NULL;
+    int rc_reader = indexed_queue_create_reader(src, &reader);
+    TEST_ASSERT_EQUAL_INT(0, rc_reader);
+    TEST_ASSERT_NOT_NULL(reader);
 
     char fpath[512];
     snprintf(fpath, sizeof(fpath), "%s/%s_export.bin", TEST_DIR, QUEUE);
@@ -194,7 +229,10 @@ void test_export_import_preserve_start_index(void)
 {
     const char *msgs[] = {"a", "b", "c"};
     IndexedQueue *src = create_queue(QUEUE, msgs, 3, 100);
-    IndexedReader *reader = indexed_queue_create_reader(src);
+    IndexedReader *reader = NULL;
+    int rc_reader = indexed_queue_create_reader(src, &reader);
+    TEST_ASSERT_EQUAL_INT(0, rc_reader);
+    TEST_ASSERT_NOT_NULL(reader);
 
     /* Messages are at indices 100, 101, 102 */
     int64_t actual_start = indexed_reader_start_index(reader);
@@ -228,9 +266,15 @@ void test_export_import_preserve_start_index(void)
     TEST_ASSERT_EQUAL_INT(3, cnt);
 
     /* Verify index space is preserved */
-    IndexedQueue *vq = indexed_queue_create(TEST_DIR, COPY_Q, 4096, 4, 1, 4096LL * 64,
-                                              actual_start, 5000000000ULL, 0, rt, rt);
-    IndexedReader *vr = indexed_queue_create_reader(vq);
+    IndexedQueue *vq = NULL;
+    int rc_vq = indexed_queue_create(TEST_DIR, COPY_Q, 4096, 4, 1, 4096LL * 64,
+                                      actual_start, 5000000000ULL, 0, rt, rt, &vq);
+    TEST_ASSERT_EQUAL_INT(0, rc_vq);
+    TEST_ASSERT_NOT_NULL(vq);
+    IndexedReader *vr = NULL;
+    int rc_vr = indexed_queue_create_reader(vq, &vr);
+    TEST_ASSERT_EQUAL_INT(0, rc_vr);
+    TEST_ASSERT_NOT_NULL(vr);
     TEST_ASSERT_EQUAL_INT64(actual_start, indexed_reader_start_index(vr));
     TEST_ASSERT_EQUAL_INT64(actual_end, indexed_reader_last_index(vr));
     ReadingContext vctx;
@@ -256,7 +300,10 @@ void test_poller_starts_at_preserved_index(void)
 {
     const char *msgs[] = {"a", "b", "c"};
     IndexedQueue *src = create_queue(QUEUE, msgs, 3, 100);
-    IndexedReader *reader = indexed_queue_create_reader(src);
+    IndexedReader *reader = NULL;
+    int rc_reader = indexed_queue_create_reader(src, &reader);
+    TEST_ASSERT_EQUAL_INT(0, rc_reader);
+    TEST_ASSERT_NOT_NULL(reader);
     int64_t si = indexed_reader_start_index(reader);
     int64_t ei = indexed_reader_last_index(reader);
 
@@ -274,9 +321,15 @@ void test_poller_starts_at_preserved_index(void)
     fclose(in);
 
     /* Now poll the imported queue — first entry should be at index 100 */
-    IndexedQueue *iq = indexed_queue_create(TEST_DIR, COPY_Q, 4096, 4, 1, 4096LL * 64,
-                                              si, 5000000000ULL, 0, rt, rt);
-    IndexedPoller *p = indexed_queue_create_poller(iq);
+    IndexedQueue *iq = NULL;
+    int rc_iq = indexed_queue_create(TEST_DIR, COPY_Q, 4096, 4, 1, 4096LL * 64,
+                                      si, 5000000000ULL, 0, rt, rt, &iq);
+    TEST_ASSERT_EQUAL_INT(0, rc_iq);
+    TEST_ASSERT_NOT_NULL(iq);
+    IndexedPoller *p = NULL;
+    int rc_p = indexed_queue_create_poller(iq, &p);
+    TEST_ASSERT_EQUAL_INT(0, rc_p);
+    TEST_ASSERT_NOT_NULL(p);
     /* Three messages at indices 100, 101, 102 */
     {
         int64_t polled_idx = -1;
@@ -300,7 +353,10 @@ void test_export_import_rebase_start_index(void)
 {
     const char *msgs[] = {"a", "b", "c"};
     IndexedQueue *src = create_queue(QUEUE, msgs, 3, 100);
-    IndexedReader *reader = indexed_queue_create_reader(src);
+    IndexedReader *reader = NULL;
+    int rc_reader = indexed_queue_create_reader(src, &reader);
+    TEST_ASSERT_EQUAL_INT(0, rc_reader);
+    TEST_ASSERT_NOT_NULL(reader);
 
     char fpath[512];
     snprintf(fpath, sizeof(fpath), "%s/%s_export.bin", TEST_DIR, QUEUE);
@@ -324,9 +380,15 @@ void test_export_import_rebase_start_index(void)
     int cnt = load_messages(COPY_Q, loaded, 10);
     TEST_ASSERT_EQUAL_INT(3, cnt);
 
-    IndexedQueue *vq = indexed_queue_create(TEST_DIR, COPY_Q, 4096, 4, 1, 4096LL * 64,
-                                              0, 5000000000ULL, 0, rt, rt);
-    IndexedReader *vr = indexed_queue_create_reader(vq);
+    IndexedQueue *vq = NULL;
+    int rc_vq = indexed_queue_create(TEST_DIR, COPY_Q, 4096, 4, 1, 4096LL * 64,
+                                      0, 5000000000ULL, 0, rt, rt, &vq);
+    TEST_ASSERT_EQUAL_INT(0, rc_vq);
+    TEST_ASSERT_NOT_NULL(vq);
+    IndexedReader *vr = NULL;
+    int rc_vr = indexed_queue_create_reader(vq, &vr);
+    TEST_ASSERT_EQUAL_INT(0, rc_vr);
+    TEST_ASSERT_NOT_NULL(vr);
     TEST_ASSERT_EQUAL_INT64(0, indexed_reader_start_index(vr));
     indexed_reader_close(vr);
     indexed_queue_close(vq);
@@ -338,7 +400,10 @@ void test_export_import_fragment(void)
 {
     const char *msgs[] = {"m1", "m2", "m3", "m4", "m5"};
     IndexedQueue *src = create_queue(QUEUE, msgs, 5, 0);
-    IndexedReader *reader = indexed_queue_create_reader(src);
+    IndexedReader *reader = NULL;
+    int rc_reader = indexed_queue_create_reader(src, &reader);
+    TEST_ASSERT_EQUAL_INT(0, rc_reader);
+    TEST_ASSERT_NOT_NULL(reader);
 
     char fpath[512];
     snprintf(fpath, sizeof(fpath), "%s/%s_export.bin", TEST_DIR, QUEUE);
@@ -368,7 +433,10 @@ void test_export_import_fragment(void)
 void test_export_empty_queue(void)
 {
     IndexedQueue *src = create_queue(QUEUE, NULL, 0, 0);
-    IndexedReader *reader = indexed_queue_create_reader(src);
+    IndexedReader *reader = NULL;
+    int rc_reader = indexed_queue_create_reader(src, &reader);
+    TEST_ASSERT_EQUAL_INT(0, rc_reader);
+    TEST_ASSERT_NOT_NULL(reader);
 
     char fpath[512];
     snprintf(fpath, sizeof(fpath), "%s/%s_export.bin", TEST_DIR, QUEUE);
@@ -397,7 +465,10 @@ void test_export_chunked(void)
     const char *msgs[] = {"msg1", "msg2", "msg3", "msg4", "msg5",
                           "msg6", "msg7", "msg8", "msg9", "msg10"};
     IndexedQueue *src = create_queue(QUEUE, msgs, 10, 0);
-    IndexedReader *reader = indexed_queue_create_reader(src);
+    IndexedReader *reader = NULL;
+    int rc_reader = indexed_queue_create_reader(src, &reader);
+    TEST_ASSERT_EQUAL_INT(0, rc_reader);
+    TEST_ASSERT_NOT_NULL(reader);
 
     char base[512];
     snprintf(base, sizeof(base), "%s/%s_chunk", TEST_DIR, QUEUE);
@@ -429,7 +500,10 @@ void test_filter_include(void)
 {
     const char *msgs[] = {"aaa", "bbb", "aaa", "ccc", "aaa"};
     IndexedQueue *src = create_queue(QUEUE, msgs, 5, 0);
-    IndexedReader *reader = indexed_queue_create_reader(src);
+    IndexedReader *reader = NULL;
+    int rc_reader = indexed_queue_create_reader(src, &reader);
+    TEST_ASSERT_EQUAL_INT(0, rc_reader);
+    TEST_ASSERT_NOT_NULL(reader);
 
     char fpath[512];
     snprintf(fpath, sizeof(fpath), "%s/%s_export.bin", TEST_DIR, QUEUE);
@@ -462,7 +536,10 @@ void test_copy_queue(void)
 {
     const char *msgs[] = {"copy1", "copy2", "copy3"};
     IndexedQueue *src = create_queue(QUEUE, msgs, 3, 0);
-    IndexedReader *reader = indexed_queue_create_reader(src);
+    IndexedReader *reader = NULL;
+    int rc_reader = indexed_queue_create_reader(src, &reader);
+    TEST_ASSERT_EQUAL_INT(0, rc_reader);
+    TEST_ASSERT_NOT_NULL(reader);
 
     cleanup_queue(COPY_Q);
     int64_t n = queue_transfer_copy(reader, TEST_DIR, COPY_Q, 0, 2, QUEUE_TRANSFER_REBASE,
@@ -485,7 +562,10 @@ void test_import_to_new(void)
 {
     const char *msgs[] = {"a", "b"};
     IndexedQueue *src = create_queue(QUEUE, msgs, 2, 0);
-    IndexedReader *reader = indexed_queue_create_reader(src);
+    IndexedReader *reader = NULL;
+    int rc_reader = indexed_queue_create_reader(src, &reader);
+    TEST_ASSERT_EQUAL_INT(0, rc_reader);
+    TEST_ASSERT_NOT_NULL(reader);
 
     char fpath[512];
     snprintf(fpath, sizeof(fpath), "%s/%s_export.bin", TEST_DIR, QUEUE);
@@ -507,7 +587,10 @@ void test_import_rebase_append(void)
 {
     const char *msgs[] = {"first", "second"};
     IndexedQueue *src = create_queue(QUEUE, msgs, 2, 0);
-    IndexedReader *reader = indexed_queue_create_reader(src);
+    IndexedReader *reader = NULL;
+    int rc_reader = indexed_queue_create_reader(src, &reader);
+    TEST_ASSERT_EQUAL_INT(0, rc_reader);
+    TEST_ASSERT_NOT_NULL(reader);
 
     char fpath[512];
     snprintf(fpath, sizeof(fpath), "%s/%s_export.bin", TEST_DIR, QUEUE);
@@ -542,7 +625,10 @@ void test_import_preserve_append(void)
 {
     const char *msgs[] = {"one"};
     IndexedQueue *src = create_queue(QUEUE, msgs, 1, 0);
-    IndexedReader *reader = indexed_queue_create_reader(src);
+    IndexedReader *reader = NULL;
+    int rc_reader = indexed_queue_create_reader(src, &reader);
+    TEST_ASSERT_EQUAL_INT(0, rc_reader);
+    TEST_ASSERT_NOT_NULL(reader);
 
     char fpath[512];
     snprintf(fpath, sizeof(fpath), "%s/%s_export.bin", TEST_DIR, QUEUE);
@@ -570,7 +656,10 @@ void test_import_no_append(void)
 {
     const char *msgs[] = {"x"};
     IndexedQueue *src = create_queue(QUEUE, msgs, 1, 0);
-    IndexedReader *reader = indexed_queue_create_reader(src);
+    IndexedReader *reader = NULL;
+    int rc_reader = indexed_queue_create_reader(src, &reader);
+    TEST_ASSERT_EQUAL_INT(0, rc_reader);
+    TEST_ASSERT_NOT_NULL(reader);
 
     char fpath[512];
     snprintf(fpath, sizeof(fpath), "%s/%s_export.bin", TEST_DIR, QUEUE);
@@ -599,7 +688,10 @@ void test_copy_to_new_rebase(void)
 {
     const char *msgs[] = {"a", "b", "c"};
     IndexedQueue *src = create_queue(QUEUE, msgs, 3, 0);
-    IndexedReader *reader = indexed_queue_create_reader(src);
+    IndexedReader *reader = NULL;
+    int rc_reader = indexed_queue_create_reader(src, &reader);
+    TEST_ASSERT_EQUAL_INT(0, rc_reader);
+    TEST_ASSERT_NOT_NULL(reader);
 
     cleanup_queue(COPY_Q);
     int64_t n = queue_transfer_copy(reader, TEST_DIR, COPY_Q, 0, 2, QUEUE_TRANSFER_REBASE,
@@ -618,7 +710,10 @@ void test_copy_to_new_preserve(void)
 {
     const char *msgs[] = {"x", "y"};
     IndexedQueue *src = create_queue(QUEUE, msgs, 2, 10);
-    IndexedReader *reader = indexed_queue_create_reader(src);
+    IndexedReader *reader = NULL;
+    int rc_reader = indexed_queue_create_reader(src, &reader);
+    TEST_ASSERT_EQUAL_INT(0, rc_reader);
+    TEST_ASSERT_NOT_NULL(reader);
 
     /* Messages at indices 10, 11 */
     int64_t si = indexed_reader_start_index(reader);
@@ -646,7 +741,10 @@ void test_copy_rebase_append(void)
 {
     const char *msgs[] = {"new1", "new2"};
     IndexedQueue *src = create_queue(QUEUE, msgs, 2, 0);
-    IndexedReader *reader = indexed_queue_create_reader(src);
+    IndexedReader *reader = NULL;
+    int rc_reader = indexed_queue_create_reader(src, &reader);
+    TEST_ASSERT_EQUAL_INT(0, rc_reader);
+    TEST_ASSERT_NOT_NULL(reader);
 
     const char *existing[] = {"old"};
     IndexedQueue *dest = create_queue(COPY_Q, existing, 1, 0);
@@ -670,7 +768,10 @@ void test_copy_preserve_append(void)
 {
     const char *msgs[] = {"m"};
     IndexedQueue *src = create_queue(QUEUE, msgs, 1, 0);
-    IndexedReader *reader = indexed_queue_create_reader(src);
+    IndexedReader *reader = NULL;
+    int rc_reader = indexed_queue_create_reader(src, &reader);
+    TEST_ASSERT_EQUAL_INT(0, rc_reader);
+    TEST_ASSERT_NOT_NULL(reader);
 
     const char *existing[] = {"old"};
     IndexedQueue *dest = create_queue(COPY_Q, existing, 1, 0);
@@ -688,7 +789,10 @@ void test_copy_no_append(void)
 {
     const char *msgs[] = {"m"};
     IndexedQueue *src = create_queue(QUEUE, msgs, 1, 0);
-    IndexedReader *reader = indexed_queue_create_reader(src);
+    IndexedReader *reader = NULL;
+    int rc_reader = indexed_queue_create_reader(src, &reader);
+    TEST_ASSERT_EQUAL_INT(0, rc_reader);
+    TEST_ASSERT_NOT_NULL(reader);
 
     const char *existing[] = {"old"};
     IndexedQueue *dest = create_queue(COPY_Q, existing, 1, 0);
@@ -709,7 +813,10 @@ void test_batch_import_to_new(void)
     const char *batches[][3] = {{"b1m1", "b1m2"}, {"b2m1"}};
     int sizes[] = {2, 1};
     IndexedBatchQueue *src = create_batch_queue(BQ_QUEUE, batches, sizes, 2);
-    IndexedBatchReader *reader = indexed_batch_queue_create_reader(src);
+    IndexedBatchReader *reader = NULL;
+    int rc_reader = indexed_batch_queue_create_reader(src, &reader);
+    TEST_ASSERT_EQUAL_INT(0, rc_reader);
+    TEST_ASSERT_NOT_NULL(reader);
 
     char fpath[512];
     snprintf(fpath, sizeof(fpath), "%s/%s_export.bin", TEST_DIR, BQ_QUEUE);
@@ -732,7 +839,10 @@ void test_batch_import_rebase_append(void)
     const char *batches[][3] = {{"new_b1"}};
     int sizes[] = {1};
     IndexedBatchQueue *src = create_batch_queue(BQ_QUEUE, batches, sizes, 1);
-    IndexedBatchReader *reader = indexed_batch_queue_create_reader(src);
+    IndexedBatchReader *reader = NULL;
+    int rc_reader = indexed_batch_queue_create_reader(src, &reader);
+    TEST_ASSERT_EQUAL_INT(0, rc_reader);
+    TEST_ASSERT_NOT_NULL(reader);
 
     char fpath[512];
     snprintf(fpath, sizeof(fpath), "%s/%s_export.bin", TEST_DIR, BQ_QUEUE);
@@ -760,7 +870,10 @@ void test_batch_import_preserve_append(void)
     const char *batches[][3] = {{"b1"}};
     int sizes[] = {1};
     IndexedBatchQueue *src = create_batch_queue(BQ_QUEUE, batches, sizes, 1);
-    IndexedBatchReader *reader = indexed_batch_queue_create_reader(src);
+    IndexedBatchReader *reader = NULL;
+    int rc_reader = indexed_batch_queue_create_reader(src, &reader);
+    TEST_ASSERT_EQUAL_INT(0, rc_reader);
+    TEST_ASSERT_NOT_NULL(reader);
 
     char fpath[512];
     snprintf(fpath, sizeof(fpath), "%s/%s_export.bin", TEST_DIR, BQ_QUEUE);
@@ -786,7 +899,10 @@ void test_batch_import_no_append(void)
     const char *batches[][3] = {{"b1"}};
     int sizes[] = {1};
     IndexedBatchQueue *src = create_batch_queue(BQ_QUEUE, batches, sizes, 1);
-    IndexedBatchReader *reader = indexed_batch_queue_create_reader(src);
+    IndexedBatchReader *reader = NULL;
+    int rc_reader = indexed_batch_queue_create_reader(src, &reader);
+    TEST_ASSERT_EQUAL_INT(0, rc_reader);
+    TEST_ASSERT_NOT_NULL(reader);
 
     char fpath[512];
     snprintf(fpath, sizeof(fpath), "%s/%s_export.bin", TEST_DIR, BQ_QUEUE);
@@ -814,7 +930,10 @@ void test_batch_copy_to_new(void)
     const char *batches[][3] = {{"b1m1"}, {"b2m1"}};
     int sizes[] = {1, 1};
     IndexedBatchQueue *src = create_batch_queue(BQ_QUEUE, batches, sizes, 2);
-    IndexedBatchReader *reader = indexed_batch_queue_create_reader(src);
+    IndexedBatchReader *reader = NULL;
+    int rc_reader = indexed_batch_queue_create_reader(src, &reader);
+    TEST_ASSERT_EQUAL_INT(0, rc_reader);
+    TEST_ASSERT_NOT_NULL(reader);
 
     cleanup_queue(BQ_COPY);
     int64_t n = batch_queue_transfer_copy(reader, TEST_DIR, BQ_COPY, 0, 1, BATCH_QUEUE_TRANSFER_REBASE,
@@ -830,7 +949,10 @@ void test_batch_copy_rebase_append(void)
     const char *batches[][3] = {{"new_b1"}};
     int sizes[] = {1};
     IndexedBatchQueue *src = create_batch_queue(BQ_QUEUE, batches, sizes, 1);
-    IndexedBatchReader *reader = indexed_batch_queue_create_reader(src);
+    IndexedBatchReader *reader = NULL;
+    int rc_reader = indexed_batch_queue_create_reader(src, &reader);
+    TEST_ASSERT_EQUAL_INT(0, rc_reader);
+    TEST_ASSERT_NOT_NULL(reader);
 
     cleanup_queue(BQ_COPY);
     const char *existing[][3] = {{"old_b1"}};
@@ -851,7 +973,10 @@ void test_batch_copy_preserve_append(void)
     const char *batches[][3] = {{"b1"}};
     int sizes[] = {1};
     IndexedBatchQueue *src = create_batch_queue(BQ_QUEUE, batches, sizes, 1);
-    IndexedBatchReader *reader = indexed_batch_queue_create_reader(src);
+    IndexedBatchReader *reader = NULL;
+    int rc_reader = indexed_batch_queue_create_reader(src, &reader);
+    TEST_ASSERT_EQUAL_INT(0, rc_reader);
+    TEST_ASSERT_NOT_NULL(reader);
 
     cleanup_queue(BQ_COPY);
     IndexedBatchQueue *dest = create_batch_queue(BQ_COPY, batches, sizes, 1);
@@ -870,7 +995,10 @@ void test_batch_copy_no_append(void)
     const char *batches[][3] = {{"b1"}};
     int sizes[] = {1};
     IndexedBatchQueue *src = create_batch_queue(BQ_QUEUE, batches, sizes, 1);
-    IndexedBatchReader *reader = indexed_batch_queue_create_reader(src);
+    IndexedBatchReader *reader = NULL;
+    int rc_reader = indexed_batch_queue_create_reader(src, &reader);
+    TEST_ASSERT_EQUAL_INT(0, rc_reader);
+    TEST_ASSERT_NOT_NULL(reader);
 
     cleanup_queue(BQ_COPY);
     IndexedBatchQueue *dest = create_batch_queue(BQ_COPY, batches, sizes, 1);
@@ -891,7 +1019,10 @@ static void batch_to_normal_export(int64_t *out_total)
     const char *batches[][3] = {{"b1m1", "b1m2"}, {"b2m1"}};
     int sizes[] = {2, 1};
     IndexedBatchQueue *src = create_batch_queue(BQ_QUEUE, batches, sizes, 2);
-    IndexedBatchReader *reader = indexed_batch_queue_create_reader(src);
+    IndexedBatchReader *reader = NULL;
+    int rc_reader = indexed_batch_queue_create_reader(src, &reader);
+    TEST_ASSERT_EQUAL_INT(0, rc_reader);
+    TEST_ASSERT_NOT_NULL(reader);
     char fpath[512];
     snprintf(fpath, sizeof(fpath), "%s/%s_export.bin", TEST_DIR, BQ_QUEUE);
     FILE *out = fopen(fpath, "wb");
@@ -989,7 +1120,10 @@ static void flat_to_batch_export(int64_t *out_total)
 {
     const char *msgs[] = {"m1", "m2", "m3"};
     IndexedQueue *src = create_queue(QUEUE, msgs, 3, 0);
-    IndexedReader *reader = indexed_queue_create_reader(src);
+    IndexedReader *reader = NULL;
+    int rc_reader = indexed_queue_create_reader(src, &reader);
+    TEST_ASSERT_EQUAL_INT(0, rc_reader);
+    TEST_ASSERT_NOT_NULL(reader);
     char fpath[512];
     snprintf(fpath, sizeof(fpath), "%s/%s_export.bin", TEST_DIR, QUEUE);
     FILE *out = fopen(fpath, "wb");
@@ -1082,7 +1216,10 @@ void test_copy_batch_to_normal_flatten(void)
     const char *batches[][3] = {{"b1m1", "b1m2"}, {"b2m1", "b2m2", "b2m3"}, {"b3m1"}};
     int sizes[] = {2, 3, 1};
     IndexedBatchQueue *src = create_batch_queue(BQ_QUEUE, batches, sizes, 3);
-    IndexedBatchReader *reader = indexed_batch_queue_create_reader(src);
+    IndexedBatchReader *reader = NULL;
+    int rc_reader = indexed_batch_queue_create_reader(src, &reader);
+    TEST_ASSERT_EQUAL_INT(0, rc_reader);
+    TEST_ASSERT_NOT_NULL(reader);
 
     cleanup_queue(CROSS_Q);
     int64_t n = queue_transfer_copy_batch_to_normal(reader, TEST_DIR, CROSS_Q, 0, 2,
@@ -1108,7 +1245,10 @@ void test_copy_normal_to_batch_1msg(void)
 {
     const char *msgs[] = {"msg1", "msg2", "msg3", "msg4", "msg5"};
     IndexedQueue *src = create_queue(QUEUE, msgs, 5, 0);
-    IndexedReader *reader = indexed_queue_create_reader(src);
+    IndexedReader *reader = NULL;
+    int rc_reader = indexed_queue_create_reader(src, &reader);
+    TEST_ASSERT_EQUAL_INT(0, rc_reader);
+    TEST_ASSERT_NOT_NULL(reader);
 
     cleanup_queue(CROSS_Q);
     int64_t n = batch_queue_transfer_copy_normal_to_batch(reader, TEST_DIR, CROSS_Q, 0, 4,
@@ -1120,9 +1260,15 @@ void test_copy_normal_to_batch_1msg(void)
     indexed_queue_close(src);
 
     /* Verify by reading back the batch queue */
-    IndexedBatchQueue *q = indexed_batch_queue_create(TEST_DIR, CROSS_Q, 4096, 4, 1, 4096LL * 64,
-                                                        0, 5000000000ULL, 0, rt, rt);
-    IndexedBatchReader *br = indexed_batch_queue_create_reader(q);
+    IndexedBatchQueue *q = NULL;
+    int rc_q = indexed_batch_queue_create(TEST_DIR, CROSS_Q, 4096, 4, 1, 4096LL * 64,
+                                           0, 5000000000ULL, 0, rt, rt, &q);
+    TEST_ASSERT_EQUAL_INT(0, rc_q);
+    TEST_ASSERT_NOT_NULL(q);
+    IndexedBatchReader *br = NULL;
+    int rc_br = indexed_batch_queue_create_reader(q, &br);
+    TEST_ASSERT_EQUAL_INT(0, rc_br);
+    TEST_ASSERT_NOT_NULL(br);
     int64_t last = indexed_batch_reader_last_index(br);
     TEST_ASSERT_EQUAL_INT64(4, last);
 
@@ -1149,7 +1295,10 @@ void test_copy_cross_type_roundtrip(void)
 {
     const char *msgs[] = {"a", "b", "c"};
     IndexedQueue *src = create_queue(QUEUE, msgs, 3, 0);
-    IndexedReader *reader = indexed_queue_create_reader(src);
+    IndexedReader *reader = NULL;
+    int rc_reader = indexed_queue_create_reader(src, &reader);
+    TEST_ASSERT_EQUAL_INT(0, rc_reader);
+    TEST_ASSERT_NOT_NULL(reader);
 
     /* normal → batch (1-msg batches) */
     cleanup_queue(CROSS_Q);
@@ -1161,9 +1310,15 @@ void test_copy_cross_type_roundtrip(void)
     indexed_queue_close(src);
 
     /* batch → normal (flatten back) */
-    IndexedBatchQueue *bq = indexed_batch_queue_create(TEST_DIR, CROSS_Q, 4096, 4, 1, 4096LL * 64,
-                                                         0, 5000000000ULL, 0, rt, rt);
-    IndexedBatchReader *br = indexed_batch_queue_create_reader(bq);
+    IndexedBatchQueue *bq = NULL;
+    int rc_bq = indexed_batch_queue_create(TEST_DIR, CROSS_Q, 4096, 4, 1, 4096LL * 64,
+                                            0, 5000000000ULL, 0, rt, rt, &bq);
+    TEST_ASSERT_EQUAL_INT(0, rc_bq);
+    TEST_ASSERT_NOT_NULL(bq);
+    IndexedBatchReader *br = NULL;
+    int rc_br = indexed_batch_queue_create_reader(bq, &br);
+    TEST_ASSERT_EQUAL_INT(0, rc_br);
+    TEST_ASSERT_NOT_NULL(br);
 
     cleanup_queue(COPY_Q);
     int64_t n2 = queue_transfer_copy_batch_to_normal(br, TEST_DIR, COPY_Q, 0, 2,
@@ -1186,7 +1341,10 @@ void test_copy_batch_to_normal_append(void)
     const char *batches[][3] = {{"new_msg"}};
     int sizes[] = {1};
     IndexedBatchQueue *src = create_batch_queue(BQ_QUEUE, batches, sizes, 1);
-    IndexedBatchReader *reader = indexed_batch_queue_create_reader(src);
+    IndexedBatchReader *reader = NULL;
+    int rc_reader = indexed_batch_queue_create_reader(src, &reader);
+    TEST_ASSERT_EQUAL_INT(0, rc_reader);
+    TEST_ASSERT_NOT_NULL(reader);
 
     const char *existing[] = {"old_msg"};
     IndexedQueue *dest = create_queue(CROSS_Q, existing, 1, 0);
@@ -1212,7 +1370,10 @@ void test_copy_batch_to_normal_no_append(void)
     const char *batches[][3] = {{"m"}};
     int sizes[] = {1};
     IndexedBatchQueue *src = create_batch_queue(BQ_QUEUE, batches, sizes, 1);
-    IndexedBatchReader *reader = indexed_batch_queue_create_reader(src);
+    IndexedBatchReader *reader = NULL;
+    int rc_reader = indexed_batch_queue_create_reader(src, &reader);
+    TEST_ASSERT_EQUAL_INT(0, rc_reader);
+    TEST_ASSERT_NOT_NULL(reader);
 
     const char *existing[] = {"old"};
     IndexedQueue *dest = create_queue(CROSS_Q, existing, 1, 0);
@@ -1231,7 +1392,10 @@ void test_copy_normal_to_batch_append(void)
 {
     const char *msgs[] = {"new_msg"};
     IndexedQueue *src = create_queue(QUEUE, msgs, 1, 0);
-    IndexedReader *reader = indexed_queue_create_reader(src);
+    IndexedReader *reader = NULL;
+    int rc_reader = indexed_queue_create_reader(src, &reader);
+    TEST_ASSERT_EQUAL_INT(0, rc_reader);
+    TEST_ASSERT_NOT_NULL(reader);
 
     const char *existing[][3] = {{"old_batch"}};
     int existing_sizes[] = {1};
@@ -1254,7 +1418,10 @@ void test_copy_normal_to_batch_preserve_append(void)
 {
     const char *msgs[] = {"m"};
     IndexedQueue *src = create_queue(QUEUE, msgs, 1, 0);
-    IndexedReader *reader = indexed_queue_create_reader(src);
+    IndexedReader *reader = NULL;
+    int rc_reader = indexed_queue_create_reader(src, &reader);
+    TEST_ASSERT_EQUAL_INT(0, rc_reader);
+    TEST_ASSERT_NOT_NULL(reader);
 
     const char *existing[][3] = {{"old"}};
     int existing_sizes[] = {1};
@@ -1284,7 +1451,10 @@ void test_copy_batch_to_normal_filter(void)
     const char *batches[][3] = {{"b1m1", "b1m2"}, {"b2m1", "b2m2", "b2m3"}, {"b3m1"}};
     int sizes[] = {2, 3, 1};
     IndexedBatchQueue *src = create_batch_queue(BQ_QUEUE, batches, sizes, 3);
-    IndexedBatchReader *reader = indexed_batch_queue_create_reader(src);
+    IndexedBatchReader *reader = NULL;
+    int rc_reader = indexed_batch_queue_create_reader(src, &reader);
+    TEST_ASSERT_EQUAL_INT(0, rc_reader);
+    TEST_ASSERT_NOT_NULL(reader);
 
     cleanup_queue(CROSS_Q);
     int64_t n = queue_transfer_copy_batch_to_normal(reader, TEST_DIR, CROSS_Q, 0, 2,
@@ -1312,7 +1482,10 @@ void test_batch_import_preserve_to_new(void)
     const char *batches[][3] = {{"b1m1"}, {"b2m1"}};
     int sizes[] = {1, 1};
     IndexedBatchQueue *src = create_batch_queue(BQ_QUEUE, batches, sizes, 2);
-    IndexedBatchReader *reader = indexed_batch_queue_create_reader(src);
+    IndexedBatchReader *reader = NULL;
+    int rc_reader = indexed_batch_queue_create_reader(src, &reader);
+    TEST_ASSERT_EQUAL_INT(0, rc_reader);
+    TEST_ASSERT_NOT_NULL(reader);
 
     char fpath[512];
     snprintf(fpath, sizeof(fpath), "%s/%s_export.bin", TEST_DIR, BQ_QUEUE);
@@ -1336,7 +1509,10 @@ void test_import_batch_stream_preserve_to_new(void)
     const char *batches[][3] = {{"f1", "f2"}};
     int sizes[] = {2};
     IndexedBatchQueue *src = create_batch_queue(BQ_QUEUE, batches, sizes, 1);
-    IndexedBatchReader *reader = indexed_batch_queue_create_reader(src);
+    IndexedBatchReader *reader = NULL;
+    int rc_reader = indexed_batch_queue_create_reader(src, &reader);
+    TEST_ASSERT_EQUAL_INT(0, rc_reader);
+    TEST_ASSERT_NOT_NULL(reader);
 
     char fpath[512];
     snprintf(fpath, sizeof(fpath), "%s/%s_export.bin", TEST_DIR, BQ_QUEUE);
@@ -1359,7 +1535,10 @@ void test_import_flat_to_batch_preserve_to_new(void)
 {
     const char *msgs[] = {"x", "y", "z"};
     IndexedQueue *src = create_queue(QUEUE, msgs, 3, 0);
-    IndexedReader *reader = indexed_queue_create_reader(src);
+    IndexedReader *reader = NULL;
+    int rc_reader = indexed_queue_create_reader(src, &reader);
+    TEST_ASSERT_EQUAL_INT(0, rc_reader);
+    TEST_ASSERT_NOT_NULL(reader);
 
     char fpath[512];
     snprintf(fpath, sizeof(fpath), "%s/%s_export.bin", TEST_DIR, QUEUE);
@@ -1383,7 +1562,10 @@ void test_batch_copy_preserve_to_new(void)
     const char *batches[][3] = {{"m1"}, {"m2"}};
     int sizes[] = {1, 1};
     IndexedBatchQueue *src = create_batch_queue(BQ_QUEUE, batches, sizes, 2);
-    IndexedBatchReader *reader = indexed_batch_queue_create_reader(src);
+    IndexedBatchReader *reader = NULL;
+    int rc_reader = indexed_batch_queue_create_reader(src, &reader);
+    TEST_ASSERT_EQUAL_INT(0, rc_reader);
+    TEST_ASSERT_NOT_NULL(reader);
 
     cleanup_queue(CROSS_Q);
     int64_t n = batch_queue_transfer_copy(reader, TEST_DIR, CROSS_Q, 0, 1, BATCH_QUEUE_TRANSFER_PRESERVE,
@@ -1400,7 +1582,10 @@ void test_copy_batch_to_normal_preserve(void)
     const char *batches[][3] = {{"a1", "a2"}, {"b1"}};
     int sizes[] = {2, 1};
     IndexedBatchQueue *src = create_batch_queue(BQ_QUEUE, batches, sizes, 2);
-    IndexedBatchReader *reader = indexed_batch_queue_create_reader(src);
+    IndexedBatchReader *reader = NULL;
+    int rc_reader = indexed_batch_queue_create_reader(src, &reader);
+    TEST_ASSERT_EQUAL_INT(0, rc_reader);
+    TEST_ASSERT_NOT_NULL(reader);
 
     cleanup_queue(CROSS_Q);
     int64_t n = queue_transfer_copy_batch_to_normal(reader, TEST_DIR, CROSS_Q, 0, 1,
@@ -1417,7 +1602,10 @@ void test_copy_normal_to_batch_preserve(void)
 {
     const char *msgs[] = {"p1", "p2"};
     IndexedQueue *src = create_queue(QUEUE, msgs, 2, 0);
-    IndexedReader *reader = indexed_queue_create_reader(src);
+    IndexedReader *reader = NULL;
+    int rc_reader = indexed_queue_create_reader(src, &reader);
+    TEST_ASSERT_EQUAL_INT(0, rc_reader);
+    TEST_ASSERT_NOT_NULL(reader);
 
     cleanup_queue(CROSS_Q);
     int64_t n = batch_queue_transfer_copy_normal_to_batch(reader, TEST_DIR, CROSS_Q, 0, 1,
@@ -1435,7 +1623,10 @@ void test_batch_export_preserve(void)
     const char *batches[][3] = {{"m1"}};
     int sizes[] = {1};
     IndexedBatchQueue *src = create_batch_queue(BQ_QUEUE, batches, sizes, 1);
-    IndexedBatchReader *reader = indexed_batch_queue_create_reader(src);
+    IndexedBatchReader *reader = NULL;
+    int rc_reader = indexed_batch_queue_create_reader(src, &reader);
+    TEST_ASSERT_EQUAL_INT(0, rc_reader);
+    TEST_ASSERT_NOT_NULL(reader);
 
     char fpath[512];
     snprintf(fpath, sizeof(fpath), "%s/%s_export.bin", TEST_DIR, BQ_QUEUE);
@@ -1462,7 +1653,10 @@ void test_batch_export_import_preserve_roundtrip(void)
     const char *batches[][3] = {{"m1"}, {"m2"}};
     int sizes[] = {1, 1};
     IndexedBatchQueue *src = create_batch_queue(BQ_QUEUE, batches, sizes, 2);
-    IndexedBatchReader *reader = indexed_batch_queue_create_reader(src);
+    IndexedBatchReader *reader = NULL;
+    int rc_reader = indexed_batch_queue_create_reader(src, &reader);
+    TEST_ASSERT_EQUAL_INT(0, rc_reader);
+    TEST_ASSERT_NOT_NULL(reader);
 
     char fpath[512];
     snprintf(fpath, sizeof(fpath), "%s/%s_export.bin", TEST_DIR, BQ_QUEUE);
@@ -1488,17 +1682,26 @@ void test_copy_batch_to_normal_preserve_nonzero(void)
     /* Source batch queue with start_index=100, one batch at index 100 */
     cleanup_queue(BQ_QUEUE);
     mkdir("/tmp/mmap_test_bqtrans", 0775);
-    IndexedBatchQueue *src = indexed_batch_queue_create(
+    IndexedBatchQueue *src = NULL;
+    int rc_src = indexed_batch_queue_create(
         TEST_DIR, BQ_QUEUE, 4096, 4, 1, 4096LL * 64,
-        100, 5000000000ULL, 0, rt, rt);
-    IndexedBatchAppender *ba = indexed_batch_queue_create_appender(src);
+        100, 5000000000ULL, 0, rt, rt, &src);
+    TEST_ASSERT_EQUAL_INT(0, rc_src);
+    TEST_ASSERT_NOT_NULL(src);
+    IndexedBatchAppender *ba = NULL;
+    int rc_ba = indexed_batch_queue_create_appender(src, &ba);
+    TEST_ASSERT_EQUAL_INT(0, rc_ba);
+    TEST_ASSERT_NOT_NULL(ba);
     MutableBatch *mb = indexed_batch_appender_start_batch(ba);
     mutable_batch_append(mb, "hello", 6);
     int64_t off = mutable_batch_complete(mb);
     indexed_batch_appender_commit_batch(ba, off);
     indexed_batch_appender_close(ba);
 
-    IndexedBatchReader *br = indexed_batch_queue_create_reader(src);
+    IndexedBatchReader *br = NULL;
+    int rc_br = indexed_batch_queue_create_reader(src, &br);
+    TEST_ASSERT_EQUAL_INT(0, rc_br);
+    TEST_ASSERT_NOT_NULL(br);
 
     cleanup_queue(CROSS_Q);
     int64_t n = queue_transfer_copy_batch_to_normal(
@@ -1517,7 +1720,10 @@ void test_copy_normal_to_batch_preserve_nonzero(void)
     /* Source normal queue with start_index=100, one message at index 100 */
     const char *msgs[] = {"world"};
     IndexedQueue *src = create_queue(QUEUE, msgs, 1, 100);
-    IndexedReader *reader = indexed_queue_create_reader(src);
+    IndexedReader *reader = NULL;
+    int rc_reader = indexed_queue_create_reader(src, &reader);
+    TEST_ASSERT_EQUAL_INT(0, rc_reader);
+    TEST_ASSERT_NOT_NULL(reader);
 
     cleanup_queue(CROSS_Q);
     int64_t n = batch_queue_transfer_copy_normal_to_batch(
@@ -1536,17 +1742,26 @@ void test_import_batch_stream_preserve_nonzero(void)
     /* Source batch queue with start_index=100 */
     cleanup_queue(BQ_QUEUE);
     mkdir("/tmp/mmap_test_bqtrans", 0775);
-    IndexedBatchQueue *src = indexed_batch_queue_create(
+    IndexedBatchQueue *src = NULL;
+    int rc_src = indexed_batch_queue_create(
         TEST_DIR, BQ_QUEUE, 4096, 4, 1, 4096LL * 64,
-        100, 5000000000ULL, 0, rt, rt);
-    IndexedBatchAppender *ba = indexed_batch_queue_create_appender(src);
+        100, 5000000000ULL, 0, rt, rt, &src);
+    TEST_ASSERT_EQUAL_INT(0, rc_src);
+    TEST_ASSERT_NOT_NULL(src);
+    IndexedBatchAppender *ba = NULL;
+    int rc_ba = indexed_batch_queue_create_appender(src, &ba);
+    TEST_ASSERT_EQUAL_INT(0, rc_ba);
+    TEST_ASSERT_NOT_NULL(ba);
     MutableBatch *mb = indexed_batch_appender_start_batch(ba);
     mutable_batch_append(mb, "test", 5);
     int64_t batch_off = mutable_batch_complete(mb);
     indexed_batch_appender_commit_batch(ba, batch_off);
     indexed_batch_appender_close(ba);
 
-    IndexedBatchReader *br = indexed_batch_queue_create_reader(src);
+    IndexedBatchReader *br = NULL;
+    int rc_br = indexed_batch_queue_create_reader(src, &br);
+    TEST_ASSERT_EQUAL_INT(0, rc_br);
+    TEST_ASSERT_NOT_NULL(br);
 
     char fpath[512];
     snprintf(fpath, sizeof(fpath), "%s/%s_export.bin", TEST_DIR, BQ_QUEUE);
@@ -1570,7 +1785,10 @@ void test_import_flat_to_batch_preserve_nonzero(void)
     /* Source normal queue with start_index=100 */
     const char *msgs[] = {"test"};
     IndexedQueue *src = create_queue(QUEUE, msgs, 1, 100);
-    IndexedReader *reader = indexed_queue_create_reader(src);
+    IndexedReader *reader = NULL;
+    int rc_reader = indexed_queue_create_reader(src, &reader);
+    TEST_ASSERT_EQUAL_INT(0, rc_reader);
+    TEST_ASSERT_NOT_NULL(reader);
 
     char fpath[512];
     snprintf(fpath, sizeof(fpath), "%s/%s_export.bin", TEST_DIR, QUEUE);
@@ -1611,11 +1829,20 @@ void test_batch_import_preserves_appender_ids(void)
     snprintf(path, sizeof(path), "%s/%s", TEST_DIR, QUEUE);
     mkdir(path, 0775);
 
-    IndexedBatchQueue *q = indexed_batch_queue_create(
+    IndexedBatchQueue *q = NULL;
+    int rc_q = indexed_batch_queue_create(
         TEST_DIR, QUEUE, 4096, 4, 1, 4096LL * 64,
-        0, 5000000000ULL, 0, rt, rt);
-    IndexedBatchAppender *a0 = indexed_batch_queue_create_appender(q);
-    IndexedBatchAppender *a1 = indexed_batch_queue_create_appender(q);
+        0, 5000000000ULL, 0, rt, rt, &q);
+    TEST_ASSERT_EQUAL_INT(0, rc_q);
+    TEST_ASSERT_NOT_NULL(q);
+    IndexedBatchAppender *a0 = NULL;
+    int rc_a0 = indexed_batch_queue_create_appender(q, &a0);
+    TEST_ASSERT_EQUAL_INT(0, rc_a0);
+    TEST_ASSERT_NOT_NULL(a0);
+    IndexedBatchAppender *a1 = NULL;
+    int rc_a1 = indexed_batch_queue_create_appender(q, &a1);
+    TEST_ASSERT_EQUAL_INT(0, rc_a1);
+    TEST_ASSERT_NOT_NULL(a1);
     uint8_t id0 = indexed_batch_appender_id(a0);
     uint8_t id1 = indexed_batch_appender_id(a1);
     TEST_ASSERT(id0 != id1);
@@ -1631,7 +1858,10 @@ void test_batch_import_preserves_appender_ids(void)
     indexed_batch_appender_close(a0);
     indexed_batch_appender_close(a1);
 
-    IndexedBatchReader *r = indexed_batch_queue_create_reader(q);
+    IndexedBatchReader *r = NULL;
+    int rc_r = indexed_batch_queue_create_reader(q, &r);
+    TEST_ASSERT_EQUAL_INT(0, rc_r);
+    TEST_ASSERT_NOT_NULL(r);
     char fpath[512];
     snprintf(fpath, sizeof(fpath), "%s/%s_export.bin", TEST_DIR, QUEUE);
     FILE *out = fopen(fpath, "wb");
@@ -1650,10 +1880,16 @@ void test_batch_import_preserves_appender_ids(void)
     TEST_ASSERT_EQUAL_INT64(2, n);
 
     /* Verify via poller */
-    IndexedBatchQueue *vq = indexed_batch_queue_create(
+    IndexedBatchQueue *vq = NULL;
+    int rc_vq = indexed_batch_queue_create(
         TEST_DIR, COPY_Q, 4096, 4, 1, 4096LL * 64,
-        0, 5000000000ULL, 0, rt, rt);
-    IndexedBatchPoller *p = indexed_batch_queue_create_poller(vq);
+        0, 5000000000ULL, 0, rt, rt, &vq);
+    TEST_ASSERT_EQUAL_INT(0, rc_vq);
+    TEST_ASSERT_NOT_NULL(vq);
+    IndexedBatchPoller *p = NULL;
+    int rc_p = indexed_batch_queue_create_poller(vq, &p);
+    TEST_ASSERT_EQUAL_INT(0, rc_p);
+    TEST_ASSERT_NOT_NULL(p);
     BatchIdCollector col = {{0}, 0};
     PollResult pr = indexed_batch_poller_poll(p, batch_id_handler, &col);
     TEST_ASSERT_EQUAL(POLL_ADVANCED, pr);
@@ -1683,10 +1919,19 @@ void test_import_preserves_appender_ids(void)
     snprintf(path, sizeof(path), "%s/%s", TEST_DIR, QUEUE);
     mkdir(path, 0775);
 
-    IndexedQueue *q = indexed_queue_create(TEST_DIR, QUEUE, 4096, 4, 1, 4096LL * 64,
-                                            0, 5000000000ULL, 0, rt, rt);
-    IndexedAppender *a0 = indexed_queue_create_appender(q);
-    IndexedAppender *a1 = indexed_queue_create_appender(q);
+    IndexedQueue *q = NULL;
+    int rc_q = indexed_queue_create(TEST_DIR, QUEUE, 4096, 4, 1, 4096LL * 64,
+                                     0, 5000000000ULL, 0, rt, rt, &q);
+    TEST_ASSERT_EQUAL_INT(0, rc_q);
+    TEST_ASSERT_NOT_NULL(q);
+    IndexedAppender *a0 = NULL;
+    int rc_a0 = indexed_queue_create_appender(q, &a0);
+    TEST_ASSERT_EQUAL_INT(0, rc_a0);
+    TEST_ASSERT_NOT_NULL(a0);
+    IndexedAppender *a1 = NULL;
+    int rc_a1 = indexed_queue_create_appender(q, &a1);
+    TEST_ASSERT_EQUAL_INT(0, rc_a1);
+    TEST_ASSERT_NOT_NULL(a1);
     uint8_t id0 = indexed_appender_id(a0);
     uint8_t id1 = indexed_appender_id(a1);
     TEST_ASSERT(id0 != id1);
@@ -1697,7 +1942,10 @@ void test_import_preserves_appender_ids(void)
     indexed_appender_close(a0);
     indexed_appender_close(a1);
 
-    IndexedReader *r = indexed_queue_create_reader(q);
+    IndexedReader *r = NULL;
+    int rc_r = indexed_queue_create_reader(q, &r);
+    TEST_ASSERT_EQUAL_INT(0, rc_r);
+    TEST_ASSERT_NOT_NULL(r);
     char fpath[512];
     snprintf(fpath, sizeof(fpath), "%s/%s_export.bin", TEST_DIR, QUEUE);
     FILE *out = fopen(fpath, "wb");
@@ -1716,9 +1964,15 @@ void test_import_preserves_appender_ids(void)
 
     /* Verify via reader: each entry has correct appender_id */
     {
-        IndexedQueue *vq = indexed_queue_create(TEST_DIR, COPY_Q, 4096, 4, 1, 4096LL * 64,
-                                                  0, 5000000000ULL, 0, rt, rt);
-        IndexedReader *vr = indexed_queue_create_reader(vq);
+        IndexedQueue *vq = NULL;
+        int rc_vq = indexed_queue_create(TEST_DIR, COPY_Q, 4096, 4, 1, 4096LL * 64,
+                                           0, 5000000000ULL, 0, rt, rt, &vq);
+        TEST_ASSERT_EQUAL_INT(0, rc_vq);
+        TEST_ASSERT_NOT_NULL(vq);
+        IndexedReader *vr = NULL;
+        int rc_vr = indexed_queue_create_reader(vq, &vr);
+        TEST_ASSERT_EQUAL_INT(0, rc_vr);
+        TEST_ASSERT_NOT_NULL(vr);
         int64_t last = indexed_reader_last_index(vr);
         TEST_ASSERT_EQUAL_INT64(2, last); /* indices 0, 1, 2 */
         int seen0 = 0, seen1 = 0;
@@ -1743,16 +1997,29 @@ void test_import_merge_via_mapper(void)
     snprintf(path, sizeof(path), "%s/%s", TEST_DIR, QUEUE);
     mkdir(path, 0775);
 
-    IndexedQueue *q = indexed_queue_create(TEST_DIR, QUEUE, 4096, 4, 1, 4096LL * 64,
-                                            0, 5000000000ULL, 0, rt, rt);
-    IndexedAppender *a0 = indexed_queue_create_appender(q);
-    IndexedAppender *a1 = indexed_queue_create_appender(q);
+    IndexedQueue *q = NULL;
+    int rc_q = indexed_queue_create(TEST_DIR, QUEUE, 4096, 4, 1, 4096LL * 64,
+                                     0, 5000000000ULL, 0, rt, rt, &q);
+    TEST_ASSERT_EQUAL_INT(0, rc_q);
+    TEST_ASSERT_NOT_NULL(q);
+    IndexedAppender *a0 = NULL;
+    int rc_a0 = indexed_queue_create_appender(q, &a0);
+    TEST_ASSERT_EQUAL_INT(0, rc_a0);
+    TEST_ASSERT_NOT_NULL(a0);
+    IndexedAppender *a1 = NULL;
+    int rc_a1 = indexed_queue_create_appender(q, &a1);
+    TEST_ASSERT_EQUAL_INT(0, rc_a1);
+    TEST_ASSERT_NOT_NULL(a1);
     indexed_appender_append(a0, "from-a0", 8);
     indexed_appender_append(a1, "from-a1", 8);
+    indexed_appender_append(a0, "from-a0-2", 10);
     indexed_appender_close(a0);
     indexed_appender_close(a1);
 
-    IndexedReader *r = indexed_queue_create_reader(q);
+    IndexedReader *r = NULL;
+    int rc_r = indexed_queue_create_reader(q, &r);
+    TEST_ASSERT_EQUAL_INT(0, rc_r);
+    TEST_ASSERT_NOT_NULL(r);
     char fpath[512];
     snprintf(fpath, sizeof(fpath), "%s/%s_export.bin", TEST_DIR, QUEUE);
     FILE *out = fopen(fpath, "wb");
@@ -1771,9 +2038,15 @@ void test_import_merge_via_mapper(void)
     TEST_ASSERT_EQUAL_INT64(2, imported);
 
     /* Verify all entries landed in appender 0 */
-    IndexedQueue *vq = indexed_queue_create(TEST_DIR, COPY_Q, 4096, 4, 1, 4096LL * 64,
-                                              0, 5000000000ULL, 0, rt, rt);
-    IndexedReader *vr = indexed_queue_create_reader(vq);
+    IndexedQueue *vq = NULL;
+    int rc_vq = indexed_queue_create(TEST_DIR, COPY_Q, 4096, 4, 1, 4096LL * 64,
+                                      0, 5000000000ULL, 0, rt, rt, &vq);
+    TEST_ASSERT_EQUAL_INT(0, rc_vq);
+    TEST_ASSERT_NOT_NULL(vq);
+    IndexedReader *vr = NULL;
+    int rc_vr = indexed_queue_create_reader(vq, &vr);
+    TEST_ASSERT_EQUAL_INT(0, rc_vr);
+    TEST_ASSERT_NOT_NULL(vr);
     int64_t last = indexed_reader_last_index(vr);
     for (int64_t i = indexed_reader_start_index(vr); i <= last; i++) {
         ReadingContext ctx;
@@ -1794,22 +2067,36 @@ void test_import_auto_on_conflict(void)
     mkdir(path, 0775);
 
     /* Pre-create destination queue — keep appender ID 0 locked during import */
-    IndexedQueue *dest = indexed_queue_create(TEST_DIR, COPY_Q, 4096, 4, 1, 4096LL * 64,
-                                               0, 5000000000ULL, 0, rt, rt);
-    IndexedAppender *existing = indexed_queue_create_appender_with_id(dest, 0);
+    IndexedQueue *dest = NULL;
+    int rc_dest = indexed_queue_create(TEST_DIR, COPY_Q, 4096, 4, 1, 4096LL * 64,
+                                        0, 5000000000ULL, 0, rt, rt, &dest);
+    TEST_ASSERT_EQUAL_INT(0, rc_dest);
+    TEST_ASSERT_NOT_NULL(dest);
+    IndexedAppender *existing = NULL;
+    int rc_existing = indexed_queue_create_appender_with_id(dest, 0, &existing);
+    TEST_ASSERT_EQUAL_INT(0, rc_existing);
     TEST_ASSERT_NOT_NULL(existing);
 
     /* Export a single-appender (aid=0) stream */
     cleanup_queue(QUEUE);
     snprintf(path, sizeof(path), "%s/%s", TEST_DIR, QUEUE);
     mkdir(path, 0775);
-    IndexedQueue *src = indexed_queue_create(TEST_DIR, QUEUE, 4096, 4, 1, 4096LL * 64,
-                                              0, 5000000000ULL, 0, rt, rt);
-    IndexedAppender *a = indexed_queue_create_appender(src);
+    IndexedQueue *src = NULL;
+    int rc_src = indexed_queue_create(TEST_DIR, QUEUE, 4096, 4, 1, 4096LL * 64,
+                                       0, 5000000000ULL, 0, rt, rt, &src);
+    TEST_ASSERT_EQUAL_INT(0, rc_src);
+    TEST_ASSERT_NOT_NULL(src);
+    IndexedAppender *a = NULL;
+    int rc_a = indexed_queue_create_appender(src, &a);
+    TEST_ASSERT_EQUAL_INT(0, rc_a);
+    TEST_ASSERT_NOT_NULL(a);
     indexed_appender_append(a, "hello", 6);
     indexed_appender_close(a);
 
-    IndexedReader *r = indexed_queue_create_reader(src);
+    IndexedReader *r = NULL;
+    int rc_r = indexed_queue_create_reader(src, &r);
+    TEST_ASSERT_EQUAL_INT(0, rc_r);
+    TEST_ASSERT_NOT_NULL(r);
     char fpath[512];
     snprintf(fpath, sizeof(fpath), "%s/%s_export.bin", TEST_DIR, QUEUE);
     FILE *out = fopen(fpath, "wb");
@@ -1826,9 +2113,15 @@ void test_import_auto_on_conflict(void)
     TEST_ASSERT_EQUAL_INT64(1, imported);
 
     /* Verify the imported entry got a different appender ID (not 0, which is held) */
-    IndexedQueue *vq = indexed_queue_create(TEST_DIR, COPY_Q, 4096, 4, 1, 4096LL * 64,
-                                              0, 5000000000ULL, 0, rt, rt);
-    IndexedReader *vr = indexed_queue_create_reader(vq);
+    IndexedQueue *vq = NULL;
+    int rc_vq = indexed_queue_create(TEST_DIR, COPY_Q, 4096, 4, 1, 4096LL * 64,
+                                      0, 5000000000ULL, 0, rt, rt, &vq);
+    TEST_ASSERT_EQUAL_INT(0, rc_vq);
+    TEST_ASSERT_NOT_NULL(vq);
+    IndexedReader *vr = NULL;
+    int rc_vr = indexed_queue_create_reader(vq, &vr);
+    TEST_ASSERT_EQUAL_INT(0, rc_vr);
+    TEST_ASSERT_NOT_NULL(vr);
     ReadingContext rctx;
     indexed_reader_read(vr, 0, &rctx);
     TEST_ASSERT_EQUAL(ENTRY_AVAILABLE, rctx.status);
@@ -1849,22 +2142,36 @@ void test_import_abort_on_conflict(void)
     mkdir(path, 0775);
 
     /* Pre-create destination queue — keep appender ID 0 locked during import */
-    IndexedQueue *dest = indexed_queue_create(TEST_DIR, COPY_Q, 4096, 4, 1, 4096LL * 64,
-                                               0, 5000000000ULL, 0, rt, rt);
-    IndexedAppender *existing = indexed_queue_create_appender_with_id(dest, 0);
+    IndexedQueue *dest = NULL;
+    int rc_dest = indexed_queue_create(TEST_DIR, COPY_Q, 4096, 4, 1, 4096LL * 64,
+                                        0, 5000000000ULL, 0, rt, rt, &dest);
+    TEST_ASSERT_EQUAL_INT(0, rc_dest);
+    TEST_ASSERT_NOT_NULL(dest);
+    IndexedAppender *existing = NULL;
+    int rc_existing = indexed_queue_create_appender_with_id(dest, 0, &existing);
+    TEST_ASSERT_EQUAL_INT(0, rc_existing);
     TEST_ASSERT_NOT_NULL(existing);
 
     /* Export a single-appender (aid=0) stream */
     cleanup_queue(QUEUE);
     snprintf(path, sizeof(path), "%s/%s", TEST_DIR, QUEUE);
     mkdir(path, 0775);
-    IndexedQueue *src = indexed_queue_create(TEST_DIR, QUEUE, 4096, 4, 1, 4096LL * 64,
-                                              0, 5000000000ULL, 0, rt, rt);
-    IndexedAppender *a = indexed_queue_create_appender(src);
+    IndexedQueue *src = NULL;
+    int rc_src = indexed_queue_create(TEST_DIR, QUEUE, 4096, 4, 1, 4096LL * 64,
+                                       0, 5000000000ULL, 0, rt, rt, &src);
+    TEST_ASSERT_EQUAL_INT(0, rc_src);
+    TEST_ASSERT_NOT_NULL(src);
+    IndexedAppender *a = NULL;
+    int rc_a = indexed_queue_create_appender(src, &a);
+    TEST_ASSERT_EQUAL_INT(0, rc_a);
+    TEST_ASSERT_NOT_NULL(a);
     indexed_appender_append(a, "hello", 6);
     indexed_appender_close(a);
 
-    IndexedReader *r = indexed_queue_create_reader(src);
+    IndexedReader *r = NULL;
+    int rc_r = indexed_queue_create_reader(src, &r);
+    TEST_ASSERT_EQUAL_INT(0, rc_r);
+    TEST_ASSERT_NOT_NULL(r);
     char fpath[512];
     snprintf(fpath, sizeof(fpath), "%s/%s_export.bin", TEST_DIR, QUEUE);
     FILE *out = fopen(fpath, "wb");
@@ -1898,13 +2205,22 @@ void test_import_mapper_invalid_id_falls_back_to_auto(void)
     snprintf(path, sizeof(path), "%s/%s", TEST_DIR, QUEUE);
     mkdir(path, 0775);
 
-    IndexedQueue *q = indexed_queue_create(TEST_DIR, QUEUE, 4096, 4, 1, 4096LL * 64,
-                                            0, 5000000000ULL, 0, rt, rt);
-    IndexedAppender *a = indexed_queue_create_appender(q);
+    IndexedQueue *q = NULL;
+    int rc_q = indexed_queue_create(TEST_DIR, QUEUE, 4096, 4, 1, 4096LL * 64,
+                                     0, 5000000000ULL, 0, rt, rt, &q);
+    TEST_ASSERT_EQUAL_INT(0, rc_q);
+    TEST_ASSERT_NOT_NULL(q);
+    IndexedAppender *a = NULL;
+    int rc_a = indexed_queue_create_appender(q, &a);
+    TEST_ASSERT_EQUAL_INT(0, rc_a);
+    TEST_ASSERT_NOT_NULL(a);
     indexed_appender_append(a, "hello", 6);
     indexed_appender_close(a);
 
-    IndexedReader *r = indexed_queue_create_reader(q);
+    IndexedReader *r = NULL;
+    int rc_r = indexed_queue_create_reader(q, &r);
+    TEST_ASSERT_EQUAL_INT(0, rc_r);
+    TEST_ASSERT_NOT_NULL(r);
     char fpath[512];
     snprintf(fpath, sizeof(fpath), "%s/%s_export.bin", TEST_DIR, QUEUE);
     FILE *out = fopen(fpath, "wb");
@@ -1917,8 +2233,8 @@ void test_import_mapper_invalid_id_falls_back_to_auto(void)
     cleanup_queue(COPY_Q);
     FILE *in = fopen(fpath, "rb");
     int64_t imported = queue_transfer_import(in, TEST_DIR, COPY_Q, QUEUE_TRANSFER_REBASE,
-                                              rt, rt, 0,
-                                              map_to_out_of_range, NULL, CONFLICT_AUTO);
+                                               rt, rt, 0,
+                                               map_to_out_of_range, NULL, CONFLICT_AUTO);
     fclose(in);
     TEST_ASSERT_EQUAL_INT64(1, imported);
     unlink(fpath);

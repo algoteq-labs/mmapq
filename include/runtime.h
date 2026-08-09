@@ -79,33 +79,42 @@ typedef struct IdleStrategy {
 /**
  * Busy spin — never yields. Lowest latency, 100% CPU.
  * Appropriate for ultra-low-latency region mapping threads.
+ * out: on success, set to the new idle strategy
+ * Returns: 0 on success, or an MMAPQ_* error code
  */
-IdleStrategy *idle_strategy_busy_spin_create(void);
+int idle_strategy_busy_spin_create(IdleStrategy **out);
 
 /**
  * Yield — calls sched_yield() when idle.
  * Lower CPU than busy spin, slightly higher latency.
+ * out: on success, set to the new idle strategy
+ * Returns: 0 on success, or an MMAPQ_* error code
  */
-IdleStrategy *idle_strategy_yield_create(void);
+int idle_strategy_yield_create(IdleStrategy **out);
 
 /**
  * Sleep — calls nanosleep() with increasing duration when idle.
  * min_sleep_ns: initial sleep duration
  * max_sleep_ns: maximum sleep duration (doubles each idle cycle)
+ * out:          on success, set to the new idle strategy
+ * Returns: 0 on success, or an MMAPQ_* error code
  */
-IdleStrategy *idle_strategy_sleep_create(uint64_t min_sleep_ns, uint64_t max_sleep_ns);
+int idle_strategy_sleep_create(uint64_t min_sleep_ns, uint64_t max_sleep_ns, IdleStrategy **out);
 
 /**
  * Backoff — progressive backoff: spin → yield → sleep.
  * Mirrors Java IdleStrategy.BACKOFF behaviour.
- * spin_count:  iterations before switching to yield
- * yield_count: yield iterations before switching to sleep
+ * spin_count:   iterations before switching to yield
+ * yield_count:  yield iterations before switching to sleep
  * max_sleep_ns: maximum sleep duration
+ * out:          on success, set to the new idle strategy
+ * Returns: 0 on success, or an MMAPQ_* error code
  */
-IdleStrategy *idle_strategy_backoff_create(
+int idle_strategy_backoff_create(
     int      spin_count,
     int      yield_count,
-    uint64_t max_sleep_ns);
+    uint64_t max_sleep_ns,
+    IdleStrategy **out);
 
 void idle_strategy_destroy(IdleStrategy *strategy);
 
@@ -124,13 +133,18 @@ typedef struct Runtime Runtime;
  *                   on_close_ctx: context passed to on_close.
  *
  * The Runtime thread starts immediately on creation.
+ *
+ * out: on success, set to the new Runtime (refcount 1); the caller owns
+ *      one reference and must release it with runtime_destroy().
+ * Returns: 0 on success, or an MMAPQ_* error code
  */
-Runtime *runtime_create(
+int runtime_create(
     const char   *name,
     IdleStrategy *idle,
     uint64_t      close_timeout_ns,
     void        (*on_close)(Runtime *rt, void *ctx),
-    void         *on_close_ctx);
+    void         *on_close_ctx,
+    Runtime     **out);
 
 /**
  * Register an Executable with the Runtime.
@@ -204,8 +218,10 @@ void runtime_close(Runtime *rt);
  * Clone a Runtime, incrementing its internal reference count.
  * The caller must call runtime_destroy() to release the reference.
  * Safe to call from any thread.
+ * out: on success, set to the same runtime pointer (refcount incremented)
+ * Returns: 0 on success, or an MMAPQ_* error code
  */
-Runtime *runtime_clone(Runtime *rt);
+int runtime_clone(Runtime *rt, Runtime **out);
 
 /**
  * Destroy the Runtime and free all memory.
@@ -229,16 +245,23 @@ void runtime_destroy(Runtime *rt);
  *   // On the next Runtime iteration, target and dereg are both removed.
  *
  * The DeregisterExecutable frees itself after execution.
+ *
+ * out: on success, set to the new executable
+ * Returns: 0 on success, or an MMAPQ_* error code
  */
-Executable *deregister_executable_create(Runtime *runtime, Executable *target);
+int deregister_executable_create(
+    Runtime *runtime, Executable *target, Executable **out);
 
 /**
  * Like deregister_executable_create() but also frees ctx_to_free after
  * unregistration. Used when the target's owning struct must be freed only
  * after the runtime thread has stopped executing it.
+ *
+ * out: on success, set to the new executable
+ * Returns: 0 on success, or an MMAPQ_* error code
  */
-Executable *deregister_executable_create_with_free(
-    Runtime *runtime, Executable *target, void *ctx_to_free);
+int deregister_executable_create_with_free(
+    Runtime *runtime, Executable *target, void *ctx_to_free, Executable **out);
 
 /* ── Default Runtime configuration ──────────────────────────────────────── */
 #define RUNTIME_DEFAULT_CLOSE_TIMEOUT_NS  (10ULL * 1000000000ULL)  /* 10 seconds */
@@ -260,23 +283,34 @@ Executable *deregister_executable_create_with_free(
  *
  * When the Runtime is closed, it removes itself from the registry.
  * Thread-safe — uses a mutex for singleton creation.
+ *
+ * out: on success, set to the runtime (clone of the singleton; the caller
+ *      owns one reference and must release it with runtime_destroy()).
+ *      If an existing singleton was found, the caller-supplied idle
+ *      strategy is destroyed (never used).
+ * Returns: 0 on success, or an MMAPQ_* error code
  */
-Runtime *runtime_get_instance(
+int runtime_get_instance(
     int           runtime_id,
     const char   *name,
     IdleStrategy *idle,
-    uint64_t      close_timeout_ns);
+    uint64_t      close_timeout_ns,
+    Runtime     **out);
 
 /**
  * Get the singleton region mapper Runtime.
- * Creates it with busy-spin idle strategy if it does not exist.
+ * Creates it with backoff idle strategy if it does not exist.
+ * out: on success, set to the region mapper runtime (caller-owned ref)
+ * Returns: 0 on success, or an MMAPQ_* error code
  */
-Runtime *runtime_region_mapper(void);
+int runtime_region_mapper(Runtime **out);
 
 /**
  * Get the singleton metrics processor Runtime.
  * Creates it with backoff idle strategy if it does not exist.
+ * out: on success, set to the metrics processor runtime (caller-owned ref)
+ * Returns: 0 on success, or an MMAPQ_* error code
  */
-Runtime *runtime_metrics_processor(void);
+int runtime_metrics_processor(Runtime **out);
 
 #endif /* RUNTIME_H */

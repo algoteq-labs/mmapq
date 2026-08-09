@@ -95,15 +95,20 @@ static inline int32_t region_size(Region *r)
  *
  * max_file_not_found_errors:   retries before returning WRAP_FILE_NOT_FOUND.
  * max_beyond_file_size_errors: retries before returning WRAP_BEYOND_FILE_SIZE.
+ * out: out-parameter for the created Region (NULL on failure)
+ *
+ * Returns 0 on success, MMAPQ_EINVAL for NULL/invalid args,
+ * MMAPQ_ENOMEM on allocation failure. Sets *out to NULL on failure.
  *
  * INVARIANT: region_size must be a power of two (MMAP_ASSERT enforced).
  */
-Region *region_sync_create(
+int region_sync_create(
     FileMapper *file_mapper,
     int32_t     region_size,
     uint64_t    timeout_ns,
     int         max_file_not_found_errors,
-    int         max_beyond_file_size_errors);
+    int         max_beyond_file_size_errors,
+    Region    **out);
 
 /**
  * Async region — mapping operations are performed by the RegionMapper thread.
@@ -122,15 +127,21 @@ Region *region_sync_create(
  *   Transitions to UNMANAGED state — subsequent wrap() calls will
  *   fail fast with MMAP_ASSERT rather than spinning indefinitely.
  *
+ * out: out-parameter for the created Region (NULL on failure)
+ *
+ * Returns 0 on success, MMAPQ_EINVAL for NULL/invalid args,
+ * MMAPQ_ENOMEM on allocation failure. Sets *out to NULL on failure.
+ *
  * INVARIANT: process_request() must only be called from the RegionMapper thread.
  * INVARIANT: region_size must be a power of two (MMAP_ASSERT enforced).
  */
-Region *region_async_create(
+int region_async_create(
     FileMapper *file_mapper,
     int32_t     region_size,
     uint64_t    timeout_ns,
     int         max_file_not_found_errors,
-    int         max_beyond_file_size_errors);
+    int         max_beyond_file_size_errors,
+    Region    **out);
 
 /**
  * Async-region-specific operations.

@@ -142,18 +142,21 @@ static int32_t ring_accessor_size(RegionAccessor *self)
 
 /* ── Factory ─────────────────────────────────────────────────────────────── */
 
-RegionAccessor *region_ring_accessor_create(
-    RegionRing *ring,
-    int32_t     region_size,
-    int         regions_to_map_ahead,
-    double      premap_trigger_ratio)
+int region_ring_accessor_create(
+    RegionRing    *ring,
+    int32_t        region_size,
+    int            regions_to_map_ahead,
+    double         premap_trigger_ratio,
+    RegionAccessor **out)
 {
-    if (ring == NULL) return NULL;
-    if (region_size <= 0) return NULL;
-    if ((region_size & (region_size - 1)) != 0) return NULL;
-    if (regions_to_map_ahead < 0) return NULL;
-    if (regions_to_map_ahead >= ring->ring_size) return NULL;
-    if (premap_trigger_ratio < 0.0 || premap_trigger_ratio > 1.0) return NULL;
+    if (out == NULL) return MMAPQ_EINVAL;
+    *out = NULL;
+    if (ring == NULL) return MMAPQ_EINVAL;
+    if (region_size <= 0) return MMAPQ_EINVAL;
+    if ((region_size & (region_size - 1)) != 0) return MMAPQ_EINVAL;
+    if (regions_to_map_ahead < 0) return MMAPQ_EINVAL;
+    if (regions_to_map_ahead >= ring->ring_size) return MMAPQ_EINVAL;
+    if (premap_trigger_ratio < 0.0 || premap_trigger_ratio > 1.0) return MMAPQ_EINVAL;
     /*
      * Sync regions map on demand on the calling thread — requesting ahead
      * would just block the thread earlier with no latency benefit.
@@ -161,7 +164,7 @@ RegionAccessor *region_ring_accessor_create(
     int effective_regions_ahead = ring->is_async ? regions_to_map_ahead : 0;
 
     RingAccessorImpl *impl = calloc(1, sizeof(RingAccessorImpl));
-    MMAP_ASSERT(impl != NULL, "region_ring_accessor_create: out of memory");
+    if (impl == NULL) return MMAPQ_ENOMEM;
 
     impl->ring                  = ring;
     impl->region_size           = region_size;
@@ -175,7 +178,7 @@ RegionAccessor *region_ring_accessor_create(
     impl->current_absolute_index = -1;
 
     RegionAccessor *acc = calloc(1, sizeof(RegionAccessor));
-    MMAP_ASSERT(acc != NULL, "region_ring_accessor_create: out of memory");
+    if (acc == NULL) { free(impl); return MMAPQ_ENOMEM; }
 
     acc->wrap           = ring_accessor_wrap;
     acc->wrap_no_premap = ring_accessor_wrap_no_premap;
@@ -183,7 +186,8 @@ RegionAccessor *region_ring_accessor_create(
     acc->size           = ring_accessor_size;
     acc->impl           = impl;
 
-    return acc;
+    *out = acc;
+    return 0;
 }
 
 /* ── Destroy ─────────────────────────────────────────────────────────────── */

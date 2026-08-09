@@ -4,6 +4,7 @@
 #include "header_reader.h"
 #include "header_codec.h"
 #include "mmap_assert.h"
+#include "mmap_platform.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -49,16 +50,17 @@ static int reader_init(IndexedReader *r)
 {
     if (r->queue_meta != NULL) return 1;
 
-    r->queue_meta = queue_meta_open_ro(r->directory, r->queue_name, QUEUE_TYPE_NORMAL, NULL);
-    if (r->queue_meta == NULL) return 0;
+    if (queue_meta_open_ro(r->directory, r->queue_name, QUEUE_TYPE_NORMAL, &r->queue_meta) != 0)
+        return 0;
 
-    r->ro_acc = queue_region_accessor_create_ro(
+    if (queue_region_accessor_create_ro(
         r->directory, r->queue_name,
         queue_meta_region_size(r->queue_meta),
         r->ring_size,
         r->regions_to_map_ahead,
         queue_meta_max_file_size(r->queue_meta),
-        r->timeout_ns, r->runtime);
+        r->timeout_ns, r->runtime,
+        &r->ro_acc) != 0) return 0;
 
     r->header_acc = queue_region_accessor_header(r->ro_acc);
     return 1;
@@ -66,18 +68,21 @@ static int reader_init(IndexedReader *r)
 
 /* ── Factory ─────────────────────────────────────────────────────────────── */
 
-IndexedReader *indexed_reader_create(
+int indexed_reader_create(
     const char *directory,
     const char *queue_name,
     int         ring_size,
     uint64_t    timeout_ns,
-    Runtime    *runtime)
+    Runtime    *runtime,
+    IndexedReader **out)
 {
-    if (directory  == NULL) return NULL;
-    if (queue_name == NULL) return NULL;
+    if (out == NULL) return MMAPQ_EINVAL;
+    *out = NULL;
+    if (directory  == NULL) return MMAPQ_EINVAL;
+    if (queue_name == NULL) return MMAPQ_EINVAL;
 
     IndexedReader *r = calloc(1, sizeof(IndexedReader));
-    if (r == NULL) return NULL;
+    if (r == NULL) return MMAPQ_ENOMEM;
 
     r->directory            = strdup(directory);
     r->queue_name           = strdup(queue_name);
@@ -88,7 +93,8 @@ IndexedReader *indexed_reader_create(
     r->cached_last_index    = HEADER_NULL_INDEX;
     r->closed               = 0;
 
-    return r;
+    *out = r;
+    return 0;
 }
 
 /* ── Internal read helper ────────────────────────────────────────────────── */

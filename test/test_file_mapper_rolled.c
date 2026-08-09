@@ -28,9 +28,11 @@ static void cleanup_files(void)
 void setUp(void)
 {
     cleanup_files();
-    fm_rw = file_mapper_rolled_create(
+    int fmerr = file_mapper_rolled_create(
         FILE_PREFIX, MAX_FILE_SIZE, REGION_SIZE,
-        file_init_zeros, NULL, MAP_MODE_READ_WRITE, MAX_CACHE, 1);
+        file_init_zeros, NULL, MAP_MODE_READ_WRITE, MAX_CACHE, 1, &fm_rw);
+    TEST_ASSERT_EQUAL_INT(0, fmerr);
+    TEST_ASSERT_NOT_NULL(fm_rw);
 }
 
 void tearDown(void)
@@ -63,9 +65,11 @@ void test_rolled_map_spans_multiple_files(void)
     }
 
     /* Read back — regions 0-3 in file_0, 4-5 in file_1 */
-    fm_ro = file_mapper_rolled_create(
+    int fmerr3 = file_mapper_rolled_create(
         FILE_PREFIX, MAX_FILE_SIZE, REGION_SIZE,
-        file_init_none, NULL, MAP_MODE_READ_ONLY, MAX_CACHE, 1);
+        file_init_none, NULL, MAP_MODE_READ_ONLY, MAX_CACHE, 1, &fm_ro);
+    TEST_ASSERT_EQUAL_INT(0, fmerr3);
+    TEST_ASSERT_NOT_NULL(fm_ro);
 
     for (int i = 0; i < 6; i++) {
         int64_t pos = (int64_t)i * REGION_SIZE;
@@ -78,9 +82,11 @@ void test_rolled_map_spans_multiple_files(void)
 
 void test_rolled_missing_ro_file_returns_file_not_found(void)
 {
-    fm_ro = file_mapper_rolled_create(
+    int fmerr4 = file_mapper_rolled_create(
         FILE_PREFIX, MAX_FILE_SIZE, REGION_SIZE,
-        file_init_none, NULL, MAP_MODE_READ_ONLY, MAX_CACHE, 1);
+        file_init_none, NULL, MAP_MODE_READ_ONLY, MAX_CACHE, 1, &fm_ro);
+    TEST_ASSERT_EQUAL_INT(0, fmerr4);
+    TEST_ASSERT_NOT_NULL(fm_ro);
 
     uintptr_t addr = file_mapper_map(fm_ro, 0, REGION_SIZE);
     TEST_ASSERT_EQUAL(FILE_MAPPER_FILE_NOT_FOUND, addr);
