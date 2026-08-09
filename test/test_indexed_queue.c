@@ -801,6 +801,7 @@ void test_open_normal_as_batch_refused(void)
     IndexedBatchAppender *ba = NULL;
     int rc_ba = indexed_batch_queue_create_appender(bq, &ba);
     TEST_ASSERT_TRUE(rc_ba != 0);
+    TEST_ASSERT(rc_ba != MMAPQ_ETIMEDOUT);
     TEST_ASSERT_NULL(ba);
 
     if (bq) indexed_batch_queue_close(bq);
@@ -838,6 +839,7 @@ void test_meta_schema_mismatch_refused(void)
     IndexedAppender *a2 = NULL;
     int rc_a2 = indexed_queue_create_appender(q2, &a2);
     TEST_ASSERT_TRUE(rc_a2 != 0);
+    TEST_ASSERT(rc_a2 != MMAPQ_ETIMEDOUT);
     TEST_ASSERT_NULL(a2);
 
     if (q2) indexed_queue_close(q2);
@@ -991,6 +993,7 @@ static void test_create_with_id_already_in_use(void)
         4096 * 1024, 4, (4096 * 1024) * 256,
         10000000000, 0, NULL, 7, 0, &a2);
     TEST_ASSERT_TRUE(rc_a2 != 0);
+    TEST_ASSERT(rc_a2 != MMAPQ_ETIMEDOUT);
     TEST_ASSERT_NULL(a2);
 
     indexed_appender_close(a1);

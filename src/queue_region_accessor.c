@@ -30,26 +30,35 @@ static void payload_file_path(const char *directory, const char *queue_name,
 
 /* ── Create a RegionRingAccessor ─────────────────────────────────────────── */
 
-static RegionAccessor *make_ring_accessor(
+static int make_ring_accessor(
     FileMapper *mapper,
     int32_t     region_size,
     int         ring_size,
     int         regions_to_map_ahead,
     double      premap_ratio,
     uint64_t    timeout_ns,
-    Runtime    *runtime)
+    Runtime    *runtime,
+    RegionAccessor **out)
 {
-    RegionRing *ring = NULL;
-    if (runtime == NULL) {
-        region_ring_sync_create(ring_size, region_size, mapper, timeout_ns, &ring);
-    } else {
-        region_ring_async_create(ring_size, region_size, mapper, timeout_ns, runtime, &ring);
-    }
+    if (out == NULL) return MMAPQ_EINVAL;
+    *out = NULL;
 
-    RegionAccessor *rra = NULL;
-    region_ring_accessor_create(
-        ring, region_size, regions_to_map_ahead, premap_ratio, &rra);
-    return rra;
+    RegionRing *ring = NULL;
+    int rc;
+    if (runtime == NULL) {
+        rc = region_ring_sync_create(ring_size, region_size, mapper, timeout_ns, &ring);
+    } else {
+        rc = region_ring_async_create(ring_size, region_size, mapper, timeout_ns, runtime, &ring);
+    }
+    if (rc != 0) return rc;
+
+    rc = region_ring_accessor_create(
+        ring, region_size, regions_to_map_ahead, premap_ratio, out);
+    if (rc != 0) {
+        region_ring_destroy(ring);
+        return rc;
+    }
+    return 0;
 }
 
 /* ── Allocate and zero a QueueRegionAccessor ─────────────────────────────── */
@@ -110,42 +119,55 @@ int queue_region_accessor_create_rw(
     header_file_path(directory, queue_name, hdr_path, sizeof(hdr_path));
 
     FileMapper *hdr_mapper = NULL;
-    file_mapper_rolled_create(
-        hdr_path, max_file_size, region_size,
-        file_init_none, NULL,
-        MAP_MODE_READ_WRITE,
-        ring_size + 2,
-        /* check_file_size = */ 1,
-        &hdr_mapper);
+    {
+        int rc = file_mapper_rolled_create(
+            hdr_path, max_file_size, region_size,
+            file_init_none, NULL,
+            MAP_MODE_READ_WRITE,
+            ring_size + 2, 1, &hdr_mapper);
+        if (rc != 0) { free(acc->queue_name); free(acc->directory); free(acc); return rc; }
+    }
 
-    /*
-     * Writer premap ratio = QUEUE_RW_PREMAP_RATIO (0.0):
-     * Request next region immediately on entering a new one.
-     * regions_to_map_ahead is forced to 0 for sync rings by
-     * region_ring_accessor_create — not relevant here (we use async).
-     */
-    acc->header = make_ring_accessor(hdr_mapper, region_size, ring_size,
+    {
+        int rc = make_ring_accessor(hdr_mapper, region_size, ring_size,
                                      regions_to_map_ahead,
                                      QUEUE_RW_PREMAP_RATIO,
-                                     timeout_ns, runtime);
+                                     timeout_ns, runtime, &acc->header);
+        if (rc != 0) {
+            file_mapper_close(hdr_mapper);
+            free(acc->queue_name); free(acc->directory); free(acc);
+            return rc;
+        }
+    }
 
     /* ── RW payload accessor for this appender ──────────────────────────── */
     char pay_path[4096];
     payload_file_path(directory, queue_name, appender_id, pay_path, sizeof(pay_path));
 
     FileMapper *pay_mapper = NULL;
-    file_mapper_rolled_create(
-        pay_path, max_file_size, region_size,
-        file_init_none, NULL,
-        MAP_MODE_READ_WRITE,
-        ring_size + 2,
-        /* check_file_size = */ 1,
-        &pay_mapper);
+    {
+        int rc = file_mapper_rolled_create(
+            pay_path, max_file_size, region_size,
+            file_init_none, NULL,
+            MAP_MODE_READ_WRITE,
+            ring_size + 2, 1, &pay_mapper);
+        if (rc != 0) {
+            queue_region_accessor_close(acc);
+            return rc;
+        }
+    }
 
-    acc->payload[appender_id].accessor = make_ring_accessor(
-        pay_mapper, region_size, ring_size,
-        regions_to_map_ahead, QUEUE_RW_PREMAP_RATIO,
-        timeout_ns, runtime);
+    {
+        int rc = make_ring_accessor(pay_mapper, region_size, ring_size,
+                                     regions_to_map_ahead,
+                                     QUEUE_RW_PREMAP_RATIO,
+                                     timeout_ns, runtime,
+                                     &acc->payload[appender_id].accessor);
+        if (rc != 0) {
+            queue_region_accessor_close(acc);
+            return rc;
+        }
+    }
     acc->payload[appender_id].occupied = 1;
 
     *out = acc;
@@ -180,22 +202,26 @@ int queue_region_accessor_create_ro(
     header_file_path(directory, queue_name, hdr_path, sizeof(hdr_path));
 
     FileMapper *hdr_mapper = NULL;
-    file_mapper_rolled_create(
-        hdr_path, max_file_size, region_size,
-        file_init_none, NULL,
-        MAP_MODE_READ_ONLY,
-        ring_size + 2,
-        /* check_file_size = */ 1,
-        &hdr_mapper);
+    {
+        int rc = file_mapper_rolled_create(
+            hdr_path, max_file_size, region_size,
+            file_init_none, NULL,
+            MAP_MODE_READ_ONLY,
+            ring_size + 2, 1, &hdr_mapper);
+        if (rc != 0) { free(acc->queue_name); free(acc->directory); free(acc); return rc; }
+    }
 
-    /*
-     * Reader premap ratio = QUEUE_RO_PREMAP_RATIO (0.5):
-     * Request next region when halfway through current one.
-     */
-    acc->header = make_ring_accessor(hdr_mapper, region_size, ring_size,
+    {
+        int rc = make_ring_accessor(hdr_mapper, region_size, ring_size,
                                      regions_to_map_ahead,
                                      QUEUE_RO_PREMAP_RATIO,
-                                     timeout_ns, runtime);
+                                     timeout_ns, runtime, &acc->header);
+        if (rc != 0) {
+            file_mapper_close(hdr_mapper);
+            free(acc->queue_name); free(acc->directory); free(acc);
+            return rc;
+        }
+    }
 
     /* Payload accessors are created lazily in queue_region_accessor_payload() */
     *out = acc;
@@ -226,22 +252,23 @@ RegionAccessor *queue_region_accessor_payload(QueueRegionAccessor *acc,
      */
     int check_file_size = acc->read_only ? 0 : 1;
     FileMapper *pay_mapper = NULL;
-    file_mapper_rolled_create(
-        pay_path, acc->max_file_size, acc->region_size,
-        file_init_none, NULL,
-        mode,
-        acc->ring_size + 2,
-        check_file_size,
-        &pay_mapper);
+    if (file_mapper_rolled_create(
+            pay_path, acc->max_file_size, acc->region_size,
+            file_init_none, NULL,
+            mode,
+            acc->ring_size + 2,
+            check_file_size,
+            &pay_mapper) != 0) return NULL;
 
     double premap_ratio = acc->read_only
         ? QUEUE_RO_PREMAP_RATIO
         : QUEUE_RW_PREMAP_RATIO;
 
-    acc->payload[appender_id].accessor = make_ring_accessor(
-        pay_mapper, acc->region_size, acc->ring_size,
-        acc->regions_to_map_ahead, premap_ratio,
-        acc->timeout_ns, acc->runtime);
+    if (make_ring_accessor(
+            pay_mapper, acc->region_size, acc->ring_size,
+            acc->regions_to_map_ahead, premap_ratio,
+            acc->timeout_ns, acc->runtime,
+            &acc->payload[appender_id].accessor) != 0) return NULL;
     acc->payload[appender_id].occupied = 1;
 
     return acc->payload[appender_id].accessor;

@@ -578,6 +578,7 @@ void test_open_batch_as_normal_refused(void)
     IndexedAppender *na = NULL;
     int rc_na = indexed_queue_create_appender(nq, &na);
     TEST_ASSERT_TRUE(rc_na != 0);
+    TEST_ASSERT(rc_na != MMAPQ_ETIMEDOUT);
     TEST_ASSERT_NULL(na);
 
     if (nq) indexed_queue_close(nq);
