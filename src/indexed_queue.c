@@ -161,7 +161,7 @@ int indexed_queue_create_appender(IndexedQueue *q, IndexedAppender **out)
     if (q == NULL) return MMAPQ_EINVAL;
     if (atomic_load_explicit(&q->closed, memory_order_relaxed)) return MMAPQ_ECLOSED;
 
-    if (create_queue_directory(q->directory, q->queue_name) != 0) return MMAPQ_ECLOSED;
+    if (create_queue_directory(q->directory, q->queue_name) != 0) return MMAPQ_ETIMEDOUT;
 
     return indexed_appender_create(
         q->directory, q->queue_name,
@@ -181,7 +181,7 @@ int indexed_queue_create_appender_with_id(
     if (q == NULL) return MMAPQ_EINVAL;
     if (atomic_load_explicit(&q->closed, memory_order_relaxed)) return MMAPQ_ECLOSED;
 
-    if (create_queue_directory(q->directory, q->queue_name) != 0) return MMAPQ_ECLOSED;
+    if (create_queue_directory(q->directory, q->queue_name) != 0) return MMAPQ_ETIMEDOUT;
 
     return indexed_appender_create_with_id(
         q->directory, q->queue_name,

@@ -108,7 +108,7 @@ int indexed_batch_queue_create_appender(
     *out = NULL;
     if (q == NULL) return MMAPQ_EINVAL;
     if (q->closed) return MMAPQ_ECLOSED;
-    create_queue_directory(q->directory, q->queue_name);
+    if (create_queue_directory(q->directory, q->queue_name) != 0) return MMAPQ_ETIMEDOUT;
     return indexed_batch_appender_create(q->directory, q->queue_name,
         q->region_size, q->ring_size, q->max_file_size, q->timeout_ns,
         q->archivable, q->write_runtime, q->start_index, out);
@@ -121,7 +121,7 @@ int indexed_batch_queue_create_appender_with_id(
     *out = NULL;
     if (q == NULL) return MMAPQ_EINVAL;
     if (q->closed) return MMAPQ_ECLOSED;
-    if (create_queue_directory(q->directory, q->queue_name) != 0) return MMAPQ_EINVAL;
+    if (create_queue_directory(q->directory, q->queue_name) != 0) return MMAPQ_ETIMEDOUT;
     return indexed_batch_appender_create_with_id(
         q->directory, q->queue_name,
         q->region_size, q->ring_size,
