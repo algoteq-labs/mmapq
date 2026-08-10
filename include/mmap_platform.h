@@ -5,8 +5,16 @@
  * Return codes used across the queue API.
  *
  *   >= 0  success (index, count, etc.)
- *    -1   mapping timeout or I/O error (transient — retry)
- *    -2   invalid argument (NULL pointer, zero/negative length, etc.)
+ *    -1   MMAPQ_ETIMEDOUT   — mapping timeout or I/O (transient, retry)
+ *    -2   MMAPQ_EINVAL      — invalid argument (NULL, zero length, etc.)
+ *    -3   MMAPQ_ECLOSED     — operation on closed handle
+ *    -4   MMAPQ_ECORRUPT    — on-disk corruption detected
+ *    -5   MMAPQ_ESCHEMA     — schema version or queue type mismatch
+ *    -6   MMAPQ_EEXIST      — destination queue already exists
+ *    -7   MMAPQ_ENOENT      — file or queue does not exist
+ *    -8   MMAPQ_EIDCONFLICT — requested appender ID already in use
+ *    -9   MMAPQ_ENOMEM      — internal allocation failure (back off, do not retry hot-loop)
+ *   -10   MMAPQ_EIO         — I/O error (metadata file write failure, retry)
  */
 #define MMAPQ_ETIMEDOUT  (-1)   /* mapping timeout or I/O — transient, retry */
 #define MMAPQ_EINVAL     (-2)   /* invalid argument (NULL, zero length, etc.) */
@@ -17,6 +25,25 @@
 #define MMAPQ_ENOENT     (-7)   /* file or queue does not exist */
 #define MMAPQ_EIDCONFLICT (-8)  /* requested appender ID already in use */
 #define MMAPQ_ENOMEM     (-9)   /* internal allocation failure (calloc, strdup, etc.) — back off, do not retry hot-loop */
+#define MMAPQ_EIO        (-10)  /* I/O error — metadata file write failure, retry */
+
+/* ── Version ───────────────────────────────────────────────────────────────── */
+
+#define MMAPQ_VERSION_MAJOR 0
+#define MMAPQ_VERSION_MINOR 1
+#define MMAPQ_VERSION_PATCH 0
+
+#define MMAPQ_VERSION_STR "0.1.0"
+
+/**
+ * mmapq_version — return the library version string.
+ *
+ * Returns: a statically allocated version string (e.g. "0.1.0").
+ * Never returns NULL. Safe to call at any time.
+ */
+static inline const char *mmapq_version(void) {
+    return MMAPQ_VERSION_STR;
+}
 
 #if defined(__linux__) && !defined(_GNU_SOURCE)
 #  define _GNU_SOURCE

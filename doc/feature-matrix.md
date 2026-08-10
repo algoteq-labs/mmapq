@@ -20,6 +20,7 @@ column are design decisions, not roadmap items.
 
 | Feature | C | Rust | Python |
 |---|---|---|---|
+| Version macro (`MMAPQ_VERSION_MAJOR`/`_MINOR`/`_PATCH`, `mmapq_version()`) | ✓ | — (via C if needed) | — |
 | Create/open single-message queue (full config) | ✓ | ✓ `QueueConfig` builder | ◐ dir/name + `archivable` kwarg; other params defaulted |
 | Create/open batch queue | ✓ | ✓ | ◐ same |
 | `archivable` creation parameter (default 0) | ✓ | ✓ `.archivable(bool)` | ✓ `archivable=False` kwarg |
@@ -96,7 +97,7 @@ column are design decisions, not roadmap items.
 |---|---|
 | Wire compatibility with Algoteq's Java implementation (tools4j-derived; NOT compatible with upstream tools4j — formats have diverged) | ✓ by construction, single-message queues; batch queues are C-ecosystem only |
 | Up to 256 concurrent appenders, lock-free atomic per-message commit | ✓ |
-| Distinct error codes: `ETIMEDOUT/EINVAL/ECLOSED/ECORRUPT/ESCHEMA/EEXIST/ENOENT/EIDCONFLICT/ENOMEM` mapped 1:1 — Rust `MmapError` variants, Python exception classes | ✓ |
+| Distinct error codes: `ETIMEDOUT/EINVAL/ECLOSED/ECORRUPT/ESCHEMA/EEXIST/ENOENT/EIDCONFLICT/ENOMEM/EIO` mapped 1:1 — Rust `MmapError` variants, Python exception classes | ✓ |
 | Factory functions return `int` (0 success, negative `MMAPQ_*` error code) with `**out` parameter instead of raw pointer | ✓ |
 | Corruption refused on open (`ECORRUPT`), never repaired; recreate from export | ✓ |
 | Validation survives release builds (`-DNDEBUG`); regression tests run under exact release flags | ✓ |

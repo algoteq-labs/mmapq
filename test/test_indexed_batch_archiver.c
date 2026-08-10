@@ -272,6 +272,21 @@ void test_batch_archive_up_to_index_rejects_non_archivable(void)
     indexed_batch_archiver_close(arch);
 }
 
+void test_batch_archive_forward_empty_queue(void)
+{
+    IndexedBatchAppender *a = create_archivable_batch_appender();
+    TEST_ASSERT_NOT_NULL(a);
+    indexed_batch_appender_close(a);
+
+    IndexedBatchArchiver *arch = NULL;
+    int rc = indexed_batch_archiver_create(DIR, QUEUE, RING_SZ, rt, &arch);
+    TEST_ASSERT_EQUAL_INT(0, rc);
+    TEST_ASSERT_NOT_NULL(arch);
+    int rc2 = indexed_batch_archiver_archive_up_to_index(arch, 5);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL, rc2);
+    indexed_batch_archiver_close(arch);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -283,5 +298,6 @@ int main(void)
     RUN_TEST(test_batch_archiver_backward_unarchive);
     RUN_TEST(test_batch_archiver_noop_when_index_equals_start);
     RUN_TEST(test_batch_archive_up_to_index_rejects_non_archivable);
+    RUN_TEST(test_batch_archive_forward_empty_queue);
     return UNITY_END();
 }
