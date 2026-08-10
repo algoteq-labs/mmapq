@@ -7,7 +7,6 @@
 #include "header_codec.h"
 #include "batch_payload_iterator.h"
 #include "mmap_platform.h"
-#include "mmap_assert.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -163,21 +162,12 @@ int indexed_batch_archiver_archive_up_to_index(IndexedBatchArchiver *a, int64_t 
         for (int64_t i = index - 1; i >= current; i--) {
             uint64_t hdr = header_read(a->header_acc, &a->header_buf,
                                        i, a->queue_name);
-            MMAP_ASSERT(hdr != HEADER_NULL,
-                "batch_archive_up_to_index: NULL header during forward walk");
+            if (hdr == HEADER_NULL)
+                return MMAPQ_EINVAL;
             uint8_t aid = header_appender_id(hdr);
             int64_t pos = header_payload_position(hdr);
             if (last_positions[aid] == OFFSET_NOT_SET)
                 last_positions[aid] = pos;
-        }
-
-        {
-            int any_found = 0;
-            for (int i = 0; i < MAX_APPENDERS; i++)
-                if (last_positions[i] != OFFSET_NOT_SET) { any_found = 1; break; }
-            MMAP_ASSERT(any_found,
-                "batch_archive_up_to_index: no valid entries found in range");
-            (void)any_found; /* suppress warning when MMAP_ASSERT compiles away */
         }
 
         /* Exhaust the batch at last_position to find nextPayloadPosition */
@@ -186,20 +176,27 @@ int indexed_batch_archiver_archive_up_to_index(IndexedBatchArchiver *a, int64_t 
             if (pos == OFFSET_NOT_SET) continue;
 
             BatchPayloadIterator *it = get_iterator(a, (uint8_t)aid);
+            if (it == NULL) return MMAPQ_ENOMEM;
             int32_t msg_count = batch_iterator_read_message_count(it, pos);
-            MMAP_ASSERT(msg_count > 0,
-                "batch_archive_up_to_index: batch has zero or negative message count");
+            if (msg_count <= 0)
+                return MMAPQ_ECORRUPT;
 
             batch_iterator_init(it, pos, msg_count, 0);
             batch_iterator_exhaust(it);
             next_offsets[aid] = batch_iterator_next_payload_position(it);
         }
 
+        /* Validate all appender metas are accessible before mutating */
+        for (int aid = 0; aid < MAX_APPENDERS; aid++) {
+            if (next_offsets[aid] == OFFSET_NOT_SET) continue;
+            if (get_appender_meta(a, (uint8_t)aid) == NULL)
+                return MMAPQ_ECORRUPT;
+        }
+
         /* Update appender metas */
         for (int aid = 0; aid < MAX_APPENDERS; aid++) {
             if (next_offsets[aid] == OFFSET_NOT_SET) continue;
             AppenderMeta *m = get_appender_meta(a, (uint8_t)aid);
-            MMAP_ASSERT(m != NULL, "batch_archive_up_to_index: appender meta not found");
             appender_meta_set_start_offset(m, next_offsets[aid]);
         }
 
@@ -223,8 +220,8 @@ int indexed_batch_archiver_archive_up_to_index(IndexedBatchArchiver *a, int64_t 
         for (int64_t i = index; i < current; i++) {
             uint64_t hdr = header_read(a->header_acc, &a->header_buf,
                                        i, a->queue_name);
-            MMAP_ASSERT(hdr != HEADER_NULL,
-                "batch_archive_up_to_index: NULL header during backward walk");
+            if (hdr == HEADER_NULL)
+                return MMAPQ_EINVAL;
 
             file_index_set_set(&hdr_files, (int)(i / headers_in_file));
 
@@ -236,9 +233,10 @@ int indexed_batch_archiver_archive_up_to_index(IndexedBatchArchiver *a, int64_t 
 
             /* Track all payload files spanned by this batch's messages */
             BatchPayloadIterator *it = get_iterator(a, aid);
+            if (it == NULL) return MMAPQ_ENOMEM;
             int32_t msg_count = batch_iterator_read_message_count(it, pos);
-            MMAP_ASSERT(msg_count > 0,
-                "batch_archive_up_to_index: committed batch has zero or negative msg count");
+            if (msg_count <= 0)
+                return MMAPQ_ECORRUPT;
             batch_iterator_init(it, pos, msg_count, 0);
             /* Record the file containing the batch header itself */
             file_index_set_set(&pay_files[aid], (int)(pos / max_file_size));
@@ -256,37 +254,47 @@ int indexed_batch_archiver_archive_up_to_index(IndexedBatchArchiver *a, int64_t 
             char path[4096];
             snprintf(path, sizeof(path), "%s/%s/header_%d",
                      a->directory, a->queue_name, fi);
-            MMAP_ASSERT(queue_file_exists(path),
-                "batch_archive_up_to_index: missing header file — undo not possible");
+            if (!queue_file_exists(path))
+                return MMAPQ_ECORRUPT;
         }
 
         /* Validate all required payload files exist */
         for (int aid = 0; aid < MAX_APPENDERS; aid++) {
             if (first_positions[aid] == OFFSET_NOT_SET) continue;
-            MMAP_ASSERT(first_positions[aid] >= INITIAL_PAYLOAD_POSITION,
-                "batch_archive_up_to_index: invalid first payload position");
+            if (first_positions[aid] < INITIAL_PAYLOAD_POSITION)
+                return MMAPQ_ECORRUPT;
             for (int fi = file_index_set_first(&pay_files[aid]); fi >= 0;
                  fi = file_index_set_next(&pay_files[aid], fi)) {
                 char path[4096];
                 snprintf(path, sizeof(path), "%s/%s/payload_%d_%d",
                          a->directory, a->queue_name, aid, fi);
-                MMAP_ASSERT(queue_file_exists(path),
-                    "batch_archive_up_to_index: missing payload file — undo not possible");
+                if (!queue_file_exists(path))
+                    return MMAPQ_ECORRUPT;
             }
+        }
+
+        /* Validate all appender metas are accessible before mutating */
+        for (int aid = 0; aid < MAX_APPENDERS; aid++) {
+            if (first_positions[aid] == OFFSET_NOT_SET) continue;
+            if (get_appender_meta(a, (uint8_t)aid) == NULL)
+                return MMAPQ_ECORRUPT;
         }
 
         /* All files present — update appender metas */
         for (int aid = 0; aid < MAX_APPENDERS; aid++) {
             if (first_positions[aid] == OFFSET_NOT_SET) continue;
             AppenderMeta *m = get_appender_meta(a, (uint8_t)aid);
-            MMAP_ASSERT(m != NULL, "batch_archive_up_to_index: appender meta not found");
             appender_meta_set_start_offset(m, first_positions[aid]);
         }
     }
 
-    /* Commit new start_index atomically — visible to all readers immediately */
+    /* Commit new start_index atomically — visible to all readers immediately.
+     * rw_meta_open can fail from external I/O, which is returned rather than
+     * asserted. If it fails after appender meta updates above, the metas are
+     * already committed but the start_index is not — on retry the function
+     * recomputes identical offsets, making the meta writes idempotent. */
     QueueMeta *rwm = rw_meta_open(a);
-    MMAP_ASSERT(rwm != NULL, "batch_archive_up_to_index: failed to open rw queue meta");
+    if (rwm == NULL) return MMAPQ_EIO;
     queue_meta_set_start_index(rwm, index);
     return 0;
 }

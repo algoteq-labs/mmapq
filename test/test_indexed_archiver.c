@@ -358,6 +358,21 @@ void test_archiver_noop_when_index_equals_start(void)
     indexed_archiver_close(arch);
 }
 
+void test_archive_forward_empty_queue(void)
+{
+    IndexedAppender *a = create_archivable_appender();
+    TEST_ASSERT_NOT_NULL(a);
+    indexed_appender_close(a);
+
+    IndexedArchiver *arch = NULL;
+    int rc = indexed_archiver_create(DIR, QUEUE, RING_SZ, rt, &arch);
+    TEST_ASSERT_EQUAL_INT(0, rc);
+    TEST_ASSERT_NOT_NULL(arch);
+    int rc2 = indexed_archiver_archive_up_to_index(arch, 5);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL, rc2);
+    indexed_archiver_close(arch);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -371,5 +386,6 @@ int main(void)
     RUN_TEST(test_archivable_roundtrip);
     RUN_TEST(test_default_not_archivable);
     RUN_TEST(test_archive_up_to_index_rejects_non_archivable);
+    RUN_TEST(test_archive_forward_empty_queue);
     return UNITY_END();
 }

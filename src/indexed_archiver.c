@@ -7,7 +7,6 @@
 #include "header_codec.h"
 #include "payload_walk.h"
 #include "mmap_platform.h"
-#include "mmap_assert.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -159,8 +158,8 @@ int indexed_archiver_archive_up_to_index(IndexedArchiver *a, int64_t index)
             for (int64_t i = index - 1; i >= current; i--) {
                 uint64_t hdr = header_read(a->header_acc, &a->header_buf,
                                            i, a->queue_name);
-                MMAP_ASSERT(hdr != HEADER_NULL,
-                    "archive_up_to_index: NULL header during forward walk");
+                if (hdr == HEADER_NULL)
+                    return MMAPQ_EINVAL;
                 uint8_t aid = header_appender_id(hdr);
                 int64_t pos = header_payload_position(hdr);
                 if (last_positions[aid] == OFFSET_NOT_SET)
@@ -177,33 +176,38 @@ int indexed_archiver_archive_up_to_index(IndexedArchiver *a, int64_t index)
                     queue_region_accessor_payload(a->ro_acc, (uint8_t)aid);
                 Buffer pay_buf = {0};
                 WrapResult wr = region_accessor_wrap(pay_acc, pos, &pay_buf);
-                MMAP_ASSERT(wr == WRAP_SUCCESS,
-                    "archive_up_to_index: failed to wrap payload region");
-                (void)wr; /* suppress warning when MMAP_ASSERT is compiled away */
+                if (wr == WRAP_MAP_TIMED_OUT)
+                    return MMAPQ_ETIMEDOUT;
+                if (wr != WRAP_SUCCESS)
+                    return MMAPQ_ECORRUPT;
 
                 int32_t len;
                 memcpy(&len, pay_buf.data + PAYLOAD_LENGTH_OFFSET,
                        PAYLOAD_LENGTH_SIZE);
-                MMAP_ASSERT(len > 0,
-                    "archive_up_to_index: committed message has zero or negative length");
+                if (len <= 0)
+                    return MMAPQ_ECORRUPT;
 
                 next_offsets[aid] = pos + PAYLOAD_LENGTH_SIZE + len;
+            }
+
+            /* Validate all appender metas are accessible before mutating */
+            for (int aid = 0; aid < MAX_APPENDERS; aid++) {
+                if (next_offsets[aid] == OFFSET_NOT_SET) continue;
+                if (get_appender_meta(a, (uint8_t)aid) == NULL)
+                    return MMAPQ_ECORRUPT;
             }
 
             /* All validated — update appender metas */
             for (int aid = 0; aid < MAX_APPENDERS; aid++) {
                 if (next_offsets[aid] == OFFSET_NOT_SET) continue;
                 AppenderMeta *m = get_appender_meta(a, (uint8_t)aid);
-                MMAP_ASSERT(m != NULL,
-                    "archive_up_to_index: appender meta not found");
                 appender_meta_set_start_offset(m, next_offsets[aid]);
             }
         } else {
             /* Fixed-size queue: just validate the boundary entry exists */
-            MMAP_ASSERT(
-                header_found(a->header_acc, &a->header_buf,
-                             index - 1, a->queue_name),
-                "archive_up_to_index: could not find entry at last index");
+            if (!header_found(a->header_acc, &a->header_buf,
+                              index - 1, a->queue_name))
+                return MMAPQ_EINVAL;
         }
 
     } else {
@@ -228,8 +232,8 @@ int indexed_archiver_archive_up_to_index(IndexedArchiver *a, int64_t index)
         for (int64_t i = index; i < current; i++) {
             uint64_t hdr = header_read(a->header_acc, &a->header_buf,
                                        i, a->queue_name);
-            MMAP_ASSERT(hdr != HEADER_NULL,
-                "archive_up_to_index: NULL header during backward walk");
+            if (hdr == HEADER_NULL)
+                return MMAPQ_EINVAL;
 
             file_index_set_set(&hdr_files, (int)(i / headers_in_file));
 
@@ -248,38 +252,47 @@ int indexed_archiver_archive_up_to_index(IndexedArchiver *a, int64_t index)
             char path[4096];
             snprintf(path, sizeof(path), "%s/%s/header_%d",
                      a->directory, a->queue_name, fi);
-            MMAP_ASSERT(queue_file_exists(path),
-                "archive_up_to_index: missing header file — undo not possible");
+            if (!queue_file_exists(path))
+                return MMAPQ_ECORRUPT;
         }
 
         /* Validate all required payload files exist */
         for (int aid = 0; aid < MAX_APPENDERS; aid++) {
             if (first_positions[aid] == OFFSET_NOT_SET) continue;
-            MMAP_ASSERT(first_positions[aid] >= INITIAL_PAYLOAD_POSITION,
-                "archive_up_to_index: invalid first payload position");
+            if (first_positions[aid] < INITIAL_PAYLOAD_POSITION)
+                return MMAPQ_ECORRUPT;
             for (int fi = file_index_set_first(&pay_files[aid]); fi >= 0;
                  fi = file_index_set_next(&pay_files[aid], fi)) {
                 char path[4096];
                 snprintf(path, sizeof(path), "%s/%s/payload_%d_%d",
                          a->directory, a->queue_name, aid, fi);
-                MMAP_ASSERT(queue_file_exists(path),
-                    "archive_up_to_index: missing payload file — undo not possible");
+                if (!queue_file_exists(path))
+                    return MMAPQ_ECORRUPT;
             }
+        }
+
+        /* Validate all appender metas are accessible before mutating */
+        for (int aid = 0; aid < MAX_APPENDERS; aid++) {
+            if (first_positions[aid] == OFFSET_NOT_SET) continue;
+            if (get_appender_meta(a, (uint8_t)aid) == NULL)
+                return MMAPQ_ECORRUPT;
         }
 
         /* All files present — update appender metas */
         for (int aid = 0; aid < MAX_APPENDERS; aid++) {
             if (first_positions[aid] == OFFSET_NOT_SET) continue;
             AppenderMeta *m = get_appender_meta(a, (uint8_t)aid);
-            MMAP_ASSERT(m != NULL,
-                "archive_up_to_index: appender meta not found");
             appender_meta_set_start_offset(m, first_positions[aid]);
         }
     }
 
-    /* Commit new start_index atomically — visible to all readers immediately */
+    /* Commit new start_index atomically — visible to all readers immediately.
+     * rw_meta_open can fail from external I/O, which is returned rather than
+     * asserted. If it fails after appender meta updates above, the metas are
+     * already committed but the start_index is not — on retry the function
+     * recomputes identical offsets, making the meta writes idempotent. */
     QueueMeta *rwm = rw_meta_open(a);
-    MMAP_ASSERT(rwm != NULL, "archive_up_to_index: failed to open rw queue meta");
+    if (rwm == NULL) return MMAPQ_EIO;
     queue_meta_set_start_index(rwm, index);
     return 0;
 }
