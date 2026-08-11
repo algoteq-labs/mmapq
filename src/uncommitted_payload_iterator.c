@@ -69,7 +69,7 @@ static void ranges_prune_up_to(UncommittedPayloadIterator *it, int64_t offset)
 
 /* ── Header scan: build committed ranges ─────────────────────────────────── */
 
-static void scan_committed_ranges(UncommittedPayloadIterator *it)
+static int scan_committed_ranges(UncommittedPayloadIterator *it)
 {
     ranges_clear(it);
 
@@ -105,13 +105,8 @@ static void scan_committed_ranges(UncommittedPayloadIterator *it)
             /* ── First entry: init range from this offset ──────────────── */
             payload_iterator_init(it->inner, header_offset, PAYLOAD_ITERATOR_NOT_SET);
 
-            int ok = payload_iterator_advance(it->inner);
-            (void)ok;
-            MMAP_ASSERT(ok,
-                "scan_committed_ranges: failed to advance at first committed offset");
-            MMAP_ASSERT(it->inner->current_message_offset == header_offset,
-                "scan_committed_ranges: header offset mismatch with payload iterator");
-
+            if (!payload_iterator_advance(it->inner)) return 0;
+            if (it->inner->current_message_offset != header_offset) return 0;
             current_start = header_offset;
             current_end   = it->inner->next_probing_offset;
 
@@ -121,12 +116,8 @@ static void scan_committed_ranges(UncommittedPayloadIterator *it)
             ranges_insert(it, current_start, current_end);
 
             payload_iterator_init(it->inner, header_offset, PAYLOAD_ITERATOR_NOT_SET);
-            int ok = payload_iterator_advance(it->inner);
-            (void)ok;
-            MMAP_ASSERT(ok,
-                "scan_committed_ranges: failed to advance at new range start");
-            MMAP_ASSERT(it->inner->current_message_offset == header_offset,
-                "scan_committed_ranges: header offset mismatch after gap");
+            if (!payload_iterator_advance(it->inner)) return 0;
+            if (it->inner->current_message_offset != header_offset) return 0;
 
             current_start = header_offset;
             current_end   = it->inner->next_probing_offset;
@@ -142,6 +133,8 @@ static void scan_committed_ranges(UncommittedPayloadIterator *it)
     if (current_start != PAYLOAD_ITERATOR_NOT_SET) {
         ranges_insert(it, current_start, current_end);
     }
+
+    return 1;
 }
 
 /* ── Init gap traversal after scan ──────────────────────────────────────── */
@@ -297,7 +290,10 @@ UncommittedPayloadIterator *uncommitted_iterator_init(
         : start_offset;
 
     /* Scan headers to build committed ranges */
-    scan_committed_ranges(it);
+    if (!scan_committed_ranges(it)) {
+        it->initialised = 0;
+        return 0;
+    }
 
     /* Prune committed ranges that end before our start */
     ranges_prune_up_to(it, effective_start);

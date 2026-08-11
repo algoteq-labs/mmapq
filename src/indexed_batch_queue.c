@@ -58,6 +58,14 @@ int indexed_batch_queue_create(
     *out = NULL;
     if (directory  == NULL) return MMAPQ_EINVAL;
     if (queue_name == NULL) return MMAPQ_EINVAL;
+    if (region_size <= 0) return MMAPQ_EINVAL;
+    if ((region_size & (region_size - 1)) != 0) return MMAPQ_EINVAL;
+    if (ring_size <= 0) return MMAPQ_EINVAL;
+    if ((ring_size & (ring_size - 1)) != 0) return MMAPQ_EINVAL;
+    if (ring_size < mmapq_min_ring_size(region_size)) return MMAPQ_EINVAL;
+    if (max_file_size <= 0) return MMAPQ_EINVAL;
+    if (max_file_size % region_size != 0) return MMAPQ_EINVAL;
+    if (start_index < 0) return MMAPQ_EINVAL;
 
     IndexedBatchQueue *q = calloc(1, sizeof(IndexedBatchQueue));
     if (q == NULL) return MMAPQ_ENOMEM;

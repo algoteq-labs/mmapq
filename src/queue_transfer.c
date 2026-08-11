@@ -309,10 +309,12 @@ static int64_t do_import(
     snprintf(dpath, sizeof(dpath), "%s/%s", directory, queue_name);
     create_dir(dpath);
 
+    int ring = mmapq_min_ring_size(region_size);
+    if (ring < 4) ring = 4;
     IndexedQueue *q = NULL;
     int rc = indexed_queue_create(
         directory, queue_name,
-        region_size, 4, 1, max_file_size, start_index,
+        region_size, ring, 1, max_file_size, start_index,
         10000000000ULL, 0, wrt, rrt, &q);
 
     if (rc != 0) return rc;
@@ -503,9 +505,11 @@ int64_t queue_transfer_copy(
     snprintf(dpath, sizeof(dpath), "%s/%s", dest_dir, dest_queue);
     create_dir(dpath);
 
+    int ring = mmapq_min_ring_size(queue_meta_region_size(qm));
+    if (ring < 4) ring = 4;
     IndexedQueue *q = NULL;
     int create_rc = indexed_queue_create(dest_dir, dest_queue,
-        queue_meta_region_size(qm), 4, 1, queue_meta_max_file_size(qm),
+        queue_meta_region_size(qm), ring, 1, queue_meta_max_file_size(qm),
         dest_start, 10000000000ULL, 0, write_rt, read_rt, &q);
 
     if (create_rc != 0) return create_rc;
@@ -591,9 +595,11 @@ int64_t queue_transfer_copy_batch_to_normal(
     snprintf(dpath, sizeof(dpath), "%s/%s", dest_dir, dest_queue);
     create_dir(dpath);
 
+    int ring = mmapq_min_ring_size(queue_meta_region_size(qm));
+    if (ring < 4) ring = 4;
     IndexedQueue *q = NULL;
     int rc = indexed_queue_create(dest_dir, dest_queue,
-        queue_meta_region_size(qm), 4, 1, queue_meta_max_file_size(qm),
+        queue_meta_region_size(qm), ring, 1, queue_meta_max_file_size(qm),
         dest_start, 10000000000ULL, 0, write_rt, read_rt, &q);
     if (rc != 0) return rc;
 

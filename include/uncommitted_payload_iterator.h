@@ -121,7 +121,9 @@ int uncommitted_iterator_create(
  * Performs the full header scan at each call. Rewind is equivalent to
  * calling init() again with the same parameters.
  *
- * Returns the iterator (same pointer).
+ * Returns the iterator (same pointer), or NULL if the header scan was
+ * truncated (mapping timeout or offset mismatch at the committed header).
+ * Callers must check for NULL before advancing.
  */
 UncommittedPayloadIterator *uncommitted_iterator_init(
     UncommittedPayloadIterator *it,
@@ -156,7 +158,7 @@ Buffer *uncommitted_iterator_current(UncommittedPayloadIterator *it);
 /**
  * uncommitted_iterator_rewind — re-init with same parameters.
  *
- * Aborts if not yet initialised.
+ * Aborts if not yet initialised. Returns NULL if the header scan fails.
  */
 UncommittedPayloadIterator *uncommitted_iterator_rewind(UncommittedPayloadIterator *it);
 

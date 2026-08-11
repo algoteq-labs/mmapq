@@ -23,7 +23,7 @@
 static const char    *DIR        = "/tmp";
 static const char    *QUEUE      = "mmap_test_iq";
 static const int32_t  REGION_SZ  = 4096;
-static const int      RING_SZ    = 4;
+static const int      RING_SZ    = 16;
 static const int64_t  MAX_FILE   = 4096LL * 64;   /* small — triggers rolling */
 static const uint64_t TIMEOUT_NS = 5000000000ULL;  /* 5 seconds */
 
@@ -644,6 +644,7 @@ void test_uncommitted_iterator_finds_uncommitted(void)
     /* The uncommitted iterator should find exactly one message */
     UncommittedPayloadIterator *it =
         indexed_appender_uncommitted_iterator(a, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET);
+    TEST_ASSERT_NOT_NULL(it);
 
     int found = 0;
     while (uncommitted_iterator_advance(it)) {
@@ -659,6 +660,7 @@ void test_uncommitted_iterator_finds_uncommitted(void)
 
     it = indexed_appender_uncommitted_iterator(
         a, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET);
+    TEST_ASSERT_NOT_NULL(it);
     found = 0;
     while (uncommitted_iterator_advance(it)) found++;
     TEST_ASSERT_EQUAL_INT(0, found);

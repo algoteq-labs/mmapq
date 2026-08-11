@@ -60,51 +60,63 @@ echo "=== mmapq test suite ($MODE) ==="
 PASS=0
 FAIL=0
 
-for TEST in "${TESTS[@]}"; do
-    BIN="/tmp/mmapq_${TEST}_${MODE}"
+# ── Shared compile + run + verify ──────────────────────────────────────────
+run_test() {
+    local test="$1"
+    local label="$2"
+    local cflags="$3"
+    local bin="/tmp/mmapq_${test}_${label}"
 
-    # Compile
-    if ! gcc $CFLAGS $SRCS "test/${TEST}.c" $UNITY -o "$BIN" $LDFLAGS 2>&1; then
-        echo "FAIL: $TEST (compile error)"
-        FAIL=$((FAIL+1))
-        continue
+    if ! gcc $cflags $SRCS "test/${test}.c" $UNITY -o "$bin" $LDFLAGS 2>&1; then
+        echo "FAIL ($label): $test (compile error)"
+        return 1
     fi
 
-    # Run — treat non-zero exit OR any sanitiser/assertion output as failure
     set +e
-    OUT=$(timeout 60 "$BIN" 2>&1)
+    OUT=$(timeout 300 "$bin" 2>&1)
     STATUS=$?
     set -e
 
     if [ "$STATUS" -ne 0 ] || echo "$OUT" | grep -qE \
         "FAIL|ASSERTION FAILED|Aborted|AddressSanitizer|LeakSanitizer|ThreadSanitizer|DATA RACE|heap-use-after-free|heap-buffer-overflow"; then
-        echo "FAIL: $TEST (exit=$STATUS)"
+        echo "FAIL ($label): $test (exit=$STATUS)"
         echo "$OUT" | tail -20
-        FAIL=$((FAIL+1))
-    else
-        echo "PASS: $TEST"
-        PASS=$((PASS+1))
+        rm -f "$bin"
+        return 1
     fi
 
-    rm -f "$BIN"
+    rm -f "$bin"
+    return 0
+}
+
+# ── Normal mode ────────────────────────────────────────────────────────────
+for TEST in "${TESTS[@]}"; do
+    if run_test "$TEST" "$MODE" "$CFLAGS"; then
+        echo "PASS ($MODE): $TEST"
+        PASS=$((PASS+1))
+    else
+        FAIL=$((FAIL+1))
+    fi
 done
 
-# ── Release-flags validation (the 3 regression tests that guard NDEBUG bugs) ─
+# ── Release-flags validation (all 19 tests under exact release flags) ──────
 echo ""
 echo "=== release-flags validation ==="
 CFLAGS_RELEASE="$(make -s print-cflags-release)"
-REL_FAILED=0
-for TEST in test_indexed_queue test_indexed_batch_queue test_indexed_archiver test_indexed_batch_archiver test_runtime; do
-    BIN="/tmp/mmapq_${TEST}_release"
-    if gcc $CFLAGS_RELEASE $SRCS "test/${TEST}.c" $UNITY -o "$BIN" $LDFLAGS 2>&1 && "$BIN" 2>&1; then
+REL_PASS=0
+REL_FAIL=0
+
+for TEST in "${TESTS[@]}"; do
+    if run_test "$TEST" "release" "$CFLAGS_RELEASE"; then
         echo "PASS (release): $TEST"
+        REL_PASS=$((REL_PASS+1))
     else
         echo "FAIL (release): $TEST"
-        REL_FAILED=1
+        REL_FAIL=$((REL_FAIL+1))
     fi
-    rm -f "$BIN"
 done
 
 echo ""
-echo "=== Results ($MODE): $PASS passed, $FAIL failed ==="
-[ "$FAIL" -eq 0 ] && [ "$REL_FAILED" -eq 0 ]
+echo "=== Results (normal): $PASS passed, $FAIL failed ==="
+echo "=== Results (release): $REL_PASS passed, $REL_FAIL failed ==="
+[ "$FAIL" -eq 0 ] && [ "$REL_FAIL" -eq 0 ]

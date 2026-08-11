@@ -73,6 +73,7 @@ int indexed_queue_create(
     if ((region_size & (region_size - 1)) != 0) return MMAPQ_EINVAL;
     if (ring_size <= 0) return MMAPQ_EINVAL;
     if ((ring_size & (ring_size - 1)) != 0) return MMAPQ_EINVAL;
+    if (ring_size < mmapq_min_ring_size(region_size)) return MMAPQ_EINVAL;
     if (max_file_size <= 0) return MMAPQ_EINVAL;
     if (max_file_size % region_size != 0) return MMAPQ_EINVAL;
     if (start_index < 0) return MMAPQ_EINVAL;

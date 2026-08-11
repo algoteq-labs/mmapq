@@ -60,7 +60,7 @@ static IndexedQueue *create_queue(const char *name, const char **msgs, int n, in
     mkdir(path, 0775);
 
     IndexedQueue *q = NULL;
-    int rc_q = indexed_queue_create(TEST_DIR, name, 4096, 4, 1, 4096LL * 64,
+    int rc_q = indexed_queue_create(TEST_DIR, name, 4096, 16, 1, 4096LL * 64,
                                      start_index, 5000000000ULL, 0, rt, rt, &q);
     TEST_ASSERT_EQUAL_INT(0, rc_q);
     TEST_ASSERT_NOT_NULL(q);
@@ -78,7 +78,7 @@ static IndexedQueue *create_queue(const char *name, const char **msgs, int n, in
 static int load_messages(const char *name, char out[][100], int max)
 {
     IndexedQueue *q = NULL;
-    int rc_q = indexed_queue_create(TEST_DIR, name, 4096, 4, 1, 4096LL * 64,
+    int rc_q = indexed_queue_create(TEST_DIR, name, 4096, 16, 1, 4096LL * 64,
                                      0, 5000000000ULL, 0, rt, rt, &q);
     TEST_ASSERT_EQUAL_INT(0, rc_q);
     TEST_ASSERT_NOT_NULL(q);
@@ -106,7 +106,7 @@ static int load_messages(const char *name, char out[][100], int max)
 static void verify_batch_index_space(const char *name, int64_t expected_start, int64_t expected_end)
 {
     IndexedBatchQueue *vq = NULL;
-    int rc_vq = indexed_batch_queue_create(TEST_DIR, name, 4096, 4, 1, 4096LL * 64,
+    int rc_vq = indexed_batch_queue_create(TEST_DIR, name, 4096, 16, 1, 4096LL * 64,
                                              0, 5000000000ULL, 0, rt, rt, &vq);
     TEST_ASSERT_EQUAL_INT(0, rc_vq);
     TEST_ASSERT_NOT_NULL(vq);
@@ -135,7 +135,7 @@ static void verify_batch_index_space(const char *name, int64_t expected_start, i
 static void verify_index_space(const char *name, int64_t expected_start, int64_t expected_end)
 {
     IndexedQueue *vq = NULL;
-    int rc_vq = indexed_queue_create(TEST_DIR, name, 4096, 4, 1, 4096LL * 64,
+    int rc_vq = indexed_queue_create(TEST_DIR, name, 4096, 16, 1, 4096LL * 64,
                                       expected_start, 5000000000ULL, 0, rt, rt, &vq);
     TEST_ASSERT_EQUAL_INT(0, rc_vq);
     TEST_ASSERT_NOT_NULL(vq);
@@ -168,7 +168,7 @@ static IndexedBatchQueue *create_batch_queue(const char *name, const char *batch
     mkdir(path, 0775);
 
     IndexedBatchQueue *q = NULL;
-    int rc_q = indexed_batch_queue_create(TEST_DIR, name, 4096, 4, 1, 4096LL * 64,
+    int rc_q = indexed_batch_queue_create(TEST_DIR, name, 4096, 16, 1, 4096LL * 64,
                                            0, 5000000000ULL, 0, rt, rt, &q);
     TEST_ASSERT_EQUAL_INT(0, rc_q);
     TEST_ASSERT_NOT_NULL(q);
@@ -267,7 +267,7 @@ void test_export_import_preserve_start_index(void)
 
     /* Verify index space is preserved */
     IndexedQueue *vq = NULL;
-    int rc_vq = indexed_queue_create(TEST_DIR, COPY_Q, 4096, 4, 1, 4096LL * 64,
+    int rc_vq = indexed_queue_create(TEST_DIR, COPY_Q, 4096, 16, 1, 4096LL * 64,
                                       actual_start, 5000000000ULL, 0, rt, rt, &vq);
     TEST_ASSERT_EQUAL_INT(0, rc_vq);
     TEST_ASSERT_NOT_NULL(vq);
@@ -322,7 +322,7 @@ void test_poller_starts_at_preserved_index(void)
 
     /* Now poll the imported queue — first entry should be at index 100 */
     IndexedQueue *iq = NULL;
-    int rc_iq = indexed_queue_create(TEST_DIR, COPY_Q, 4096, 4, 1, 4096LL * 64,
+    int rc_iq = indexed_queue_create(TEST_DIR, COPY_Q, 4096, 16, 1, 4096LL * 64,
                                       si, 5000000000ULL, 0, rt, rt, &iq);
     TEST_ASSERT_EQUAL_INT(0, rc_iq);
     TEST_ASSERT_NOT_NULL(iq);
@@ -381,7 +381,7 @@ void test_export_import_rebase_start_index(void)
     TEST_ASSERT_EQUAL_INT(3, cnt);
 
     IndexedQueue *vq = NULL;
-    int rc_vq = indexed_queue_create(TEST_DIR, COPY_Q, 4096, 4, 1, 4096LL * 64,
+    int rc_vq = indexed_queue_create(TEST_DIR, COPY_Q, 4096, 16, 1, 4096LL * 64,
                                       0, 5000000000ULL, 0, rt, rt, &vq);
     TEST_ASSERT_EQUAL_INT(0, rc_vq);
     TEST_ASSERT_NOT_NULL(vq);
@@ -1261,7 +1261,7 @@ void test_copy_normal_to_batch_1msg(void)
 
     /* Verify by reading back the batch queue */
     IndexedBatchQueue *q = NULL;
-    int rc_q = indexed_batch_queue_create(TEST_DIR, CROSS_Q, 4096, 4, 1, 4096LL * 64,
+    int rc_q = indexed_batch_queue_create(TEST_DIR, CROSS_Q, 4096, 16, 1, 4096LL * 64,
                                            0, 5000000000ULL, 0, rt, rt, &q);
     TEST_ASSERT_EQUAL_INT(0, rc_q);
     TEST_ASSERT_NOT_NULL(q);
@@ -1311,7 +1311,7 @@ void test_copy_cross_type_roundtrip(void)
 
     /* batch → normal (flatten back) */
     IndexedBatchQueue *bq = NULL;
-    int rc_bq = indexed_batch_queue_create(TEST_DIR, CROSS_Q, 4096, 4, 1, 4096LL * 64,
+    int rc_bq = indexed_batch_queue_create(TEST_DIR, CROSS_Q, 4096, 16, 1, 4096LL * 64,
                                             0, 5000000000ULL, 0, rt, rt, &bq);
     TEST_ASSERT_EQUAL_INT(0, rc_bq);
     TEST_ASSERT_NOT_NULL(bq);
@@ -1684,7 +1684,7 @@ void test_copy_batch_to_normal_preserve_nonzero(void)
     mkdir("/tmp/mmap_test_bqtrans", 0775);
     IndexedBatchQueue *src = NULL;
     int rc_src = indexed_batch_queue_create(
-        TEST_DIR, BQ_QUEUE, 4096, 4, 1, 4096LL * 64,
+        TEST_DIR, BQ_QUEUE, 4096, 16, 1, 4096LL * 64,
         100, 5000000000ULL, 0, rt, rt, &src);
     TEST_ASSERT_EQUAL_INT(0, rc_src);
     TEST_ASSERT_NOT_NULL(src);
@@ -1744,7 +1744,7 @@ void test_import_batch_stream_preserve_nonzero(void)
     mkdir("/tmp/mmap_test_bqtrans", 0775);
     IndexedBatchQueue *src = NULL;
     int rc_src = indexed_batch_queue_create(
-        TEST_DIR, BQ_QUEUE, 4096, 4, 1, 4096LL * 64,
+        TEST_DIR, BQ_QUEUE, 4096, 16, 1, 4096LL * 64,
         100, 5000000000ULL, 0, rt, rt, &src);
     TEST_ASSERT_EQUAL_INT(0, rc_src);
     TEST_ASSERT_NOT_NULL(src);
@@ -1831,7 +1831,7 @@ void test_batch_import_preserves_appender_ids(void)
 
     IndexedBatchQueue *q = NULL;
     int rc_q = indexed_batch_queue_create(
-        TEST_DIR, QUEUE, 4096, 4, 1, 4096LL * 64,
+        TEST_DIR, QUEUE, 4096, 16, 1, 4096LL * 64,
         0, 5000000000ULL, 0, rt, rt, &q);
     TEST_ASSERT_EQUAL_INT(0, rc_q);
     TEST_ASSERT_NOT_NULL(q);
@@ -1882,7 +1882,7 @@ void test_batch_import_preserves_appender_ids(void)
     /* Verify via poller */
     IndexedBatchQueue *vq = NULL;
     int rc_vq = indexed_batch_queue_create(
-        TEST_DIR, COPY_Q, 4096, 4, 1, 4096LL * 64,
+        TEST_DIR, COPY_Q, 4096, 16, 1, 4096LL * 64,
         0, 5000000000ULL, 0, rt, rt, &vq);
     TEST_ASSERT_EQUAL_INT(0, rc_vq);
     TEST_ASSERT_NOT_NULL(vq);
@@ -1920,7 +1920,7 @@ void test_import_preserves_appender_ids(void)
     mkdir(path, 0775);
 
     IndexedQueue *q = NULL;
-    int rc_q = indexed_queue_create(TEST_DIR, QUEUE, 4096, 4, 1, 4096LL * 64,
+    int rc_q = indexed_queue_create(TEST_DIR, QUEUE, 4096, 16, 1, 4096LL * 64,
                                      0, 5000000000ULL, 0, rt, rt, &q);
     TEST_ASSERT_EQUAL_INT(0, rc_q);
     TEST_ASSERT_NOT_NULL(q);
@@ -1965,7 +1965,7 @@ void test_import_preserves_appender_ids(void)
     /* Verify via reader: each entry has correct appender_id */
     {
         IndexedQueue *vq = NULL;
-        int rc_vq = indexed_queue_create(TEST_DIR, COPY_Q, 4096, 4, 1, 4096LL * 64,
+        int rc_vq = indexed_queue_create(TEST_DIR, COPY_Q, 4096, 16, 1, 4096LL * 64,
                                            0, 5000000000ULL, 0, rt, rt, &vq);
         TEST_ASSERT_EQUAL_INT(0, rc_vq);
         TEST_ASSERT_NOT_NULL(vq);
@@ -1998,7 +1998,7 @@ void test_import_merge_via_mapper(void)
     mkdir(path, 0775);
 
     IndexedQueue *q = NULL;
-    int rc_q = indexed_queue_create(TEST_DIR, QUEUE, 4096, 4, 1, 4096LL * 64,
+    int rc_q = indexed_queue_create(TEST_DIR, QUEUE, 4096, 16, 1, 4096LL * 64,
                                      0, 5000000000ULL, 0, rt, rt, &q);
     TEST_ASSERT_EQUAL_INT(0, rc_q);
     TEST_ASSERT_NOT_NULL(q);
@@ -2039,7 +2039,7 @@ void test_import_merge_via_mapper(void)
 
     /* Verify all entries landed in appender 0 */
     IndexedQueue *vq = NULL;
-    int rc_vq = indexed_queue_create(TEST_DIR, COPY_Q, 4096, 4, 1, 4096LL * 64,
+    int rc_vq = indexed_queue_create(TEST_DIR, COPY_Q, 4096, 16, 1, 4096LL * 64,
                                       0, 5000000000ULL, 0, rt, rt, &vq);
     TEST_ASSERT_EQUAL_INT(0, rc_vq);
     TEST_ASSERT_NOT_NULL(vq);
@@ -2068,7 +2068,7 @@ void test_import_auto_on_conflict(void)
 
     /* Pre-create destination queue — keep appender ID 0 locked during import */
     IndexedQueue *dest = NULL;
-    int rc_dest = indexed_queue_create(TEST_DIR, COPY_Q, 4096, 4, 1, 4096LL * 64,
+    int rc_dest = indexed_queue_create(TEST_DIR, COPY_Q, 4096, 16, 1, 4096LL * 64,
                                         0, 5000000000ULL, 0, rt, rt, &dest);
     TEST_ASSERT_EQUAL_INT(0, rc_dest);
     TEST_ASSERT_NOT_NULL(dest);
@@ -2082,7 +2082,7 @@ void test_import_auto_on_conflict(void)
     snprintf(path, sizeof(path), "%s/%s", TEST_DIR, QUEUE);
     mkdir(path, 0775);
     IndexedQueue *src = NULL;
-    int rc_src = indexed_queue_create(TEST_DIR, QUEUE, 4096, 4, 1, 4096LL * 64,
+    int rc_src = indexed_queue_create(TEST_DIR, QUEUE, 4096, 16, 1, 4096LL * 64,
                                        0, 5000000000ULL, 0, rt, rt, &src);
     TEST_ASSERT_EQUAL_INT(0, rc_src);
     TEST_ASSERT_NOT_NULL(src);
@@ -2114,7 +2114,7 @@ void test_import_auto_on_conflict(void)
 
     /* Verify the imported entry got a different appender ID (not 0, which is held) */
     IndexedQueue *vq = NULL;
-    int rc_vq = indexed_queue_create(TEST_DIR, COPY_Q, 4096, 4, 1, 4096LL * 64,
+    int rc_vq = indexed_queue_create(TEST_DIR, COPY_Q, 4096, 16, 1, 4096LL * 64,
                                       0, 5000000000ULL, 0, rt, rt, &vq);
     TEST_ASSERT_EQUAL_INT(0, rc_vq);
     TEST_ASSERT_NOT_NULL(vq);
@@ -2143,7 +2143,7 @@ void test_import_abort_on_conflict(void)
 
     /* Pre-create destination queue — keep appender ID 0 locked during import */
     IndexedQueue *dest = NULL;
-    int rc_dest = indexed_queue_create(TEST_DIR, COPY_Q, 4096, 4, 1, 4096LL * 64,
+    int rc_dest = indexed_queue_create(TEST_DIR, COPY_Q, 4096, 16, 1, 4096LL * 64,
                                         0, 5000000000ULL, 0, rt, rt, &dest);
     TEST_ASSERT_EQUAL_INT(0, rc_dest);
     TEST_ASSERT_NOT_NULL(dest);
@@ -2157,7 +2157,7 @@ void test_import_abort_on_conflict(void)
     snprintf(path, sizeof(path), "%s/%s", TEST_DIR, QUEUE);
     mkdir(path, 0775);
     IndexedQueue *src = NULL;
-    int rc_src = indexed_queue_create(TEST_DIR, QUEUE, 4096, 4, 1, 4096LL * 64,
+    int rc_src = indexed_queue_create(TEST_DIR, QUEUE, 4096, 16, 1, 4096LL * 64,
                                        0, 5000000000ULL, 0, rt, rt, &src);
     TEST_ASSERT_EQUAL_INT(0, rc_src);
     TEST_ASSERT_NOT_NULL(src);
@@ -2206,7 +2206,7 @@ void test_import_mapper_invalid_id_falls_back_to_auto(void)
     mkdir(path, 0775);
 
     IndexedQueue *q = NULL;
-    int rc_q = indexed_queue_create(TEST_DIR, QUEUE, 4096, 4, 1, 4096LL * 64,
+    int rc_q = indexed_queue_create(TEST_DIR, QUEUE, 4096, 16, 1, 4096LL * 64,
                                      0, 5000000000ULL, 0, rt, rt, &q);
     TEST_ASSERT_EQUAL_INT(0, rc_q);
     TEST_ASSERT_NOT_NULL(q);

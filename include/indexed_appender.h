@@ -185,8 +185,10 @@ PayloadIterator *indexed_appender_iterator(
  * Skips messages that have already been committed (visible in the header).
  * Operates on a fixed snapshot of the stream as of the call time.
  *
- * Returns an UncommittedPayloadIterator owned by the caller. Destroy with
- * uncommitted_iterator_destroy() when done.
+ * Returns the appender's internal UncommittedPayloadIterator, or NULL if
+ * the header scan was truncated (mapping timeout or offset mismatch). The
+ * returned pointer is valid until the next call to this function or until
+ * indexed_appender_close(). Do not destroy it manually.
  */
 UncommittedPayloadIterator *indexed_appender_uncommitted_iterator(
     IndexedAppender *a,

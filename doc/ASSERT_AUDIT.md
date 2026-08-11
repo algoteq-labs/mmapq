@@ -1,7 +1,7 @@
 # ASSERT_AUDIT.md — MMAP_ASSERT Inventory
 
-**83 asserts across 18 src/*.c files.** Generated from source.
-Last verified: 2026-08-11 (Phase 6c — regenerated).
+**78 asserts across 18 src/*.c files.** Generated from source.
+Last verified: 2026-08-11 (Phase 7 — regenerated).
 
 ## How this document is maintained
 
@@ -22,9 +22,9 @@ every row before changing it.
 
 | Disposition | Count |
 |---|---|
-| I (stays, re-verified) | 80 |
+| I (stays, re-verified) | 75 |
 | V (pending conversion) | 3 |
-| **Total** | **83** |
+| **Total** | **78** |
 
 ## Per-file inventory
 
@@ -81,14 +81,10 @@ Lines 37, 70. MMAP_ASSERT(0) for unreachable code paths.
 |---|---|---|
 | 139 length > 0 (read inner, on-disk) | V | On-disk payload length read via memcpy from mapped file. Could be zero/negative due to truncation or partial write. Reachable from `indexed_reader_read` and `indexed_reader_read_view`. `WRAP_SUCCESS` check directly above already sets `ENTRY_ERROR` — convert to early return with `ENTRY_ERROR` status. |
 
-### payload_iterator.c — 8 (7 I, 1 V)
+### payload_iterator.c — 7 (all I)
 
-Lines 57, 99, 112, 148-149, 160-161: NULL/state checks on `it` — I.
-Line 131: see table below.
-
-| Line | Disposition | Verified |
-|---|---|---|
-| 131 length > 0 (payload_walk returned negative) | V | `payload_walk_advance` at `payload_walk.c:81` returns -1 when `length <= 0` from on-disk data (corruption). Also returns -1 for wrap failures at lines 33, 46, 68. Both paths call from on-disk/caller-controlled data, not internal logic. The assert discards the error signal. Convert to return a proper error. |
+Lines 57, 99, 112, 147-148, 159-160: NULL/state checks on `it` — I.
+Phase 7a converted line 131 to `if (length <= 0) return 0;` (mapping timeout → end-of-stream).
 
 ### payload_walk.c — 1 (1 I)
 
@@ -119,11 +115,12 @@ Internal dispatch null checks.
 Lines 505 (same-thread invariant), 761 (helper-register ok).
 Internal invariants after public entry-point validation.
 
-### uncommitted_payload_iterator.c — 13 (all I)
+### uncommitted_payload_iterator.c — 9 (all I)
 
-Lines 30, 110, 112, 126, 128, 276, 316-317, 330, 349, 365, 373-374.
+Lines 30, 269, 309-310, 323, 342, 358, 366-367.
 Internal state checks on ranges iterator. No caller-controlled values
-reach these paths.
+reach these paths. Phase 7a converted 5 scan_committed_ranges asserts
+to runtime checks (advance failure → return 0 from scan).
 
 ## Pending V-class conversions
 
@@ -131,7 +128,6 @@ reach these paths.
 |---|---|---|---|
 | `batch_payload_iterator.c` | 82 | capacity == padded | Return MMAPQ_ECORRUPT on mismatch |
 | `indexed_reader.c` | 139 | length > 0 | Set ENTRY_ERROR instead of assert |
-| `payload_iterator.c` | 131 | payload_walk returned negative | Propagate error instead of assert |
 
 ## Files with zero asserts (all V-class already converted)
 

@@ -128,8 +128,7 @@ int payload_iterator_advance(PayloadIterator *it)
         return 0;
     }
 
-    MMAP_ASSERT(length > 0,
-        "payload_iterator_advance: payload_walk returned negative length");
+    if (length <= 0) return 0;
 
     it->current_message_offset = message_offset;
     it->current_message_length = length;

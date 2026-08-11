@@ -2,6 +2,8 @@
 #define INDEXED_QUEUE_H
 
 #include <stdint.h>
+#include "header_codec.h"
+#include "region_ring_accessor.h"
 #include "indexed_appender.h"
 #include "indexed_archiver.h"
 #include "indexed_poller.h"
@@ -55,6 +57,29 @@
 #define INDEXED_QUEUE_DEFAULT_REGIONS_TO_MAP_AHEAD ((int32_t)1)
 #define INDEXED_QUEUE_DEFAULT_MAX_FILE_SIZE       ((int64_t)INDEXED_QUEUE_DEFAULT_REGION_SIZE * 256)
 #define INDEXED_QUEUE_DEFAULT_TIMEOUT_NS          ((uint64_t)10 * 1000000000ULL)
+
+/* ── Geometry constraint helper ──────────────────────────────────────────── */
+
+/*
+ * mmapq_min_ring_size — minimum ring_size to avoid thrashing the header walk.
+ *
+ * The header vertical walk has a working set of one header block (32 KiB),
+ * and the premap engine maps regions_to_map_ahead regions past the current
+ * one. The ring span (ring_size * region_size) must hold both.
+ *
+ * Returns a power-of-two ring_size, or INDEXED_QUEUE_DEFAULT_RING_SIZE for
+ * invalid region_size (<= 0).
+ */
+static inline int mmapq_min_ring_size(int32_t region_size)
+{
+    if (region_size <= 0) return INDEXED_QUEUE_DEFAULT_RING_SIZE;
+    int64_t block = (int64_t)(1 << HEADER_BLOCK_SIZE_BITS) * HEADER_SIZE;
+    int64_t need  = (block + region_size - 1) / region_size
+                  + REGION_RING_ACCESSOR_DEFAULT_REGIONS_AHEAD;
+    int p2 = 1;
+    while ((int64_t)p2 < need) p2 <<= 1;
+    return p2;
+}
 
 /* ── IndexedQueue ────────────────────────────────────────────────────────── */
 
