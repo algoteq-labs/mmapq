@@ -779,6 +779,39 @@ void test_append_rejects_zero_length(void)
     indexed_queue_close(q);
 }
 
+void test_append_rejects_oversized_message(void)
+{
+    IndexedQueue      *q = NULL;
+    IndexedAppender   *a = NULL;
+
+    /* Create with small region so we can exceed it */
+    int rc_q = indexed_queue_create(DIR, QUEUE,
+        REGION_SZ, RING_SZ, 1,
+        4096LL * 64, 0, TIMEOUT_NS,
+        0, rt, rt, &q);
+    TEST_ASSERT_EQUAL_INT(0, rc_q);
+    TEST_ASSERT_NOT_NULL(q);
+    int rc_a = indexed_queue_create_appender(q, &a);
+    TEST_ASSERT_EQUAL_INT(0, rc_a);
+    TEST_ASSERT_NOT_NULL(a);
+
+    int64_t ok = indexed_appender_append(a, "small", 5);
+    TEST_ASSERT_EQUAL_INT64(0, ok);
+
+    /* REGION_SZ = 4096, message of 4096 bytes exceeds region_size - 4 */
+    char big[4096];
+    memset(big, 'x', sizeof(big));
+    int64_t bad = indexed_appender_append(a, big, (int32_t)sizeof(big));
+    TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL, bad);
+
+    /* Verify state unchanged — next append succeeds */
+    int64_t next = indexed_appender_append(a, "after", 5);
+    TEST_ASSERT_EQUAL_INT64(1, next);
+
+    indexed_appender_close(a);
+    indexed_queue_close(q);
+}
+
 void test_open_normal_as_batch_refused(void)
 {
     IndexedQueue *q = NULL;
@@ -1033,6 +1066,7 @@ int main(void)
     RUN_TEST(test_poller_automatically_discovers_region_size);
 
     RUN_TEST(test_append_rejects_zero_length);
+    RUN_TEST(test_append_rejects_oversized_message);
 
     RUN_TEST(test_open_normal_as_batch_refused);
     RUN_TEST(test_meta_schema_mismatch_refused);

@@ -49,7 +49,7 @@ column are design decisions, not roadmap items.
 | Start batch → append N messages → atomic commit (command/event transaction pattern) | ✓ | ✓ `BatchWriter`, commit consumes writer | ✓ context manager, discard on exception |
 | Discard batch (rollback) | ✓ | ✓ (drop) | ✓ (exception path) |
 | Single-call append_and_commit | ✓ | ✓ | ✓ |
-| Reserved append (write into reserved space) / append_remaining_from | ✓ | ✓ | — |
+| Reserved append (write into reserved space) / append_remaining_from | ✓ | ✓ | ✓ |
 | In-batch message iterator / message count | ✓ | ✓ | ✓ (handler-side iteration) |
 
 ## Consuming — pollers (sequential)

@@ -172,8 +172,9 @@ void indexed_batch_appender_discard_batch(IndexedBatchAppender *a, int64_t batch
  *
  * a:     the appender
  * data:  pointer to the message payload
- * length: number of bytes to write
- * Returns: the zero-based index of the committed batch, or -1 on error
+ * length: number of bytes to write (must be <= region_size - 4)
+ * Returns: the zero-based index of the committed batch,
+ *         or -1 on mapping timeout, or MMAPQ_EINVAL if message exceeds region size
  */
 int64_t indexed_batch_appender_append_and_commit(IndexedBatchAppender *a, const void *data, int32_t length);
 
@@ -189,8 +190,11 @@ int64_t indexed_batch_appender_append_and_commit(IndexedBatchAppender *a, const 
  * b:     the in-progress batch
  * data:  pointer to the message payload
  * length: number of bytes to write (not including the length prefix)
+ * length must be <= region_size - 4 (the 4-byte length prefix). Messages larger
+ * than one region are rejected with MMAPQ_EINVAL.
+ *
  * Returns: the zero-based index of the newly appended message within the batch,
- *         or -1 on mapping timeout
+ *         or -1 on mapping timeout, or MMAPQ_EINVAL if message exceeds region size
  */
 int32_t mutable_batch_append(MutableBatch *b, const void *data, int32_t length);
 
@@ -206,8 +210,10 @@ int32_t mutable_batch_append(MutableBatch *b, const void *data, int32_t length);
  * length:  number of payload bytes to reserve
  * out_data: set to a pointer to the reserved payload region on return;
  *                 valid until the next append, region remap, or close
+ * length must be <= region_size - 4. Larger values are rejected with MMAPQ_EINVAL.
+ *
  * Returns: the zero-based index of the reserved message slot within the batch,
- *         or -1 on mapping timeout
+ *         or -1 on mapping timeout, or MMAPQ_EINVAL if length exceeds region size
  */
 int32_t mutable_batch_append_reserved(MutableBatch *b, int32_t length, void **out_data);
 
@@ -218,9 +224,14 @@ int32_t mutable_batch_append_reserved(MutableBatch *b, int32_t length, void **ou
  * The iterator must not be backed by the same in-progress batch to avoid
  * undefined behaviour.
  *
+ * If any individual message exceeds the destination queue's region_size, the
+ * function returns MMAPQ_EINVAL immediately. On failure the batch is partially
+ * populated and must be discarded, not committed.
+ *
  * b:  the in-progress batch
  * it: iterator positioned at the first message to copy
- * Returns: the number of messages appended
+ * Returns: the number of messages appended on success,
+ *         or a negative MMAPQ_* error code on failure
  */
 int32_t mutable_batch_append_remaining_from(MutableBatch *b, BatchPayloadIterator *it);
 

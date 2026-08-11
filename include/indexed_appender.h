@@ -107,8 +107,11 @@ int indexed_appender_create_with_id(
  * data:   pointer to message payload bytes
  * length: payload byte count (must be <= region_size - 4)
  *
+ * length must be <= region_size - 4 (the 4-byte length prefix). Messages larger
+ * than one region are rejected with MMAPQ_EINVAL.
+ *
  * Returns the queue index at which the message was committed,
- * or -1 on mapping timeout.
+ * or -1 on mapping timeout, or MMAPQ_EINVAL if message exceeds region size.
  */
 int64_t indexed_appender_append(
     IndexedAppender *a,
@@ -121,9 +124,14 @@ int64_t indexed_appender_append(
  * Writes the payload to the payload file but does NOT write the header.
  * The message is invisible to pollers and readers until commit() is called.
  *
+ * data:   pointer to message payload bytes
+ * length: payload byte count (must be <= region_size - 4)
+ * length must be <= region_size - 4. Larger values are rejected with
+ * MMAPQ_EINVAL.
+ *
  * Returns the payload offset (position of the 4-byte length prefix),
- * or -1 on mapping timeout. The offset must be passed to
- * indexed_appender_commit() later.
+ * or -1 on mapping timeout, or MMAPQ_EINVAL if message exceeds region size.
+ * The offset must be passed to indexed_appender_commit() later.
  *
  * Use case: UDP resequencing — append as packets arrive, commit when
  * the sequence is gapless.
@@ -140,6 +148,8 @@ int64_t indexed_appender_append_uncommitted(
  *
  * Writes the header, making the message visible to pollers and readers.
  * Returns the queue index assigned to this message,
+ * or MMAPQ_EINVAL if a or payload_offset is NULL/invalid,
+ * or MMAPQ_ECLOSED if the appender is closed,
  * or -1 on mapping timeout.
  *
  * CONTRACT: Not idempotent. Committing the same offset twice will cause

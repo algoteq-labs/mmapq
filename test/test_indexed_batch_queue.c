@@ -557,6 +557,30 @@ void test_batch_append_rejects_zero_length(void)
     indexed_batch_appender_close(a);
 }
 
+void test_batch_append_rejects_oversized_message(void)
+{
+    IndexedBatchAppender *a = NULL;
+    int rc_a = indexed_batch_queue_create_appender(q, &a);
+    TEST_ASSERT_EQUAL_INT(0, rc_a);
+    TEST_ASSERT_NOT_NULL(a);
+
+    MutableBatch *b = indexed_batch_appender_start_batch(a);
+    TEST_ASSERT_NOT_NULL(b);
+
+    int32_t ok = mutable_batch_append(b, "small", 5);
+    TEST_ASSERT_EQUAL_INT(0, ok);
+
+    /* REGION_SZ = 65536, message of 65536 bytes exceeds region_size - 4 */
+    char big[65536];
+    memset(big, 'x', sizeof(big));
+    int32_t bad = mutable_batch_append(b, big, (int32_t)sizeof(big));
+    TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL, bad);
+
+    /* Batch is partially populated — must discard, not commit */
+    indexed_batch_appender_discard_batch(a, b->batch_offset);
+    indexed_batch_appender_close(a);
+}
+
 void test_open_batch_as_normal_refused(void)
 {
     IndexedBatchAppender *a = NULL;
@@ -730,6 +754,7 @@ int main(void)
 {
     UNITY_BEGIN();
     RUN_TEST(test_batch_append_rejects_zero_length);
+    RUN_TEST(test_batch_append_rejects_oversized_message);
     RUN_TEST(test_batch_poll_end_of_stream);
     RUN_TEST(test_batch_poll_single_batch);
     RUN_TEST(test_batch_poll_multiple_batches);
