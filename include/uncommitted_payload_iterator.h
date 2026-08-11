@@ -158,7 +158,7 @@ Buffer *uncommitted_iterator_current(UncommittedPayloadIterator *it);
 /**
  * uncommitted_iterator_rewind — re-init with same parameters.
  *
- * Aborts if not yet initialised. Returns NULL if the header scan fails.
+ * Returns NULL if not yet initialised, or if the header scan fails.
  */
 UncommittedPayloadIterator *uncommitted_iterator_rewind(UncommittedPayloadIterator *it);
 

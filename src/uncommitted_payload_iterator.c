@@ -310,7 +310,7 @@ UncommittedPayloadIterator *uncommitted_iterator_init(
 int uncommitted_iterator_advance(UncommittedPayloadIterator *it)
 {
     MMAP_ASSERT(it != NULL,         "uncommitted_iterator_advance: it is NULL");
-    MMAP_ASSERT(it->initialised,    "uncommitted_iterator_advance: not yet initialised");
+    if (!it->initialised) return 0;
 
     while (1) {
         if (payload_iterator_advance(it->inner)) {
@@ -367,7 +367,7 @@ Buffer *uncommitted_iterator_current(UncommittedPayloadIterator *it)
 UncommittedPayloadIterator *uncommitted_iterator_rewind(UncommittedPayloadIterator *it)
 {
     MMAP_ASSERT(it != NULL,      "uncommitted_iterator_rewind: it is NULL");
-    MMAP_ASSERT(it->initialised, "uncommitted_iterator_rewind: not yet initialised");
+    if (!it->initialised) return NULL;
 
     return uncommitted_iterator_init(it, it->init_start_offset, it->init_end_offset);
 }

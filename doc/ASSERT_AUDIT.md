@@ -1,6 +1,6 @@
 # ASSERT_AUDIT.md — MMAP_ASSERT Inventory
 
-**78 asserts across 18 src/*.c files.** Generated from source.
+**76 asserts across 18 src/*.c files.** Generated from source.
 Last verified: 2026-08-11 (Phase 7 — regenerated).
 
 ## How this document is maintained
@@ -22,9 +22,9 @@ every row before changing it.
 
 | Disposition | Count |
 |---|---|
-| I (stays, re-verified) | 75 |
+| I (stays, re-verified) | 73 |
 | V (pending conversion) | 3 |
-| **Total** | **78** |
+| **Total** | **76** |
 
 ## Per-file inventory
 
@@ -115,12 +115,14 @@ Internal dispatch null checks.
 Lines 505 (same-thread invariant), 761 (helper-register ok).
 Internal invariants after public entry-point validation.
 
-### uncommitted_payload_iterator.c — 9 (all I)
+### uncommitted_payload_iterator.c — 7 (all I)
 
-Lines 30, 269, 309-310, 323, 342, 358, 366-367.
+Lines 30, 269, 312, 326, 345, 361, 369.
 Internal state checks on ranges iterator. No caller-controlled values
 reach these paths. Phase 7a converted 5 scan_committed_ranges asserts
-to runtime checks (advance failure → return 0 from scan).
+to runtime checks (advance failure → return 0 from scan). Phase 7 close
+converted lines 312 and 369 (initialised guards) from asserts to runtime
+checks.
 
 ## Pending V-class conversions
 
