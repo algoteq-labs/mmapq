@@ -7,6 +7,7 @@
 #include "internal/header_codec.h"
 #include "internal/header_reader.h"
 #include "internal/payload_iterator.h"
+#include "mmap_platform.h"
 #include "internal/uncommitted_payload_iterator.h"
 #include "indexed_batch_queue.h"
 #include "internal/queue_meta.h"
@@ -1148,6 +1149,33 @@ void test_last_error_zero_on_success(void)
     indexed_poller_close(p);
 }
 
+/* ── strerror pins ────────────────────────────────────────────────────────── */
+
+void test_strerror_all_codes(void)
+{
+    /* Every defined code returns a non-empty string */
+    const char *s;
+    s = mmapq_strerror(MMAPQ_ETIMEDOUT);   TEST_ASSERT_NOT_NULL(s); TEST_ASSERT(strlen(s) > 0);
+    s = mmapq_strerror(MMAPQ_EINVAL);      TEST_ASSERT_NOT_NULL(s); TEST_ASSERT(strlen(s) > 0);
+    s = mmapq_strerror(MMAPQ_ECLOSED);     TEST_ASSERT_NOT_NULL(s); TEST_ASSERT(strlen(s) > 0);
+    s = mmapq_strerror(MMAPQ_ECORRUPT);    TEST_ASSERT_NOT_NULL(s); TEST_ASSERT(strlen(s) > 0);
+    s = mmapq_strerror(MMAPQ_ESCHEMA);     TEST_ASSERT_NOT_NULL(s); TEST_ASSERT(strlen(s) > 0);
+    s = mmapq_strerror(MMAPQ_EEXIST);      TEST_ASSERT_NOT_NULL(s); TEST_ASSERT(strlen(s) > 0);
+    s = mmapq_strerror(MMAPQ_ENOENT);      TEST_ASSERT_NOT_NULL(s); TEST_ASSERT(strlen(s) > 0);
+    s = mmapq_strerror(MMAPQ_EIDCONFLICT); TEST_ASSERT_NOT_NULL(s); TEST_ASSERT(strlen(s) > 0);
+    s = mmapq_strerror(MMAPQ_ENOMEM);      TEST_ASSERT_NOT_NULL(s); TEST_ASSERT(strlen(s) > 0);
+    s = mmapq_strerror(MMAPQ_EIO);         TEST_ASSERT_NOT_NULL(s); TEST_ASSERT(strlen(s) > 0);
+    s = mmapq_strerror(MMAPQ_ENOTREADY);   TEST_ASSERT_NOT_NULL(s); TEST_ASSERT(strlen(s) > 0);
+}
+
+void test_strerror_unknown(void)
+{
+    const char *s = mmapq_strerror(-99);
+    TEST_ASSERT_NOT_NULL(s);
+    TEST_ASSERT(strlen(s) > 0);
+    TEST_ASSERT_EQUAL_STRING("unknown error", s);
+}
+
 /* ── main ────────────────────────────────────────────────────────────────── */
 
 int main(void)
@@ -1195,6 +1223,9 @@ int main(void)
 
     RUN_TEST(test_reader_last_error_reports_eschema);
     RUN_TEST(test_last_error_zero_on_success);
+
+    RUN_TEST(test_strerror_all_codes);
+    RUN_TEST(test_strerror_unknown);
 
     return UNITY_END();
 }

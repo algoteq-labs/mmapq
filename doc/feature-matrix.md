@@ -21,6 +21,7 @@ column are design decisions, not roadmap items.
 | Feature | C | Rust | Python |
 |---|---|---|---|
 | Version macro (`MMAPQ_VERSION_MAJOR`/`_MINOR`/`_PATCH`, `mmapq_version()`) | ✓ | — (via C if needed) | — |
+| Error-string lookup (`mmapq_strerror`) | ✓ `src/mmapq_strerror.c`; `scripts/check_error_codes.sh` gate | — (Rust `Display` covers this) | — (exception messages cover this) |
 | Create/open single-message queue (full config) | ✓ | ✓ `QueueConfig` builder | ◐ dir/name + `archivable` kwarg; other params defaulted |
 | Create/open batch queue | ✓ | ✓ | ✓ `batch_queue.py:IndexedBatchQueue.create()` with `region_size`, `ring_size`, `max_file_size`, `start_index`, `timeout_ns`, `archivable` |
 | `archivable` creation parameter (default 0) | ✓ | ✓ `.archivable(bool)` | ✓ `archivable=False` kwarg |

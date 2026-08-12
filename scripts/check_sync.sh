@@ -39,4 +39,10 @@ if [ -n "$EXTRA_IN_MANIFEST" ]; then
     exit 1
 fi
 
+# Verify that every MMAPQ_* error code appears in all mirrors
+if [ -f mmapq/scripts/check_error_codes.sh ]; then
+    bash mmapq/scripts/check_error_codes.sh --self-test
+    bash mmapq/scripts/check_error_codes.sh
+fi
+
 echo "mirrors in sync"

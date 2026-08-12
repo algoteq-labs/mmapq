@@ -29,6 +29,17 @@
 #define MMAPQ_EIO        (-10)  /* I/O error — metadata file write failure, retry */
 #define MMAPQ_ENOTREADY  (-11)  /* meta file exists but not yet fully initialised — transient, retry */
 
+/* ── Error string ──────────────────────────────────────────────────────────── */
+
+/**
+ * mmapq_strerror — return a human-readable string for an MMAPQ_* error code.
+ *
+ * rc: a negative MMAPQ_* error code (e.g. MMAPQ_EINVAL = -2)
+ * Returns: a statically allocated string. Never returns NULL.
+ *          Returns "unknown error" for unrecognised codes.
+ */
+const char *mmapq_strerror(int rc);
+
 /* ── Version ───────────────────────────────────────────────────────────────── */
 
 #define MMAPQ_VERSION_MAJOR 0
