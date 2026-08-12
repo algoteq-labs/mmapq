@@ -57,6 +57,13 @@ esac
 
 echo "=== mmapq test suite ($MODE) ==="
 
+# ── Gate A: umbrella header compiles with only -I include (no -I src) ────────
+GATE_CFLAGS="-std=gnu11 -D_GNU_SOURCE -I include"
+echo "--- Gate A: mmapq.h umbrella ---"
+echo '#include "mmapq.h"' | gcc $GATE_CFLAGS -x c - -c -o /dev/null 2>&1 && \
+    echo "PASS: mmapq.h compiles with -I include only" || \
+    { echo "FAIL: mmapq.h umbrella header did not compile"; exit 1; }
+
 PASS=0
 FAIL=0
 
@@ -99,12 +106,19 @@ for TEST in "${TESTS[@]}"; do
     fi
 done
 
-# ── Release-flags validation (all 19 tests under exact release flags) ──────
+# ── Release-flags validation (all 19 tests + gates under exact release flags) ──
 echo ""
 echo "=== release-flags validation ==="
 CFLAGS_RELEASE="$(make -s print-cflags-release)"
 REL_PASS=0
 REL_FAIL=0
+
+# Gate A under release flags (no -I src — must resolve everything from include/)
+GATE_CFLAGS_RELEASE="-std=gnu11 -O3 -DNDEBUG -D_GNU_SOURCE -I include"
+echo "--- Gate A (release): mmapq.h umbrella ---"
+echo '#include "mmapq.h"' | gcc $GATE_CFLAGS_RELEASE -x c - -c -o /dev/null 2>&1 && \
+    echo "PASS (release): mmapq.h umbrella" || \
+    { echo "FAIL (release): mmapq.h umbrella header did not compile"; ((REL_FAIL++)); }
 
 for TEST in "${TESTS[@]}"; do
     if run_test "$TEST" "release" "$CFLAGS_RELEASE"; then

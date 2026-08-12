@@ -12,6 +12,7 @@ indexed_poller.h
 indexed_queue.h
 indexed_reader.h
 mmap_platform.h
+mmapq.h
 poller.h
 queue_transfer.h
 region_accessor.h
