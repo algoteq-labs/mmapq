@@ -33,6 +33,8 @@ struct IndexedReader {
     Buffer payload_buf;
 
     int closed;
+    int meta_init_failed;
+    int init_result;
 };
 
 /* ── Start index supplier ────────────────────────────────────────────────── */
@@ -49,18 +51,31 @@ static int64_t reader_start_index_fn(void *ctx)
 static int reader_init(IndexedReader *r)
 {
     if (r->queue_meta != NULL) return 1;
+    if (r->meta_init_failed) return 0;
 
-    if (queue_meta_open_ro(r->directory, r->queue_name, QUEUE_TYPE_NORMAL, &r->queue_meta) != 0)
+    int rc = queue_meta_open_ro(r->directory, r->queue_name, QUEUE_TYPE_NORMAL, &r->queue_meta);
+    if (rc != 0) {
+        /* Latch terminal errors only — ENOENT, ENOTREADY, ETIMEDOUT are transient */
+        if (rc != MMAPQ_ENOENT && rc != MMAPQ_ENOTREADY && rc != MMAPQ_ETIMEDOUT)
+            r->meta_init_failed = 1;
+        r->init_result = rc;
         return 0;
+    }
 
-    if (queue_region_accessor_create_ro(
+    int acc_rc = queue_region_accessor_create_ro(
         r->directory, r->queue_name,
         queue_meta_region_size(r->queue_meta),
         r->ring_size,
         r->regions_to_map_ahead,
         queue_meta_max_file_size(r->queue_meta),
         r->timeout_ns, r->runtime,
-        &r->ro_acc) != 0) return 0;
+        &r->ro_acc);
+    if (acc_rc != 0) {
+        queue_meta_close(r->queue_meta);
+        r->queue_meta = NULL;
+        r->init_result = acc_rc;
+        return 0;
+    }
 
     r->header_acc = queue_region_accessor_header(r->ro_acc);
     return 1;
@@ -92,6 +107,7 @@ int indexed_reader_create(
     r->runtime              = runtime;
     r->cached_last_index    = HEADER_NULL_INDEX;
     r->closed               = 0;
+    /* meta_init_failed and init_result are zero-initialised by calloc */
 
     *out = r;
     return 0;
@@ -108,7 +124,10 @@ static void reader_fill_context(IndexedReader *r, int64_t index, ReadingContext 
     ctx->length      = 0;
 
     if (!reader_init(r)) {
-        ctx->status = ENTRY_END_OF_STREAM;
+        ctx->status = (r->init_result == MMAPQ_ENOENT
+                    || r->init_result == MMAPQ_ENOTREADY)
+            ? ENTRY_END_OF_STREAM
+            : ENTRY_ERROR;
         return;
     }
 
@@ -236,7 +255,7 @@ EntryStatus indexed_reader_entry_status(IndexedReader *r, int64_t index)
     if (r == NULL)  return ENTRY_ERROR;
     if (r->closed)  return ENTRY_ERROR;
 
-    if (!reader_init(r)) return ENTRY_END_OF_STREAM;
+    if (!reader_init(r)) return (r->init_result == MMAPQ_ENOENT || r->init_result == MMAPQ_ENOTREADY) ? ENTRY_END_OF_STREAM : ENTRY_ERROR;
     if (index < queue_meta_start_index(r->queue_meta)) return ENTRY_ARCHIVED;
 
     return header_found(r->header_acc, &r->header_buf, index, r->queue_name)

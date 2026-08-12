@@ -15,6 +15,7 @@
  *    -8   MMAPQ_EIDCONFLICT — requested appender ID already in use
  *    -9   MMAPQ_ENOMEM      — internal allocation failure (back off, do not retry hot-loop)
  *   -10   MMAPQ_EIO         — I/O error (metadata file write failure, retry)
+ *   -11   MMAPQ_ENOTREADY   — meta file exists but not yet fully initialised (transient, retry)
  */
 #define MMAPQ_ETIMEDOUT  (-1)   /* mapping timeout or I/O — transient, retry */
 #define MMAPQ_EINVAL     (-2)   /* invalid argument (NULL, zero length, etc.) */
@@ -26,6 +27,7 @@
 #define MMAPQ_EIDCONFLICT (-8)  /* requested appender ID already in use */
 #define MMAPQ_ENOMEM     (-9)   /* internal allocation failure (calloc, strdup, etc.) — back off, do not retry hot-loop */
 #define MMAPQ_EIO        (-10)  /* I/O error — metadata file write failure, retry */
+#define MMAPQ_ENOTREADY  (-11)  /* meta file exists but not yet fully initialised — transient, retry */
 
 /* ── Version ───────────────────────────────────────────────────────────────── */
 

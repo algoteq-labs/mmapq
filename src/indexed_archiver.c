@@ -31,6 +31,8 @@ struct IndexedArchiver {
 
     /* Per-appender meta — opened lazily, keyed by appender_id (0–255) */
     AppenderMeta *appender_metas[MAX_APPENDERS];
+
+    int meta_init_failed;
 };
 
 /* ── Lazy initialisers ───────────────────────────────────────────────────── */
@@ -38,20 +40,30 @@ struct IndexedArchiver {
 static QueueMeta *ro_init(IndexedArchiver *a)
 {
     if (a->ro_meta) return a->ro_meta;
+    if (a->meta_init_failed) return NULL;
 
-    if (queue_meta_open_ro(a->directory, a->queue_name, QUEUE_TYPE_NORMAL, &a->ro_meta) != 0)
+    int rc = queue_meta_open_ro(a->directory, a->queue_name, QUEUE_TYPE_NORMAL, &a->ro_meta);
+    if (rc != 0) {
+        if (rc != MMAPQ_ENOENT && rc != MMAPQ_ENOTREADY && rc != MMAPQ_ETIMEDOUT)
+            a->meta_init_failed = 1;
         return NULL;
+    }
 
     /* Sync mapping (regions_to_map_ahead = 0): the archiver does a single
      * sequential pass over headers and never benefits from background premap. */
-    if (queue_region_accessor_create_ro(
+    int acc_rc = queue_region_accessor_create_ro(
         a->directory, a->queue_name,
         queue_meta_region_size(a->ro_meta),
         a->ring_size,
         0,   /* regions_to_map_ahead — sync, no background mapper needed */
         queue_meta_max_file_size(a->ro_meta),
         10000000000ULL, a->runtime,
-        &a->ro_acc) != 0) { return NULL; }
+        &a->ro_acc);
+    if (acc_rc != 0) {
+        queue_meta_close(a->ro_meta);
+        a->ro_meta = NULL;
+        return NULL;
+    }
     a->header_acc = queue_region_accessor_header(a->ro_acc);
     return a->ro_meta;
 }

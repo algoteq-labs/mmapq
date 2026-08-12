@@ -26,6 +26,8 @@ struct IndexedBatchPoller {
 
     Buffer               header_buf;
     int                  closed;
+    int                  meta_init_failed;
+    int                  init_result;
 };
 
 /* ── Internal Helpers ────────────────────────────────────────────────────── */
@@ -33,10 +35,22 @@ struct IndexedBatchPoller {
 static int poller_init(IndexedBatchPoller *p)
 {
     if (p->queue_meta) return 1;
-    if (queue_meta_open_ro(p->directory, p->queue_name, QUEUE_TYPE_BATCH, &p->queue_meta) != 0)
+    if (p->meta_init_failed) return 0;
+    int rc = queue_meta_open_ro(p->directory, p->queue_name, QUEUE_TYPE_BATCH, &p->queue_meta);
+    if (rc != 0) {
+        if (rc != MMAPQ_ENOENT && rc != MMAPQ_ENOTREADY && rc != MMAPQ_ETIMEDOUT)
+            p->meta_init_failed = 1;
+        p->init_result = rc;
         return 0;
+    }
 
-    if (queue_region_accessor_create_ro(p->directory, p->queue_name, queue_meta_region_size(p->queue_meta), p->ring_size, 1, queue_meta_max_file_size(p->queue_meta), p->timeout_ns, p->runtime, &p->ro_acc) != 0) return 0;
+    int acc_rc = queue_region_accessor_create_ro(p->directory, p->queue_name, queue_meta_region_size(p->queue_meta), p->ring_size, 1, queue_meta_max_file_size(p->queue_meta), p->timeout_ns, p->runtime, &p->ro_acc);
+    if (acc_rc != 0) {
+        queue_meta_close(p->queue_meta);
+        p->queue_meta = NULL;
+        p->init_result = acc_rc;
+        return 0;
+    }
     p->header_acc = queue_region_accessor_header(p->ro_acc);
     p->current_batch_index = queue_meta_start_index(p->queue_meta);
     return 1;
@@ -78,7 +92,8 @@ int indexed_batch_poller_create(
     p->ring_size  = ring_size;
     p->timeout_ns = timeout_ns;
     p->runtime    = runtime;
-    p->closed     = 0;
+    p->closed           = 0;
+    /* meta_init_failed and init_result are zero-initialised by calloc */
 
     *out = p;
     return 0;
@@ -88,7 +103,8 @@ int indexed_batch_poller_create(
 
 BatchPollResult indexed_batch_poller_poll(IndexedBatchPoller *p, BatchHandler handler, void *ctx)
 {
-    if (__builtin_expect(!poller_init(p), 0)) return POLL_END_OF_STREAM;
+    if (__builtin_expect(!poller_init(p), 0))
+        return (p->init_result == MMAPQ_ENOENT || p->init_result == MMAPQ_ENOTREADY) ? POLL_END_OF_STREAM : POLL_ERROR;
 
     long start_idx = queue_meta_start_index(p->queue_meta);
     if (p->current_batch_index < start_idx) return POLL_ARCHIVED;

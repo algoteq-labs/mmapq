@@ -33,6 +33,8 @@ struct IndexedPoller {
     Buffer payload_buf;
 
     int closed;
+    int meta_init_failed;
+    int init_result;
 };
 
 /* ── Start index supplier ────────────────────────────────────────────────── */
@@ -49,18 +51,30 @@ static int64_t poller_start_index_fn(void *ctx)
 static int poller_init(IndexedPoller *p)
 {
     if (p->queue_meta != NULL) return 1;
+    if (p->meta_init_failed) return 0;
 
-    if (queue_meta_open_ro(p->directory, p->queue_name, QUEUE_TYPE_NORMAL, &p->queue_meta) != 0)
-        return 0;  /* queue not created yet */
+    int rc = queue_meta_open_ro(p->directory, p->queue_name, QUEUE_TYPE_NORMAL, &p->queue_meta);
+    if (rc != 0) {
+        if (rc != MMAPQ_ENOENT && rc != MMAPQ_ENOTREADY && rc != MMAPQ_ETIMEDOUT)
+            p->meta_init_failed = 1;
+        p->init_result = rc;
+        return 0;
+    }
 
-    if (queue_region_accessor_create_ro(
+    int acc_rc = queue_region_accessor_create_ro(
         p->directory, p->queue_name,
         queue_meta_region_size(p->queue_meta),
         p->ring_size,
         p->regions_to_map_ahead,
         queue_meta_max_file_size(p->queue_meta),
         p->timeout_ns, p->runtime,
-        &p->ro_acc) != 0) return 0;
+        &p->ro_acc);
+    if (acc_rc != 0) {
+        queue_meta_close(p->queue_meta);
+        p->queue_meta = NULL;
+        p->init_result = acc_rc;
+        return 0;
+    }
 
     p->header_acc = queue_region_accessor_header(p->ro_acc);
 
@@ -96,6 +110,7 @@ int indexed_poller_create(
     p->runtime             = runtime;
     p->current_index       = QUEUE_META_INITIAL_START_INDEX;
     p->closed              = 0;
+    /* meta_init_failed and init_result are zero-initialised by calloc */
 
     *out = p;
     return 0;
@@ -112,7 +127,7 @@ PollResult indexed_poller_poll(
     if (p->closed)    return POLL_ERROR;
     if (handler == NULL) return POLL_ERROR;
 
-    if (!poller_init(p)) return POLL_END_OF_STREAM;
+    if (!poller_init(p)) return (p->init_result == MMAPQ_ENOENT || p->init_result == MMAPQ_ENOTREADY) ? POLL_END_OF_STREAM : POLL_ERROR;
 
     /* 
      * Optimisation: non-archivable queues always start at 0.

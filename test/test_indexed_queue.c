@@ -136,6 +136,49 @@ void test_poll_end_of_stream_when_empty(void)
     indexed_poller_close(p);
 }
 
+void test_poller_before_queue_retries(void)
+{
+    const char *poll_dir  = "/tmp";
+    const char *poll_name = "mmap_test_iq_poller_before";
+    char cleanup_cmd[512];
+    snprintf(cleanup_cmd, sizeof(cleanup_cmd), "rm -rf %s/%s", poll_dir, poll_name);
+
+    /* Step 1: create poller before queue exists */
+    IndexedPoller *p = NULL;
+    int rc_p = indexed_poller_create(poll_dir, poll_name, 16, 5000000000ULL, rt, &p);
+    TEST_ASSERT_EQUAL_INT(0, rc_p);
+    TEST_ASSERT_NOT_NULL(p);
+
+    PollCapture cap = { .directive = NEXT_ADVANCE };
+    PollResult r1 = indexed_poller_poll(p, capture_handler, &cap);
+    TEST_ASSERT_EQUAL_INT(POLL_END_OF_STREAM, r1);
+
+    /* Step 2: create the queue, append a message */
+    IndexedQueue *q2 = NULL;
+    int rc_q = indexed_queue_create_default(poll_dir, poll_name, rt, rt, &q2);
+    TEST_ASSERT_EQUAL_INT(0, rc_q);
+    TEST_ASSERT_NOT_NULL(q2);
+
+    IndexedAppender *a = NULL;
+    int rc_a = indexed_queue_create_appender(q2, &a);
+    TEST_ASSERT_EQUAL_INT(0, rc_a);
+    TEST_ASSERT_NOT_NULL(a);
+
+    int64_t idx = indexed_appender_append(a, "hello", 5);
+    TEST_ASSERT_EQUAL_INT64(0, idx);
+    indexed_appender_close(a);
+
+    /* Step 3: poll should now see the message */
+    PollCapture cap2 = { .directive = NEXT_ADVANCE };
+    PollResult r2 = indexed_poller_poll(p, capture_handler, &cap2);
+    TEST_ASSERT_EQUAL_INT(POLL_ADVANCED, r2);
+    TEST_ASSERT_EQUAL_INT(1, cap2.call_count);
+
+    indexed_poller_close(p);
+    indexed_queue_close(q2);
+    { int _rc_ = system(cleanup_cmd); (void)_rc_; }
+}
+
 void test_append_multiple_and_poll_all(void)
 {
     IndexedAppender *a = NULL;
@@ -1042,6 +1085,7 @@ int main(void)
 
     RUN_TEST(test_append_and_poll_single_message);
     RUN_TEST(test_poll_end_of_stream_when_empty);
+    RUN_TEST(test_poller_before_queue_retries);
     RUN_TEST(test_append_multiple_and_poll_all);
 
     RUN_TEST(test_reader_read_at_index);
