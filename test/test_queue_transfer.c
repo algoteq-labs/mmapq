@@ -31,7 +31,7 @@ static void cleanup_queue(const char *name)
 {
     char cmd[512];
     snprintf(cmd, sizeof(cmd), "rm -rf %s/%s", TEST_DIR, name);
-    system(cmd);
+    int rc = system(cmd); (void)rc;
 }
 
 void setUp(void)
@@ -481,7 +481,7 @@ void test_export_chunked(void)
 
     char clean_cmd[1024];
     snprintf(clean_cmd, sizeof(clean_cmd), "rm -f %s_*", base);
-    system(clean_cmd);
+    int rc = system(clean_cmd); (void)rc;
 }
 
 static int32_t map_to_zero(uint16_t aid, void *ctx)

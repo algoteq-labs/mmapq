@@ -142,6 +142,7 @@ void test_poller_before_queue_retries(void)
     const char *poll_name = "mmap_test_iq_poller_before";
     char cleanup_cmd[512];
     snprintf(cleanup_cmd, sizeof(cleanup_cmd), "rm -rf %s/%s", poll_dir, poll_name);
+    { int _rc_ = system(cleanup_cmd); (void)_rc_; }   /* clean stale state from prior runs */
 
     /* Step 1: create poller before queue exists */
     IndexedPoller *p = NULL;
