@@ -150,6 +150,17 @@ static inline int indexed_reader_has_entry(IndexedReader *r, int64_t index)
     return indexed_reader_entry_status(r, index) == ENTRY_AVAILABLE;
 }
 
+/* ── Error accessor ────────────────────────────────────────────────────────── */
+
+/**
+ * indexed_reader_last_error — MMAPQ_* code from the most recent ENTRY_ERROR.
+ *
+ * Returns 0 if the last read did not return ENTRY_ERROR. The value is cleared
+ * to 0 at the start of each read() call, so it always describes the most
+ * recent call. Meaningful only immediately after a read that returned ENTRY_ERROR.
+ */
+int indexed_reader_last_error(const IndexedReader *r);
+
 /* ── Lifecycle ───────────────────────────────────────────────────────────── */
 
 /**

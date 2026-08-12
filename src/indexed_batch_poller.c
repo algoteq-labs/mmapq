@@ -29,6 +29,7 @@ struct IndexedBatchPoller {
     int                  closed;
     int                  meta_init_failed;
     int                  init_result;
+    int                  last_error;       /* MMAPQ_* code from last POLL_ERROR, 0 otherwise */
 };
 
 /* ── Internal Helpers ────────────────────────────────────────────────────── */
@@ -104,8 +105,18 @@ int indexed_batch_poller_create(
 
 BatchPollResult indexed_batch_poller_poll(IndexedBatchPoller *p, BatchHandler handler, void *ctx)
 {
-    if (__builtin_expect(!poller_init(p), 0))
-        return (p->init_result == MMAPQ_ENOENT || p->init_result == MMAPQ_ENOTREADY) ? POLL_END_OF_STREAM : POLL_ERROR;
+    if (p == NULL)    return POLL_ERROR;
+    p->last_error = 0;
+
+    if (p->closed)     { p->last_error = MMAPQ_ECLOSED; return POLL_ERROR; }
+    if (handler == NULL) { p->last_error = MMAPQ_EINVAL; return POLL_ERROR; }
+
+    if (__builtin_expect(!poller_init(p), 0)) {
+        if (p->init_result == MMAPQ_ENOENT || p->init_result == MMAPQ_ENOTREADY)
+            return POLL_END_OF_STREAM;
+        p->last_error = p->init_result;
+        return POLL_ERROR;
+    }
 
     long start_idx = queue_meta_start_index(p->queue_meta);
     if (p->current_batch_index < start_idx) return POLL_ARCHIVED;
@@ -117,6 +128,7 @@ BatchPollResult indexed_batch_poller_poll(IndexedBatchPoller *p, BatchHandler ha
     int64_t pos = header_payload_position(header);
 
     BatchPayloadIterator *it = get_iterator(p, aid);
+    if (it == NULL) { p->last_error = MMAPQ_ENOMEM; return POLL_ERROR; }
     int32_t msg_count = batch_iterator_read_message_count(it, pos);
     if (msg_count <= 0) return POLL_CORRUPT;
     batch_iterator_init(it, pos, msg_count, 0);
@@ -207,6 +219,13 @@ int indexed_batch_poller_exists(IndexedBatchPoller *p, int64_t batch_index)
     if (!poller_init(p)) return 0;
     if (batch_index < queue_meta_start_index(p->queue_meta)) return 0;
     return header_found(p->header_acc, &p->header_buf, batch_index, p->queue_name) ? 1 : 0;
+}
+
+/* ── Error accessor ────────────────────────────────────────────────────────── */
+
+int indexed_batch_poller_last_error(const IndexedBatchPoller *p)
+{
+    return p == NULL ? 0 : p->last_error;
 }
 
 void indexed_batch_poller_close(IndexedBatchPoller *p)

@@ -40,6 +40,7 @@ struct IndexedBatchReader {
     int     closed;
     int     meta_init_failed;
     int     init_result;
+    int     last_error;       /* MMAPQ_* code from last BATCH_ENTRY_ERROR, 0 otherwise */
 };
 
 static int64_t reader_start_index_fn(void *ctx)
@@ -113,6 +114,7 @@ int indexed_batch_reader_create(
 
 static void reader_fill_context(IndexedBatchReader *r, int64_t index, BatchReadingContext *ctx)
 {
+    r->last_error = 0;
     ctx->index         = index;
     ctx->batch_offset  = -1;
     ctx->message_count = 0;
@@ -123,6 +125,7 @@ static void reader_fill_context(IndexedBatchReader *r, int64_t index, BatchReadi
                     || r->init_result == MMAPQ_ENOTREADY)
             ? BATCH_ENTRY_END_OF_STREAM
             : BATCH_ENTRY_ERROR;
+        if (ctx->status == BATCH_ENTRY_ERROR) r->last_error = r->init_result;
         return;
     }
 
@@ -171,8 +174,8 @@ BatchReadingContext *indexed_batch_reader_read(
 {
     if (r == NULL)   return NULL;
     if (ctx == NULL) return NULL;
-    if (r->closed)   { ctx->status = BATCH_ENTRY_ERROR; return ctx; }
-    if (index < 0)   { ctx->status = BATCH_ENTRY_ERROR; return ctx; }
+    if (r->closed)   { r->last_error = MMAPQ_ECLOSED; ctx->status = BATCH_ENTRY_ERROR; return ctx; }
+    if (index < 0)   { r->last_error = MMAPQ_EINVAL; ctx->status = BATCH_ENTRY_ERROR; return ctx; }
 
     reader_fill_context(r, index, ctx);
     return ctx;
@@ -184,7 +187,7 @@ BatchReadingContext *indexed_batch_reader_read_first(
 {
     if (r == NULL)   return NULL;
     if (ctx == NULL) return NULL;
-    if (r->closed)   { ctx->status = BATCH_ENTRY_ERROR; return ctx; }
+    if (r->closed)   { r->last_error = MMAPQ_ECLOSED; ctx->status = BATCH_ENTRY_ERROR; return ctx; }
 
     int64_t start = reader_init(r)
         ? queue_meta_start_index(r->queue_meta)
@@ -200,7 +203,7 @@ BatchReadingContext *indexed_batch_reader_read_last(
 {
     if (r == NULL)   return NULL;
     if (ctx == NULL) return NULL;
-    if (r->closed)   { ctx->status = BATCH_ENTRY_ERROR; return ctx; }
+    if (r->closed)   { r->last_error = MMAPQ_ECLOSED; ctx->status = BATCH_ENTRY_ERROR; return ctx; }
 
     int64_t last = indexed_batch_reader_last_index(r);
     if (last == HEADER_NULL_INDEX) {
@@ -256,6 +259,13 @@ BatchEntryStatus indexed_batch_reader_entry_status(IndexedBatchReader *r, int64_
     return header_found(r->header_acc, &r->header_buf, index, r->queue_name)
         ? BATCH_ENTRY_AVAILABLE
         : BATCH_ENTRY_END_OF_STREAM;
+}
+
+/* ── Error accessor ────────────────────────────────────────────────────────── */
+
+int indexed_batch_reader_last_error(const IndexedBatchReader *r)
+{
+    return r == NULL ? 0 : r->last_error;
 }
 
 /* ── Accessors ─────────────────────────────────────────────────────────────── */

@@ -168,6 +168,17 @@ int64_t indexed_poller_start_index(IndexedPoller *p);
  */
 int indexed_poller_exists(IndexedPoller *p, int64_t index);
 
+/* ── Error accessor ────────────────────────────────────────────────────────── */
+
+/**
+ * indexed_poller_last_error — MMAPQ_* code from the most recent POLL_ERROR.
+ *
+ * Returns 0 if the last poll did not return POLL_ERROR. The value is cleared
+ * to 0 at the start of each poll() call, so it always describes the most
+ * recent call. Meaningful only immediately after a poll that returned POLL_ERROR.
+ */
+int indexed_poller_last_error(const IndexedPoller *p);
+
 /* ── Lifecycle ───────────────────────────────────────────────────────────── */
 
 /**

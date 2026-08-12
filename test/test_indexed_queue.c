@@ -1080,6 +1080,74 @@ static void test_create_with_id_already_in_use(void)
     indexed_appender_close(a1);
 }
 
+/* ── last_error pins ─────────────────────────────────────────────────────── */
+
+static NextMove last_error_dummy_handler(int64_t idx, uint8_t aid, const void *data, int32_t len, void *ctx)
+{ (void)idx; (void)aid; (void)data; (void)len; (void)ctx; return NEXT_ADVANCE; }
+
+void test_reader_last_error_reports_eschema(void)
+{
+    /* Create a batch queue (wrong type for a normal IndexedReader) */
+    cleanup();
+    IndexedBatchQueue *bq = NULL;
+    int rc = indexed_batch_queue_create(DIR, QUEUE,
+              4096, 16, 1, 4096LL * 64, 0, 5000000000ULL, 0, rt, rt, &bq);
+    TEST_ASSERT_EQUAL_INT(0, rc);
+    TEST_ASSERT_NOT_NULL(bq);
+    /* Write a batch so meta exists with QUEUE_TYPE_BATCH */
+    IndexedBatchAppender *ba = NULL;
+    rc = indexed_batch_queue_create_appender(bq, &ba);
+    TEST_ASSERT_EQUAL_INT(0, rc);
+    TEST_ASSERT_NOT_NULL(ba);
+    MutableBatch *mb = indexed_batch_appender_start_batch(ba);
+    TEST_ASSERT_NOT_NULL(mb);
+    mutable_batch_append(mb, "x", 1);
+    int64_t off = mutable_batch_complete(mb);
+    indexed_batch_appender_commit_batch(ba, off);
+    indexed_batch_appender_close(ba);
+    indexed_batch_queue_close(bq);
+
+    /* Open a normal IndexedReader on the batch queue — should get ESCHEMA */
+    IndexedReader *r = NULL;
+    rc = indexed_reader_create(DIR, QUEUE, 4, 5000000000ULL, NULL, &r);
+    TEST_ASSERT_EQUAL_INT(0, rc);
+    TEST_ASSERT_NOT_NULL(r);
+    ReadingContext ctx = {0};
+    indexed_reader_read(r, 0, &ctx);
+    TEST_ASSERT_EQUAL(ENTRY_ERROR, ctx.status);
+    TEST_ASSERT_EQUAL(MMAPQ_ESCHEMA, indexed_reader_last_error(r));
+    indexed_reader_close(r);
+
+    /* Cleanup for setUp/tearDown */
+    cleanup();
+}
+
+void test_last_error_zero_on_success(void)
+{
+    /* setUp already created the queue and appended nothing. Read of 0
+       should be END_OF_STREAM (not error), and last_error should be 0. */
+    IndexedReader *r = NULL;
+    int rc = indexed_reader_create(DIR, QUEUE, 4, 5000000000ULL, NULL, &r);
+    TEST_ASSERT_EQUAL_INT(0, rc);
+    TEST_ASSERT_NOT_NULL(r);
+    ReadingContext ctx = {0};
+    indexed_reader_read(r, 0, &ctx);
+    TEST_ASSERT_EQUAL(ENTRY_END_OF_STREAM, ctx.status);
+    TEST_ASSERT_EQUAL(0, indexed_reader_last_error(r));
+    indexed_reader_close(r);
+
+    /* Also verify poller last_error is 0 after a valid end-of-stream poll */
+    IndexedPoller *p = NULL;
+    rc = indexed_queue_create_poller(q, &p);
+    TEST_ASSERT_EQUAL_INT(0, rc);
+    TEST_ASSERT_NOT_NULL(p);
+    /* Use a real handler so we don't hit the NULL-handler error path */
+    PollResult pr = indexed_poller_poll(p, last_error_dummy_handler, NULL);
+    TEST_ASSERT_EQUAL(POLL_END_OF_STREAM, pr);
+    TEST_ASSERT_EQUAL(0, indexed_poller_last_error(p));
+    indexed_poller_close(p);
+}
+
 /* ── main ────────────────────────────────────────────────────────────────── */
 
 int main(void)
@@ -1124,6 +1192,9 @@ int main(void)
     RUN_TEST(test_standalone_factory_rejects_missing_directory);
     RUN_TEST(test_create_with_id_already_in_use);
     RUN_TEST(test_poll_detects_corrupt_payload);
+
+    RUN_TEST(test_reader_last_error_reports_eschema);
+    RUN_TEST(test_last_error_zero_on_success);
 
     return UNITY_END();
 }

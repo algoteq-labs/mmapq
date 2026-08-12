@@ -35,6 +35,7 @@ struct IndexedPoller {
     int closed;
     int meta_init_failed;
     int init_result;
+    int last_error;       /* MMAPQ_* code from last POLL_ERROR, 0 otherwise */
 };
 
 /* ── Start index supplier ────────────────────────────────────────────────── */
@@ -123,11 +124,18 @@ PollResult indexed_poller_poll(
     MessageHandler handler,
     void          *ctx)
 {
-    if (p == NULL)    return POLL_ERROR;
-    if (p->closed)    return POLL_ERROR;
-    if (handler == NULL) return POLL_ERROR;
+    p->last_error = 0;
 
-    if (!poller_init(p)) return (p->init_result == MMAPQ_ENOENT || p->init_result == MMAPQ_ENOTREADY) ? POLL_END_OF_STREAM : POLL_ERROR;
+    if (p == NULL)    return POLL_ERROR;
+    if (p->closed)    { p->last_error = MMAPQ_ECLOSED; return POLL_ERROR; }
+    if (handler == NULL) { p->last_error = MMAPQ_EINVAL; return POLL_ERROR; }
+
+    if (!poller_init(p)) {
+        if (p->init_result == MMAPQ_ENOENT || p->init_result == MMAPQ_ENOTREADY)
+            return POLL_END_OF_STREAM;
+        p->last_error = p->init_result;
+        return POLL_ERROR;
+    }
 
     /* 
      * Optimisation: non-archivable queues always start at 0.
@@ -159,12 +167,12 @@ PollResult indexed_poller_poll(
         queue_region_accessor_payload(p->ro_acc, appender_id);
 
     WrapResult r = region_accessor_wrap(payload_acc, payload_position, &p->payload_buf);
-    if (r != WRAP_SUCCESS) return POLL_ERROR;
+    if (r != WRAP_SUCCESS) { p->last_error = MMAPQ_ETIMEDOUT; return POLL_ERROR; }
 
     int32_t length;
     memcpy(&length, p->payload_buf.data + PAYLOAD_LENGTH_OFFSET, sizeof(int32_t));
 
-    if (length <= 0) return POLL_CORRUPT;
+    if (length <= 0) { p->last_error = MMAPQ_ECORRUPT; return POLL_CORRUPT; }
 
     const void *data = p->payload_buf.data + PAYLOAD_DATA_OFFSET;
 
@@ -296,6 +304,13 @@ int indexed_poller_exists(IndexedPoller *p, int64_t index)
     if (!poller_init(p)) return 0;
     if (index < queue_meta_start_index(p->queue_meta)) return 0;
     return header_found(p->header_acc, &p->header_buf, index, p->queue_name);
+}
+
+/* ── Error accessor ────────────────────────────────────────────────────────── */
+
+int indexed_poller_last_error(const IndexedPoller *p)
+{
+    return p == NULL ? 0 : p->last_error;
 }
 
 /* ── indexed_poller_close ────────────────────────────────────────────────── */

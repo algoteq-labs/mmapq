@@ -73,13 +73,13 @@ Lines 37, 70. MMAP_ASSERT(0) for unreachable code paths.
 
 | Line | Disposition | Verified |
 |---|---|---|
-| 194 unknown handler directive | I | Internal logic error: handler always returns valid directive |
+| 202 unknown handler directive (poll) | I | Internal: MMAP_ASSERT(0) guards unreachable default case in switch — all known directives return before hitting it. |
 
 ### indexed_reader.c — 1 (1 V)
 
 | Line | Disposition | Verified |
 |---|---|---|
-| 158 length > 0 (read inner, on-disk) | V | On-disk payload length read via memcpy from mapped file. Could be zero/negative due to truncation or partial write. Reachable from `indexed_reader_read` and `indexed_reader_read_view`. `WRAP_SUCCESS` check directly above already sets `ENTRY_ERROR` — convert to early return with `ENTRY_ERROR` status. |
+| 161 length > 0 (read inner, on-disk) | V | On-disk payload length read via memcpy from mapped file. Could be zero/negative due to truncation or partial write. Reachable from `indexed_reader_read` and `indexed_reader_read_view`. `WRAP_SUCCESS` check directly above already sets `ENTRY_ERROR` — convert to early return with `ENTRY_ERROR` status. |
 
 ### payload_iterator.c — 7 (all I)
 
@@ -129,7 +129,7 @@ checks.
 | File | Line | Assert | Action |
 |---|---|---|---|
 | `batch_payload_iterator.c` | 83 | capacity == padded | Return MMAPQ_ECORRUPT on mismatch |
-| `indexed_reader.c` | 139 | length > 0 | Set ENTRY_ERROR instead of assert |
+| `indexed_reader.c` | 161 | length > 0 | Set ENTRY_ERROR instead of assert |
 
 ## Files with zero asserts (all V-class already converted)
 
