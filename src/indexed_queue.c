@@ -156,18 +156,6 @@ int indexed_queue_create_default(
         out_queue);
 }
 
-/* ── indexed_queue_create_default_opt ────────────────────────────────────── */
-
-int indexed_queue_create_default_opt(
-    const char *directory,
-    const char *queue_name,
-    Runtime    *write_runtime,
-    Runtime    *read_runtime,
-    IndexedQueue **out_queue)
-{
-    return indexed_queue_create_default(directory, queue_name, write_runtime, read_runtime, out_queue);
-}
-
 /* ── Participant factories ────────────────────────────────────────────────── */
 
 int indexed_queue_create_appender(IndexedQueue *q, IndexedAppender **out)

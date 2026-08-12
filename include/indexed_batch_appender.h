@@ -87,7 +87,7 @@ int indexed_batch_appender_create(
  * if the ID is already in use.
  *
  * All parameters same as indexed_batch_appender_create, plus:
- * appender_id: the desired appender ID (0-254)
+ * appender_id: the desired appender ID (0-255)
  */
 int indexed_batch_appender_create_with_id(
     const char *directory,

@@ -158,11 +158,19 @@ header CAS operations and improving throughput for high-frequency messages.
 #include "runtime.h"
 #include "indexed_batch_queue.h"
 
-Runtime *rt = runtime_region_mapper();
-IndexedBatchQueue *q = indexed_batch_queue_create_default("/tmp", "events", rt, rt);
+Runtime *rt = NULL;
+int rc = runtime_region_mapper(&rt);
+assert(rc == 0);
+
+IndexedBatchQueue *q = NULL;
+rc = indexed_batch_queue_create_default("/tmp", "events", rt, rt, &q);
+assert(rc == 0);
 
 /* Batch three messages together (single header commit) */
-IndexedBatchAppender *a = indexed_batch_queue_create_appender(q);
+IndexedBatchAppender *a = NULL;
+rc = indexed_batch_queue_create_appender(q, &a);
+assert(rc == 0);
+
 MutableBatch *b = indexed_batch_appender_start_batch(a);
 mutable_batch_append(b, "msg0", 4);
 mutable_batch_append(b, "msg1", 4);
@@ -170,16 +178,18 @@ mutable_batch_append(b, "msg2", 4);
 int64_t batch_idx = indexed_batch_appender_commit_batch(a, mutable_batch_complete(b));
 
 /* Poll one batch at a time — handler receives the full batch context */
-IndexedBatchPoller *p = indexed_batch_queue_create_poller(q);
+IndexedBatchPoller *p = NULL;
+rc = indexed_batch_queue_create_poller(q, &p);
+assert(rc == 0);
 
 static NextMove my_handler(int64_t batch_index, BatchReadingContext *ctx,
                             void *user_ctx) {
     /* Iterate through messages in the batch */
-    while (batch_iterator_advance(&ctx->batch_iterator)) {
-        printf("batch[%ld]: %.*s\n",
-               batch_index,
-               (int)batch_iterator_current_length(&ctx->batch_iterator),
-               (const char *)batch_iterator_current_data(&ctx->batch_iterator));
+    BatchPayloadIterator *it = ctx->iterator;
+    while (batch_iterator_advance(it)) {
+        int32_t len = batch_iterator_current_length_ffi(it);
+        printf("batch[%ld]: %.*s\n", batch_index, (int)len,
+               (const char *)batch_iterator_current_data_ffi(it));
     }
     return NEXT_ADVANCE;
 }
@@ -522,13 +532,13 @@ BENCH_ITER=5000000 BENCH_MAPPER=11 ./scripts/bench.sh
 
 | Function | What it does |
 | :--- | :--- |
-| `runtime_region_mapper()` | Get the singleton background mapping thread (call once at startup) |
-| `indexed_queue_create_default()` | Open or create a single-message queue |
-| `indexed_queue_create_appender()` | Create a writer |
-| `indexed_queue_create_poller()` | Create a sequential reader |
-| `indexed_appender_append()` | Write and commit a message |
-| `indexed_poller_poll()` | Process one message via callback |
-| `indexed_batch_queue_create_default()` | Open or create a batch queue |
+| `runtime_region_mapper(&rt)` | Get the singleton background mapping thread (call once at startup) |
+| `indexed_queue_create_default(dir, name, wrt, rrt, &q)` | Open or create a single-message queue |
+| `indexed_queue_create_appender(q, &a)` | Create a writer |
+| `indexed_queue_create_poller(q, &p)` | Create a sequential reader |
+| `indexed_appender_append(a, data, len)` | Write and commit a message |
+| `indexed_poller_poll(p, handler, ctx)` | Process one message via callback |
+| `indexed_batch_queue_create_default(dir, name, wrt, rrt, &q)` | Open or create a batch queue |
 | `indexed_batch_appender_start_batch()` | Begin a new batch |
 | `mutable_batch_append()` | Add a message to an in-progress batch |
 | `indexed_batch_appender_commit_batch()` | Commit the batch atomically |

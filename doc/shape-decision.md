@@ -22,6 +22,16 @@ class as the last three phases.
   `timeout_ns`; the standalone form does not.
 - Non-breaking — pure additive.
 
+## macOS support (12b)
+
+**Decision:** removed. 
+
+The only platform-specific code was thread naming (3 sites:
+`mmap_platform.h` x2, `runtime.c`). No mmap, atomics, or file-layout
+differences existed — but cross-process lock-free atomics over `MAP_SHARED`
+on Apple Silicon were never tested. Re-adding macOS support requires macOS
+CI exercising the multiprocess test.
+
 ## Runtime gap closure
 
 The `runtime=`-only path in Python (the originally documented path) was

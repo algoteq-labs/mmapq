@@ -59,15 +59,15 @@ static inline const char *mmapq_version(void) {
 }
 
 #if defined(__linux__) && !defined(_GNU_SOURCE)
-#  define _GNU_SOURCE
+#  error "mmapq requires -D_GNU_SOURCE on Linux — add -D_GNU_SOURCE to your CFLAGS"
 #endif
 
 /**
  * Platform detection and CPU hints.
  *
- * Supports Linux and macOS (including Apple Silicon / ARM64).
+ * Supports Linux (x86-64 and ARM64).
  *
- * _GNU_SOURCE is defined above on Linux to expose pthread_setname_np,
+ * mmapq requires -D_GNU_SOURCE on Linux to expose pthread_setname_np,
  * pthread_setaffinity_np and CPU_SET macros.
  *
  * CROSS-PROCESS ATOMICS:
@@ -76,12 +76,10 @@ static inline const char *mmapq_version(void) {
  *   guaranteed on:
  *     Linux x86-64  (LOCK CMPXCHG)
  *     Linux ARM64   (LDAXR/STLXR, CASAL)
- *     macOS ARM64   (same as Linux ARM64 — same hardware)
- *     macOS x86-64  (Rosetta 2, same as x86-64)
  */
 
-#if !defined(__linux__) && !defined(__APPLE__)
-#  error "mmapq supports Linux and macOS only"
+#if !defined(__linux__)
+#  error "mmapq supports Linux only"
 #endif
 
 #include <stdint.h>
@@ -96,7 +94,7 @@ static inline const char *mmapq_version(void) {
  *
  * Linux: uses madvise with MADV_HUGEPAGE. Requires Transparent Huge Pages (THP)
  *        to be enabled in the kernel (typically 'madvise' or 'always' mode).
- * macOS: no-op (not supported via standard madvise).
+ * Non-Linux: no-op (not supported via standard madvise).
  */
 static inline void huge_pages_hint(void *addr, size_t length)
 {
@@ -165,27 +163,19 @@ static inline long page_size(void)
 /**
  * thread_set_name — set the name of a pthread (for debugger visibility).
  *
- * Linux: pthread_setname_np(thread, name) — sets another thread's name.
- *        Requires _GNU_SOURCE (set by build system on Linux).
- * macOS: pthread_setname_np(name) — sets only the CALLING thread's name.
- *        Must be called from within the thread itself; see runtime_thread_fn.
+ * Linux: pthread_setname_np(thread, name).
+ *        Requires _GNU_SOURCE on the compiler command line.
  */
 static inline void thread_set_name(pthread_t thread, const char *name)
 {
-#if defined(__linux__)
     pthread_setname_np(thread, name);
-#elif defined(__APPLE__)
-    (void)thread;
-    (void)name;
-    /* macOS: thread sets its own name at startup inside runtime_thread_fn */
-#endif
 }
 
 /**
  * thread_set_affinity_of — pin a specific thread to a specific CPU core.
  *
  * Linux: uses pthread_setaffinity_np.
- * macOS: no-op (not supported via standard API).
+ * Non-Linux: no-op (not supported via standard API).
  */
 static inline int thread_set_affinity_of(pthread_t thread, int cpu_core)
 {

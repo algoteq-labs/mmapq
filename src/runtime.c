@@ -347,13 +347,9 @@ static void *runtime_thread_fn(void *arg)
 
     /*
      * Set thread name from within the thread itself.
-     * On macOS, pthread_setname_np only sets the calling thread's name,
-     * so we must call it here. On Linux, thread_set_name() from the
-     * creator thread is sufficient, but calling it here too is harmless.
+     * thread_set_name() from the creator thread is sufficient, but
+     * calling it here too is harmless.
      */
-#if defined(__APPLE__)
-    pthread_setname_np(rt->name);
-#endif
 
     atomic_store(&rt->thread_started, 1);
     rt->runtime_thread_id = pthread_self();

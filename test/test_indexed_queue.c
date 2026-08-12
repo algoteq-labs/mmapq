@@ -1081,6 +1081,29 @@ static void test_create_with_id_already_in_use(void)
     indexed_appender_close(a1);
 }
 
+/* ── Appender ID boundary pin ────────────────────────────────────────────── */
+
+static void test_appender_id_255_succeeds(void)
+{
+    char tmp[128];
+    snprintf(tmp, sizeof(tmp), "%s/%s_XXXXXX", DIR, QUEUE);
+    char *dir = mkdtemp(tmp);
+    TEST_ASSERT_NOT_NULL(dir);
+    char qdir[256];
+    snprintf(qdir, sizeof(qdir), "%s/%s", dir, QUEUE);
+    mkdir(qdir, 0755);
+
+    IndexedAppender *a = NULL;
+    int rc = indexed_appender_create_with_id(
+        dir, QUEUE,
+        4096 * 1024, 4, (4096 * 1024) * 256,
+        10000000000, 0, NULL, 255, 0, &a);
+    TEST_ASSERT_EQUAL_INT(0, rc);
+    TEST_ASSERT_NOT_NULL(a);
+    TEST_ASSERT_EQUAL_UINT8(255, indexed_appender_id(a));
+    indexed_appender_close(a);
+}
+
 /* ── last_error pins ─────────────────────────────────────────────────────── */
 
 static NextMove last_error_dummy_handler(int64_t idx, uint8_t aid, const void *data, int32_t len, void *ctx)
@@ -1219,6 +1242,7 @@ int main(void)
 
     RUN_TEST(test_standalone_factory_rejects_missing_directory);
     RUN_TEST(test_create_with_id_already_in_use);
+    RUN_TEST(test_appender_id_255_succeeds);
     RUN_TEST(test_poll_detects_corrupt_payload);
 
     RUN_TEST(test_reader_last_error_reports_eschema);

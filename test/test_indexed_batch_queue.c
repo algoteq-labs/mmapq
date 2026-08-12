@@ -751,6 +751,16 @@ static void test_batch_stale_appender_catch_up(void)
     indexed_batch_appender_close(a2);
 }
 
+static void test_batch_appender_id_255_succeeds(void)
+{
+    IndexedBatchAppender *a = NULL;
+    int rc = indexed_batch_queue_create_appender_with_id(q, 255, &a);
+    TEST_ASSERT_EQUAL_INT(0, rc);
+    TEST_ASSERT_NOT_NULL(a);
+    TEST_ASSERT_EQUAL_UINT8(255, indexed_batch_appender_id(a));
+    indexed_batch_appender_close(a);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -773,5 +783,6 @@ int main(void)
     RUN_TEST(test_batch_roundtrip_type_stamped);
     RUN_TEST(test_batch_poll_detects_corrupt_payload);
     RUN_TEST(test_batch_stale_appender_catch_up);
+    RUN_TEST(test_batch_appender_id_255_succeeds);
     return UNITY_END();
 }

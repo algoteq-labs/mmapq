@@ -58,7 +58,7 @@ typedef struct IndexedBatchReader IndexedBatchReader;
  *
  * source_aid: appender ID from the source (export stream or reader)
  * ctx:        caller-supplied context (passed through from the API call)
- * Returns: a valid appender ID (0-254), or APPENDER_ID_AUTO for auto-assign
+ * Returns: a valid appender ID (0-255), or APPENDER_ID_AUTO for auto-assign
  */
 typedef int32_t (*AppenderIdMapper)(uint16_t source_aid, void *ctx);
 

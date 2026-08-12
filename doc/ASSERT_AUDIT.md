@@ -112,7 +112,7 @@ Internal dispatch null checks.
 
 ### runtime.c — 2 (both I)
 
-Lines 505 (same-thread invariant), 761 (helper-register ok).
+Lines 501 (same-thread invariant), 757 (helper-register ok).
 Internal invariants after public entry-point validation.
 
 ### uncommitted_payload_iterator.c — 7 (all I)

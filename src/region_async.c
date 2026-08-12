@@ -243,6 +243,7 @@ static WrapResult await_mapped(AsyncRegionImpl *impl, int64_t region_start_posit
     }
 
     uint64_t start_ns = monotonic_nanos();
+    int spin = 0;
 
     while (1) {
         s = get_state(impl);
@@ -284,6 +285,10 @@ static WrapResult await_mapped(AsyncRegionImpl *impl, int64_t region_start_posit
             return WRAP_MAP_TIMED_OUT;
         }
         spin_hint();
+        if (++spin >= 1000) {
+            spin = 0;
+            sched_yield();
+        }
     }
 }
 

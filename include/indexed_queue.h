@@ -16,9 +16,10 @@
  *
  * FILE LAYOUT (all under "<directory>/<queue_name>/"):
  *   meta                    — queue configuration (QueueMeta)
- *   header                  — shared header file (all appenders write here)
- *   payload_<N>             — one payload file per appender N
- *   appender_meta_<N>       — per-appender start offset
+ *   header_N                — shared header file (N = file index 0, 1, 2...)
+ *   payload_A_N             — per-appender payload file (A = appender ID,
+ *                             N = file index 0, 1, 2...)
+ *   appender_meta_A         — per-appender start offset
  *   appender_id_pool        — bitset for ID allocation
  *
  * DEFAULTS (mirrors Java IndexedQueueBuilder):
@@ -120,16 +121,6 @@ int indexed_queue_create(
  * runtimes must be provided — typically runtime_region_mapper() or NULL.
  */
 int indexed_queue_create_default(
-    const char *directory,
-    const char *queue_name,
-    Runtime    *write_runtime,
-    Runtime    *read_runtime,
-    IndexedQueue **out_queue);
-
-/**
- * indexed_queue_create_default_opt — create with default parameters and options.
- */
-int indexed_queue_create_default_opt(
     const char *directory,
     const char *queue_name,
     Runtime    *write_runtime,

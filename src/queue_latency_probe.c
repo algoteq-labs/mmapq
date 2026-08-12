@@ -113,11 +113,11 @@ int queue_latency_probe_create(
     memset(p->msg_buffer, 0, (size_t)message_size);
     
     {
-        int rc = indexed_queue_create_default_opt(directory, request_name, write_runtime, read_runtime, &p->request_queue);
+        int rc = indexed_queue_create_default(directory, request_name, write_runtime, read_runtime, &p->request_queue);
         if (rc != 0) { free(p->msg_buffer); free(p); return rc; }
     }
     {
-        int rc = indexed_queue_create_default_opt(directory, response_name, write_runtime, read_runtime, &p->response_queue);
+        int rc = indexed_queue_create_default(directory, response_name, write_runtime, read_runtime, &p->response_queue);
         if (rc != 0) { indexed_queue_close(p->request_queue); free(p->msg_buffer); free(p); return rc; }
     }
     

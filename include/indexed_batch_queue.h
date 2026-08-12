@@ -107,7 +107,7 @@ int indexed_batch_queue_create_appender(
  * code if the ID is already in use or if the queue is closed.
  *
  * q:           the queue (must not be closed)
- * appender_id: the desired appender ID (0-254)
+ * appender_id: the desired appender ID (0-255)
  * out:         on success, set to the new appender
  * Returns: 0 on success, or an MMAPQ_* error code
  */

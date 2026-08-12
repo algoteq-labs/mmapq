@@ -45,4 +45,22 @@ if [ -f mmapq/scripts/check_error_codes.sh ]; then
     bash mmapq/scripts/check_error_codes.sh
 fi
 
+# Verify README fenced C blocks compile against -I include only
+if [ -f mmapq/scripts/check_readme_examples.sh ]; then
+    bash mmapq/scripts/check_readme_examples.sh mmapq/README.md
+fi
+
+# Verify the generated binding-coverage section in feature-matrix.md is current
+if [ -f mmapq/scripts/api_surface.sh ]; then
+    GENERATED=$(bash mmapq/scripts/api_surface.sh --presence-matrix | grep -A100 '^## ' | head -n -1)
+    CHECKED_IN=$(awk '/^## Auto-generated binding coverage$/{p=1} /^<!-- \/GENERATED -->$/{p=0} p' mmapq/doc/feature-matrix.md)
+    if [ "$GENERATED" != "$CHECKED_IN" ]; then
+        echo "ERROR: feature-matrix.md auto-generated section is stale. Regenerate with:" >&2
+        echo "  bash scripts/api_surface.sh --presence-matrix > /tmp/gen &&" >&2
+        echo "  # replace the section between <!-- GENERATED --> and <!-- /GENERATED -->" >&2
+        exit 1
+    fi
+    echo "PASS: feature-matrix.md binding-coverage section is current"
+fi
+
 echo "mirrors in sync"
