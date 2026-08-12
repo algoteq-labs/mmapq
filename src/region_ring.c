@@ -1,6 +1,6 @@
-#include "region_ring.h"
+#include "internal/region_ring.h"
 #include "runtime.h"
-#include "mmap_assert.h"
+#include "internal/mmap_assert.h"
 #include "mmap_platform.h"
 
 #include <stdlib.h>

@@ -3,9 +3,9 @@
 #include "indexed_queue.h"
 #include "indexed_appender.h"
 #include "indexed_poller.h"
-#include "queue_meta.h"
-#include "appender_meta.h"
-#include "header_codec.h"
+#include "internal/queue_meta.h"
+#include "internal/appender_meta.h"
+#include "internal/header_codec.h"
 #include "runtime.h"
 
 #include <stdlib.h>

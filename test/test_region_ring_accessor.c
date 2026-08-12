@@ -1,8 +1,8 @@
 #include "unity.h"
-#include "region_ring_accessor.h"
-#include "region_ring.h"
-#include "file_mapper.h"
-#include "file_initialiser.h"
+#include "internal/region_ring_accessor.h"
+#include "internal/region_ring.h"
+#include "internal/file_mapper.h"
+#include "internal/file_initialiser.h"
 #include "runtime.h"
 
 #include <stdint.h>

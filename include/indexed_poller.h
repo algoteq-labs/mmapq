@@ -3,9 +3,7 @@
 
 #include <stdint.h>
 #include "poller.h"
-#include "region_accessor.h"
 #include "runtime.h"
-#include "mmap_assert.h"
 
 /**
  * IndexedPoller — sequential consumer of the indexed queue.

@@ -2,10 +2,8 @@
 #define INDEXED_BATCH_READER_H
 
 #include <stdint.h>
-#include "region_accessor.h"
 #include "runtime.h"
 #include "batch_payload_iterator.h"
-#include "queue_meta.h"
 
 /**
  * IndexedBatchReader — random-access reader for an indexed batch queue.
@@ -220,22 +218,6 @@ static inline int indexed_batch_reader_has_entry(IndexedBatchReader *r, int64_t 
 {
     return indexed_batch_reader_entry_status(r, index) == BATCH_ENTRY_AVAILABLE;
 }
-
-/**
- * Return the queue metadata associated with this reader, or NULL if the queue
- * does not exist.  Triggers lazy initialisation if needed.
- */
-QueueMeta *indexed_batch_reader_queue_meta(IndexedBatchReader *r);
-
-/**
- * Return the base directory string.
- */
-const char *indexed_batch_reader_directory(IndexedBatchReader *r);
-
-/**
- * Return the queue name string.
- */
-const char *indexed_batch_reader_queue_name(IndexedBatchReader *r);
 
 /* ── Lifecycle ────────────────────────────────────────────────────────────── */
 

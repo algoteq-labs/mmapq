@@ -2,15 +2,11 @@
 #define INDEXED_QUEUE_H
 
 #include <stdint.h>
-#include "header_codec.h"
-#include "region_ring_accessor.h"
 #include "indexed_appender.h"
 #include "indexed_archiver.h"
 #include "indexed_poller.h"
 #include "indexed_reader.h"
-#include "queue_meta.h"
 #include "runtime.h"
-#include "mmap_assert.h"
 
 /**
  * IndexedQueue — top-level factory for an indexed message queue.
@@ -70,16 +66,7 @@
  * Returns a power-of-two ring_size, or INDEXED_QUEUE_DEFAULT_RING_SIZE for
  * invalid region_size (<= 0).
  */
-static inline int mmapq_min_ring_size(int32_t region_size)
-{
-    if (region_size <= 0) return INDEXED_QUEUE_DEFAULT_RING_SIZE;
-    int64_t block = (int64_t)(1 << HEADER_BLOCK_SIZE_BITS) * HEADER_SIZE;
-    int64_t need  = (block + region_size - 1) / region_size
-                  + REGION_RING_ACCESSOR_DEFAULT_REGIONS_AHEAD;
-    int p2 = 1;
-    while ((int64_t)p2 < need) p2 <<= 1;
-    return p2;
-}
+int mmapq_min_ring_size(int32_t region_size);
 
 /* ── IndexedQueue ────────────────────────────────────────────────────────── */
 

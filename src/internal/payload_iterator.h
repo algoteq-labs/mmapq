@@ -36,7 +36,8 @@
 
 #define PAYLOAD_ITERATOR_NOT_SET  ((int64_t)-1)
 
-typedef struct {
+/* Completes the forward declaration from include/indexed_appender.h */
+typedef struct PayloadIterator {
     /* Configuration — set at construction */
     const char     *queue_name;
     RegionAccessor *payload_accessor;

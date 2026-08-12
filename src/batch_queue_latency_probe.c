@@ -1,6 +1,6 @@
-#include "batch_queue_latency_probe.h"
+#include "internal/batch_queue_latency_probe.h"
 #include "mmap_platform.h"
-#include "mmap_assert.h"
+#include "internal/mmap_assert.h"
 #include "internal/batch_payload_iterator_internal.h"
 #include <stdlib.h>
 #include <string.h>

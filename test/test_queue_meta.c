@@ -1,5 +1,5 @@
 #include "unity.h"
-#include "queue_meta.h"
+#include "internal/queue_meta.h"
 
 #include <unistd.h>
 #include <stdio.h>

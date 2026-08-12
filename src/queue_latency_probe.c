@@ -1,6 +1,6 @@
-#include "queue_latency_probe.h"
+#include "internal/queue_latency_probe.h"
 #include "mmap_platform.h"
-#include "mmap_assert.h"
+#include "internal/mmap_assert.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>

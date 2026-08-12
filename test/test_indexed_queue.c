@@ -4,10 +4,12 @@
 #include "indexed_poller.h"
 #include "indexed_reader.h"
 #include "runtime.h"
-#include "header_codec.h"
-#include "header_reader.h"
+#include "internal/header_codec.h"
+#include "internal/header_reader.h"
+#include "internal/payload_iterator.h"
+#include "internal/uncommitted_payload_iterator.h"
 #include "indexed_batch_queue.h"
-#include "queue_meta.h"
+#include "internal/queue_meta.h"
 #include <stdio.h>
 #include <time.h>
 

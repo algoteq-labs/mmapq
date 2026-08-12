@@ -56,8 +56,9 @@ typedef struct {
 } CommittedRange;
 
 /* ── UncommittedPayloadIterator ──────────────────────────────────────────── */
+/* Completes the forward declaration from include/indexed_appender.h */
 
-typedef struct {
+typedef struct UncommittedPayloadIterator {
     const char     *queue_name;
     uint8_t         appender_id;
 

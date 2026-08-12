@@ -17,7 +17,7 @@ SRCS    = $(wildcard src/*.c)
 OBJS    = $(SRCS:.c=.o)
 LIB     = libmmapq.a
 
-.PHONY: all demo bench echo_server batch_demo batch_bench batch_echo_server bench-suite batch-bench-suite interop test test-asan test-tsan test-multi clean
+.PHONY: all demo bench echo_server batch_demo batch_bench batch_echo_server bench-suite batch-bench-suite interop test test-asan test-tsan test-multi install clean
 
 all: $(LIB) demo bench echo_server batch_demo batch_bench batch_echo_server
 
@@ -77,6 +77,12 @@ print-cflags-release:
 # Ensure scripts are executable after checkout
 scripts/test.sh test/multiprocess/test_multiprocess.sh:
 	chmod +x $@
+
+install: $(LIB)
+	install -d $(DESTDIR)$(PREFIX)/include/mmapq
+	install -m 644 $(addprefix include/,$(shell cat include/PUBLIC_HEADERS)) $(DESTDIR)$(PREFIX)/include/mmapq/
+	install -d $(DESTDIR)$(PREFIX)/lib
+	install -m 644 $(LIB) $(DESTDIR)$(PREFIX)/lib/
 
 clean:
 	rm -f $(OBJS) $(LIB) demo latency_bench echo_server batch_demo batch_latency_bench batch_echo_server

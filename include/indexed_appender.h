@@ -2,11 +2,11 @@
 #define INDEXED_APPENDER_H
 
 #include <stdint.h>
-#include "region_accessor.h"
 #include "runtime.h"
-#include "payload_iterator.h"
-#include "uncommitted_payload_iterator.h"
-#include "mmap_assert.h"
+
+/* Opaque iterator types — struct definitions are private (src/internal/). */
+typedef struct PayloadIterator PayloadIterator;
+typedef struct UncommittedPayloadIterator UncommittedPayloadIterator;
 
 /**
  * IndexedAppender — writes messages to the indexed queue.

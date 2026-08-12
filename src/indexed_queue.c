@@ -1,8 +1,10 @@
 #include "indexed_queue.h"
 #include "indexed_archiver.h"
-#include "queue_meta.h"
-#include "appender_id_pool.h"
-#include "mmap_assert.h"
+#include "internal/queue_meta.h"
+#include "internal/appender_id_pool.h"
+#include "internal/header_codec.h"
+#include "internal/region_ring_accessor.h"
+#include "internal/mmap_assert.h"
 #include "mmap_platform.h"
 
 #include <stdlib.h>
@@ -31,6 +33,19 @@ struct IndexedQueue {
     QueueMeta *queue_meta;   /* Lazily opened RO meta */
     atomic_int closed;
 };
+
+/* ── Geometry constraint helper ──────────────────────────────────────────── */
+
+int mmapq_min_ring_size(int32_t region_size)
+{
+    if (region_size <= 0) return INDEXED_QUEUE_DEFAULT_RING_SIZE;
+    int64_t block = (int64_t)(1 << HEADER_BLOCK_SIZE_BITS) * HEADER_SIZE;
+    int64_t need  = (block + region_size - 1) / region_size
+                  + REGION_RING_ACCESSOR_DEFAULT_REGIONS_AHEAD;
+    int p2 = 1;
+    while ((int64_t)p2 < need) p2 <<= 1;
+    return p2;
+}
 
 /* ── Directory creation ──────────────────────────────────────────────────── */
 

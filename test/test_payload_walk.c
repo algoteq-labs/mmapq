@@ -1,11 +1,11 @@
 #include "unity.h"
-#include "payload_walk.h"
-#include "file_mapper.h"
-#include "file_initialiser.h"
-#include "region_ring.h"
-#include "region_ring_accessor.h"
+#include "internal/payload_walk.h"
+#include "internal/file_mapper.h"
+#include "internal/file_initialiser.h"
+#include "internal/region_ring.h"
+#include "internal/region_ring_accessor.h"
 #include "runtime.h"
-#include "header_codec.h"
+#include "internal/header_codec.h"
 
 #include <unistd.h>
 #include <string.h>

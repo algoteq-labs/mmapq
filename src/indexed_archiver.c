@@ -1,11 +1,11 @@
 #include "indexed_archiver.h"
-#include "queue_meta.h"
-#include "queue_region_accessor.h"
-#include "queue_files.h"
-#include "appender_meta.h"
-#include "header_reader.h"
-#include "header_codec.h"
-#include "payload_walk.h"
+#include "internal/queue_meta.h"
+#include "internal/queue_region_accessor.h"
+#include "internal/queue_files.h"
+#include "internal/appender_meta.h"
+#include "internal/header_reader.h"
+#include "internal/header_codec.h"
+#include "internal/payload_walk.h"
 #include "mmap_platform.h"
 
 #include <stdlib.h>

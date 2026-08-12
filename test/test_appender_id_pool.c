@@ -1,5 +1,5 @@
 #include "unity.h"
-#include "appender_id_pool.h"
+#include "internal/appender_id_pool.h"
 
 #include <unistd.h>
 #include <stdio.h>

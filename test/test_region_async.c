@@ -1,9 +1,9 @@
 #include "unity.h"
-#include "region.h"
-#include "region_ring.h"
+#include "internal/region.h"
+#include "internal/region_ring.h"
 #include "runtime.h"
-#include "file_mapper.h"
-#include "file_initialiser.h"
+#include "internal/file_mapper.h"
+#include "internal/file_initialiser.h"
 
 #include <stdint.h>
 #include <unistd.h>

@@ -1,20 +1,26 @@
 #include "queue_transfer.h"
-#include "queue_meta.h"
+#include "internal/queue_meta.h"
 #include "indexed_queue.h"
 #include "indexed_appender.h"
 #include "indexed_batch_reader.h"
 #include "indexed_batch_queue.h"
 #include "indexed_batch_appender.h"
 #include "export_meta.h"
-#include "appender_cache.h"
+#include "internal/appender_cache.h"
 #include "internal/batch_payload_iterator_internal.h"
-#include "mmap_assert.h"
+#include "internal/mmap_assert.h"
 #include "mmap_platform.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 #include <sys/stat.h>
 #include <errno.h>
+
+/* Internal accessors — declared in indexed_reader.h and
+ * indexed_batch_reader.h before Phase 9c moved them out of the
+ * public surface. These are used by transfer internals only. */
+QueueMeta *indexed_reader_queue_meta(IndexedReader *r);
+QueueMeta *indexed_batch_reader_queue_meta(IndexedBatchReader *r);
 
 /* ── Internal helpers ────────────────────────────────────────────────────── */
 

@@ -5,10 +5,10 @@
 #include "indexed_batch_poller.h"
 #include "indexed_batch_reader.h"
 #include "runtime.h"
-#include "header_codec.h"
-#include "header_reader.h"
+#include "internal/header_codec.h"
+#include "internal/header_reader.h"
 #include "indexed_queue.h"
-#include "queue_meta.h"
+#include "internal/queue_meta.h"
 #include "internal/batch_payload_iterator_internal.h"
 #include <stdio.h>
 #include <time.h>

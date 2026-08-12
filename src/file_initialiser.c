@@ -1,5 +1,5 @@
-#include "file_initialiser.h"
-#include "mmap_assert.h"
+#include "internal/file_initialiser.h"
+#include "internal/mmap_assert.h"
 
 #include <unistd.h>
 #include <errno.h>

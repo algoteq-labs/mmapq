@@ -1,6 +1,6 @@
 #include "unity.h"
-#include "file_mapper.h"
-#include "file_initialiser.h"
+#include "internal/file_mapper.h"
+#include "internal/file_initialiser.h"
 
 #include <fcntl.h>
 #include <unistd.h>

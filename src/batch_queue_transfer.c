@@ -1,18 +1,22 @@
 #include "batch_queue_transfer.h"
-#include "queue_meta.h"
+#include "internal/queue_meta.h"
 #include "indexed_batch_queue.h"
 #include "indexed_batch_appender.h"
 #include "indexed_queue.h"
 #include "indexed_appender.h"
 #include "indexed_reader.h"
 #include "export_meta.h"
-#include "appender_cache.h"
+#include "internal/appender_cache.h"
 #include "internal/batch_payload_iterator_internal.h"
-#include "mmap_assert.h"
+#include "internal/mmap_assert.h"
 #include "mmap_platform.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+
+/* Internal accessors — removed from public headers in Phase 9c. */
+QueueMeta *indexed_reader_queue_meta(IndexedReader *r);
+QueueMeta *indexed_batch_reader_queue_meta(IndexedBatchReader *r);
 #include <sys/stat.h>
 #include <errno.h>
 

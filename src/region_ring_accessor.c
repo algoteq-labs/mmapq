@@ -1,5 +1,5 @@
-#include "region_ring_accessor.h"
-#include "mmap_assert.h"
+#include "internal/region_ring_accessor.h"
+#include "internal/mmap_assert.h"
 #include "mmap_platform.h"
 
 #include <stdlib.h>

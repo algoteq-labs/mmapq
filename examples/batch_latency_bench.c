@@ -1,10 +1,10 @@
-#include "batch_queue_latency_probe.h"
+#include "internal/batch_queue_latency_probe.h"
 #include "indexed_batch_queue.h"
 #include "indexed_batch_appender.h"
 #include "indexed_batch_poller.h"
 #include "runtime.h"
 #include "mmap_platform.h"
-#include "mmap_stats.h"
+#include "internal/mmap_stats.h"
 #include "internal/batch_payload_iterator_internal.h"
 
 #include <stdio.h>

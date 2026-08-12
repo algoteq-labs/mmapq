@@ -1,6 +1,6 @@
 #include "batch_payload_iterator.h"
-#include "header_codec.h"
-#include "mmap_assert.h"
+#include "internal/header_codec.h"
+#include "internal/mmap_assert.h"
 #include "internal/batch_payload_iterator_internal.h"
 #include <string.h>
 

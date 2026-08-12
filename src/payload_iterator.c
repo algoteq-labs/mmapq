@@ -1,6 +1,6 @@
-#include "payload_iterator.h"
-#include "payload_walk.h"
-#include "mmap_assert.h"
+#include "internal/payload_iterator.h"
+#include "internal/payload_walk.h"
+#include "internal/mmap_assert.h"
 #include "mmap_platform.h"
 
 #include <stdlib.h>

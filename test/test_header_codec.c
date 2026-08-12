@@ -1,5 +1,5 @@
 #include "unity.h"
-#include "header_codec.h"
+#include "internal/header_codec.h"
 
 void setUp(void)    {}
 void tearDown(void) {}

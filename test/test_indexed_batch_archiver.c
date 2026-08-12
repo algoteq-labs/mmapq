@@ -2,7 +2,7 @@
 #include "indexed_batch_archiver.h"
 #include "indexed_batch_appender.h"
 #include "indexed_batch_poller.h"
-#include "queue_meta.h"
+#include "internal/queue_meta.h"
 #include "runtime.h"
 
 #include <stdlib.h>

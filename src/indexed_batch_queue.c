@@ -2,9 +2,9 @@
 #include "indexed_batch_reader.h"
 #include "indexed_batch_archiver.h"
 #include "indexed_queue.h"
-#include "queue_meta.h"
+#include "internal/queue_meta.h"
 #include "mmap_platform.h"
-#include "mmap_assert.h"
+#include "internal/mmap_assert.h"
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>

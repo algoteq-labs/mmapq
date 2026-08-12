@@ -3,7 +3,7 @@
 #include "indexed_batch_poller.h"
 #include "runtime.h"
 #include "mmap_platform.h"
-#include "mmap_assert.h"
+#include "internal/mmap_assert.h"
 #include "internal/batch_payload_iterator_internal.h"
 
 #include <stdio.h>
