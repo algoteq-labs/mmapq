@@ -13,6 +13,7 @@
 #include "indexed_batch_appender.h"
 #include "indexed_batch_poller.h"
 #include "batch_payload_iterator.h"
+#include "internal/batch_payload_iterator_internal.h"
 #include "runtime.h"
 #include "mmap_platform.h"
 
@@ -39,9 +40,9 @@ static NextMove batch_handler(
 
     printf("  batch[%ld] — %d message(s):\n", batch_index, msg_count);
 
-    while (batch_iterator_advance(&ctx->batch_iterator)) {
-        const void *data = batch_iterator_current_data(&ctx->batch_iterator);
-        int32_t length   = batch_iterator_current_length(&ctx->batch_iterator);
+    while (batch_iterator_advance(ctx->iterator)) {
+        const void *data = batch_iterator_current_data(ctx->iterator);
+        int32_t length   = batch_iterator_current_length(ctx->iterator);
         printf("    msg[%d]: %.*s\n", seen, length, (const char *)data);
         seen++;
         (*total_messages)++;

@@ -7,6 +7,7 @@
 #include "indexed_reader.h"
 #include "export_meta.h"
 #include "appender_cache.h"
+#include "internal/batch_payload_iterator_internal.h"
 #include "mmap_assert.h"
 #include "mmap_platform.h"
 #include <stdlib.h>
@@ -100,13 +101,13 @@ int64_t batch_queue_transfer_export(
             indexed_batch_reader_read(reader, b, &bctx);
             if (bctx.status != BATCH_ENTRY_AVAILABLE) continue;
             int matched = 0;
-            batch_iterator_init(&bctx.batch_iterator, bctx.batch_offset,
+            batch_iterator_init(bctx.iterator, bctx.batch_offset,
                                 bctx.message_count, 0);
-            while (batch_iterator_advance(&bctx.batch_iterator)) {
-                int m_idx = bctx.batch_iterator.current_msg_index;
-                int m_cnt = bctx.batch_iterator.message_count;
-                const void *d = batch_iterator_current_data(&bctx.batch_iterator);
-                int32_t l = batch_iterator_current_length(&bctx.batch_iterator);
+            while (batch_iterator_advance(bctx.iterator)) {
+                int m_idx = bctx.iterator->current_msg_index;
+                int m_cnt = bctx.iterator->message_count;
+                const void *d = batch_iterator_current_data(bctx.iterator);
+                int32_t l = batch_iterator_current_length(bctx.iterator);
                 int in = include ? include(b, m_idx, m_cnt, d, l, ctx) : 1;
                 int ex = exclude ? exclude(b, m_idx, m_cnt, d, l, ctx) : 0;
                 if (in && !ex) { matched = 1; break; }
@@ -142,13 +143,13 @@ int64_t batch_queue_transfer_export(
         if (no_filter) {
             msg_matched = bctx.message_count;
         } else {
-            batch_iterator_init(&bctx.batch_iterator, bctx.batch_offset,
+            batch_iterator_init(bctx.iterator, bctx.batch_offset,
                                 bctx.message_count, 0);
-            while (batch_iterator_advance(&bctx.batch_iterator)) {
-                int m_idx = bctx.batch_iterator.current_msg_index;
-                int m_cnt = bctx.batch_iterator.message_count;
-                const void *d = batch_iterator_current_data(&bctx.batch_iterator);
-                int32_t l = batch_iterator_current_length(&bctx.batch_iterator);
+            while (batch_iterator_advance(bctx.iterator)) {
+                int m_idx = bctx.iterator->current_msg_index;
+                int m_cnt = bctx.iterator->message_count;
+                const void *d = batch_iterator_current_data(bctx.iterator);
+                int32_t l = batch_iterator_current_length(bctx.iterator);
                 int in = include ? include(b, m_idx, m_cnt, d, l, ctx) : 1;
                 int ex = exclude ? exclude(b, m_idx, m_cnt, d, l, ctx) : 0;
                 if (in && !ex) msg_matched++;
@@ -162,13 +163,13 @@ int64_t batch_queue_transfer_export(
         if (write_all(out, &msg_matched, sizeof(int32_t))) return -1;
 
         /* Write matching messages */
-        batch_iterator_init(&bctx.batch_iterator, bctx.batch_offset,
+        batch_iterator_init(bctx.iterator, bctx.batch_offset,
                             bctx.message_count, 0);
-        while (batch_iterator_advance(&bctx.batch_iterator)) {
-            int m_idx = bctx.batch_iterator.current_msg_index;
-            int m_cnt = bctx.batch_iterator.message_count;
-            const void *d = batch_iterator_current_data(&bctx.batch_iterator);
-            int32_t l = batch_iterator_current_length(&bctx.batch_iterator);
+        while (batch_iterator_advance(bctx.iterator)) {
+            int m_idx = bctx.iterator->current_msg_index;
+            int m_cnt = bctx.iterator->message_count;
+            const void *d = batch_iterator_current_data(bctx.iterator);
+            int32_t l = batch_iterator_current_length(bctx.iterator);
             if (no_filter) {
                 if (write_all(out, &l, sizeof(int32_t))) return -1;
                 if (l > 0 && write_all(out, d, (size_t)l)) return -1;
@@ -224,13 +225,13 @@ int64_t batch_queue_transfer_export_chunked(
         /* Count/size this batch */
         int msg_matched = 0;
         int batch_size  = (int)(sizeof(uint16_t) + sizeof(int32_t)); /* appender_id + msg_count */
-        batch_iterator_init(&bctx.batch_iterator, bctx.batch_offset,
+        batch_iterator_init(bctx.iterator, bctx.batch_offset,
                             bctx.message_count, 0);
-        while (batch_iterator_advance(&bctx.batch_iterator)) {
-            int m_idx = bctx.batch_iterator.current_msg_index;
-            int m_cnt = bctx.batch_iterator.message_count;
-            const void *d = batch_iterator_current_data(&bctx.batch_iterator);
-            int32_t l = batch_iterator_current_length(&bctx.batch_iterator);
+        while (batch_iterator_advance(bctx.iterator)) {
+            int m_idx = bctx.iterator->current_msg_index;
+            int m_cnt = bctx.iterator->message_count;
+            const void *d = batch_iterator_current_data(bctx.iterator);
+            int32_t l = batch_iterator_current_length(bctx.iterator);
             if (no_filter) {
                 msg_matched++;
                 batch_size += (int)(sizeof(int32_t) + l);
@@ -298,13 +299,13 @@ int64_t batch_queue_transfer_export_chunked(
             if (bctx.status != BATCH_ENTRY_AVAILABLE) continue;
 
             int msg_matched = 0;
-            batch_iterator_init(&bctx.batch_iterator, bctx.batch_offset,
+            batch_iterator_init(bctx.iterator, bctx.batch_offset,
                                 bctx.message_count, 0);
-            while (batch_iterator_advance(&bctx.batch_iterator)) {
-                int m_idx = bctx.batch_iterator.current_msg_index;
-                int m_cnt = bctx.batch_iterator.message_count;
-                const void *d = batch_iterator_current_data(&bctx.batch_iterator);
-                int32_t l = batch_iterator_current_length(&bctx.batch_iterator);
+            while (batch_iterator_advance(bctx.iterator)) {
+                int m_idx = bctx.iterator->current_msg_index;
+                int m_cnt = bctx.iterator->message_count;
+                const void *d = batch_iterator_current_data(bctx.iterator);
+                int32_t l = batch_iterator_current_length(bctx.iterator);
                 if (no_filter) { msg_matched++; }
                 else {
                     int in = include ? include(b, m_idx, m_cnt, d, l, ctx) : 1;
@@ -317,13 +318,13 @@ int64_t batch_queue_transfer_export_chunked(
             uint16_t batch_aid = bctx.appender_id;
             if (write_all(cf, &batch_aid, sizeof(uint16_t))) { fclose(cf); return -1; }
             if (write_all(cf, &msg_matched, sizeof(int32_t)))  { fclose(cf); return -1; }
-            batch_iterator_init(&bctx.batch_iterator, bctx.batch_offset,
+            batch_iterator_init(bctx.iterator, bctx.batch_offset,
                                 bctx.message_count, 0);
-            while (batch_iterator_advance(&bctx.batch_iterator)) {
-                int m_idx = bctx.batch_iterator.current_msg_index;
-                int m_cnt = bctx.batch_iterator.message_count;
-                const void *d = batch_iterator_current_data(&bctx.batch_iterator);
-                int32_t l = batch_iterator_current_length(&bctx.batch_iterator);
+            while (batch_iterator_advance(bctx.iterator)) {
+                int m_idx = bctx.iterator->current_msg_index;
+                int m_cnt = bctx.iterator->message_count;
+                const void *d = batch_iterator_current_data(bctx.iterator);
+                int32_t l = batch_iterator_current_length(bctx.iterator);
                 if (no_filter) {
                     if (write_all(cf, &l, sizeof(int32_t))) { fclose(cf); return -1; }
                     if (l > 0 && write_all(cf, d, (size_t)l)) { fclose(cf); return -1; }
@@ -613,13 +614,13 @@ int64_t batch_queue_transfer_copy(
         MutableBatch *mb = NULL;
         int batch_has_msgs = 0;
 
-        batch_iterator_init(&bctx.batch_iterator, bctx.batch_offset,
+        batch_iterator_init(bctx.iterator, bctx.batch_offset,
                             bctx.message_count, 0);
-        while (batch_iterator_advance(&bctx.batch_iterator)) {
-            int m_idx = bctx.batch_iterator.current_msg_index;
-            int m_cnt = bctx.batch_iterator.message_count;
-            const void *d = batch_iterator_current_data(&bctx.batch_iterator);
-            int32_t l = batch_iterator_current_length(&bctx.batch_iterator);
+        while (batch_iterator_advance(bctx.iterator)) {
+            int m_idx = bctx.iterator->current_msg_index;
+            int m_cnt = bctx.iterator->message_count;
+            const void *d = batch_iterator_current_data(bctx.iterator);
+            int32_t l = batch_iterator_current_length(bctx.iterator);
             if (!no_filter) {
                 int in = include ? include(b, m_idx, m_cnt, d, l, ctx) : 1;
                 int ex = exclude ? exclude(b, m_idx, m_cnt, d, l, ctx) : 0;

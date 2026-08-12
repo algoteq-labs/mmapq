@@ -1,6 +1,7 @@
 #include "batch_queue_latency_probe.h"
 #include "mmap_platform.h"
 #include "mmap_assert.h"
+#include "internal/batch_payload_iterator_internal.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdatomic.h>
@@ -52,13 +53,13 @@ static NextMove client_handler(int64_t b_idx, BatchReadingContext *batch_ctx, vo
     (void)b_idx;
     BatchQueueLatencyProbe *p = (BatchQueueLatencyProbe *)user_ctx;
 
-    if (!batch_iterator_advance(&batch_ctx->batch_iterator))
+    if (!batch_iterator_advance(batch_ctx->iterator))
         return NEXT_ADVANCE;
-    const LatencyHeader *hdr = batch_iterator_current_data(&batch_ctx->batch_iterator);
+    const LatencyHeader *hdr = batch_iterator_current_data(batch_ctx->iterator);
 
     if (hdr->instance_id == p->instance_id && hdr->sequence == p->current_request_seq) {
         if (p->validate_on_client && !verify_payload_pattern(
-                (const void *)hdr, batch_iterator_current_length(&batch_ctx->batch_iterator),
+                (const void *)hdr, batch_iterator_current_length(batch_ctx->iterator),
                 hdr->sequence)) {
             atomic_fetch_add(&p->validation_errors, 1);
         }

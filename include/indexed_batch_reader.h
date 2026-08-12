@@ -22,8 +22,8 @@
  *
  * The caller owns a BatchReadingContext and passes it to each read call.
  * The context is reused across calls — no heap allocation per read.
- * The BatchPayloadIterator inside the context is valid only until the next
- * call to any read function on this reader.
+ * The BatchPayloadIterator pointed to by the context is valid only until
+ * the next call to any read function on this reader.
  *
  * Thread safety: one reader per consumer thread. Must not be shared.
  *
@@ -80,23 +80,26 @@ typedef enum {
  *   - batch_offset:   payload file offset of the batch header
  *   - message_count:  number of messages in the batch
  *   - appender_id:    appender ID that wrote this batch
- *   - batch_iterator: positioned before the first message; call
- *                     batch_iterator_advance() to move to each message
+ *   - iterator:       pointer to a BatchPayloadIterator positioned before
+ *                     the first message; call batch_iterator_advance() to
+ *                     move to each message
  *
  * When status != BATCH_ENTRY_AVAILABLE, the iterator is in an invalid state
  * and must not be used.
  *
- * The BatchPayloadIterator holds a flyweight view into the mapped payload
- * region. It is valid only until the next read call on this reader.
+ * The BatchPayloadIterator is owned by the reader or poller that produced
+ * this context. It is valid only until the next read call on that reader,
+ * or until the poll handler returns. Do not retain the pointer, and do not
+ * free it.
  */
 typedef struct {
-    int64_t              index;
-    BatchEntryStatus     status;
-    int64_t              batch_offset;
-    int32_t              message_count;
-    uint8_t              appender_id;
-    uint8_t              reserved[3];
-    BatchPayloadIterator batch_iterator;
+    int64_t               index;
+    BatchEntryStatus      status;
+    int64_t               batch_offset;
+    int32_t               message_count;
+    uint8_t               appender_id;
+    uint8_t               reserved[3];
+    BatchPayloadIterator *iterator;
 } BatchReadingContext;
 
 /* ── Factory ─────────────────────────────────────────────────────────────── */
@@ -129,8 +132,9 @@ int indexed_batch_reader_create(
  * Read the batch at the given index.
  *
  * Populates @p ctx with the result. If the batch is available, ctx->status
- * is BATCH_ENTRY_AVAILABLE and ctx->batch_iterator is positioned before the
- * first message (call batch_iterator_advance() to begin iteration).
+ * is BATCH_ENTRY_AVAILABLE and ctx->iterator points to a BatchPayloadIterator
+ * positioned before the first message (call batch_iterator_advance() to
+ * begin iteration).
  *
  * If the batch is not available, ctx->status indicates why:
  *   BATCH_ENTRY_END_OF_STREAM — index beyond the last committed batch

@@ -9,6 +9,7 @@
 #include "header_reader.h"
 #include "indexed_queue.h"
 #include "queue_meta.h"
+#include "internal/batch_payload_iterator_internal.h"
 #include <stdio.h>
 #include <time.h>
 
@@ -76,10 +77,10 @@ static NextMove capture_handler(
     c->captured_message_count = ctx->message_count;
     c->call_count++;
 
-    if (batch_iterator_advance(&ctx->batch_iterator)) {
-        int32_t len = batch_iterator_current_length(&ctx->batch_iterator);
+    if (batch_iterator_advance(ctx->iterator)) {
+        int32_t len = batch_iterator_current_length(ctx->iterator);
         if (len > 0 && len < (int32_t)sizeof(c->captured_first_msg) - 1) {
-            memcpy(c->captured_first_msg, batch_iterator_current_data(&ctx->batch_iterator), (size_t)len);
+            memcpy(c->captured_first_msg, batch_iterator_current_data(ctx->iterator), (size_t)len);
             c->captured_first_msg[len] = '\0';
         }
     }
@@ -95,7 +96,7 @@ static NextMove advance_all_handler(
     (void)batch_index;
     int *count = (int *)user_ctx;
     *count = 0;
-    while (batch_iterator_advance(&ctx->batch_iterator)) {
+    while (batch_iterator_advance(ctx->iterator)) {
         (*count)++;
     }
     return NEXT_ADVANCE;
@@ -422,26 +423,26 @@ void test_reader_read_by_index(void)
     TEST_ASSERT_EQUAL_INT64(0, ctx.index);
     TEST_ASSERT_EQUAL_INT(2, ctx.message_count);
 
-    TEST_ASSERT_TRUE(batch_iterator_advance(&ctx.batch_iterator));
-    TEST_ASSERT_EQUAL_INT(6, batch_iterator_current_length(&ctx.batch_iterator));
-    TEST_ASSERT_EQUAL_MEMORY("first0", batch_iterator_current_data(&ctx.batch_iterator), 6);
+    TEST_ASSERT_TRUE(batch_iterator_advance(ctx.iterator));
+    TEST_ASSERT_EQUAL_INT(6, batch_iterator_current_length(ctx.iterator));
+    TEST_ASSERT_EQUAL_MEMORY("first0", batch_iterator_current_data(ctx.iterator), 6);
 
-    TEST_ASSERT_TRUE(batch_iterator_advance(&ctx.batch_iterator));
-    TEST_ASSERT_EQUAL_MEMORY("second0", batch_iterator_current_data(&ctx.batch_iterator), 7);
+    TEST_ASSERT_TRUE(batch_iterator_advance(ctx.iterator));
+    TEST_ASSERT_EQUAL_MEMORY("second0", batch_iterator_current_data(ctx.iterator), 7);
 
-    TEST_ASSERT_FALSE(batch_iterator_advance(&ctx.batch_iterator));
+    TEST_ASSERT_FALSE(batch_iterator_advance(ctx.iterator));
 
     indexed_batch_reader_read(r, 1, &ctx);
     TEST_ASSERT_EQUAL_INT(BATCH_ENTRY_AVAILABLE, ctx.status);
     TEST_ASSERT_EQUAL_INT(3, ctx.message_count);
 
-    TEST_ASSERT_TRUE(batch_iterator_advance(&ctx.batch_iterator));
-    TEST_ASSERT_EQUAL_MEMORY("first1", batch_iterator_current_data(&ctx.batch_iterator), 6);
-    TEST_ASSERT_TRUE(batch_iterator_advance(&ctx.batch_iterator));
-    TEST_ASSERT_EQUAL_MEMORY("second1", batch_iterator_current_data(&ctx.batch_iterator), 7);
-    TEST_ASSERT_TRUE(batch_iterator_advance(&ctx.batch_iterator));
-    TEST_ASSERT_EQUAL_MEMORY("third1", batch_iterator_current_data(&ctx.batch_iterator), 6);
-    TEST_ASSERT_FALSE(batch_iterator_advance(&ctx.batch_iterator));
+    TEST_ASSERT_TRUE(batch_iterator_advance(ctx.iterator));
+    TEST_ASSERT_EQUAL_MEMORY("first1", batch_iterator_current_data(ctx.iterator), 6);
+    TEST_ASSERT_TRUE(batch_iterator_advance(ctx.iterator));
+    TEST_ASSERT_EQUAL_MEMORY("second1", batch_iterator_current_data(ctx.iterator), 7);
+    TEST_ASSERT_TRUE(batch_iterator_advance(ctx.iterator));
+    TEST_ASSERT_EQUAL_MEMORY("third1", batch_iterator_current_data(ctx.iterator), 6);
+    TEST_ASSERT_FALSE(batch_iterator_advance(ctx.iterator));
 
     indexed_batch_appender_close(a);
     indexed_batch_reader_close(r);
@@ -483,8 +484,8 @@ void test_reader_read_first_and_last(void)
     TEST_ASSERT_EQUAL_INT64(1, ctx.index);
     TEST_ASSERT_EQUAL_INT(2, ctx.message_count);
 
-    TEST_ASSERT_TRUE(batch_iterator_advance(&ctx.batch_iterator));
-    TEST_ASSERT_EQUAL_MEMORY("last_a", batch_iterator_current_data(&ctx.batch_iterator), 6);
+    TEST_ASSERT_TRUE(batch_iterator_advance(ctx.iterator));
+    TEST_ASSERT_EQUAL_MEMORY("last_a", batch_iterator_current_data(ctx.iterator), 6);
 
     indexed_batch_appender_close(a);
     indexed_batch_reader_close(r);

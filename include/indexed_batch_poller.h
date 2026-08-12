@@ -10,10 +10,10 @@
  * IndexedBatchPoller — sequential batch consumer.
  *
  * Delivers one complete batch per poll() call. The handler receives the
- * batch index and a BatchReadingContext containing a BatchPayloadIterator
- * positioned before the first message. The handler calls
- * batch_iterator_advance() to iterate messages, then returns a NextMove
- * directive to control cursor movement.
+ * batch index and a BatchReadingContext whose iterator field points to a
+ * BatchPayloadIterator positioned before the first message. The handler
+ * calls batch_iterator_advance() to iterate messages, then returns a
+ * NextMove directive to control cursor movement.
  *
  * This is a per-batch poller — the atomic unit of delivery is a batch,
  * matching the atomic unit of commit. There is no per-message granularity.
@@ -26,7 +26,7 @@
  *   4. If NULL_HEADER → POLL_END_OF_STREAM.
  *   5. Decode appenderId + payloadPosition from header.
  *   6. Read message count from payload, init iterator before message 0.
- *   7. Populate BatchReadingContext with batch info + iterator.
+ *   7. Populate BatchReadingContext with batch info + iterator pointer.
  *   8. Call handler(batch_index, &context, ctx).
  *   9. Apply the returned directive:
  *        NEXT_ADVANCE  → currentBatchIndex++
@@ -57,9 +57,9 @@ typedef PollResult BatchPollResult;
 /**
  * BatchHandler — callback invoked once per poll() call, for one batch.
  *
- * The BatchReadingContext's batch_iterator is positioned BEFORE message 0.
+ * The BatchReadingContext's iterator is positioned BEFORE message 0.
  * Handlers MUST call batch_iterator_advance() before the first call to
- * batch_iterator_current_data() / batch_iterator_current_length().
+ * batch_iterator_current_data_ffi() / batch_iterator_current_length_ffi().
  *
  * The context and its iterator are flyweight views into mapped memory —
  * valid only for the duration of this call. Do not retain the pointer.
@@ -67,7 +67,7 @@ typedef PollResult BatchPollResult;
  * batch_index: zero-based index of the delivered batch
  * context:     batch context with iterator positioned before msg 0
  * ctx:         caller-supplied context pointer
- * Returns:             cursor directive: ADVANCE, STOP, or RETREAT
+ * Returns:     cursor directive: ADVANCE, STOP, or RETREAT
  */
 typedef NextMove (*BatchHandler)(
     int64_t              batch_index,

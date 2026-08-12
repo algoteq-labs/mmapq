@@ -6,6 +6,7 @@
 #include "header_reader.h"
 #include "header_codec.h"
 #include "batch_payload_iterator.h"
+#include "internal/batch_payload_iterator_internal.h"
 #include "mmap_assert.h"
 #include "mmap_platform.h"
 

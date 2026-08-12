@@ -30,7 +30,7 @@ TESTS=(
     test_indexed_batch_archiver
 )
 
-CFLAGS="-std=gnu11 -g -O0 -D_GNU_SOURCE -I include"
+CFLAGS="-std=gnu11 -g -O0 -D_GNU_SOURCE -I include -I src"
 LDFLAGS="-pthread -lm"
 SRCS="$(ls src/*.c)"
 UNITY="test/unity.c"

@@ -10,7 +10,7 @@
 #   make clean      remove build artefacts
 
 CC      = gcc
-CFLAGS  = -std=gnu11 -O3 -march=native -flto -DNDEBUG -Wall -Wextra -Wno-unused-parameter -D_GNU_SOURCE -I include
+CFLAGS  = -std=gnu11 -O3 -march=native -flto -DNDEBUG -Wall -Wextra -Wno-unused-parameter -D_GNU_SOURCE -I include -I src
 LDFLAGS = -pthread -lm
 
 SRCS    = $(wildcard src/*.c)

@@ -11,6 +11,7 @@
 #include "indexed_batch_poller.h"
 #include "runtime.h"
 #include "mmap_platform.h"
+#include "internal/batch_payload_iterator_internal.h"
 
 #include <unistd.h>
 #include <string.h>
@@ -90,7 +91,7 @@ static int load_messages(const char *name, char out[][100], int max)
     int64_t last = indexed_reader_last_index(r);
     if (last < 0) { indexed_reader_close(r); indexed_queue_close(q); return 0; }
     for (int64_t i = indexed_reader_start_index(r); i <= last && count < max; i++) {
-        ReadingContext ctx;
+        ReadingContext ctx = {0};
         indexed_reader_read(r, i, &ctx);
         if (ctx.status == ENTRY_AVAILABLE) {
             memcpy(out[count], ctx.data, (size_t)ctx.length);
@@ -1278,10 +1279,10 @@ void test_copy_normal_to_batch_1msg(void)
         indexed_batch_reader_read(br, i, &ctx);
         TEST_ASSERT_EQUAL(BATCH_ENTRY_AVAILABLE, ctx.status);
         TEST_ASSERT_EQUAL_INT(1, ctx.message_count);
-        batch_iterator_init(&ctx.batch_iterator, ctx.batch_offset, ctx.message_count, 0);
-        TEST_ASSERT(batch_iterator_advance(&ctx.batch_iterator));
-        int32_t l = batch_iterator_current_length(&ctx.batch_iterator);
-        memcpy(buf, batch_iterator_current_data(&ctx.batch_iterator), (size_t)l);
+        batch_iterator_init(ctx.iterator, ctx.batch_offset, ctx.message_count, 0);
+        TEST_ASSERT(batch_iterator_advance(ctx.iterator));
+        int32_t l = batch_iterator_current_length(ctx.iterator);
+        memcpy(buf, batch_iterator_current_data(ctx.iterator), (size_t)l);
         buf[l - 1] = '\0';
         char expected[24];
         snprintf(expected, sizeof(expected), "msg%ld", (long)(i + 1));
@@ -1977,7 +1978,7 @@ void test_import_preserves_appender_ids(void)
         TEST_ASSERT_EQUAL_INT64(2, last); /* indices 0, 1, 2 */
         int seen0 = 0, seen1 = 0;
         for (int64_t i = indexed_reader_start_index(vr); i <= last; i++) {
-            ReadingContext ctx;
+        ReadingContext ctx = {0};
             indexed_reader_read(vr, i, &ctx);
             TEST_ASSERT_EQUAL(ENTRY_AVAILABLE, ctx.status);
             if (ctx.appender_id == id0) seen0 = 1;
@@ -2049,7 +2050,7 @@ void test_import_merge_via_mapper(void)
     TEST_ASSERT_NOT_NULL(vr);
     int64_t last = indexed_reader_last_index(vr);
     for (int64_t i = indexed_reader_start_index(vr); i <= last; i++) {
-        ReadingContext ctx;
+        ReadingContext ctx = {0};
         indexed_reader_read(vr, i, &ctx);
         TEST_ASSERT_EQUAL(ENTRY_AVAILABLE, ctx.status);
         TEST_ASSERT_EQUAL_UINT8(0, ctx.appender_id);

@@ -3,8 +3,6 @@
 
 #include <stdint.h>
 #include <stddef.h>
-#include "region_accessor.h"
-#include "header_codec.h"
 
 /**
  * BatchPayloadIterator — zero-copy flyweight iterator over a single batch
@@ -19,18 +17,13 @@
  *                   +0  4  int32 length   — payload byte count
  *                   +4  N  payload bytes
  *
- * The iterator provides sequential, zero-copy access to messages. It holds a
- * flyweight Buffer into the mapped payload region — the data pointer returned
- * by batch_iterator_current_data() is valid only until the next call to
- * batch_iterator_advance() or any re-wrap of the underlying region.
+ * The type is opaque to binding code. Access through the out-of-line
+ * functions declared below. Internal C code may include the private
+ * header src/internal/batch_payload_iterator_internal.h for zero-cost
+ * inline access.
  *
- * batch_iterator_current_data() and batch_iterator_current_length() are only
- * valid after a successful call to batch_iterator_advance() (returns 1).
- *
- * WARNING: The iterator struct is designed to be embedded inside pollers,
- * appenders, and reading contexts to achieve zero heap allocation per message.
- * The payload_acc and queue_name fields must be set by the owning object
- * before calling batch_iterator_init().
+ * batch_iterator_current_data_ffi() and batch_iterator_current_length_ffi()
+ * are only valid after a successful call to batch_iterator_advance() (returns 1).
  *
  * Mirrors Java IBatch / BatchPayloadIterator.
  */
@@ -47,23 +40,7 @@
 /** Sentinel value returned by batch_iterator_probe_batch when no valid batch found. */
 #define BATCH_ITERATOR_INVALID_POSITION ((int64_t)-1)
 
-typedef struct {
-    const char     *queue_name;   /* for diagnostic messages */
-    RegionAccessor *payload_acc;  /* payload region — set by owning object */
-    Buffer          payload_buf;  /* flyweight view into mapped region */
-
-    /* Current batch state */
-    int64_t         batch_offset;    /* absolute payload offset of this batch */
-    int32_t         message_count;   /* total messages in the batch */
-
-    /* Cursor state — valid after a successful batch_iterator_advance() */
-    int32_t         current_msg_index;     /* zero-based index of current message */
-    int64_t         current_msg_offset;    /* absolute payload offset of current message */
-    int32_t         current_msg_length;    /* payload bytes in current message */
-    int64_t         next_message_position; /* absolute offset of the next message */
-
-    int             exhausted; /* 1 after all messages have been visited */
-} BatchPayloadIterator;
+typedef struct BatchPayloadIterator BatchPayloadIterator;
 
 /**
  * Initialise the iterator for a known batch.
@@ -113,8 +90,8 @@ int64_t batch_iterator_probe_batch(BatchPayloadIterator *it, int64_t offset);
  * On the first call after batch_iterator_init(), moves to message 0 (or
  * start_msg_index if non-zero). On subsequent calls, moves to the next message.
  *
- * After a successful call, batch_iterator_current_data() and
- * batch_iterator_current_length() return valid values for the current message.
+ * After a successful call, batch_iterator_current_data_ffi() and
+ * batch_iterator_current_length_ffi() return valid values for the current message.
  *
  * Returns: 1 if advanced successfully; 0 if the batch is exhausted
  */
@@ -123,10 +100,7 @@ int batch_iterator_advance(BatchPayloadIterator *it);
 /**
  * Return 1 if the iterator is positioned on a valid message (advance() returned 1).
  */
-static inline int batch_iterator_has_current(const BatchPayloadIterator *it)
-{
-    return it->current_msg_index >= 0 && !it->exhausted;
-}
+int batch_iterator_has_current_ffi(const BatchPayloadIterator *it);
 
 /**
  * Return a pointer to the current message's payload bytes.
@@ -136,32 +110,14 @@ static inline int batch_iterator_has_current(const BatchPayloadIterator *it)
  *
  * Only valid after a successful batch_iterator_advance() call.
  */
-static inline const void *batch_iterator_current_data(const BatchPayloadIterator *it)
-{
-    return it->payload_buf.data + PAYLOAD_DATA_OFFSET;
-}
+const void *batch_iterator_current_data_ffi(const BatchPayloadIterator *it);
 
 /**
  * Return the byte count of the current message's payload.
  *
  * Only valid after a successful batch_iterator_advance() call.
  */
-static inline int32_t batch_iterator_current_length(const BatchPayloadIterator *it)
-{
-    return it->current_msg_length;
-}
-
-/* Non-inline FFI wrappers — exported for Rust FFI (static inline has no symbol). */
-const void *batch_iterator_current_data_ffi(const BatchPayloadIterator *it);
-int32_t    batch_iterator_current_length_ffi(const BatchPayloadIterator *it);
-
-/**
- * Skip all remaining messages in the batch, leaving the iterator exhausted.
- *
- * Used to skip remaining messages and position next_message_position at
- * the start of the following batch.
- */
-void batch_iterator_exhaust(BatchPayloadIterator *it);
+int32_t batch_iterator_current_length_ffi(const BatchPayloadIterator *it);
 
 /**
  * Return the byte offset immediately after the last message in the batch.
@@ -172,9 +128,14 @@ void batch_iterator_exhaust(BatchPayloadIterator *it);
  *
  * Mirrors Java BatchPayloadIterator.nextPayloadPosition().
  */
-static inline int64_t batch_iterator_next_payload_position(const BatchPayloadIterator *it)
-{
-    return it->next_message_position;
-}
+int64_t batch_iterator_next_payload_position_ffi(const BatchPayloadIterator *it);
+
+/**
+ * Skip all remaining messages in the batch, leaving the iterator exhausted.
+ *
+ * Used to skip remaining messages and position next_message_position at
+ * the start of the following batch.
+ */
+void batch_iterator_exhaust(BatchPayloadIterator *it);
 
 #endif /* BATCH_PAYLOAD_ITERATOR_H */

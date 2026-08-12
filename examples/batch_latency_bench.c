@@ -5,6 +5,7 @@
 #include "runtime.h"
 #include "mmap_platform.h"
 #include "mmap_stats.h"
+#include "internal/batch_payload_iterator_internal.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -42,16 +43,16 @@ static NextMove internal_echo_handler(
     (void)b_idx;
     BatchServerCtx *s = (BatchServerCtx *)user_ctx;
 
-    if (!batch_iterator_advance(&ctx->batch_iterator))
+    if (!batch_iterator_advance(ctx->iterator))
         return NEXT_ADVANCE;
-    const BatchLatencyHeader *hdr = batch_iterator_current_data(&ctx->batch_iterator);
+    const BatchLatencyHeader *hdr = batch_iterator_current_data(ctx->iterator);
     if (hdr->sequence == SHUTDOWN_SEQ)
         s->shutdown_requested = 1;
 
     MutableBatch *b = indexed_batch_appender_start_batch(s->response_appender);
-    mutable_batch_append(b, batch_iterator_current_data(&ctx->batch_iterator),
-                            batch_iterator_current_length(&ctx->batch_iterator));
-    mutable_batch_append_remaining_from(b, &ctx->batch_iterator);
+    mutable_batch_append(b, batch_iterator_current_data(ctx->iterator),
+                            batch_iterator_current_length(ctx->iterator));
+    mutable_batch_append_remaining_from(b, ctx->iterator);
     indexed_batch_appender_commit_batch(s->response_appender, mutable_batch_complete(b));
 
     return NEXT_ADVANCE;

@@ -22,11 +22,11 @@ void setUp(void)
 
     /* Write a known value at offset 0 */
     uint64_t magic = 0xDEADBEEFCAFEBABEULL;
-    pwrite(fd, &magic, sizeof(magic), 0);
+    { ssize_t _w = pwrite(fd, &magic, sizeof(magic), 0); (void)_w; }
 
     /* Write another at offset REGION_SIZE */
     uint64_t magic2 = 0x0102030405060708ULL;
-    pwrite(fd, &magic2, sizeof(magic2), REGION_SIZE);
+    { ssize_t _w = pwrite(fd, &magic2, sizeof(magic2), REGION_SIZE); (void)_w; }
 
     close(fd);
 

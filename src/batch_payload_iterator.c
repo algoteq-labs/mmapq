@@ -1,6 +1,7 @@
 #include "batch_payload_iterator.h"
 #include "header_codec.h"
 #include "mmap_assert.h"
+#include "internal/batch_payload_iterator_internal.h"
 #include <string.h>
 
 static void wrap_or_fail(BatchPayloadIterator *it, int64_t position, const char *context)
@@ -107,7 +108,12 @@ void batch_iterator_exhaust(BatchPayloadIterator *it)
     while (batch_iterator_advance(it));
 }
 
-/* Non-inline wrappers for static inline accessors — used by Rust FFI. */
+/* Non-inline wrappers for accessors — used by Rust FFI and Python cffi. */
+int batch_iterator_has_current_ffi(const BatchPayloadIterator *it)
+{
+    return batch_iterator_has_current(it);
+}
+
 const void *batch_iterator_current_data_ffi(const BatchPayloadIterator *it)
 {
     return batch_iterator_current_data(it);
@@ -116,4 +122,9 @@ const void *batch_iterator_current_data_ffi(const BatchPayloadIterator *it)
 int32_t batch_iterator_current_length_ffi(const BatchPayloadIterator *it)
 {
     return batch_iterator_current_length(it);
+}
+
+int64_t batch_iterator_next_payload_position_ffi(const BatchPayloadIterator *it)
+{
+    return batch_iterator_next_payload_position(it);
 }

@@ -70,7 +70,7 @@ void test_file_init_none_does_not_change_size(void)
 {
     /* Write some data first */
     const char data[] = "hello";
-    write(test_fd, data, sizeof(data));
+    { ssize_t _w = write(test_fd, data, sizeof(data)); (void)_w; }
 
     struct stat st_before;
     fstat(test_fd, &st_before);

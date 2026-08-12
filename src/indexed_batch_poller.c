@@ -6,6 +6,7 @@
 #include "batch_payload_iterator.h"
 #include "mmap_assert.h"
 #include "mmap_platform.h"
+#include "internal/batch_payload_iterator_internal.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -125,7 +126,7 @@ BatchPollResult indexed_batch_poller_poll(IndexedBatchPoller *p, BatchHandler ha
     batch_ctx.status        = BATCH_ENTRY_AVAILABLE;
     batch_ctx.batch_offset  = pos;
     batch_ctx.message_count = msg_count;
-    batch_ctx.batch_iterator = *it;
+    batch_ctx.iterator = it;
 
     NextMove move = handler(p->current_batch_index, &batch_ctx, ctx);
 

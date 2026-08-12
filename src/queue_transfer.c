@@ -7,6 +7,7 @@
 #include "indexed_batch_appender.h"
 #include "export_meta.h"
 #include "appender_cache.h"
+#include "internal/batch_payload_iterator_internal.h"
 #include "mmap_assert.h"
 #include "mmap_platform.h"
 #include <stdlib.h>
@@ -631,13 +632,13 @@ int64_t queue_transfer_copy_batch_to_normal(
         if (abort_flag) { indexed_queue_close(q); return MMAPQ_EIDCONFLICT; }
         if (!a) break;
 
-        batch_iterator_init(&bctx.batch_iterator, bctx.batch_offset,
+        batch_iterator_init(bctx.iterator, bctx.batch_offset,
                             bctx.message_count, 0);
-        while (batch_iterator_advance(&bctx.batch_iterator)) {
-            int m_idx = bctx.batch_iterator.current_msg_index;
-            int m_cnt = bctx.batch_iterator.message_count;
-            const void *d = batch_iterator_current_data(&bctx.batch_iterator);
-            int32_t l = batch_iterator_current_length(&bctx.batch_iterator);
+        while (batch_iterator_advance(bctx.iterator)) {
+            int m_idx = bctx.iterator->current_msg_index;
+            int m_cnt = bctx.iterator->message_count;
+            const void *d = batch_iterator_current_data(bctx.iterator);
+            int32_t l = batch_iterator_current_length(bctx.iterator);
 
             if (!no_filter) {
                 int in = include ? include(b, m_idx, m_cnt, d, l, ctx) : 1;

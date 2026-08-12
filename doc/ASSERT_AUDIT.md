@@ -38,7 +38,7 @@ every row before changing it.
 
 | Line | Disposition | Verified |
 |---|---|---|
-| 82 padding mismatch (capacity == padded) | V | On-disk padding data compared against wrapped capacity; corruption causes mismatch. Reachable from poll/read via batch_iterator_advance. Convert to MMAPQ_ECORRUPT. |
+| 83 padding mismatch (capacity == padded) | V | On-disk padding data compared against wrapped capacity; corruption causes mismatch. Reachable from poll/read via batch_iterator_advance. Convert to MMAPQ_ECORRUPT. |
 
 ### file_mapper_rolled.c — 10 (all I)
 
@@ -128,7 +128,7 @@ checks.
 
 | File | Line | Assert | Action |
 |---|---|---|---|
-| `batch_payload_iterator.c` | 82 | capacity == padded | Return MMAPQ_ECORRUPT on mismatch |
+| `batch_payload_iterator.c` | 83 | capacity == padded | Return MMAPQ_ECORRUPT on mismatch |
 | `indexed_reader.c` | 139 | length > 0 | Set ENTRY_ERROR instead of assert |
 
 ## Files with zero asserts (all V-class already converted)

@@ -5,6 +5,7 @@
 #include "header_codec.h"
 #include "mmap_assert.h"
 #include "mmap_platform.h"
+#include "internal/batch_payload_iterator_internal.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -29,6 +30,11 @@ struct IndexedBatchReader {
      * batch_iterator_init() immediately re-wraps it for payload access.
      */
     Buffer               header_buf;
+
+    /* Reusable iterator storage — owned by this reader, borrowed by the
+     * BatchReadingContext during read calls. Valid only until the next
+     * read call on this reader. */
+    BatchPayloadIterator  batch_iterator;
 
     int64_t cached_last_index;
     int     closed;
@@ -110,7 +116,7 @@ static void reader_fill_context(IndexedBatchReader *r, int64_t index, BatchReadi
     ctx->index         = index;
     ctx->batch_offset  = -1;
     ctx->message_count = 0;
-    memset(&ctx->batch_iterator, 0, sizeof(BatchPayloadIterator));
+    ctx->iterator      = NULL;
 
     if (!reader_init(r)) {
         ctx->status = (r->init_result == MMAPQ_ENOENT
@@ -127,9 +133,10 @@ static void reader_fill_context(IndexedBatchReader *r, int64_t index, BatchReadi
     }
 
     /*
-     * Use the reader's own header_buf, not the context's payload_buf.
-     * The payload_buf is immediately re-wrapped by batch_iterator_init
-     * for payload access — using it here would corrupt the header read.
+     * Use the reader's own header_buf, not the r->batch_iterator's
+     * payload_buf. The payload_buf is immediately re-wrapped by
+     * batch_iterator_init for payload access — using it here would
+     * corrupt the header read.
      */
     uint64_t header = header_read(r->header_acc, &r->header_buf, index, r->queue_name);
     if (header == HEADER_NULL) {
@@ -143,12 +150,13 @@ static void reader_fill_context(IndexedBatchReader *r, int64_t index, BatchReadi
     RegionAccessor *payload_acc =
         queue_region_accessor_payload(r->ro_acc, appender_id);
 
-    ctx->batch_iterator.queue_name  = r->queue_name;
-    ctx->batch_iterator.payload_acc = payload_acc;
+    r->batch_iterator.queue_name  = r->queue_name;
+    r->batch_iterator.payload_acc = payload_acc;
 
-    int32_t message_count = batch_iterator_read_message_count(&ctx->batch_iterator, payload_position);
+    int32_t message_count = batch_iterator_read_message_count(&r->batch_iterator, payload_position);
 
-    batch_iterator_init(&ctx->batch_iterator, payload_position, message_count, 0);
+    batch_iterator_init(&r->batch_iterator, payload_position, message_count, 0);
+    ctx->iterator = &r->batch_iterator;
 
     ctx->batch_offset  = payload_position;
     ctx->message_count = message_count;
@@ -199,8 +207,8 @@ BatchReadingContext *indexed_batch_reader_read_last(
         ctx->index         = HEADER_NULL_INDEX;
         ctx->batch_offset  = -1;
         ctx->message_count = 0;
+        ctx->iterator      = NULL;
         ctx->status        = BATCH_ENTRY_END_OF_STREAM;
-        memset(&ctx->batch_iterator, 0, sizeof(BatchPayloadIterator));
         return ctx;
     }
 
