@@ -71,7 +71,7 @@ system and C/Rust/Python processes sharing one queue.
   reach the page cache, not the platter; the OS persists them eventually.
   Queues here are transport-plus-recent-history; long-term data belongs in
   the export format (`QueueTransfer`) or a database.
-- **You need Windows or macOS.** Linux only (x86-64, ARM64).
+- **You need Windows or macOS.** Linux only (x86-64; ARM64 untested).
 
 What you give up relative to the alternatives is scope. What you gain is a
 system small enough to audit end-to-end: ~10k lines of dependency-free C11,
@@ -645,7 +645,8 @@ present in your build) reports the exact location of an inconsistency.
 ## Platform
 
 Linux only. Requires naturally aligned lock-free atomics over `MAP_SHARED`
-mmap — guaranteed on x86-64 and ARM64.
+mmap — verified on x86-64; ARM64 is untested (run `test/multiprocess/` on an
+aarch64 box before shipping an ARM64 claim).
 
 ---
 

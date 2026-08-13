@@ -1,0 +1,10 @@
+prefix=@CMAKE_INSTALL_PREFIX@
+exec_prefix=${prefix}
+libdir=${exec_prefix}/@CMAKE_INSTALL_LIBDIR@
+includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@
+
+Name: mmapq
+Description: Low-latency shared memory primitives in C
+Version: @PROJECT_VERSION@
+Libs: -L${libdir} -lmmapq
+Cflags: -I${includedir} -D_GNU_SOURCE

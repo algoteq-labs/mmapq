@@ -24,6 +24,7 @@ add_library(mmapq STATIC
     indexed_poller.c
     indexed_reader.c
     indexed_queue.c
+    mmapq_strerror.c
     queue_latency_probe.c
     # Archiver layer
     queue_files.c
@@ -41,12 +42,22 @@ add_library(mmapq STATIC
 )
 
 target_include_directories(mmapq
-    PUBLIC  ${PROJECT_SOURCE_DIR}/include
+    PUBLIC
+        $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
+        $<INSTALL_INTERFACE:include>
+        # Internal headers live under src/ and are referenced as
+        # internal/<name>.h; needed at build time (sources, examples, tests)
+        # but NOT exported to consumers (src/ is not installed).
+        $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/src>
 )
 
 target_link_libraries(mmapq
     PUBLIC pthread m
 )
+
+# _GNU_SOURCE is required to build mmapq (Phase 12i); propagate it to
+# consumers so find_package(mmapq) links can include mmap_platform.h.
+target_compile_definitions(mmapq PUBLIC _GNU_SOURCE)
 
 # Apply build-type-specific flags
 target_compile_options(mmapq PRIVATE
@@ -72,12 +83,46 @@ if(MMAP_ENABLE_TSAN)
 endif()
 
 # Install targets
+include(GNUInstallDirs)
+include(CMakePackageConfigHelpers)
+
 install(TARGETS mmapq
-    ARCHIVE DESTINATION lib
+    EXPORT mmapqTargets
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
 )
 install(DIRECTORY ${PROJECT_SOURCE_DIR}/include/
-    DESTINATION include/mmapq
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/mmapq
+    FILES_MATCHING PATTERN "*.h"
 )
 install(FILES ${PROJECT_SOURCE_DIR}/doc/wire-format.md
-    DESTINATION share/doc/mmapq
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/mmapq
+)
+
+# pkg-config
+configure_file(${PROJECT_SOURCE_DIR}/mmapq.pc.in
+    ${CMAKE_CURRENT_BINARY_DIR}/mmapq.pc @ONLY)
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/mmapq.pc
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig
+)
+
+# CMake package config so downstream projects can find_package(mmapq)
+configure_package_config_file(
+    ${PROJECT_SOURCE_DIR}/cmake/mmapqConfig.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/mmapqConfig.cmake
+    INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/mmapq
+)
+write_basic_package_version_file(
+    ${CMAKE_CURRENT_BINARY_DIR}/mmapqConfigVersion.cmake
+    VERSION ${PROJECT_VERSION}
+    COMPATIBILITY SameMajorVersion
+)
+install(EXPORT mmapqTargets
+    FILE mmapqTargets.cmake
+    NAMESPACE mmapq::
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/mmapq
+)
+install(FILES
+    ${CMAKE_CURRENT_BINARY_DIR}/mmapqConfig.cmake
+    ${CMAKE_CURRENT_BINARY_DIR}/mmapqConfigVersion.cmake
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/mmapq
 )
