@@ -172,6 +172,7 @@ run_cross bash mmapq/scripts/check_gates_fail_closed.sh
 
 # ── Final ───────────────────────────────────────────────────────────────────
 if [ "$GATE_SKIP" -gt 0 ]; then
-    echo "GATE_SKIP: $GATE_SKIP cross-repo check(s) skipped (bare clone). CI must assert GATE_SKIP == 0." >&2
+    echo "local checks passed ($GATE_SKIP cross-repo check(s) skipped — bare clone). CI must assert GATE_SKIP == 0." >&2
+else
+    echo "mirrors in sync"
 fi
-echo "mirrors in sync"
