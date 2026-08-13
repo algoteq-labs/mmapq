@@ -1,6 +1,6 @@
 # ASSERT_AUDIT.md — MMAP_ASSERT Inventory
 
-**76 asserts across 18 src/*.c files.** Generated from source.
+**74 asserts across 16 src/*.c files.** Generated from source.
 Last verified: 2026-08-13 (Phase 14 — regenerated).
 
 ## Legend
@@ -15,8 +15,9 @@ Last verified: 2026-08-13 (Phase 14 — regenerated).
 | Disposition | Count |
 |---|---|
 | I (stays, re-verified) | 74 |
-| V (pending conversion) | 2 |
-| **Total** | **76** |
+| V (pending conversion) | 0 |
+| (converted from V in Phase 16e) | 2 |
+| **Total** | **74** |
 
 ## Per-file inventory
 
@@ -26,11 +27,11 @@ Last verified: 2026-08-13 (Phase 14 — regenerated).
 |---|---|---|
 | 143 pool NULL (release) | I | Internal: pool param from private struct, not caller |
 
-### batch_payload_iterator.c — 1 (1 V)
+### batch_payload_iterator.c — 1 (0 V)
 
 | Line | Disposition | Verified |
 |---|---|---|
-| 83 padding mismatch (capacity == padded) | V | On-disk padding vs capacity mismatch; corruption. Convert to MMAPQ_ECORRUPT. |
+| 83 padding mismatch (capacity == padded) | (converted, Phase 16e) | Now a runtime check: sets exhausted=1 and returns 0 instead of asserting. |
 
 ### file_mapper_rolled.c — 10 (all I)
 
@@ -66,11 +67,11 @@ Lines 37, 70. Internal dispatch null checks.
 |---|---|---|
 | 203 unknown handler directive | I | Internal: MMAP_ASSERT(0) guards unreachable default in switch. |
 
-### indexed_reader.c — 1 (1 V)
+### indexed_reader.c — 1 (0 V)
 
 | Line | Disposition | Verified |
 |---|---|---|
-| 163 length > 0 (on-disk) | V | On-disk payload length from mapped file. Could be zero/negative due to truncation. |
+| 163 length > 0 (on-disk) | (converted, Phase 16e) | Now a runtime check: sets MMAPQ_ENTRY_ERROR with last_error=MMAPQ_ECORRUPT. |
 
 ### payload_iterator.c — 7 (all I)
 
@@ -110,8 +111,8 @@ Lines 30, 269, 312, 326, 345, 361, 369. Internal dispatch null checks.
 
 | File | Line | Assert | Action |
 |---|---|---|---|
-| `batch_payload_iterator.c` | 83 | capacity == padded | Return MMAPQ_ECORRUPT on mismatch |
-| `indexed_reader.c` | 163 | length > 0 | Set MMAPQ_ENTRY_ERROR instead of assert |
+| `batch_payload_iterator.c` | 83 | capacity == padded | (converted Phase 16e — runtime check) |
+| `indexed_reader.c` | 163 | length > 0 | (converted Phase 16e — runtime check) |
 
 ## Files with zero asserts (all V-class already converted)
 

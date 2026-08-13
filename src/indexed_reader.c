@@ -160,8 +160,11 @@ static void reader_fill_context(MmapqIndexedReader *r, int64_t index, MmapqReadi
 
     int32_t length;
     memcpy(&length, r->payload_buf.data + PAYLOAD_LENGTH_OFFSET, sizeof(int32_t));
-    MMAP_ASSERT(length > 0,
-        "indexed_reader: invalid payload length at committed header");
+    if (length <= 0) {
+        ctx->status = MMAPQ_ENTRY_ERROR;
+        r->last_error = MMAPQ_ECORRUPT;
+        return;
+    }
 
     ctx->appender_id = appender_id;
     ctx->msg_offset  = payload_position;

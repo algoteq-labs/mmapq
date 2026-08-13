@@ -1051,6 +1051,61 @@ static void test_poll_detects_corrupt_payload(void)
     cleanup();
 }
 
+static void test_reader_detects_corrupt_length(void)
+{
+    /* Pin for the Phase 16e conversion of indexed_reader.c:163. The length
+       check must be a runtime check (returning MMAPQ_ENTRY_ERROR/ECORRUPT),
+       not an MMAP_ASSERT that compiles away under NDEBUG. */
+    char qname[64];
+    snprintf(qname, sizeof(qname), "%s_rlcorrupt", QUEUE);
+    char cmd[512];
+    snprintf(cmd, sizeof(cmd), "rm -rf %s/%s", DIR, qname);
+    int rc = system(cmd); (void)rc;
+
+    MmapqIndexedQueue *q = NULL;
+    int rc_q = mmapq_indexed_queue_create(
+        DIR, qname, REGION_SZ, RING_SZ, 1, MAX_FILE, 0, TIMEOUT_NS, 0, NULL, NULL, &q);
+    TEST_ASSERT_EQUAL_INT(0, rc_q);
+    TEST_ASSERT_NOT_NULL(q);
+
+    MmapqIndexedAppender *a = NULL;
+    int rc_a = mmapq_indexed_queue_create_appender(q, &a);
+    TEST_ASSERT_EQUAL_INT(0, rc_a);
+    TEST_ASSERT_NOT_NULL(a);
+    int64_t idx = mmapq_indexed_appender_append(a, "hello", 5);
+    TEST_ASSERT(idx >= 0);
+    mmapq_indexed_appender_close(a);
+
+    MmapqIndexedReader *r = NULL;
+    int rc_r = mmapq_indexed_reader_create(DIR, qname, 4, TIMEOUT_NS, NULL, &r);
+    TEST_ASSERT_EQUAL_INT(0, rc_r);
+    TEST_ASSERT_NOT_NULL(r);
+    MmapqReadingContext ctx = {0};
+    mmapq_indexed_reader_read(r, 0, &ctx);
+    TEST_ASSERT(ctx.status == MMAPQ_ENTRY_AVAILABLE);
+
+    /* Corrupt the 4-byte length prefix at msg_offset to 0 (end-of-stream
+       sentinel), simulating truncation/corruption on disk. */
+    char path[512];
+    snprintf(path, sizeof(path), "%s/%s/payload_%u_0", DIR, qname, (unsigned)ctx.appender_id);
+    int fd = open(path, O_WRONLY);
+    TEST_ASSERT_MESSAGE(fd >= 0, "failed to open payload file for writing");
+    uint32_t zero = 0;
+    ssize_t written = pwrite(fd, &zero, sizeof(zero), ctx.msg_offset); (void)written;
+    close(fd);
+
+    /* Re-read — must surface the corruption as an error, not assert (which
+       would compile away under NDEBUG and hand back a zero-length message). */
+    MmapqReadingContext ctx2 = {0};
+    mmapq_indexed_reader_read(r, 0, &ctx2);
+    TEST_ASSERT(ctx2.status == MMAPQ_ENTRY_ERROR);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ECORRUPT, mmapq_indexed_reader_last_error(r));
+
+    mmapq_indexed_reader_close(r);
+    mmapq_indexed_queue_close(q);
+    cleanup();
+}
+
 static void test_create_with_id_already_in_use(void)
 {
     /* Need the queue subdirectory and pool file for the standalone factory */
@@ -1283,6 +1338,7 @@ int main(void)
     RUN_TEST(test_create_with_id_already_in_use);
     RUN_TEST(test_appender_id_255_succeeds);
     RUN_TEST(test_poll_detects_corrupt_payload);
+    RUN_TEST(test_reader_detects_corrupt_length);
 
     RUN_TEST(test_reader_last_error_reports_eschema);
     RUN_TEST(test_last_error_zero_on_success);

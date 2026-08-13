@@ -80,7 +80,10 @@ static int32_t advance_buffer(MmapqBatchPayloadIterator *it)
     /* Handle long padding */
     if (msg_len < 0) {
         int32_t padded = -msg_len + PAYLOAD_LENGTH_SIZE;
-        MMAP_ASSERT(it->payload_buf.capacity == padded, "batch_iterator: padding mismatch");
+        if (it->payload_buf.capacity != padded) {
+            it->exhausted = 1;
+            return 0;
+        }
         it->next_message_position += padded;
         wrap_or_fail(it, it->next_message_position, "advance_buffer_after_long_padding");
         memcpy(&msg_len, it->payload_buf.data + PAYLOAD_LENGTH_OFFSET, sizeof(int32_t));
