@@ -5,24 +5,33 @@ set -e
 
 cd "$(dirname "$0")/../.."
 
-diff -rq mmapq/src mmapq-rs/c/src -x '*.o'
-diff -rq mmapq/include mmapq-rs/c/include
-diff -rq mmapq/test mmapq-rs/c/test -x '*.o'
-diff -rq mmapq/scripts mmapq-rs/c/scripts
+# ── 17d: sibling-presence detection ─────────────────────────────────────────
+# "Bare clone" is decided by the presence of the sibling directories, never by
+# watching a diff fail — that conflates "sibling absent" with "sibling present
+# and drifted", which is the failure mode this refactor exists to remove.
+# Cross-repo checks (those that read mmapq-rs/ or mmapq-py/) are skipped here
+# with an explicit, counted GATE_SKIP line. CI asserts GATE_SKIP == 0, so a
+# bare-clone-shaped run can never be mistaken for full coverage.
+HAVE_SIBLINGS=1
+GATE_SKIP=0
+missing=""
+[ -d mmapq-rs ] || missing="$missing mmapq-rs"
+[ -d mmapq-py ] || missing="$missing mmapq-py"
+if [ -n "$missing" ]; then
+    HAVE_SIBLINGS=0
+    echo "GATE_SKIP: cross-repo checks skipped — bare clone (missing:$missing)" >&2
+fi
 
-# mmapq-py/c is the same submodule and ships in the sdist (11b), so it is
-# held to the same mirror standard as mmapq-rs/c. Without this, a stale
-# Python submodule pointer is invisible to every gate: setup.py globs the
-# sources, so the wheel still builds while the vendored CMakeLists.txt and
-# scripts/ go silently out of date in a published artifact.
-diff -rq mmapq/src mmapq-py/c/src -x '*.o'
-diff -rq mmapq/include mmapq-py/c/include
-diff -rq mmapq/test mmapq-py/c/test -x '*.o'
-diff -rq mmapq/scripts mmapq-py/c/scripts
+run_cross() {
+    if [ "$HAVE_SIBLINGS" -eq 0 ]; then
+        GATE_SKIP=$((GATE_SKIP + 1))
+        echo "GATE_SKIP: $* (bare clone — mmapq-rs/mmapq-py not present)" >&2
+        return 0
+    fi
+    "$@"
+}
 
-# Verify that no private C struct layout is mirrored in the Python cdef
-bash mmapq-py/scripts/check_no_layout_mirrors.sh --self-test
-bash mmapq-py/scripts/check_no_layout_mirrors.sh
+# ── Local checks (valid on a bare mmapq clone) ──────────────────────────────
 
 # Verify disjointness: no header in both public include/ and private src/internal/
 MMAPQ_INC=$(ls mmapq/include/*.h | xargs -n1 basename | sort)
@@ -49,33 +58,9 @@ if [ -n "$EXTRA_IN_MANIFEST" ]; then
     exit 1
 fi
 
-# Verify that every MMAPQ_* error code appears in all mirrors
-bash mmapq/scripts/check_error_codes.sh --self-test
-bash mmapq/scripts/check_error_codes.sh
-
 # Self-test the ASSERT_AUDIT disposition check, then verify counts + line numbers
 bash mmapq/scripts/audit_asserts.sh --self-test
 bash mmapq/scripts/audit_asserts.sh --verify
-
-# Self-test the README checker before running it
-bash mmapq/scripts/check_readme_examples.sh --self-test
-
-# Verify README fenced code blocks compile (C/Rust) or parse (Python)
-bash mmapq/scripts/check_readme_examples.sh \
-    mmapq/README.md \
-    mmapq-rs/README.md \
-    mmapq-py/README.md
-
-# Verify the generated binding-coverage section in feature-matrix.md is current
-GENERATED=$(bash mmapq/scripts/api_surface.sh --presence-matrix | grep -A100 '^## ' | head -n -1)
-CHECKED_IN=$(awk '/^## Auto-generated binding coverage$/{p=1} /^<!-- \/GENERATED -->$/{p=0} p' mmapq/doc/feature-matrix.md)
-if [ "$GENERATED" != "$CHECKED_IN" ]; then
-    echo "ERROR: feature-matrix.md auto-generated section is stale. Regenerate with:" >&2
-    echo "  bash scripts/api_surface.sh --presence-matrix > /tmp/gen &&" >&2
-    echo "  # replace the section between <!-- GENERATED --> and <!-- /GENERATED -->" >&2
-    exit 1
-fi
-echo "PASS: feature-matrix.md binding-coverage section is current"
 
 # Verify the GENERATED constants block in doc/wire-format.md is current
 GEN_WF=$(bash mmapq/scripts/gen_wire_format.sh)
@@ -93,12 +78,6 @@ bash mmapq/scripts/check_strdup_guards.sh
 
 # Verify every src/*.c appears in src/CMakeLists.txt's add_library list
 bash mmapq/scripts/check_cmake_sources.sh
-
-# Verify submodule URLs are relative and published files carry no internal host
-bash mmapq/scripts/check_published_urls.sh
-
-# Verify binding symbols are declared in public headers
-bash mmapq/scripts/check_binding_symbols.sh
 
 # Verify no unprefixed symbols in the archive (strong linker gate)
 bash mmapq/scripts/api_surface.sh --linker
@@ -121,9 +100,63 @@ if [ -n "$BAD_INLINES" ]; then
     exit 1
 fi
 
-# Verify every gate fails closed when its inputs are absent (P5).
-# Gate scope classification (local vs cross-repo) is derived from the
-# registry, not listed here: bash mmapq/scripts/check_gates_fail_closed.sh --list-registry
-bash mmapq/scripts/check_gates_fail_closed.sh
+# Verify no doc cites a source file by line number, and cited files exist (17f)
+bash mmapq/scripts/check_doc_citations.sh
 
+# ── Cross-repo checks (need mmapq-rs/ and mmapq-py/) ────────────────────────
+
+# Mirror sync of the vendored C mirrors (mmapq-rs/c + mmapq-py/c)
+run_cross bash mmapq/scripts/check_mirrors.sh
+
+# Verify that no private C struct layout is mirrored in the Python cdef
+run_cross bash mmapq-py/scripts/check_no_layout_mirrors.sh --self-test
+run_cross bash mmapq-py/scripts/check_no_layout_mirrors.sh
+
+# Verify that every MMAPQ_* error code appears in all mirrors
+run_cross bash mmapq/scripts/check_error_codes.sh --self-test
+run_cross bash mmapq/scripts/check_error_codes.sh
+
+# Verify Python IntEnum members match C header enums (17e). This was reachable
+# only via the fail-closed meta-harness baseline control; wire it here so a
+# harness reorder cannot silently stop it running.
+run_cross bash mmapq-py/scripts/check_enum_sync.sh
+
+# Self-test the README checker before running it (local; fake inputs)
+bash mmapq/scripts/check_readme_examples.sh --self-test
+
+# Verify README fenced code blocks compile (C/Rust) or parse (Python)
+run_cross bash mmapq/scripts/check_readme_examples.sh \
+    mmapq/README.md \
+    mmapq-rs/README.md \
+    mmapq-py/README.md
+
+# Verify the generated binding-coverage section in feature-matrix.md is current
+# (the presence matrix reads mmapq-rs/src/ffi.rs and mmapq-py/setup.py → cross).
+presence_fresh() {
+    GENERATED=$(bash mmapq/scripts/api_surface.sh --presence-matrix | grep -A100 '^## ' | head -n -1)
+    CHECKED_IN=$(awk '/^## Auto-generated binding coverage$/{p=1} /^<!-- \/GENERATED -->$/{p=0} p' mmapq/doc/feature-matrix.md)
+    if [ "$GENERATED" != "$CHECKED_IN" ]; then
+        echo "ERROR: feature-matrix.md auto-generated section is stale. Regenerate with:" >&2
+        echo "  bash scripts/api_surface.sh --presence-matrix > /tmp/gen &&" >&2
+        echo "  # replace the section between <!-- GENERATED --> and <!-- /GENERATED -->" >&2
+        exit 1
+    fi
+    echo "PASS: feature-matrix.md binding-coverage section is current"
+}
+run_cross presence_fresh
+
+# Verify submodule URLs are relative and published files carry no internal host
+run_cross bash mmapq/scripts/check_published_urls.sh
+
+# Verify binding symbols are declared in public headers
+run_cross bash mmapq/scripts/check_binding_symbols.sh
+
+# Verify every gate fails closed when its inputs are absent (P5). Reads the
+# sibling inputs, so cross-scope.
+run_cross bash mmapq/scripts/check_gates_fail_closed.sh
+
+# ── Final ───────────────────────────────────────────────────────────────────
+if [ "$GATE_SKIP" -gt 0 ]; then
+    echo "GATE_SKIP: $GATE_SKIP cross-repo check(s) skipped (bare clone). CI must assert GATE_SKIP == 0." >&2
+fi
 echo "mirrors in sync"

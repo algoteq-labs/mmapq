@@ -82,13 +82,13 @@ change, every participant refuses at creation with a clear diagnostic.
 
   | file                          | call                    | queue type |
   |-------------------------------|-------------------------|-----------|
-  | src/indexed_appender.c:340    | queue_meta_open_rw      | normal (0) |
-  | src/indexed_poller.c:53       | queue_meta_open_ro      | normal (0) |
-  | src/indexed_reader.c:52       | queue_meta_open_ro      | normal (0) |
-  | src/indexed_queue.c:209       | queue_meta_open_ro      | normal (0) |
-  | src/indexed_batch_appender.c:158 | queue_meta_open_rw   | batch (2)  |
-  | src/indexed_batch_poller.c:36 | queue_meta_open_ro      | batch (2)  |
-  | src/indexed_batch_reader.c:47 | queue_meta_open_ro      | batch (2)  |
+  | src/indexed_appender.c    | queue_meta_open_rw      | normal (0) |
+  | src/indexed_poller.c      | queue_meta_open_ro      | normal (0) |
+  | src/indexed_reader.c      | queue_meta_open_ro      | normal (0) |
+  | src/indexed_queue.c       | queue_meta_open_ro      | normal (0) |
+  | src/indexed_batch_appender.c | queue_meta_open_rw   | batch (2)  |
+  | src/indexed_batch_poller.c  | queue_meta_open_ro      | batch (2)  |
+  | src/indexed_batch_reader.c  | queue_meta_open_ro      | batch (2)  |
 
   (Line numbers approximate; locate by grepping `queue_meta_open`.)
   There may be additional call sites in archiver/transfer code —

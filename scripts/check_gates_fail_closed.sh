@@ -25,14 +25,35 @@ declare -a REGISTRY
 REGISTRY+=("mmapq/scripts/check_strdup_guards.sh||mmapq/src")
 REGISTRY+=("mmapq/scripts/check_cmake_sources.sh||mmapq/src")
 REGISTRY+=("mmapq/scripts/audit_asserts.sh|--verify|mmapq/src")
+REGISTRY+=("mmapq/scripts/check_doc_citations.sh||mmapq/doc")
 REGISTRY+=("mmapq/scripts/check_error_codes.sh||mmapq/include/mmap_platform.h mmapq-rs/src/error.rs mmapq-py/src/mmapq/_errors.py")
 REGISTRY+=("mmapq/scripts/check_binding_symbols.sh||mmapq/include mmapq-rs/src/ffi.rs mmapq-py/setup.py")
 REGISTRY+=("mmapq/scripts/check_readme_examples.sh|mmapq/README.md mmapq-rs/README.md mmapq-py/README.md|mmapq/README.md mmapq-rs/Cargo.toml mmapq-py/src/mmapq/__init__.py")
 REGISTRY+=("mmapq-py/scripts/check_enum_sync.sh||mmapq/include mmapq-py/src/mmapq/types.py")
 REGISTRY+=("mmapq-py/scripts/check_no_layout_mirrors.sh||mmapq/include mmapq-py/setup.py")
 REGISTRY+=("mmapq/scripts/check_published_urls.sh||mmapq-rs/.gitmodules mmapq-py/.gitmodules mmapq-rs/Cargo.toml mmapq-py/pyproject.toml mmapq-py/setup.py")
+REGISTRY+=("mmapq/scripts/check_mirrors.sh||mmapq-rs/c/src mmapq-py/c/src")
 
 # ── --list-registry: print gates with their derived scope and inputs ─────────
+# --list-registry=csv emits machine-readable `scope\tpath\targs` lines so
+# callers (check_sync.sh 17d) can derive the cross-scope set mechanically
+# instead of hand-maintaining a second copy of the classification.
+if [ "${1:-}" = "--list-registry=csv" ]; then
+    for entry in "${REGISTRY[@]}"; do
+        path="${entry%%|*}"
+        rest="${entry#*|}"
+        args="${rest%|*}"
+        inputs="${rest##*|}"
+        if echo "$inputs" | grep -q 'mmapq-rs/\|mmapq-py/'; then
+            scope="cross"
+        else
+            scope="local"
+        fi
+        printf '%s\t%s\t%s\n' "$scope" "$path" "$args"
+    done
+    exit 0
+fi
+
 if [ "${1:-}" = "--list-registry" ]; then
     echo "Registered gates (local = runs from a bare mmapq clone; cross = needs sibling repos):"
     for entry in "${REGISTRY[@]}"; do
@@ -140,6 +161,13 @@ for entry in "${REGISTRY[@]}"; do
     inputs="${rest##*|}"
     name="$path${args:+ $args}"
 
+    # check_mirrors.sh is a whole-tree comparison, not a remove-one-input gate
+    # (its subset baseline would need the vendored c/ trees present, which would
+    # shadow mmapq/include for the header-reading gates). Tested separately below.
+    case "$path" in
+        */check_mirrors.sh) continue ;;
+    esac
+
     # Baseline control: pristine copy must exit 0.
     copy_subsets
     if run_gate "$path" "$args"; then
@@ -169,6 +197,36 @@ for entry in "${REGISTRY[@]}"; do
             echo "  PASS: $name (input '$input' absent)"
         fi
     done
+done
+
+# ── check_mirrors.sh (whole-tree, dedicated) ────────────────────────────────
+MR="$TMPDIR/mmapq-mirror-work"
+mirror_copy() {
+    rm -rf "$MR"
+    for t in src include test scripts; do
+        [ -d "$ROOT/mmapq/$t" ]      && { mkdir -p "$MR/mmapq/$t";      cp -a "$ROOT/mmapq/$t/." "$MR/mmapq/$t/"; }
+        [ -d "$ROOT/mmapq-rs/c/$t" ] && { mkdir -p "$MR/mmapq-rs/c/$t"; cp -a "$ROOT/mmapq-rs/c/$t/." "$MR/mmapq-rs/c/$t/"; }
+        [ -d "$ROOT/mmapq-py/c/$t" ] && { mkdir -p "$MR/mmapq-py/c/$t"; cp -a "$ROOT/mmapq-py/c/$t/." "$MR/mmapq-py/c/$t/"; }
+    done
+}
+mirror_copy
+if ( cd "$MR" && bash mmapq/scripts/check_mirrors.sh ) >/dev/null 2>&1; then
+    echo "  CONTROL-PASS: mmapq/scripts/check_mirrors.sh"
+    tested_gates=$((tested_gates + 1))
+else
+    echo "  CONTROL-FAIL: mmapq/scripts/check_mirrors.sh exited non-zero on pristine mirror copy" >&2
+    echo "                (working-tree mirrors not in sync — run bash mmapq/scripts/check_mirrors.sh)" >&2
+    control_fails=$((control_fails + 1))
+fi
+for target in mmapq-rs/c/src mmapq-py/c/src; do
+    mirror_copy
+    rm -rf "$MR/$target"
+    if ( cd "$MR" && bash mmapq/scripts/check_mirrors.sh ) >/dev/null 2>&1; then
+        echo "  FAIL: mmapq/scripts/check_mirrors.sh exited 0 when mirror '$target' was absent" >&2
+        errors=1
+    else
+        echo "  PASS: mmapq/scripts/check_mirrors.sh (mirror '$target' absent)"
+    fi
 done
 
 if [ "$control_fails" -gt 0 ]; then
