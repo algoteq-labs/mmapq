@@ -90,23 +90,6 @@ static inline const char *mmapq_version(void) {
 #include <sys/mman.h>
 
 /**
- * huge_pages_hint — advise the kernel to use huge pages for a mapped region.
- *
- * Linux: uses madvise with MADV_HUGEPAGE. Requires Transparent Huge Pages (THP)
- *        to be enabled in the kernel (typically 'madvise' or 'always' mode).
- * Non-Linux: no-op (not supported via standard madvise).
- */
-static inline void huge_pages_hint(void *addr, size_t length)
-{
-#if defined(__linux__) && defined(MADV_HUGEPAGE)
-    madvise(addr, length, MADV_HUGEPAGE);
-#else
-    (void)addr;
-    (void)length;
-#endif
-}
-
-/**
  * spin_hint — yield the CPU pipeline during a spin-wait loop.
  *
  * x86_64: PAUSE instruction.
@@ -134,30 +117,6 @@ static inline uint64_t monotonic_nanos(void)
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (uint64_t)ts.tv_sec * UINT64_C(1000000000) + (uint64_t)ts.tv_nsec;
-}
-
-/**
- * memory_barrier — full compiler and hardware memory barrier.
- */
-static inline void memory_barrier(void)
-{
-    __asm__ volatile("" ::: "memory");
-}
-
-/**
- * page_size — OS memory page size in bytes (cached after first call).
- *
- * Linux: typically 4096 bytes.
- * macOS ARM64 (M1/M2/M3): typically 16384 bytes.
- * All mmap region sizes must be multiples of this value.
- */
-static inline long page_size(void)
-{
-    static long cached = 0;
-    if (__builtin_expect(cached == 0, 0)) {
-        cached = sysconf(_SC_PAGESIZE);
-    }
-    return cached;
 }
 
 /**

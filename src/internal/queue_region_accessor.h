@@ -2,7 +2,7 @@
 #define QUEUE_REGION_ACCESSOR_H
 
 #include <stdint.h>
-#include "region_accessor.h"
+#include "internal/region_accessor.h"
 #include "region_ring.h"
 #include "region_ring_accessor.h"
 #include "file_mapper.h"

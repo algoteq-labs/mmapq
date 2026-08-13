@@ -2,6 +2,7 @@
 #include "internal/file_mapper.h"
 #include "internal/mmap_assert.h"
 #include "mmap_platform.h"
+#include "internal/platform_internal.h"
 
 #include <stdlib.h>
 #include <string.h>

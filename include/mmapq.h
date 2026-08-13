@@ -10,8 +10,6 @@
 #include "mmap_platform.h"
 #include "runtime.h"
 #include "poller.h"
-#include "region_accessor.h"
-#include "export_meta.h"
 #include "queue_transfer.h"
 #include "batch_queue_transfer.h"
 #include "indexed_queue.h"

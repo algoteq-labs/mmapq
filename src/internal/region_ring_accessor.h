@@ -2,7 +2,7 @@
 #define REGION_RING_ACCESSOR_H
 
 #include <stdint.h>
-#include "region_accessor.h"
+#include "internal/region_accessor.h"
 #include "region_ring.h"
 #include "file_mapper.h"
 #include "mmap_assert.h"

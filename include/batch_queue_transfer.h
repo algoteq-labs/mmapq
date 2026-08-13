@@ -41,7 +41,6 @@
 #include <stdio.h>
 #include "indexed_batch_reader.h"
 #include "runtime.h"
-#include "export_meta.h"
 #include "queue_transfer.h"
 
 /* Forward declaration for cross-type copy function */

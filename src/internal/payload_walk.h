@@ -2,7 +2,7 @@
 #define PAYLOAD_WALK_H
 
 #include <stdint.h>
-#include "region_accessor.h"
+#include "internal/region_accessor.h"
 #include "header_codec.h"
 #include "mmap_assert.h"
 

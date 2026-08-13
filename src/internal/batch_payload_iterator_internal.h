@@ -12,7 +12,7 @@
  */
 
 #include "batch_payload_iterator.h"
-#include "region_accessor.h"
+#include "internal/region_accessor.h"
 #include "header_codec.h"
 
 /* Complete the forward declaration from batch_payload_iterator.h */

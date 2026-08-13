@@ -32,7 +32,6 @@
 #include <stdio.h>
 #include "indexed_reader.h"
 #include "runtime.h"
-#include "export_meta.h"
 
 /* Forward declarations for cross-type copy functions */
 typedef struct IndexedBatchReader IndexedBatchReader;

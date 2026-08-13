@@ -2,7 +2,7 @@
 #define UNCOMMITTED_PAYLOAD_ITERATOR_H
 
 #include <stdint.h>
-#include "region_accessor.h"
+#include "internal/region_accessor.h"
 #include "payload_iterator.h"
 #include "header_codec.h"
 #include "mmap_assert.h"

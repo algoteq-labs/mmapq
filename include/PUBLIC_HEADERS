@@ -1,6 +1,5 @@
 batch_payload_iterator.h
 batch_queue_transfer.h
-export_meta.h
 indexed_appender.h
 indexed_archiver.h
 indexed_batch_appender.h
@@ -15,5 +14,4 @@ mmap_platform.h
 mmapq.h
 poller.h
 queue_transfer.h
-region_accessor.h
 runtime.h

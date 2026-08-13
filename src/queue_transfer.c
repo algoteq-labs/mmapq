@@ -5,7 +5,7 @@
 #include "indexed_batch_reader.h"
 #include "indexed_batch_queue.h"
 #include "indexed_batch_appender.h"
-#include "export_meta.h"
+#include "internal/export_meta.h"
 #include "internal/appender_cache.h"
 #include "internal/batch_payload_iterator_internal.h"
 #include "internal/mmap_assert.h"

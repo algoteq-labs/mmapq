@@ -2,7 +2,7 @@
 #define FIXED_SIZE_REGION_H
 
 #include <stdint.h>
-#include "region_accessor.h"
+#include "internal/region_accessor.h"
 #include "file_initialiser.h"
 
 /**
