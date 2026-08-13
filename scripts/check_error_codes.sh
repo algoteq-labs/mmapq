@@ -89,6 +89,10 @@ check_all() {
     if [ "$errors" -eq 0 ]; then
         local total
         total=$(extract_pairs "$REPO/include/mmap_platform.h" | wc -l)
+        if [ "$total" -eq 0 ]; then
+            echo "ERROR: no MMAPQ_* error codes found — wrong working directory?" >&2
+            return 1
+        fi
         echo "OK: all $total MMAPQ_* error codes present in all mirrors"
     fi
     return $errors

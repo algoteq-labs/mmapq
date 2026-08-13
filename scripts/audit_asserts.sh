@@ -120,6 +120,10 @@ for f in src/*.c; do
 done
 
 echo "---"
+if [ "$total" -eq 0 ]; then
+    echo "ERROR: no MMAP_ASSERT sites found — wrong working directory? (checked src/*.c)" >&2
+    exit 1
+fi
 echo "Total: $total assert(s) across $files file(s)"
 
 if [ "$VERIFY" = "--verify" ]; then
