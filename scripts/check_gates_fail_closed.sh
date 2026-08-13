@@ -7,46 +7,37 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 
 # ── Registry: every gate script and its declared inputs ─────────────────────
-# Format: repo_relative_path inputs_absent_cmd
-# inputs_absent_cmd: a command that, when run from $ROOT, removes/hides the
-#                    inputs the gate needs.  Uses the real gate script &
-#                    expects non-zero exit.
+# Format: path|args|inputs_absent_cmd
+# path and args are joined at invocation: "bash $path $args"
 declare -a REGISTRY
-REGISTRY+=("mmapq/scripts/check_strdup_guards.sh|rm -f mmapq/src/*.c")
-REGISTRY+=("mmapq/scripts/check_error_codes.sh|rm -f mmapq/include/mmap_platform.h")
-REGISTRY+=("mmapq/scripts/audit_asserts.sh --verify|rm -f mmapq/src/indexed_appender.c")
-REGISTRY+=("mmapq/scripts/check_readme_examples.sh|rm -f mmapq/README.md")
-REGISTRY+=("mmapq-py/scripts/check_enum_sync.sh|rm -rf mmapq/include")
-REGISTRY+=("mmapq-py/scripts/check_no_layout_mirrors.sh|rm -rf mmapq/include")
-REGISTRY+=("mmapq/scripts/check_binding_symbols.sh|rm -rf mmapq/include")
+REGISTRY+=("mmapq/scripts/check_strdup_guards.sh||rm -f mmapq/src/*.c")
+REGISTRY+=("mmapq/scripts/check_error_codes.sh||rm -f mmapq/include/mmap_platform.h")
+REGISTRY+=("mmapq/scripts/audit_asserts.sh|--verify|rm -f mmapq/src/indexed_appender.c")
+REGISTRY+=("mmapq/scripts/check_readme_examples.sh|mmapq/README.md|rm -f mmapq/README.md")
+REGISTRY+=("mmapq-py/scripts/check_enum_sync.sh||rm -rf mmapq/include")
+REGISTRY+=("mmapq-py/scripts/check_no_layout_mirrors.sh||rm -rf mmapq/include")
+REGISTRY+=("mmapq/scripts/check_binding_symbols.sh||rm -rf mmapq/include")
 
 if [ "${1:-}" = "--list-registry" ]; then
     echo "Registered gates:"
     for entry in "${REGISTRY[@]}"; do
-        gate="${entry%%|*}"
-        echo "  $gate"
+        path="${entry%%|*}"
+        rest="${entry#*|}"
+        args="${rest%|*}"
+        echo "  $path${args:+ $args}"
     done
     exit 0
 fi
 
 # ── Discover unregistered gates ─────────────────────────────────────────────
-# Glob every check_*.sh and audit_asserts.sh; flag anything not in the registry.
 errors=0
 
 check_registered() {
     local script="$1"
     local rel="${script#$ROOT/}"
     for entry in "${REGISTRY[@]}"; do
-        gate="${entry%%|*}"
-        if [ "$gate" = "$rel" ] || [ "$gate" = "$rel --verify" ]; then
-            return 0
-        fi
-    done
-    # Check without --verify suffix
-    local base="${rel% --verify}"
-    for entry in "${REGISTRY[@]}"; do
-        gate="${entry%%|*}"
-        if [ "$gate" = "$base" ]; then
+        path="${entry%%|*}"
+        if [ "$path" = "$rel" ]; then
             return 0
         fi
     done
@@ -54,14 +45,13 @@ check_registered() {
     return 1
 }
 
-# Discover from mmapq (exclude aggregator and meta-gate itself)
 while IFS= read -r script; do
     case "$script" in
         */check_sync.sh|*/check_gates_fail_closed.sh) continue ;;
     esac
     check_registered "$script" || errors=1
 done < <(find "$ROOT/mmapq/scripts" "$ROOT/mmapq-py/scripts" -name 'check_*.sh' 2>/dev/null)
-check_registered "$ROOT/mmapq/scripts/audit_asserts.sh --verify" || errors=1
+check_registered "$ROOT/mmapq/scripts/audit_asserts.sh" || errors=1
 
 if [ "$errors" -gt 0 ]; then
     echo "FAIL: unregistered gates found — add them to the registry or remove them" >&2
@@ -74,37 +64,41 @@ echo "PASS: all $(find "$ROOT/mmapq/scripts" "$ROOT/mmapq-py/scripts" -name 'che
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
 
-# Copy the relevant trees
 cp -a "$ROOT/mmapq" "$TMPDIR/mmapq"
 cp -a "$ROOT/mmapq-py" "$TMPDIR/mmapq-py"
-
-# Remove any c/ mirror that would satisfy the include check
 rm -rf "$TMPDIR/mmapq-rs" 2>/dev/null || true
 
-# Source repo-root env
 cd "$TMPDIR"
 
 for entry in "${REGISTRY[@]}"; do
-    gate="${entry%%|*}"
-    cmd="${entry#*|}"
+    path="${entry%%|*}"
+    rest="${entry#*|}"
+    args="${rest%|*}"
+    cmd="${rest##*|}"
     
-    # Reset tree for each test
     git checkout -- "$TMPDIR/mmapq" 2>/dev/null || true
     git checkout -- "$TMPDIR/mmapq-py" 2>/dev/null || true
     
-    # Apply the inputs-absent command
     eval "$cmd" 2>/dev/null || true
     
     set +e
-    bash "$gate" > /dev/null 2>&1
+    if [ -n "$args" ]; then
+        bash "$path" "$args" > /dev/null 2>&1
+    else
+        bash "$path" > /dev/null 2>&1
+    fi
     rc=$?
     set -e
     
+    name="$path${args:+ $args}"
     if [ "$rc" -eq 0 ]; then
-        echo "FAIL: $gate exited 0 when inputs were absent" >&2
+        echo "FAIL: $name exited 0 when inputs were absent" >&2
+        errors=1
+    elif [ "$rc" -eq 126 ] || [ "$rc" -eq 127 ]; then
+        echo "FAIL: $name exited $rc (could not execute — check path)" >&2
         errors=1
     else
-        echo "  PASS: $gate -> exit $rc"
+        echo "  PASS: $name -> exit $rc"
     fi
 done
 
