@@ -18,6 +18,7 @@ REGISTRY+=("mmapq/scripts/audit_asserts.sh --verify|rm -f mmapq/src/indexed_appe
 REGISTRY+=("mmapq/scripts/check_readme_examples.sh|rm -f mmapq/README.md")
 REGISTRY+=("mmapq-py/scripts/check_enum_sync.sh|rm -rf mmapq/include")
 REGISTRY+=("mmapq-py/scripts/check_no_layout_mirrors.sh|rm -rf mmapq/include")
+REGISTRY+=("mmapq/scripts/check_binding_symbols.sh|rm -rf mmapq/include")
 
 if [ "${1:-}" = "--list-registry" ]; then
     echo "Registered gates:"
@@ -53,8 +54,11 @@ check_registered() {
     return 1
 }
 
-# Discover from mmapq
+# Discover from mmapq (exclude aggregator and meta-gate itself)
 while IFS= read -r script; do
+    case "$script" in
+        */check_sync.sh|*/check_gates_fail_closed.sh) continue ;;
+    esac
     check_registered "$script" || errors=1
 done < <(find "$ROOT/mmapq/scripts" "$ROOT/mmapq-py/scripts" -name 'check_*.sh' 2>/dev/null)
 check_registered "$ROOT/mmapq/scripts/audit_asserts.sh --verify" || errors=1

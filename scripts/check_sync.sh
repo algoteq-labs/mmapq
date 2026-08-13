@@ -63,4 +63,7 @@ echo "PASS: feature-matrix.md binding-coverage section is current"
 # Verify every strdup() is followed by a NULL check
 bash mmapq/scripts/check_strdup_guards.sh
 
+# Verify every gate fails closed when its inputs are absent (P5)
+bash mmapq/scripts/check_gates_fail_closed.sh
+
 echo "mirrors in sync"

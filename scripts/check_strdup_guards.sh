@@ -25,6 +25,11 @@ while IFS= read -r match; do
     fi
 done < <(grep -rn "strdup(" src/*.c)
 
+if [ "$total" -eq 0 ]; then
+    echo "ERROR: no strdup() call sites found — wrong working directory?" >&2
+    exit 1
+fi
+
 if [ "$errors" -gt 0 ]; then
     echo "FAIL: $errors / $total strdup() calls lack NULL checks" >&2
     exit 1
