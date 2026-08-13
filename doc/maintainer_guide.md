@@ -149,3 +149,36 @@ The sub-300ns baseline was verified using:
 ./latency_bench 20000000 100000 64 5 7 9
 ```
 Always use at least 20M iterations to ensure all regions are mapped and the system has reached steady-state thermal/power levels.
+
+## 7. Cross-Repo Gates and Toolchain Requirements
+
+The gate scripts live in `mmapq/scripts/` and `mmapq-py/scripts/`. Whether a
+gate is **local** (runs from a bare `mmapq` clone) or **cross-repo** (needs the
+sibling `mmapq-rs` / `mmapq-py` trees) is derived from its declared inputs, not
+hand-maintained:
+
+```bash
+bash mmapq/scripts/check_gates_fail_closed.sh --list-registry
+```
+
+**Deliberate decision:** `check_readme_examples.sh` compiles the Rust README
+against the real crate, so `check_sync.sh` — the everyday pre-commit command for
+a zero-dependency C library — requires **gcc, python3, and a Rust toolchain
+(`cargo`)**. This was a deliberate choice over the alternative (skipping the
+Rust arm, which would let the README's Rust examples rot unverified). If a
+host lacks `cargo`, the gate reports a hard `FAIL` naming the cause; the
+`MMAPQ_SKIP_RUST_GATE=1` and `MMAPQ_SKIP_PYTHON_GATE=1` opt-outs are counted
+(`GATE_SKIP`) and must be zero in CI. The correct escape valve if this ever
+bites is to split `check_sync.sh` into a fast local subset and a full
+cross-repo suite — not to weaken or silently skip an arm.
+
+The opt-out cannot silently reduce coverage: the meta-gate detects it
+structurally. When the Rust arm is skipped, the `mmapq-rs/Cargo.toml` input
+test stops testing anything and the meta-gate immediately reports
+`FAIL: exited 0 when input 'mmapq-rs/Cargo.toml' was absent`. That is the
+expected, correct behaviour — not a regression. The `GATE_SKIP == 0` CI
+assertion is belt-and-braces on top of this, not the primary defence.
+
+Copies of `mmapq/scripts/` under `mmapq-rs/c/scripts/` are submodule mirror
+artefacts and must not be run from there; the cross-repo path assumptions do
+not resolve. Run gates from the workspace root.

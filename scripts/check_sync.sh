@@ -46,8 +46,14 @@ bash mmapq/scripts/check_error_codes.sh
 # Verify ASSERT_AUDIT.md line numbers match source
 bash mmapq/scripts/audit_asserts.sh --verify
 
-# Verify README fenced C blocks compile against -I include only
-bash mmapq/scripts/check_readme_examples.sh mmapq/README.md
+# Self-test the README checker before running it
+bash mmapq/scripts/check_readme_examples.sh --self-test
+
+# Verify README fenced code blocks compile (C/Rust) or parse (Python)
+bash mmapq/scripts/check_readme_examples.sh \
+    mmapq/README.md \
+    mmapq-rs/README.md \
+    mmapq-py/README.md
 
 # Verify the generated binding-coverage section in feature-matrix.md is current
 GENERATED=$(bash mmapq/scripts/api_surface.sh --presence-matrix | grep -A100 '^## ' | head -n -1)
@@ -78,7 +84,9 @@ if [ -n "$BAD_INLINES" ]; then
     exit 1
 fi
 
-# Verify every gate fails closed when its inputs are absent (P5)
+# Verify every gate fails closed when its inputs are absent (P5).
+# Gate scope classification (local vs cross-repo) is derived from the
+# registry, not listed here: bash mmapq/scripts/check_gates_fail_closed.sh --list-registry
 bash mmapq/scripts/check_gates_fail_closed.sh
 
 echo "mirrors in sync"
