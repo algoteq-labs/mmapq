@@ -261,6 +261,7 @@ int file_mapper_rolled_create(
     if (impl == NULL) return MMAPQ_ENOMEM;
 
     impl->file_prefix      = strdup(file_prefix);
+    if (impl->file_prefix == NULL) { free(impl); return MMAPQ_ENOMEM; }
     impl->max_file_size    = max_file_size;
     impl->region_size      = region_size;
     impl->initialiser      = initialiser;

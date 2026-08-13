@@ -90,7 +90,9 @@ int indexed_batch_poller_create(
     if (p == NULL) return MMAPQ_ENOMEM;
 
     p->directory  = strdup(directory);
+    if (p->directory == NULL) { free(p); return MMAPQ_ENOMEM; }
     p->queue_name = strdup(queue_name);
+    if (p->queue_name == NULL) { free(p->directory); free(p); return MMAPQ_ENOMEM; }
     p->ring_size  = ring_size;
     p->timeout_ns = timeout_ns;
     p->runtime    = runtime;

@@ -425,7 +425,7 @@ int32_t mutable_batch_append(MutableBatch *b, const void *data, int32_t length)
 {
     if (b == NULL || data == NULL || length <= 0) return MMAPQ_EINVAL;
     IndexedBatchAppender *a = b->appender;
-    if (length + PAYLOAD_LENGTH_SIZE > queue_meta_region_size(a->queue_meta)) return MMAPQ_EINVAL;
+    if (length > queue_meta_region_size(a->queue_meta) - PAYLOAD_LENGTH_SIZE) return MMAPQ_EINVAL;
     if (write_padding_if_needed(a, length)) return -1;
     memcpy(a->payload_buf.data + PAYLOAD_LENGTH_OFFSET, &length, sizeof(int32_t));
     memcpy(a->payload_buf.data + PAYLOAD_DATA_OFFSET, data, (size_t)length);
@@ -437,7 +437,7 @@ int32_t mutable_batch_append_reserved(MutableBatch *b, int32_t length, void **ou
 {
     if (b == NULL || out_data == NULL || length <= 0) return MMAPQ_EINVAL;
     IndexedBatchAppender *a = b->appender;
-    if (length + PAYLOAD_LENGTH_SIZE > queue_meta_region_size(a->queue_meta)) return MMAPQ_EINVAL;
+    if (length > queue_meta_region_size(a->queue_meta) - PAYLOAD_LENGTH_SIZE) return MMAPQ_EINVAL;
     if (write_padding_if_needed(a, length)) return -1;
     memcpy(a->payload_buf.data + PAYLOAD_LENGTH_OFFSET, &length, sizeof(int32_t));
     *out_data = a->payload_buf.data + PAYLOAD_DATA_OFFSET;
@@ -452,7 +452,7 @@ int32_t mutable_batch_append_remaining_from(MutableBatch *b, BatchPayloadIterato
     int32_t count = 0;
     while (batch_iterator_advance(it)) {
         int32_t msg_len = batch_iterator_current_length(it);
-        if (msg_len + PAYLOAD_LENGTH_SIZE > region_sz) return MMAPQ_EINVAL;
+        if (msg_len > region_sz - PAYLOAD_LENGTH_SIZE) return MMAPQ_EINVAL;
         int rc = mutable_batch_append(b, batch_iterator_current_data(it), msg_len);
         if (rc < 0) return rc;
         count++;

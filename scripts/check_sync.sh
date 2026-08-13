@@ -63,4 +63,7 @@ if [ -f mmapq/scripts/api_surface.sh ]; then
     echo "PASS: feature-matrix.md binding-coverage section is current"
 fi
 
+# Verify every strdup() is followed by a NULL check
+bash mmapq/scripts/check_strdup_guards.sh
+
 echo "mirrors in sync"

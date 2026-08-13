@@ -219,7 +219,7 @@ void test_archiver_poller_returns_archived_below_start_index(void)
 {
     IndexedAppender *a = create_archivable_appender();
     for (int i = 0; i < 5; i++) {
-        char msg[8];
+        char msg[16];
         snprintf(msg, sizeof(msg), "m%d", i);
         indexed_appender_append(a, msg, (int32_t)strlen(msg));
     }
@@ -280,7 +280,7 @@ void test_archiver_start_offset_advances_after_archive(void)
     IndexedAppender *a = create_archivable_appender();
     uint8_t appender_id = indexed_appender_id(a);
     for (int i = 0; i < 3; i++) {
-        char msg[8];
+        char msg[16];
         snprintf(msg, sizeof(msg), "m%d", i);
         indexed_appender_append(a, msg, (int32_t)strlen(msg));
     }
@@ -324,7 +324,7 @@ void test_archiver_backward_unarchive(void)
 {
     IndexedAppender *a = create_archivable_appender();
     for (int i = 0; i < 4; i++) {
-        char msg[8];
+        char msg[16];
         snprintf(msg, sizeof(msg), "b%d", i);
         indexed_appender_append(a, msg, (int32_t)strlen(msg));
     }

@@ -20,6 +20,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/stat.h>
+#include <stdint.h>
 
 /* ── Test configuration ──────────────────────────────────────────────────── */
 
@@ -1172,6 +1173,42 @@ void test_last_error_zero_on_success(void)
     indexed_poller_close(p);
 }
 
+/* ── Phase 14a/14b pins ──────────────────────────────────────────────────── */
+
+void test_poller_null_guard(void)
+{
+    /* NULL poller must return POLL_ERROR, not dereference before the guard */
+    PollResult r = indexed_poller_poll(NULL, capture_handler, NULL);
+    TEST_ASSERT_EQUAL(POLL_ERROR, r);
+}
+
+void test_append_rejects_max_int_length(void)
+{
+    IndexedQueue    *q = NULL;
+    IndexedAppender *a = NULL;
+
+    int rc_q = indexed_queue_create(DIR, QUEUE,
+        REGION_SZ, RING_SZ, 1,
+        4096LL * 64, 0, TIMEOUT_NS,
+        0, rt, rt, &q);
+    TEST_ASSERT_EQUAL_INT(0, rc_q);
+    TEST_ASSERT_NOT_NULL(q);
+    int rc_a = indexed_queue_create_appender(q, &a);
+    TEST_ASSERT_EQUAL_INT(0, rc_a);
+    TEST_ASSERT_NOT_NULL(a);
+
+    /* INT32_MAX triggers signed-overflow in length + PAYLOAD_LENGTH_SIZE if
+       the guard is written as (length + 4 > region_size). Fixed in Phase 14b
+       to compare against the complement: (length > region_size - 4).
+       This pin exists for UBSan detection: with the old code, UBSan fires
+       on signed-integer-overflow; with the fix, it does not. */
+    int64_t bad = indexed_appender_append(a, "x", INT32_MAX);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL, bad);
+
+    indexed_appender_close(a);
+    indexed_queue_close(q);
+}
+
 /* ── strerror pins ────────────────────────────────────────────────────────── */
 
 void test_strerror_all_codes(void)
@@ -1235,6 +1272,8 @@ int main(void)
 
     RUN_TEST(test_append_rejects_zero_length);
     RUN_TEST(test_append_rejects_oversized_message);
+    RUN_TEST(test_append_rejects_max_int_length);
+    RUN_TEST(test_poller_null_guard);
 
     RUN_TEST(test_open_normal_as_batch_refused);
     RUN_TEST(test_meta_schema_mismatch_refused);

@@ -101,7 +101,9 @@ int indexed_reader_create(
     if (r == NULL) return MMAPQ_ENOMEM;
 
     r->directory            = strdup(directory);
+    if (r->directory == NULL) { free(r); return MMAPQ_ENOMEM; }
     r->queue_name           = strdup(queue_name);
+    if (r->queue_name == NULL) { free(r->directory); free(r); return MMAPQ_ENOMEM; }
     r->ring_size            = ring_size;
     r->regions_to_map_ahead = REGION_RING_ACCESSOR_DEFAULT_REGIONS_AHEAD;
     r->timeout_ns           = timeout_ns;

@@ -78,7 +78,9 @@ static QueueRegionAccessor *acc_alloc(
     if (acc == NULL) return NULL;
 
     acc->directory           = strdup(directory);
+    if (acc->directory == NULL) { free(acc); return NULL; }
     acc->queue_name          = strdup(queue_name);
+    if (acc->queue_name == NULL) { free(acc->directory); free(acc); return NULL; }
     acc->read_only           = read_only;
     acc->region_size         = region_size;
     acc->ring_size           = ring_size;

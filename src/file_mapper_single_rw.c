@@ -223,6 +223,7 @@ int file_mapper_single_rw_create(
     if (impl == NULL) return MMAPQ_ENOMEM;
 
     impl->file_path       = strdup(file_path);
+    if (impl->file_path == NULL) { free(impl); return MMAPQ_ENOMEM; }
     impl->max_size        = max_size;
     impl->initialiser     = initialiser;
     impl->initialiser_ctx = initialiser_ctx;

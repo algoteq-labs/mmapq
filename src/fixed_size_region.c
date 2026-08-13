@@ -131,6 +131,9 @@ int fixed_size_region_create(
     }
 
     impl->file_path = strdup(file_path);  /* keep for toString/debugging */
+    if (impl->file_path == NULL) {
+        free(impl); munmap(addr, map_len); close(fd); return MMAPQ_ENOMEM;
+    }
     impl->size      = size;
     impl->address   = (uintptr_t)addr;
     impl->fd        = fd;

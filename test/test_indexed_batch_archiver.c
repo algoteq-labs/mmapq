@@ -90,7 +90,7 @@ void test_batch_archiver_archive_forward_updates_start_index(void)
     IndexedBatchAppender *a = create_archivable_batch_appender();
     for (int i = 0; i < 5; i++) {
         MutableBatch *b = indexed_batch_appender_start_batch(a);
-        char msg[16];
+        char msg[32];
         snprintf(msg, sizeof(msg), "batch%d", i);
         mutable_batch_append(b, msg, (int32_t)strlen(msg));
         indexed_batch_appender_commit_batch(a, mutable_batch_complete(b));

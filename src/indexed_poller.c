@@ -104,7 +104,9 @@ int indexed_poller_create(
     if (p == NULL) return MMAPQ_ENOMEM;
 
     p->directory           = strdup(directory);
+    if (p->directory == NULL) { free(p); return MMAPQ_ENOMEM; }
     p->queue_name          = strdup(queue_name);
+    if (p->queue_name == NULL) { free(p->directory); free(p); return MMAPQ_ENOMEM; }
     p->ring_size           = ring_size;
     p->regions_to_map_ahead = REGION_RING_ACCESSOR_DEFAULT_REGIONS_AHEAD;
     p->timeout_ns          = timeout_ns;
@@ -124,9 +126,8 @@ PollResult indexed_poller_poll(
     MessageHandler handler,
     void          *ctx)
 {
-    p->last_error = 0;
-
     if (p == NULL)    return POLL_ERROR;
+    p->last_error = 0;
     if (p->closed)    { p->last_error = MMAPQ_ECLOSED; return POLL_ERROR; }
     if (handler == NULL) { p->last_error = MMAPQ_EINVAL; return POLL_ERROR; }
 

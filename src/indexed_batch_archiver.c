@@ -130,7 +130,9 @@ int indexed_batch_archiver_create(
     if (a == NULL) return MMAPQ_ENOMEM;
 
     a->directory  = strdup(directory);
+    if (a->directory == NULL) { free(a); return MMAPQ_ENOMEM; }
     a->queue_name = strdup(queue_name);
+    if (a->queue_name == NULL) { free(a->directory); free(a); return MMAPQ_ENOMEM; }
     a->ring_size  = ring_size > 0 ? ring_size : 4;
     a->runtime    = runtime;
     *out = a;
@@ -360,8 +362,14 @@ int indexed_batch_archiver_archivable_files(
         snprintf(path, sizeof(path), "%s/%s/header_%d",
                  a->directory, a->queue_name, i);
         /* Caller must free each returned string */
-        if (queue_file_exists(path))
-            paths_out[count++] = strdup(path);
+        if (queue_file_exists(path)) {
+            paths_out[count] = strdup(path);
+            if (paths_out[count] == NULL) {
+                for (int j = 0; j < count; j++) free(paths_out[j]);
+                return MMAPQ_ENOMEM;
+            }
+            count++;
+        }
     }
 
     /* Fully covered payload files per appender */
@@ -377,8 +385,14 @@ int indexed_batch_archiver_archivable_files(
             char path[4096];
             snprintf(path, sizeof(path), "%s/%s/payload_%u_%d",
                      a->directory, a->queue_name, (unsigned)ids[k], fi);
-            if (queue_file_exists(path))
-                paths_out[count++] = strdup(path);
+            if (queue_file_exists(path)) {
+                paths_out[count] = strdup(path);
+                if (paths_out[count] == NULL) {
+                    for (int j = 0; j < count; j++) free(paths_out[j]);
+                    return MMAPQ_ENOMEM;
+                }
+                count++;
+            }
         }
     }
 

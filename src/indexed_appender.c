@@ -520,7 +520,7 @@ int64_t indexed_appender_append(
 {
     if (a == NULL || data == NULL || length <= 0) return MMAPQ_EINVAL;
     if (a->closed) return MMAPQ_ECLOSED;
-    if (length + PAYLOAD_LENGTH_SIZE > queue_meta_region_size(a->queue_meta)) return MMAPQ_EINVAL;
+    if (length > queue_meta_region_size(a->queue_meta) - PAYLOAD_LENGTH_SIZE) return MMAPQ_EINVAL;
 
     int64_t payload_offset;
     if (write_payload(a, data, length, &payload_offset)) return -1;
@@ -539,7 +539,7 @@ int64_t indexed_appender_append_uncommitted(
 {
     if (a == NULL || data == NULL || length <= 0) return MMAPQ_EINVAL;
     if (a->closed) return MMAPQ_ECLOSED;
-    if (length + PAYLOAD_LENGTH_SIZE > queue_meta_region_size(a->queue_meta)) return MMAPQ_EINVAL;
+    if (length > queue_meta_region_size(a->queue_meta) - PAYLOAD_LENGTH_SIZE) return MMAPQ_EINVAL;
 
     int64_t payload_offset;
     if (write_payload(a, data, length, &payload_offset)) return -1;
