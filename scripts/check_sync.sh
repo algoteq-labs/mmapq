@@ -100,24 +100,25 @@ if [ -n "$BAD_INLINES" ]; then
     exit 1
 fi
 
-# Verify every cdef header appears in the set_source include list (17f follow-on).
-# A missing #include causes implicit-declaration warnings, which under gcc < 14
-# are mere warnings but silently truncate pointer returns (the F3b mmapq_strerror
-# bug: the 64-bit pointer was truncated to 32 bits by the implicit int return).
-IFS='|' read -ra INCS < <(grep -oP '#include\s+"[^"]+' mmapq-py/setup.py | sed 's/#include "//' | sort -u | tr '\n' '|')
-for cdef_h in mmap_platform.h; do
-    if ! printf '%s\n' "${INCS[@]}" | grep -qx "$cdef_h"; then
-        echo "ERROR: $cdef_h is used in cdef but missing from set_source include list" >&2
-        echo "       in mmapq-py/setup.py. The generated C will have an implicit" >&2
-        echo "       declaration for every cdef'd symbol from that header." >&2
-        exit 1
-    fi
-done
-
 # Verify no doc cites a source file by line number, and cited files exist (17f)
 bash mmapq/scripts/check_doc_citations.sh
 
 # ── Cross-repo checks (need mmapq-rs/ and mmapq-py/) ────────────────────────
+
+# Verify every cdef header appears in the set_source include list (F3b follow-on).
+# A missing #include causes implicit-declaration warnings, which under gcc < 14
+# are mere warnings but silently truncate pointer returns (the mmapq_strerror
+# bug: 64-bit pointer truncated to 32 bits by implicit int return).
+run_cross bash -c '
+IFS="|" read -ra INCS <<< "$(grep -oP "#include\s+\"[^\"]+" mmapq-py/setup.py | sed "s/#include \"//" | sort -u | tr "\n" "|")"
+for h in mmap_platform.h; do
+    if ! printf "%s\n" "${INCS[@]}" | grep -qx "$h"; then
+        echo "ERROR: $h used in cdef but missing from set_source include list" >&2
+        echo "       in mmapq-py/setup.py. Implicit declaration truncates pointers." >&2
+        exit 1
+    fi
+done
+'
 
 # Mirror sync of the vendored C mirrors (mmapq-rs/c + mmapq-py/c)
 run_cross bash mmapq/scripts/check_mirrors.sh
