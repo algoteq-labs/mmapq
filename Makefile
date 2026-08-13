@@ -12,6 +12,7 @@
 PREFIX    ?= /usr/local
 LIBDIR    ?= $(PREFIX)/lib
 INCLUDEDIR ?= $(PREFIX)/include
+DATADIR   ?= $(PREFIX)/share
 NATIVE    ?= 0
 LTO       ?= 0
 
@@ -93,6 +94,8 @@ install: $(LIB)
 	install -m 644 $(addprefix include/,$(shell cat include/PUBLIC_HEADERS)) $(DESTDIR)$(INCLUDEDIR)/mmapq/
 	install -d $(DESTDIR)$(LIBDIR)
 	install -m 644 $(LIB) $(DESTDIR)$(LIBDIR)/
+	install -d $(DESTDIR)$(DATADIR)/doc/mmapq
+	install -m 644 doc/wire-format.md $(DESTDIR)$(DATADIR)/doc/mmapq/
 
 clean:
 	rm -f $(OBJS) $(LIB) demo latency_bench echo_server batch_demo batch_latency_bench batch_echo_server

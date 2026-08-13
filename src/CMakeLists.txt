@@ -78,3 +78,6 @@ install(TARGETS mmapq
 install(DIRECTORY ${PROJECT_SOURCE_DIR}/include/
     DESTINATION include/mmapq
 )
+install(FILES ${PROJECT_SOURCE_DIR}/doc/wire-format.md
+    DESTINATION share/doc/mmapq
+)

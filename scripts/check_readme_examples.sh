@@ -144,6 +144,42 @@ check_python_block() {
     fi
 }
 
+# check_include_paths — verify that every `include/…` path a README mentions
+# resolves against the INSTALLED header set (include/PUBLIC_HEADERS), not the
+# source tree. This is 16e's prophylactic: after rewording the README away from
+# internal headers, a future edit that re-introduces `include/header_codec.h`
+# (internal, never installed) must fail. Self-tested below.
+check_include_paths() {
+    local readme="$1"
+    local script_dir manifest
+    script_dir=$(cd "$(dirname "$0")" && pwd)
+    manifest="$script_dir/../include/PUBLIC_HEADERS"
+
+    if [ ! -f "$manifest" ]; then
+        echo "  FAIL: include/PUBLIC_HEADERS not found ($manifest) — cannot verify installed header paths"
+        FAIL=$((FAIL + 1))
+        return
+    fi
+
+    local refs
+    refs=$(grep -oE 'include/[A-Za-z0-9_.-]+\.h' "$readme" | sed 's#^include/##' | sort -u || true)
+    if [ -z "$refs" ]; then
+        return
+    fi
+
+    local bad=0 h
+    while IFS= read -r h; do
+        if ! grep -qxF "$h" "$manifest"; then
+            echo "  FAIL: README references include/$h, which is not an installed (PUBLIC_HEADERS) header"
+            FAIL=$((FAIL + 1))
+            bad=1
+        fi
+    done <<< "$refs"
+    if [ "$bad" -eq 0 ]; then
+        echo "  PASS: all include/… header references resolve against the installed set"
+    fi
+}
+
 check_readme() {
     local readme="$1"
     if [ ! -f "$readme" ]; then
@@ -183,6 +219,10 @@ check_readme() {
             lang="${line#\`\`\`}"
         fi
     done < "$readme"
+
+    # Verify every include/… path mentioned in the README resolves against the
+    # installed header set (16e path-resolution gate).
+    check_include_paths "$readme"
 }
 
 # --- Self-test ---
@@ -243,6 +283,33 @@ self_test() {
         fail=1
     else
         echo "  self-test Rust arm: OK"
+    fi
+
+    # Path-resolution arm (16e): a README referencing a non-installed header
+    # must FAIL; one referencing an installed header must PASS.
+    local manifest
+    manifest="$script_dir/../include/PUBLIC_HEADERS"
+    if [ -f "$manifest" ]; then
+        # Non-installed (internal) header → must fail.
+        echo 'The spec lives in `include/header_codec.h`.' > "$tmpdir/bad_path.md"
+        if bash "$0" "$tmpdir/bad_path.md" >/dev/null 2>&1; then
+            echo "  self-test path-resolution (internal header) arm: FAIL (false positive)"
+            fail=1
+        else
+            echo "  self-test path-resolution (internal header) arm: OK"
+        fi
+        # Installed header → must pass.
+        local installed
+        installed=$(grep -m1 -v '^$' "$manifest")
+        echo "Consumers include \`include/${installed}\`." > "$tmpdir/good_path.md"
+        if bash "$0" "$tmpdir/good_path.md" >/dev/null 2>&1; then
+            echo "  self-test path-resolution (installed header) arm: OK"
+        else
+            echo "  self-test path-resolution (installed header) arm: FAIL (false negative)"
+            fail=1
+        fi
+    else
+        echo "  self-test path-resolution arm: SKIP (no PUBLIC_HEADERS manifest)"
     fi
 
     # Rust arm opt-out: without cargo, MMAPQ_SKIP_RUST_GATE=1 must SKIP, not FAIL.

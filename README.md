@@ -86,8 +86,10 @@ The feature set and the on-disk format are **frozen**. This is a design
 position, not a maturity disclaimer:
 
 - The wire format never changes. Queue files written today remain readable
-  by every future version. Format constants live in `include/header_codec.h`
-  and `include/queue_meta.h`, which are the specification.
+  by every future version. The format is specified in `doc/wire-format.md`
+  (installed with the library at `share/doc/mmapq/wire-format.md`); the
+  authoritative implementation lives in the source distribution at
+  `src/internal/header_codec.h` and `src/internal/queue_meta.h`.
 - The public API only grows for one reason: completing parity with the
   Algoteq Java reference implementation for capability that already exists
   on disk. No convenience layers, no configuration sprawl, no ecosystem.
