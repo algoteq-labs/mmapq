@@ -452,7 +452,7 @@ int mmapq_runtime_create(
     pthread_create(&rt->thread, &attr, runtime_thread_fn, rt);
     pthread_attr_destroy(&attr);
 
-    /* Set thread name for debugger visibility (macOS: thread sets its own name) */
+    /* Set thread name for debugger visibility */
     mmapq_thread_set_name(rt->thread, rt->name);
 
     /* Wait for thread to start so runtime_thread_id is set */

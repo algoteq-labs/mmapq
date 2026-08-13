@@ -87,6 +87,15 @@ bash mmapq/scripts/check_binding_symbols.sh
 # Verify no unprefixed symbols in the archive (strong linker gate)
 bash mmapq/scripts/api_surface.sh --linker
 
+# Verify no stale macOS/Darwin/__APPLE__ references remain in the C tree (16a).
+# The platform decision is "Linux only" (doc/shape-decision.md); allow-list is zero.
+MMAP_MACOS=$(grep -rn "__APPLE__\|Darwin\|macOS" mmapq/src mmapq/include mmapq/CMakeLists.txt mmapq/Makefile 2>/dev/null || true)
+if [ -n "$MMAP_MACOS" ]; then
+    echo "ERROR: stale macOS/Darwin/__APPLE__ references in the C tree:" >&2
+    echo "$MMAP_MACOS" >&2
+    exit 1
+fi
+
 # Verify static inline functions in public headers have mmapq_ prefix
 BAD_INLINES=$(grep -rn '^static inline' mmapq/include/ 2>/dev/null \
     | grep -v 'mmapq_\|MMAPQ_\|mmapqi_' || true)

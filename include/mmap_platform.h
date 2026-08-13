@@ -110,7 +110,6 @@ static inline void mmapq_spin_hint(void)
  * mmapq_monotonic_nanos — current time in nanoseconds from a monotonic clock.
  *
  * Linux: CLOCK_MONOTONIC — uses VDSO for sub-100ns overhead.
- * macOS: CLOCK_MONOTONIC.
  */
 static inline uint64_t mmapq_monotonic_nanos(void)
 {

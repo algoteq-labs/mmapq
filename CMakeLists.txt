@@ -47,8 +47,8 @@ option(MMAP_ENABLE_UBSAN   "Enable UBSanitizer"       OFF)
 option(MMAP_ENABLE_TSAN    "Enable ThreadSanitizer"   OFF)
 
 # ── Platform guard ────────────────────────────────────────────────────────
-if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT CMAKE_SYSTEM_NAME STREQUAL "Darwin")
-    message(FATAL_ERROR "mmapq supports Linux and macOS only")
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    message(FATAL_ERROR "mmapq supports Linux only - see doc/shape-decision.md")
 endif()
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
