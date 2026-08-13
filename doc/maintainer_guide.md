@@ -71,6 +71,7 @@ Always `memset` any large results/timestamp arrays (e.g. 160MB for 20M iteration
 To achieve deterministic sub-300ns performance on Linux:
 *   **Core Isolation**: Use the `5, 7, 9` pattern. Pin the client loop to core 5, the server loop to core 7, and the background `MmapqRuntime` mapper to core 9.
 *   **External Process Rule**: When running client and server in separate processes, **never** pin multiple mappers to the same isolated core. If cores are scarce, it is better to let the mappers float on the OS housekeeping cores than to oversubscribe an isolated core, which triggers disruptive Inter-Processor Interrupt (IPI) noise.
+*   **Async core requirement**: the async `MmapqRuntime` mapper needs a core it can occupy. On a 1-vCPU or oversubscribed host the caller must `sched_yield()` in any wait-for-mapper loop, or the waiter busy-spins the mapper thread out of its scheduler timeslice and the mapping appears to hang (see 13a in `region_async.c` and the region-ring deregistration path). This is why `async` is not a free default — see `doc/shape-decision.md` for the sync-vs-async mapping guidance.
 *   **Huge Pages**: Transparent Huge Pages (THP) should be enabled. The library calls `huge_pages_hint` (MADV_HUGEPAGE) on data segments to reduce TLB pressure.
 *   **VDSO Timing**: Use `CLOCK_MONOTONIC`. Bypassing the VDSO path can add ~50-100ns of overhead per clock read.
 

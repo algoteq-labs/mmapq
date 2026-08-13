@@ -221,6 +221,45 @@ appenders.
 
 ---
 
+## 6.5 Region-ring geometry constraint
+
+The vertical walk strides `word_size` bytes per sector, so a full sweep of
+the `sectorSize` header sectors touches `sectorSize * word_size` bytes of
+header. At `sectorSize = 64`, `word_size = 512`, that working set is 32 KB.
+
+The region ring must be able to hold the *previous sweep's* working set
+while advancing into the next — so the header-lane footprint is effectively
+**2 × the single-sweep span**, or 64 KB at the chosen geometry. If
+`ring_size × region_size` cannot hold that footprint, the ring thrashes
+(repeatedly evicts and re-maps the same sectors), collapsing throughput by
+orders of magnitude.
+
+Measured (async runtime, 1-byte appends, release flags):
+
+| ring span (ring_size × region_size) | throughput |
+|---:|---:|
+| 16 KiB | 1,829 msg/s |
+| 32 KiB | 4,480 msg/s |
+| 64 KiB | 94,361 msg/s |
+| 16 MiB (default 4 MiB × 4) | 75.8 M msg/s |
+
+The threshold is 2×, not 1× — at exactly 32 KiB it still thrashes, at
+64 KiB it recovers.
+
+**Enforcement.** `mmapq_indexed_queue_create` and
+`mmapq_indexed_batch_queue_create` reject
+
+```
+ring_size × region_size < 2 × sectorSize × word_size
+```
+
+with `MMAPQ_EINVAL` at creation time (see `mmapq_min_ring_size` in
+`include/indexed_queue.h`). This is a **creation-only** check: existing
+queues keep their persisted geometry on reopen, so no compatibility break
+against the frozen-format promise.
+
+---
+
 ## 7. Summary
 
 - `sectorSize` is a tunable parameter, not a fixed constant — 8, 64, 128,

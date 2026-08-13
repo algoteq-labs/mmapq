@@ -198,10 +198,35 @@ static void async_ring_close(RegionRing *self)
     wait_impl.self_exec.close   = waiting_deregister_close;
     wait_impl.self_exec.ctx     = &wait_impl;
 
-    mmapq_runtime_register(impl->runtime, &wait_impl.self_exec);
+    /*
+     * TODO(13d-ii): the mmapq_runtime_register() return is unchecked. If the
+     * runtime is already closed it returns 0, the dereg executable is never
+     * processed, and the wait below can never be satisfied — an unbounded
+     * spin. Handling that safely requires propagating failure out of
+     * async_ring_close (a non-void return) so region_ring_destroy can skip
+     * closing regions under a possibly-still-active mapper thread; a bare
+     * skip of the wait here would instead close them in region_ring_destroy
+     * and risk a use-after-free. That signature change is API-adjacent and
+     * needs a decision — it is 13d-ii, not made here. In the normal lifecycle
+     * the ring is closed before the runtime, so registration succeeds.
+     */
+    (void)mmapq_runtime_register(impl->runtime, &wait_impl.self_exec);
 
-    while (!atomic_load_explicit(&wait_impl.done, memory_order_acquire)) {
-        mmapq_spin_hint();
+    {
+        uint64_t spins = 0;
+        while (!atomic_load_explicit(&wait_impl.done, memory_order_acquire)) {
+            mmapq_spin_hint();
+            /*
+             * Yield periodically: on a 1-vCPU/oversubscribed host a pure
+             * busy-spin starves the very mapper thread we are waiting for
+             * (13a pattern, await_mapped). A well-provisioned host never
+             * reaches the threshold.
+             */
+            if (++spins >= 1000) {
+                spins = 0;
+                sched_yield();
+            }
+        }
     }
     /* Mapper thread has confirmed it is done. mapping_impl is freed by
      * waiting_deregister_execute via target_ctx_to_free. */
