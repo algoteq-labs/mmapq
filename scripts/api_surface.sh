@@ -18,9 +18,6 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 INCLUDE_DIR="$HERE/include"
-FFI_RS="$HERE/../mmapq-rs/src/ffi.rs"
-SETUP_PY="$HERE/../mmapq-py/setup.py"
-RS_DIRS="$HERE/../mmapq-rs/src $HERE/../mmapq-rs/tests"
 
 TMP_FFI=$(mktemp)
 TMP_CDEF=$(mktemp)
@@ -28,17 +25,26 @@ TMP_CALLS=$(mktemp)
 cleanup() { rm -f "$TMP_FFI" "$TMP_CDEF" "$TMP_CALLS"; }
 trap cleanup EXIT
 
-# Extract binding function names
-grep -oP 'pub fn \K[a-zA-Z_][a-zA-Z0-9_]*' "$FFI_RS" | sort -u > "$TMP_FFI"
-grep -oP '\b[a-z_][a-zA-Z0-9_]*\(' "$SETUP_PY" | sed 's/($//' | sort -u > "$TMP_CDEF"
+# ── Non-linker modes: read sibling repos for binding analysis ──────────────
+# --linker only inspects libmmapq.a and never reads these paths; resolving
+# them unconditionally would make a bare mmapq clone fail rawly (17d).
+if [ "${1:-}" != "--linker" ]; then
+    FFI_RS="$HERE/../mmapq-rs/src/ffi.rs"
+    SETUP_PY="$HERE/../mmapq-py/setup.py"
+    RS_DIRS="$HERE/../mmapq-rs/src $HERE/../mmapq-rs/tests"
 
-# Count call sites in Rust source (excluding ffi.rs).
-# Extract both fn( and path::fn( patterns; strip path prefixes.
-find $RS_DIRS -name '*.rs' ! -path '*/ffi.rs' -print0 2>/dev/null \
-    | xargs -0 grep -oPh '[a-zA-Z_][a-zA-Z0-9_]*::[a-zA-Z_][a-zA-Z0-9_]*\(|\b[a-zA-Z_][a-zA-Z0-9_]*\(' 2>/dev/null \
-    | sed 's/($//' \
-    | sed 's/.*:://' \
-    | sort | uniq -c | awk '{print $2, $1}' > "$TMP_CALLS"
+    # Extract binding function names
+    grep -oP 'pub fn \K[a-zA-Z_][a-zA-Z0-9_]*' "$FFI_RS" | sort -u > "$TMP_FFI"
+    grep -oP '\b[a-z_][a-zA-Z0-9_]*\(' "$SETUP_PY" | sed 's/($//' | sort -u > "$TMP_CDEF"
+
+    # Count call sites in Rust source (excluding ffi.rs).
+    # Extract both fn( and path::fn( patterns; strip path prefixes.
+    find $RS_DIRS -name '*.rs' ! -path '*/ffi.rs' -print0 2>/dev/null \
+        | xargs -0 grep -oPh '[a-zA-Z_][a-zA-Z0-9_]*::[a-zA-Z_][a-zA-Z0-9_]*\(|\b[a-zA-Z_][a-zA-Z0-9_]*\(' 2>/dev/null \
+        | sed 's/($//' \
+        | sed 's/.*:://' \
+        | sort | uniq -c | awk '{print $2, $1}' > "$TMP_CALLS"
+fi
 
 # ── Linker-symbol mode (strong gate) ─────────────────────────────────────────
 if [ "${1:-}" = "--linker" ]; then
