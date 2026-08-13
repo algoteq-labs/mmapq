@@ -111,6 +111,7 @@ copy_subsets() {
     cp -a "$ROOT/mmapq-rs/c/include/." "$WORK/mmapq-rs/c/include/"
     cp "$ROOT/mmapq-rs/Cargo.toml" "$WORK/mmapq-rs/Cargo.toml"
     cp "$ROOT/mmapq-rs/README.md" "$WORK/mmapq-rs/README.md"
+    cp "$ROOT/mmapq-rs/build.rs" "$WORK/mmapq-rs/build.rs"
 }
 
 run_gate() {
