@@ -15,6 +15,19 @@ cd "$(dirname "$0")/.."
 CMAKE=src/CMakeLists.txt
 [ -f "$CMAKE" ] || { echo "ERROR: $CMAKE not found — wrong working directory?" >&2; exit 1; }
 
+# Reject file(GLOB) explicitly. Without this the gate still fails closed
+# (no .c tokens are extracted, so every source reports missing), but it
+# fails with no diagnostic and the reader is left guessing. Name it.
+if grep -qE '^[[:space:]]*file[[:space:]]*\([[:space:]]*GLOB' "$CMAKE"; then
+    echo "ERROR: $CMAKE uses file(GLOB) — this is NOT the fix for source-list drift." >&2
+    echo "       CMake bakes glob results at configure time; a source added later" >&2
+    echo "       is not picked up until someone re-runs cmake. CONFIGURE_DEPENDS" >&2
+    echo "       only re-globs at build time on generators that support it and" >&2
+    echo "       costs a directory stat on every build. Keep the explicit list;" >&2
+    echo "       this gate is what keeps it honest." >&2
+    exit 1
+fi
+
 # Extract every *.c token inside the add_library(...) block.
 cmake_sources=$(sed -n '/add_library(mmapq STATIC/,/)/p' "$CMAKE" \
     | grep -oE '[A-Za-z0-9_./-]+\.c' | sort -u)

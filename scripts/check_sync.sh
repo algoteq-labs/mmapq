@@ -10,6 +10,16 @@ diff -rq mmapq/include mmapq-rs/c/include
 diff -rq mmapq/test mmapq-rs/c/test -x '*.o'
 diff -rq mmapq/scripts mmapq-rs/c/scripts
 
+# mmapq-py/c is the same submodule and ships in the sdist (11b), so it is
+# held to the same mirror standard as mmapq-rs/c. Without this, a stale
+# Python submodule pointer is invisible to every gate: setup.py globs the
+# sources, so the wheel still builds while the vendored CMakeLists.txt and
+# scripts/ go silently out of date in a published artifact.
+diff -rq mmapq/src mmapq-py/c/src -x '*.o'
+diff -rq mmapq/include mmapq-py/c/include
+diff -rq mmapq/test mmapq-py/c/test -x '*.o'
+diff -rq mmapq/scripts mmapq-py/c/scripts
+
 # Verify that no private C struct layout is mirrored in the Python cdef
 bash mmapq-py/scripts/check_no_layout_mirrors.sh --self-test
 bash mmapq-py/scripts/check_no_layout_mirrors.sh
