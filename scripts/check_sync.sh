@@ -43,7 +43,8 @@ fi
 bash mmapq/scripts/check_error_codes.sh --self-test
 bash mmapq/scripts/check_error_codes.sh
 
-# Verify ASSERT_AUDIT.md line numbers match source
+# Self-test the ASSERT_AUDIT disposition check, then verify counts + line numbers
+bash mmapq/scripts/audit_asserts.sh --self-test
 bash mmapq/scripts/audit_asserts.sh --verify
 
 # Self-test the README checker before running it

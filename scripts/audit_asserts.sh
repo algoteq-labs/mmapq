@@ -4,9 +4,13 @@
 #   ./scripts/audit_asserts.sh
 #   ./scripts/audit_asserts.sh --verify
 set -euo pipefail
+SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 cd "$(dirname "$0")/.."
 
 VERIFY="${1:-}"
+
+# Doc path is parameterizable so --self-test can run against a mutated copy.
+DOC="${ASSERT_AUDIT_DOC:-doc/ASSERT_AUDIT.md}"
 
 # ── Parse a line-list string like "30, 269, 309, 323, 342, 358, 366"
 #    or "81, 152-153, 157, 179-181" into sorted space-separated numbers.
@@ -38,7 +42,7 @@ parse_line_list() {
 get_claimed_lines() {
   local file="$1"
   local section
-  section=$(sed -n "/^### $file — [0-9]/,/^### /p" doc/ASSERT_AUDIT.md)
+  section=$(sed -n "/^### $file — [0-9]/,/^### /p" "$DOC")
 
   # Try "Lines N, M, ..." format first
   local line_list
@@ -103,6 +107,32 @@ verify_per_file() {
   return "$errors"
 }
 
+# ── Verify the I/V disposition split in the Summary table. ──────────────────
+# The per-file inventory's disposition (I or V) is hand-maintained; a summary
+# count that drifts from the actual rows is silent (this gate previously passed
+# I=73/V=3 while the inventory had exactly 2 V rows). Checks:
+#   1. I + V claims sum to the source total.
+#   2. The V claim equals the actual number of `| V |` disposition rows.
+verify_dispositions() {
+  local errors=0
+  local i_claim v_claim v_actual sum
+  i_claim=$(sed -n 's/^| I (stays, re-verified) | \([0-9][0-9]*\) |.*/\1/p' "$DOC" | head -1)
+  v_claim=$(sed -n 's/^| V (pending conversion) | \([0-9][0-9]*\) |.*/\1/p' "$DOC" | head -1)
+  v_actual=$(grep -cE '^\| .* \| V \|' "$DOC" || true)
+
+  sum=$(( ${i_claim:-0} + ${v_claim:-0} ))
+  if [ "$sum" -ne "$total" ]; then
+    echo "  disposition sum $sum != source total $total (I=$i_claim V=$v_claim)"
+    errors=1
+  fi
+  if [ "${v_claim:-0}" -ne "$v_actual" ]; then
+    echo "  V disposition claim $v_claim != actual V rows $v_actual"
+    errors=1
+  fi
+
+  return "$errors"
+}
+
 total=0
 files=0
 
@@ -127,7 +157,7 @@ fi
 echo "Total: $total assert(s) across $files file(s)"
 
 if [ "$VERIFY" = "--verify" ]; then
-    claimed=$(sed -n 's/^\*\*\([0-9][0-9]*\) asserts.*$/\1/p' doc/ASSERT_AUDIT.md)
+    claimed=$(sed -n 's/^\*\*\([0-9][0-9]*\) asserts.*$/\1/p' "$DOC")
     if [ "$total" -ne "${claimed:-0}" ]; then
         echo "VERIFY FAILED: source has $total, ASSERT_AUDIT.md claims $claimed"
         exit 1
@@ -136,5 +166,36 @@ if [ "$VERIFY" = "--verify" ]; then
         echo "VERIFY FAILED: per-file line number mismatches"
         exit 1
     fi
+    if ! verify_dispositions; then
+        echo "VERIFY FAILED: I/V disposition split inconsistent with inventory"
+        exit 1
+    fi
     echo "verification passed"
+fi
+
+if [ "$VERIFY" = "--self-test" ]; then
+    STMP=$(mktemp -d)
+    trap 'rm -rf "$STMP"' EXIT
+
+    # Positive: pristine doc must pass. (SELF is absolute, resolved before the
+    # top-level cd, so the recursive invocation lands on the script.)
+    cp "$DOC" "$STMP/pass.md"
+    if ASSERT_AUDIT_DOC="$STMP/pass.md" bash "$SELF" --verify >/dev/null 2>&1; then
+        echo "  self-test pass case: OK"
+    else
+        echo "  self-test pass case: FAIL (pristine doc rejected)"
+        exit 1
+    fi
+
+    # Negative: corrupt the V count (drift) and the disposition check must fail.
+    sed 's/^| V (pending conversion) | [0-9][0-9]* |.*/| V (pending conversion) | 99 |/' "$DOC" > "$STMP/fail.md"
+    if ASSERT_AUDIT_DOC="$STMP/fail.md" bash "$SELF" --verify >/dev/null 2>&1; then
+        echo "  self-test fail case: FAIL (corrupted V count not detected)"
+        exit 1
+    else
+        echo "  self-test fail case: OK"
+    fi
+
+    echo "self-test: PASS"
+    exit 0
 fi

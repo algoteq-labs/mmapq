@@ -166,8 +166,9 @@ for entry in "${REGISTRY[@]}"; do
 done
 
 if [ "$control_fails" -gt 0 ]; then
-    echo "FAIL: $control_fails gate(s) failed the pristine-input control (incomplete subset or broken gate)" >&2
-    echo "      Their input tests were skipped. Fix the subset/gate, not the registry." >&2
+    echo "FAIL: $control_fails gate(s) failed the pristine-input control" >&2
+    echo "      (incomplete subset, missing toolchain, or broken gate). Input tests skipped." >&2
+    echo "      Fix the subset/gate/toolchain, not the registry." >&2
     errors=1
 fi
 

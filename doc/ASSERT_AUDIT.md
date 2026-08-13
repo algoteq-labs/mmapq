@@ -14,8 +14,8 @@ Last verified: 2026-08-13 (Phase 14 — regenerated).
 
 | Disposition | Count |
 |---|---|
-| I (stays, re-verified) | 73 |
-| V (pending conversion) | 3 |
+| I (stays, re-verified) | 74 |
+| V (pending conversion) | 2 |
 | **Total** | **76** |
 
 ## Per-file inventory
