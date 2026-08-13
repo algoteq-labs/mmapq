@@ -31,7 +31,7 @@ Last verified: 2026-08-13 (Phase 14 — regenerated).
 
 | Line | Disposition | Verified |
 |---|---|---|
-| 83 padding mismatch (capacity == padded) | (converted, Phase 16e) | Now a runtime check: sets exhausted=1 and returns 0 instead of asserting. |
+| 83 padding mismatch (capacity == padded) | (converted, Phase 16e) | Now a runtime check: sets exhausted=1 and returns 0 instead of asserting. Note: the int-returning function has no `last_error` channel, so a corrupt padding record is indistinguishable from clean end-of-stream to a caller — intentional; adding an error field would be a struct/ABI change out of scope. |
 
 ### file_mapper_rolled.c — 10 (all I)
 

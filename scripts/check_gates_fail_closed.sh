@@ -29,6 +29,7 @@ REGISTRY+=("mmapq/scripts/check_binding_symbols.sh||mmapq/include mmapq-rs/src/f
 REGISTRY+=("mmapq/scripts/check_readme_examples.sh|mmapq/README.md mmapq-rs/README.md mmapq-py/README.md|mmapq/README.md mmapq-rs/Cargo.toml mmapq-py/src/mmapq/__init__.py")
 REGISTRY+=("mmapq-py/scripts/check_enum_sync.sh||mmapq/include mmapq-py/src/mmapq/types.py")
 REGISTRY+=("mmapq-py/scripts/check_no_layout_mirrors.sh||mmapq/include mmapq-py/setup.py")
+REGISTRY+=("mmapq/scripts/check_published_urls.sh||mmapq-rs/.gitmodules mmapq-py/.gitmodules mmapq-rs/Cargo.toml mmapq-py/pyproject.toml mmapq-py/setup.py")
 
 # ── --list-registry: print gates with their derived scope and inputs ─────────
 if [ "${1:-}" = "--list-registry" ]; then
@@ -112,6 +113,9 @@ copy_subsets() {
     cp "$ROOT/mmapq-rs/Cargo.toml" "$WORK/mmapq-rs/Cargo.toml"
     cp "$ROOT/mmapq-rs/README.md" "$WORK/mmapq-rs/README.md"
     cp "$ROOT/mmapq-rs/build.rs" "$WORK/mmapq-rs/build.rs"
+    cp "$ROOT/mmapq-rs/.gitmodules" "$WORK/mmapq-rs/.gitmodules"
+    cp "$ROOT/mmapq-py/.gitmodules" "$WORK/mmapq-py/.gitmodules"
+    cp "$ROOT/mmapq-py/pyproject.toml" "$WORK/mmapq-py/pyproject.toml"
 }
 
 run_gate() {

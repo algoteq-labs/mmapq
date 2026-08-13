@@ -81,6 +81,9 @@ echo "PASS: doc/wire-format.md GENERATED constants block is current"
 # Verify every strdup() is followed by a NULL check
 bash mmapq/scripts/check_strdup_guards.sh
 
+# Verify submodule URLs are relative and published files carry no internal host
+bash mmapq/scripts/check_published_urls.sh
+
 # Verify binding symbols are declared in public headers
 bash mmapq/scripts/check_binding_symbols.sh
 
