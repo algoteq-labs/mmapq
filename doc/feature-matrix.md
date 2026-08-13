@@ -25,7 +25,7 @@ column are design decisions, not roadmap items.
 | Create/open single-message queue (full config) | ✓ | ✓ `QueueConfig` builder | ◐ dir/name + `archivable` kwarg; other params defaulted |
 | Create/open batch queue | ✓ | ✓ | ✓ `batch_queue.py:MmapqIndexedBatchQueue.create()` with `region_size`, `ring_size`, `max_file_size`, `start_index`, `timeout_ns`, `archivable` |
 | `archivable` creation parameter (default 0) | ✓ | ✓ `.archivable(bool)` | ✓ `archivable=False` kwarg |
-| Async region mapping via MmapqRuntime (background mapper) | ✓ | ✓ `MmapqRuntime` + singletons | ✓ `MmapqRuntime.region_mapper()` in `runtime.py`; `test_runtime_kept_alive_by_queue` in `test_batch_queue.py` |
+| Async region mapping via MmapqRuntime (background mapper) | ✓ | ✓ `MmapqRuntime` + singletons | ✓ `MmapqRuntime.region_mapper()` in `runtime.py`; `test_runtime_kept_alive_by_queue` in `test_queue.py` |
 | Custom runtime config (idle strategies, close timeout) | ✓ | ✓ | — |
 | Queue metadata accessors (region size, max file size, start index) | ✓ | ✓ | — |
 | queue_type discriminator validated on every open (normal/batch/fixed-8) | ✓ | ✓ (via C) | ✓ (via C) |
@@ -132,7 +132,7 @@ column are design decisions, not roadmap items.
 | `indexed_poller.h` | 11/18 | 11/18 |
 | `indexed_queue.h` | 16/20 | 13/20 |
 | `indexed_reader.h` | 9/13 | 9/13 |
-| `mmap_platform.h` | 1/15 | 0/15 |
+| `mmap_platform.h` | 1/15 | 1/15 |
 | `mmapq.h` | 0/1 | 0/1 |
 | `poller.h` | 0/1 | 0/1 |
 | `queue_transfer.h` | 6/6 | 5/6 |
