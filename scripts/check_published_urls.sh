@@ -21,6 +21,11 @@
 # a new homepage field, an added manifest — so extend it when that happens;
 # do not assume it is generated.
 #
+# NOTE (hostname sweeps): a detector necessarily contains its own target
+# pattern; this file's regex and comments legitimately include
+# internal-host.invalid. Exclude detector scripts from hostname sweeps — they
+# scan only the PUBLISHED files and never their own source.
+#
 # Usage: bash scripts/check_published_urls.sh
 set -uo pipefail
 
