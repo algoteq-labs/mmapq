@@ -23,6 +23,7 @@ trap 'rm -rf "$TMPDIR"' EXIT
 # mmapq clone).
 declare -a REGISTRY
 REGISTRY+=("mmapq/scripts/check_strdup_guards.sh||mmapq/src")
+REGISTRY+=("mmapq/scripts/check_cmake_sources.sh||mmapq/src")
 REGISTRY+=("mmapq/scripts/audit_asserts.sh|--verify|mmapq/src")
 REGISTRY+=("mmapq/scripts/check_error_codes.sh||mmapq/include/mmap_platform.h mmapq-rs/src/error.rs mmapq-py/src/mmapq/_errors.py")
 REGISTRY+=("mmapq/scripts/check_binding_symbols.sh||mmapq/include mmapq-rs/src/ffi.rs mmapq-py/setup.py")

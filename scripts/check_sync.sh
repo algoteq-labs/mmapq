@@ -81,6 +81,9 @@ echo "PASS: doc/wire-format.md GENERATED constants block is current"
 # Verify every strdup() is followed by a NULL check
 bash mmapq/scripts/check_strdup_guards.sh
 
+# Verify every src/*.c appears in src/CMakeLists.txt's add_library list
+bash mmapq/scripts/check_cmake_sources.sh
+
 # Verify submodule URLs are relative and published files carry no internal host
 bash mmapq/scripts/check_published_urls.sh
 

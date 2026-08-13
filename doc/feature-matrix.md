@@ -132,7 +132,7 @@ column are design decisions, not roadmap items.
 | `indexed_poller.h` | 11/18 | 11/18 |
 | `indexed_queue.h` | 16/20 | 13/20 |
 | `indexed_reader.h` | 9/13 | 9/13 |
-| `mmap_platform.h` | 0/15 | 0/15 |
+| `mmap_platform.h` | 1/15 | 0/15 |
 | `mmapq.h` | 0/1 | 0/1 |
 | `poller.h` | 0/1 | 0/1 |
 | `queue_transfer.h` | 6/6 | 5/6 |
