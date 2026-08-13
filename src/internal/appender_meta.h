@@ -82,35 +82,35 @@ static inline uint8_t appender_meta_appender_id(const AppenderMeta *m)
 /* ── Factory functions ───────────────────────────────────────────────────── */
 
 /**
- * appender_meta_open_rw — open or create the appender meta file.
+ * mmapqi_appender_meta_open_rw — open or create the appender meta file.
  *
  * Creates the file if it does not exist, initialised with the given
  * appender_id and start_offset = INITIAL_PAYLOAD_POSITION.
  * Returns 0 on success. Returns MMAPQ_EINVAL for NULL args,
  * MMAPQ_ENOMEM for allocation failures. Sets *out to NULL on failure.
  */
-int appender_meta_open_rw(
+int mmapqi_appender_meta_open_rw(
     const char *directory,
     const char *queue_name,
     uint8_t     appender_id,
     AppenderMeta **out);
 
 /**
- * appender_meta_open_ro — open the appender meta file for reading.
+ * mmapqi_appender_meta_open_ro — open the appender meta file for reading.
  *
  * Returns 0 on success, MMAPQ_ENOENT if the file does not exist,
  * MMAPQ_EINVAL for NULL args, MMAPQ_ENOMEM for allocation failures.
  * Sets *out to NULL on failure.
  */
-int appender_meta_open_ro(
+int mmapqi_appender_meta_open_ro(
     const char *directory,
     const char *queue_name,
     uint8_t     appender_id,
     AppenderMeta **out);
 
 /**
- * appender_meta_close — unmap and free an AppenderMeta.
+ * mmapqi_appender_meta_close — unmap and free an AppenderMeta.
  */
-void appender_meta_close(AppenderMeta *m);
+void mmapqi_appender_meta_close(AppenderMeta *m);
 
 #endif /* APPENDER_META_H */

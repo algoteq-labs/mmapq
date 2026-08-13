@@ -50,7 +50,7 @@ typedef struct {
 /* ── Consumer thread ─────────────────────────────────────────────────────── */
 
 typedef struct {
-    IndexedPoller *poller;
+    MmapqIndexedPoller *poller;
     int64_t        expected_sequence;
     int64_t        messages_received;
     uint64_t       total_latency_ns;
@@ -59,7 +59,7 @@ typedef struct {
     int            done;       /* set to 1 when MSG_COUNT messages consumed */
 } ConsumerCtx;
 
-static NextMove consumer_handler(
+static MmapqNextMove consumer_handler(
     int64_t     index,
     uint8_t     appender_id,
     const void *data,
@@ -75,7 +75,7 @@ static NextMove consumer_handler(
         fprintf(stderr, "ERROR: unexpected message length %d at index %ld\n",
                 length, index);
         c->errors++;
-        return NEXT_ADVANCE;
+        return MMAPQ_NEXT_ADVANCE;
     }
 
     /* Safe copy instead of unsafe cast to avoid alignment violations */
@@ -89,7 +89,7 @@ static NextMove consumer_handler(
     }
 
     /* Measure latency */
-    uint64_t now_ns  = monotonic_nanos();
+    uint64_t now_ns  = mmapq_monotonic_nanos();
     uint64_t lat_ns  = now_ns - m.timestamp_ns;
     c->total_latency_ns += lat_ns;
     if (lat_ns > c->max_latency_ns) c->max_latency_ns = lat_ns;
@@ -101,7 +101,7 @@ static NextMove consumer_handler(
         c->done = 1;
     }
 
-    return NEXT_ADVANCE;
+    return MMAPQ_NEXT_ADVANCE;
 }
 
 static void *consumer_thread_fn(void *arg)
@@ -109,13 +109,13 @@ static void *consumer_thread_fn(void *arg)
     ConsumerCtx *ctx = (ConsumerCtx *)arg;
 
     while (!ctx->done) {
-        PollResult r = indexed_poller_poll(ctx->poller, consumer_handler, ctx);
-        if (r == POLL_END_OF_STREAM) {
+        MmapqPollResult r = mmapq_indexed_poller_poll(ctx->poller, consumer_handler, ctx);
+        if (r == MMAPQ_POLL_END_OF_STREAM) {
             /* Spin-wait until the producer writes one.
              * Burns CPU intentionally for minimum latency.
              * Use a sleeping poller or idle strategy in
              * throughput-oriented applications. */
-            spin_hint();
+            mmapq_spin_hint();
         }
     }
 
@@ -143,12 +143,12 @@ int main(void)
     cleanup();
 
     /* Create runtime — the background region mapping thread */
-    Runtime *rt = NULL;
-    if (runtime_region_mapper(&rt) != 0) return 1;
+    MmapqRuntime *rt = NULL;
+    if (mmapq_runtime_region_mapper(&rt) != 0) return 1;
 
     /* Create the queue */
-    IndexedQueue *q = NULL;
-    if (indexed_queue_create(
+    MmapqIndexedQueue *q = NULL;
+    if (mmapq_indexed_queue_create(
         QUEUE_DIR, QUEUE_NAME,
         REGION_SIZE, RING_SIZE,
         1,
@@ -156,12 +156,12 @@ int main(void)
         TIMEOUT_NS, 0, rt, rt, &q) != 0) return 1;
 
     /* Create appender and poller */
-    IndexedAppender *appender = NULL;
-    if (indexed_queue_create_appender(q, &appender) != 0) return 1;
-    IndexedPoller *poller = NULL;
-    if (indexed_queue_create_poller(q, &poller) != 0) return 1;
+    MmapqIndexedAppender *appender = NULL;
+    if (mmapq_indexed_queue_create_appender(q, &appender) != 0) return 1;
+    MmapqIndexedPoller *poller = NULL;
+    if (mmapq_indexed_queue_create_poller(q, &poller) != 0) return 1;
 
-    printf("appender ID: %d\n", indexed_appender_id(appender));
+    printf("appender ID: %d\n", mmapq_indexed_appender_id(appender));
 
     /* Start consumer thread */
     ConsumerCtx ctx = {
@@ -182,7 +182,7 @@ int main(void)
      * is ready).  produce_end: wall time when the last message was committed.
      * consume_end: wall time when the last message was delivered. */
     printf("producing %d messages...\n", MSG_COUNT);
-    uint64_t produce_start = monotonic_nanos();
+    uint64_t produce_start = mmapq_monotonic_nanos();
 
     Message msg;
     memset(&msg, 0, sizeof(msg));
@@ -190,9 +190,9 @@ int main(void)
 
     for (int i = 0; i < MSG_COUNT; i++) {
         msg.sequence     = i;
-        msg.timestamp_ns = monotonic_nanos();
+        msg.timestamp_ns = mmapq_monotonic_nanos();
 
-        int64_t idx = indexed_appender_append(appender, &msg, sizeof(msg));
+        int64_t idx = mmapq_indexed_appender_append(appender, &msg, sizeof(msg));
         (void)idx; /* commit succeeded — idx is the assigned queue index */
 
         if ((i + 1) % REPORT_INTERVAL == 0) {
@@ -200,11 +200,11 @@ int main(void)
         }
     }
 
-    uint64_t produce_end = monotonic_nanos();
+    uint64_t produce_end = mmapq_monotonic_nanos();
 
     /* Wait for consumer to finish */
     pthread_join(consumer, NULL);
-    uint64_t consume_end = monotonic_nanos();
+    uint64_t consume_end = mmapq_monotonic_nanos();
 
     /* ── Results ─────────────────────────────────────────────────────────── */
 
@@ -225,7 +225,7 @@ int main(void)
     printf("  throughput:           %.0f msg/s\n", throughput);
     printf("  avg latency:          %.2f µs\n",  avg_lat_us);
     printf("  max latency:          %.2f µs\n",  max_lat_us);
-    printf("  last index:           %ld\n",    indexed_appender_current_index(appender) - 1);
+    printf("  last index:           %ld\n",    mmapq_indexed_appender_current_index(appender) - 1);
     printf("──────────────────────────────────────────────────\n");
 
     if (ctx.errors == 0 && ctx.messages_received == (int64_t)MSG_COUNT) {
@@ -236,9 +236,9 @@ int main(void)
     }
 
     /* Cleanup */
-    indexed_appender_close(appender);
-    indexed_poller_close(poller);
-    indexed_queue_close(q);
+    mmapq_indexed_appender_close(appender);
+    mmapq_indexed_poller_close(poller);
+    mmapq_indexed_queue_close(q);
     cleanup();
 
     return (ctx.errors == 0 && ctx.messages_received == (int64_t)MSG_COUNT) ? 0 : 1;

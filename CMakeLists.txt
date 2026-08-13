@@ -22,14 +22,23 @@ set(MMAP_COMMON_FLAGS
     -Wextra
     -Wpedantic
     -Wno-unused-parameter     # state machine ops take ctx they don't always use
+    -Wmissing-prototypes
+    -Wstrict-prototypes
+    -Wnull-dereference
     -fno-omit-frame-pointer   # better stack traces
 )
 
 set(MMAP_DEBUG_FLAGS   ${MMAP_COMMON_FLAGS} -O0 -g3)
-set(MMAP_RELEASE_FLAGS ${MMAP_COMMON_FLAGS} -O3 -DNDEBUG -march=native)
+option(MMAP_NATIVE_ARCH "Tune for the build host" OFF)
+if(MMAP_NATIVE_ARCH)
+    set(MMAP_RELEASE_FLAGS ${MMAP_COMMON_FLAGS} -O3 -DNDEBUG -march=native)
+else()
+    set(MMAP_RELEASE_FLAGS ${MMAP_COMMON_FLAGS} -O3 -DNDEBUG)
+endif()
 set(MMAP_RELDBG_FLAGS  ${MMAP_COMMON_FLAGS} -O2 -g -DNDEBUG)
-set(MMAP_ASAN_FLAGS    ${MMAP_DEBUG_FLAGS}  -fsanitize=address,undefined -fsanitize-recover=all)
-set(MMAP_UBSAN_FLAGS   ${MMAP_DEBUG_FLAGS}  -fsanitize=undefined)
+# Sanitizer flags are set via MMAP_ENABLE_ASAN / MMAP_ENABLE_UBSAN options
+# in src/CMakeLists.txt — the old MMAP_ASAN_FLAGS / MMAP_UBSAN_FLAGS
+# variables were defined here but never referenced.
 
 # ── Options ───────────────────────────────────────────────────────────────
 option(MMAP_BUILD_TESTS    "Build test suite"         ON)

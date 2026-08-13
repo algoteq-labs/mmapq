@@ -1,5 +1,5 @@
-#ifndef INDEXED_QUEUE_H
-#define INDEXED_QUEUE_H
+#ifndef MMAPQ_INDEXED_QUEUE_H
+#define MMAPQ_INDEXED_QUEUE_H
 
 #include <stdint.h>
 #include "indexed_appender.h"
@@ -9,9 +9,9 @@
 #include "runtime.h"
 
 /**
- * IndexedQueue — top-level factory for an indexed message queue.
+ * MmapqIndexedQueue — top-level factory for an indexed message queue.
  *
- * An IndexedQueue owns the persistent configuration (QueueMeta, AppenderIdPool)
+ * An MmapqIndexedQueue owns the persistent configuration (QueueMeta, AppenderIdPool)
  * and creates appenders, pollers, and readers on demand.
  *
  * FILE LAYOUT (all under "<directory>/<queue_name>/"):
@@ -30,18 +30,18 @@
  *   timeout_ns:         10 seconds
  *
  * THREAD MODEL:
- *   - IndexedQueue itself is not thread-safe (construction/destruction).
+ *   - MmapqIndexedQueue itself is not thread-safe (construction/destruction).
  *   - Each appender/poller/reader is thread-confined to its creating thread.
  *   - Multiple appenders, pollers, and readers may coexist in the same process.
  *   - The queue may also be accessed simultaneously from other processes
  *     (multi-process shared memory queue).
  *
  * LIFECYCLE:
- *   1. indexed_queue_create() — create or open the queue.
- *   2. indexed_queue_create_appender() / _poller() / _reader() — create participants.
+ *   1. mmapq_indexed_queue_create() — create or open the queue.
+ *   2. mmapq_indexed_queue_create_appender() / _poller() / _reader() — create participants.
  *   3. Use participants (their own thread-confined lifecycles).
- *   4. Close participants before calling indexed_queue_close().
- *   5. indexed_queue_close() — close the queue and free resources.
+ *   4. Close participants before calling mmapq_indexed_queue_close().
+ *   5. mmapq_indexed_queue_close() — close the queue and free resources.
  *
  * The queue does NOT close appenders/pollers/readers on close() — the caller
  * is responsible for closing all participants first.
@@ -49,11 +49,11 @@
 
 /* ── Default configuration ───────────────────────────────────────────────── */
 
-#define INDEXED_QUEUE_DEFAULT_REGION_SIZE         ((int32_t)(4096 * 1024))
-#define INDEXED_QUEUE_DEFAULT_RING_SIZE           ((int32_t)4)
-#define INDEXED_QUEUE_DEFAULT_REGIONS_TO_MAP_AHEAD ((int32_t)1)
-#define INDEXED_QUEUE_DEFAULT_MAX_FILE_SIZE       ((int64_t)INDEXED_QUEUE_DEFAULT_REGION_SIZE * 256)
-#define INDEXED_QUEUE_DEFAULT_TIMEOUT_NS          ((uint64_t)10 * 1000000000ULL)
+#define MMAPQ_INDEXED_QUEUE_DEFAULT_REGION_SIZE         ((int32_t)(4096 * 1024))
+#define MMAPQ_INDEXED_QUEUE_DEFAULT_RING_SIZE           ((int32_t)4)
+#define MMAPQ_INDEXED_QUEUE_DEFAULT_REGIONS_TO_MAP_AHEAD ((int32_t)1)
+#define MMAPQ_INDEXED_QUEUE_DEFAULT_MAX_FILE_SIZE       ((int64_t)MMAPQ_INDEXED_QUEUE_DEFAULT_REGION_SIZE * 256)
+#define MMAPQ_INDEXED_QUEUE_DEFAULT_TIMEOUT_NS          ((uint64_t)10 * 1000000000ULL)
 
 /* ── Geometry constraint helper ──────────────────────────────────────────── */
 
@@ -64,19 +64,19 @@
  * and the premap engine maps regions_to_map_ahead regions past the current
  * one. The ring span (ring_size * region_size) must hold both.
  *
- * Returns a power-of-two ring_size, or INDEXED_QUEUE_DEFAULT_RING_SIZE for
+ * Returns a power-of-two ring_size, or MMAPQ_INDEXED_QUEUE_DEFAULT_RING_SIZE for
  * invalid region_size (<= 0).
  */
 int mmapq_min_ring_size(int32_t region_size);
 
-/* ── IndexedQueue ────────────────────────────────────────────────────────── */
+/* ── MmapqIndexedQueue ────────────────────────────────────────────────────────── */
 
-typedef struct IndexedQueue IndexedQueue;
+typedef struct MmapqIndexedQueue MmapqIndexedQueue;
 
 /* ── Factory ─────────────────────────────────────────────────────────────── */
 
 /**
- * indexed_queue_create — open an existing indexed queue or prepare for creation.
+ * mmapq_indexed_queue_create — open an existing indexed queue or prepare for creation.
  *
  * directory:          base directory (e.g. "/data/queues")
  * queue_name:         name of the queue (becomes a subdirectory)
@@ -100,7 +100,7 @@ typedef struct IndexedQueue IndexedQueue;
  * code on failure (EINVAL for bad arguments, ECLOSED for allocation failures)
  * and sets *out_queue to NULL.
  */
-int indexed_queue_create(
+int mmapq_indexed_queue_create(
     const char *directory,
     const char *queue_name,
     int32_t     region_size,
@@ -110,39 +110,39 @@ int indexed_queue_create(
     int64_t     start_index,
     uint64_t    timeout_ns,
     int         archivable,
-    Runtime    *write_runtime,
-    Runtime    *read_runtime,
-    IndexedQueue **out_queue);
+    MmapqRuntime    *write_runtime,
+    MmapqRuntime    *read_runtime,
+    MmapqIndexedQueue **out_queue);
 
 /**
- * indexed_queue_create_default — create with default parameters.
+ * mmapq_indexed_queue_create_default — create with default parameters.
  *
  * Uses INDEXED_QUEUE_DEFAULT_* constants.
- * runtimes must be provided — typically runtime_region_mapper() or NULL.
+ * runtimes must be provided — typically mmapq_runtime_region_mapper() or NULL.
  */
-int indexed_queue_create_default(
+int mmapq_indexed_queue_create_default(
     const char *directory,
     const char *queue_name,
-    Runtime    *write_runtime,
-    Runtime    *read_runtime,
-    IndexedQueue **out_queue);
+    MmapqRuntime    *write_runtime,
+    MmapqRuntime    *read_runtime,
+    MmapqIndexedQueue **out_queue);
 
 /* ── Participant factories ────────────────────────────────────────────────── */
 
 /**
- * indexed_queue_create_appender — create a new appender with a fresh ID.
+ * mmapq_indexed_queue_create_appender — create a new appender with a fresh ID.
  *
  * Acquires an appender ID from the pool. The returned appender must be
- * closed with indexed_appender_close() before indexed_queue_close().
+ * closed with mmapq_indexed_appender_close() before mmapq_indexed_queue_close().
  *
  * q:   the queue (must not be closed)
  * out: on success, set to the new appender
  * Returns: 0 on success, or an MMAPQ_* error code
  */
-int indexed_queue_create_appender(IndexedQueue *q, IndexedAppender **out);
+int mmapq_indexed_queue_create_appender(MmapqIndexedQueue *q, MmapqIndexedAppender **out);
 
 /**
- * indexed_queue_create_appender_with_id — create an appender with a specific ID.
+ * mmapq_indexed_queue_create_appender_with_id — create an appender with a specific ID.
  *
  * Returns MMAPQ_EIDCONFLICT if the ID is already in use.
  *
@@ -151,36 +151,36 @@ int indexed_queue_create_appender(IndexedQueue *q, IndexedAppender **out);
  * out:         on success, set to the new appender
  * Returns: 0 on success, or an MMAPQ_* error code
  */
-int indexed_queue_create_appender_with_id(
-    IndexedQueue *q,
+int mmapq_indexed_queue_create_appender_with_id(
+    MmapqIndexedQueue *q,
     uint8_t       appender_id,
-    IndexedAppender **out);
+    MmapqIndexedAppender **out);
 
 /**
- * indexed_queue_create_poller — create a new sequential poller.
+ * mmapq_indexed_queue_create_poller — create a new sequential poller.
  *
  * The poller starts at the queue's current start_index (0 for non-archivable).
- * Close with indexed_poller_close() before indexed_queue_close().
+ * Close with mmapq_indexed_poller_close() before mmapq_indexed_queue_close().
  *
  * q:   the queue (must not be closed)
  * out: on success, set to the new poller
  * Returns: 0 on success, or an MMAPQ_* error code
  */
-int indexed_queue_create_poller(IndexedQueue *q, IndexedPoller **out);
+int mmapq_indexed_queue_create_poller(MmapqIndexedQueue *q, MmapqIndexedPoller **out);
 
 /**
- * indexed_queue_create_reader — create a new random-access reader.
+ * mmapq_indexed_queue_create_reader — create a new random-access reader.
  *
- * Close with indexed_reader_close() before indexed_queue_close().
+ * Close with mmapq_indexed_reader_close() before mmapq_indexed_queue_close().
  *
  * q:   the queue (must not be closed)
  * out: on success, set to the new reader
  * Returns: 0 on success, or an MMAPQ_* error code
  */
-int indexed_queue_create_reader(IndexedQueue *q, IndexedReader **out);
+int mmapq_indexed_queue_create_reader(MmapqIndexedQueue *q, MmapqIndexedReader **out);
 
 /**
- * indexed_queue_create_archiver — create an archiver for this queue.
+ * mmapq_indexed_queue_create_archiver — create an archiver for this queue.
  *
  * The queue must have been created with archivable=1. Use the archiver to
  * advance the start index, update per-appender start offsets, and obtain
@@ -188,35 +188,35 @@ int indexed_queue_create_reader(IndexedQueue *q, IndexedReader **out);
  *
  * Returns MMAPQ_EINVAL if the queue is not archivable.
  *
- * The archiver must be closed independently with indexed_archiver_close().
+ * The archiver must be closed independently with mmapq_indexed_archiver_close().
  *
  * q:   the queue (must not be closed, must be archivable)
  * out: on success, set to the new archiver
  * Returns: 0 on success, or an MMAPQ_* error code
  */
-int indexed_queue_create_archiver(IndexedQueue *q, IndexedArchiver **out);
+int mmapq_indexed_queue_create_archiver(MmapqIndexedQueue *q, MmapqIndexedArchiver **out);
 
 /* ── Metadata ─────────────────────────────────────────────────────────────── */
 
 /**
- * indexed_queue_region_size — configured region size in bytes.
+ * mmapq_indexed_queue_region_size — configured region size in bytes.
  */
-int32_t indexed_queue_region_size(const IndexedQueue *q);
+int32_t mmapq_indexed_queue_region_size(const MmapqIndexedQueue *q);
 
 /**
- * indexed_queue_max_file_size — configured maximum file size in bytes.
+ * mmapq_indexed_queue_max_file_size — configured maximum file size in bytes.
  */
-int64_t indexed_queue_max_file_size(const IndexedQueue *q);
+int64_t mmapq_indexed_queue_max_file_size(const MmapqIndexedQueue *q);
 
 /**
- * indexed_queue_start_index — current logical start index (set at creation; may be non-zero after PRESERVE import/copy).
+ * mmapq_indexed_queue_start_index — current logical start index (set at creation; may be non-zero after PRESERVE import/copy).
  */
-int64_t indexed_queue_start_index(const IndexedQueue *q);
+int64_t mmapq_indexed_queue_start_index(const MmapqIndexedQueue *q);
 
 /* ── Lifecycle ───────────────────────────────────────────────────────────── */
 
 /**
- * indexed_queue_close — close the queue and release all resources.
+ * mmapq_indexed_queue_close — close the queue and release all resources.
  *
  * Closes the QueueMeta and AppenderIdPool.
  * Does NOT close any appenders, pollers, or readers — those must be
@@ -224,6 +224,6 @@ int64_t indexed_queue_start_index(const IndexedQueue *q);
  *
  * Idempotent.
  */
-void indexed_queue_close(IndexedQueue *q);
+void mmapq_indexed_queue_close(MmapqIndexedQueue *q);
 
-#endif /* INDEXED_QUEUE_H */
+#endif /* MMAPQ_INDEXED_QUEUE_H */

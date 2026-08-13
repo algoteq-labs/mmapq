@@ -28,11 +28,11 @@ typedef struct __attribute__((packed)) {
 } LatencyHeader;
 
 typedef struct {
-    IndexedAppender *response_appender;
+    MmapqIndexedAppender *response_appender;
     volatile int     shutdown_requested;
 } InternalServerCtx;
 
-static NextMove internal_echo_handler(
+static MmapqNextMove internal_echo_handler(
     int64_t     index,
     uint8_t     appender_id,
     const void *data,
@@ -46,9 +46,9 @@ static NextMove internal_echo_handler(
         s->shutdown_requested = 1;
     }
     /* Echo the entire payload back to the response queue */
-    indexed_appender_append(s->response_appender, data, length);
+    mmapq_indexed_appender_append(s->response_appender, data, length);
     
-    return NEXT_ADVANCE;
+    return MMAPQ_NEXT_ADVANCE;
 }
 
 typedef struct {
@@ -64,24 +64,24 @@ static void *internal_server_thread_fn(void *arg)
     ServerThreadArgs *a = (ServerThreadArgs *)arg;
     
     if (a->cpu >= 0) {
-        thread_set_affinity(a->cpu);
+        mmapq_thread_set_affinity(a->cpu);
     }
-    thread_set_name(pthread_self(), "echo-server");
+    mmapq_thread_set_name(pthread_self(), "echo-server");
 
-    Runtime *rt = NULL;
-    if (runtime_region_mapper(&rt) != 0) { fprintf(stderr, "runtime_region_mapper failed\n"); exit(1); }
+    MmapqRuntime *rt = NULL;
+    if (mmapq_runtime_region_mapper(&rt) != 0) { fprintf(stderr, "mmapq_runtime_region_mapper failed\n"); exit(1); }
     if (a->mapper_cpu >= 0) {
-        runtime_set_affinity(rt, a->mapper_cpu);
+        mmapq_runtime_set_affinity(rt, a->mapper_cpu);
     }
     
-    IndexedQueue *q_req = NULL, *q_res = NULL;
-    if (indexed_queue_create_default(a->dir, a->req, rt, rt, &q_req) != 0) { fprintf(stderr, "create request queue failed\n"); exit(1); }
-    if (indexed_queue_create_default(a->dir, a->res, rt, rt, &q_res) != 0) { fprintf(stderr, "create response queue failed\n"); exit(1); }
+    MmapqIndexedQueue *q_req = NULL, *q_res = NULL;
+    if (mmapq_indexed_queue_create_default(a->dir, a->req, rt, rt, &q_req) != 0) { fprintf(stderr, "create request queue failed\n"); exit(1); }
+    if (mmapq_indexed_queue_create_default(a->dir, a->res, rt, rt, &q_res) != 0) { fprintf(stderr, "create response queue failed\n"); exit(1); }
     
-    IndexedPoller *poller = NULL;
-    if (indexed_queue_create_poller(q_req, &poller) != 0) { fprintf(stderr, "create poller failed\n"); exit(1); }
-    IndexedAppender *appender = NULL;
-    if (indexed_queue_create_appender(q_res, &appender) != 0) { fprintf(stderr, "create appender failed\n"); exit(1); }
+    MmapqIndexedPoller *poller = NULL;
+    if (mmapq_indexed_queue_create_poller(q_req, &poller) != 0) { fprintf(stderr, "create poller failed\n"); exit(1); }
+    MmapqIndexedAppender *appender = NULL;
+    if (mmapq_indexed_queue_create_appender(q_res, &appender) != 0) { fprintf(stderr, "create appender failed\n"); exit(1); }
     
     InternalServerCtx ctx = {
         .response_appender = appender,
@@ -89,13 +89,13 @@ static void *internal_server_thread_fn(void *arg)
     };
 
     while (!ctx.shutdown_requested) {
-        indexed_poller_poll(poller, internal_echo_handler, &ctx);
+        mmapq_indexed_poller_poll(poller, internal_echo_handler, &ctx);
     }
 
-    indexed_appender_close(appender);
-    indexed_poller_close(poller);
-    indexed_queue_close(q_req);
-    indexed_queue_close(q_res);
+    mmapq_indexed_appender_close(appender);
+    mmapq_indexed_poller_close(poller);
+    mmapq_indexed_queue_close(q_req);
+    mmapq_indexed_queue_close(q_res);
     
     free(a);
     return NULL;
@@ -147,19 +147,19 @@ int main(int argc, char *argv[])
     printf("  Validation: Server=%s, Client=%s\n", 
            val_server ? "ON" : "OFF", val_client ? "ON" : "OFF");
 
-    Runtime *write_rt = NULL;
-    Runtime *read_rt  = NULL;
+    MmapqRuntime *write_rt = NULL;
+    MmapqRuntime *read_rt  = NULL;
 
     if (use_sync) {
         /* Both NULL */
     } else if (use_mixed) {
-        if (runtime_region_mapper(&write_rt) != 0) { fprintf(stderr, "runtime_region_mapper failed\n"); return 1; }
+        if (mmapq_runtime_region_mapper(&write_rt) != 0) { fprintf(stderr, "mmapq_runtime_region_mapper failed\n"); return 1; }
         read_rt  = NULL;
-        if (mapper_cpu >= 0) runtime_set_affinity(write_rt, mapper_cpu);
+        if (mapper_cpu >= 0) mmapq_runtime_set_affinity(write_rt, mapper_cpu);
     } else {
-        if (runtime_region_mapper(&write_rt) != 0) { fprintf(stderr, "runtime_region_mapper failed\n"); return 1; }
+        if (mmapq_runtime_region_mapper(&write_rt) != 0) { fprintf(stderr, "mmapq_runtime_region_mapper failed\n"); return 1; }
         read_rt  = write_rt;
-        if (mapper_cpu >= 0) runtime_set_affinity(write_rt, mapper_cpu);
+        if (mapper_cpu >= 0) mmapq_runtime_set_affinity(write_rt, mapper_cpu);
     }
 
     /* Use predictable names for interoperability */
@@ -182,7 +182,7 @@ int main(int argc, char *argv[])
     }
 
     QueueLatencyProbe *probe = NULL;
-    if (queue_latency_probe_create(
+    if (mmapqi_queue_latency_probe_create(
         1, dir, name_req, name_res, msg_size,
         val_server, val_client, write_rt, read_rt, &probe) != 0) {
         fprintf(stderr, "probe create failed\n"); return 1;
@@ -190,7 +190,7 @@ int main(int argc, char *argv[])
 
     /* Client Pinning */
     if (client_cpu >= 0) {
-        thread_set_affinity(client_cpu);
+        mmapq_thread_set_affinity(client_cpu);
     }
 
     printf("Warming up...\n");
@@ -199,27 +199,27 @@ int main(int argc, char *argv[])
         memset(results, 0, sizeof(uint64_t) * (size_t)iterations);
     }
 
-    queue_latency_probe_move_to_end(probe); /* Skip any stale messages */
+    mmapqi_queue_latency_probe_move_to_end(probe); /* Skip any stale messages */
     for (int i = 0; i < warmup; i++) {
-        queue_latency_probe_execute(probe);
+        mmapqi_queue_latency_probe_execute(probe);
     }
 
     printf("Measuring...\n");
 
-    uint64_t start_bench = monotonic_nanos();
+    uint64_t start_bench = mmapq_monotonic_nanos();
     for (int i = 0; i < iterations; i++) {
-        results[i] = queue_latency_probe_execute(probe);
+        results[i] = mmapqi_queue_latency_probe_execute(probe);
     }
-    uint64_t end_bench = monotonic_nanos();
+    uint64_t end_bench = mmapq_monotonic_nanos();
 
     mmap_stats_print(results, iterations, end_bench - start_bench, "Round-Trip Latency Statistics (nanoseconds):");
 
-    int64_t errors = queue_latency_probe_validation_errors(probe);
+    int64_t errors = mmapqi_queue_latency_probe_validation_errors(probe);
     if (errors > 0) {
         printf("!!! WARNING: %ld validation errors detected !!!\n\n", errors);
     }
 
-    queue_latency_probe_close(probe);
+    mmapqi_queue_latency_probe_close(probe);
     
     if (!external_server && server_cpu >= 0) {
         pthread_join(server_thread, NULL);

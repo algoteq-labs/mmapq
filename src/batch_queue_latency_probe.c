@@ -22,11 +22,11 @@ struct BatchQueueLatencyProbe {
     int                    validate_on_server;
     int                    validate_on_client;
 
-    IndexedBatchQueue     *request_queue;
-    IndexedBatchQueue     *response_queue;
+    MmapqIndexedBatchQueue     *request_queue;
+    MmapqIndexedBatchQueue     *response_queue;
 
-    IndexedBatchAppender  *request_appender;
-    IndexedBatchPoller    *response_poller;
+    MmapqIndexedBatchAppender  *request_appender;
+    MmapqIndexedBatchPoller    *response_poller;
 
     atomic_int             response_received;
     uint32_t               current_request_seq;
@@ -48,13 +48,13 @@ static int verify_payload_pattern(const uint8_t *data, int32_t length, uint32_t 
     return 1;
 }
 
-static NextMove client_handler(int64_t b_idx, BatchReadingContext *batch_ctx, void *user_ctx)
+static MmapqNextMove client_handler(int64_t b_idx, MmapqBatchReadingContext *batch_ctx, void *user_ctx)
 {
     (void)b_idx;
     BatchQueueLatencyProbe *p = (BatchQueueLatencyProbe *)user_ctx;
 
-    if (!batch_iterator_advance(batch_ctx->iterator))
-        return NEXT_ADVANCE;
+    if (!mmapq_batch_iterator_advance(batch_ctx->iterator))
+        return MMAPQ_NEXT_ADVANCE;
     const LatencyHeader *hdr = batch_iterator_current_data(batch_ctx->iterator);
 
     if (hdr->instance_id == p->instance_id && hdr->sequence == p->current_request_seq) {
@@ -65,10 +65,10 @@ static NextMove client_handler(int64_t b_idx, BatchReadingContext *batch_ctx, vo
         }
         atomic_store(&p->response_received, 1);
     }
-    return NEXT_ADVANCE;
+    return MMAPQ_NEXT_ADVANCE;
 }
 
-int batch_queue_latency_probe_create(
+int mmapqi_batch_queue_latency_probe_create(
     uint16_t    instance_id,
     const char *directory,
     const char *request_name,
@@ -76,8 +76,8 @@ int batch_queue_latency_probe_create(
     int32_t     message_size,
     int         validate_on_server,
     int         validate_on_client,
-    Runtime    *write_runtime,
-    Runtime    *read_runtime,
+    MmapqRuntime    *write_runtime,
+    MmapqRuntime    *read_runtime,
     BatchQueueLatencyProbe **out)
 {
     if (out == NULL) return MMAPQ_EINVAL;
@@ -95,33 +95,33 @@ int batch_queue_latency_probe_create(
     if (p->msg_buffer == NULL) { free(p); return MMAPQ_ENOMEM; }
 
     {
-        int rc = indexed_batch_queue_create_default(directory, request_name, write_runtime, read_runtime, &p->request_queue);
+        int rc = mmapq_indexed_batch_queue_create_default(directory, request_name, write_runtime, read_runtime, &p->request_queue);
         if (rc != 0) { free(p->msg_buffer); free(p); return rc; }
     }
     {
-        int rc = indexed_batch_queue_create_default(directory, response_name, write_runtime, read_runtime, &p->response_queue);
-        if (rc != 0) { indexed_batch_queue_close(p->request_queue); free(p->msg_buffer); free(p); return rc; }
+        int rc = mmapq_indexed_batch_queue_create_default(directory, response_name, write_runtime, read_runtime, &p->response_queue);
+        if (rc != 0) { mmapq_indexed_batch_queue_close(p->request_queue); free(p->msg_buffer); free(p); return rc; }
     }
 
     {
-        int rc = indexed_batch_queue_create_appender(p->request_queue, &p->request_appender);
-        if (rc != 0) { indexed_batch_queue_close(p->response_queue); indexed_batch_queue_close(p->request_queue); free(p->msg_buffer); free(p); return rc; }
+        int rc = mmapq_indexed_batch_queue_create_appender(p->request_queue, &p->request_appender);
+        if (rc != 0) { mmapq_indexed_batch_queue_close(p->response_queue); mmapq_indexed_batch_queue_close(p->request_queue); free(p->msg_buffer); free(p); return rc; }
     }
     {
-        int rc = indexed_batch_queue_create_poller(p->response_queue, &p->response_poller);
-        if (rc != 0) { indexed_batch_appender_close(p->request_appender); indexed_batch_queue_close(p->response_queue); indexed_batch_queue_close(p->request_queue); free(p->msg_buffer); free(p); return rc; }
+        int rc = mmapq_indexed_batch_queue_create_poller(p->response_queue, &p->response_poller);
+        if (rc != 0) { mmapq_indexed_batch_appender_close(p->request_appender); mmapq_indexed_batch_queue_close(p->response_queue); mmapq_indexed_batch_queue_close(p->request_queue); free(p->msg_buffer); free(p); return rc; }
     }
 
     *out = p;
     return 0;
 }
 
-void batch_queue_latency_probe_move_to_end(BatchQueueLatencyProbe *p)
+void mmapqi_batch_queue_latency_probe_move_to_end(BatchQueueLatencyProbe *p)
 {
-    indexed_batch_poller_move_to_end(p->response_poller);
+    mmapq_indexed_batch_poller_move_to_end(p->response_poller);
 }
 
-uint64_t batch_queue_latency_probe_execute(BatchQueueLatencyProbe *p)
+uint64_t mmapqi_batch_queue_latency_probe_execute(BatchQueueLatencyProbe *p)
 {
     atomic_store(&p->response_received, 0);
     p->current_request_seq++;
@@ -132,23 +132,23 @@ uint64_t batch_queue_latency_probe_execute(BatchQueueLatencyProbe *p)
 
     if (p->validate_on_server || p->validate_on_client) fill_payload_pattern(p->msg_buffer, p->message_size, p->current_request_seq);
 
-    uint64_t start = monotonic_nanos();
+    uint64_t start = mmapq_monotonic_nanos();
 
-    MutableBatch *b = indexed_batch_appender_start_batch(p->request_appender);
-    mutable_batch_append(b, p->msg_buffer, p->message_size);
-    int64_t off = mutable_batch_complete(b);
-    indexed_batch_appender_commit_batch(p->request_appender, off);
+    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(p->request_appender);
+    mmapq_mutable_batch_append(b, p->msg_buffer, p->message_size);
+    int64_t off = mmapq_mutable_batch_complete(b);
+    mmapq_indexed_batch_appender_commit_batch(p->request_appender, off);
 
     while (!atomic_load(&p->response_received)) {
-        indexed_batch_poller_poll(p->response_poller, client_handler, p);
+        mmapq_indexed_batch_poller_poll(p->response_poller, client_handler, p);
     }
 
-    return monotonic_nanos() - start;
+    return mmapq_monotonic_nanos() - start;
 }
 
-int64_t batch_queue_latency_probe_validation_errors(BatchQueueLatencyProbe *p) { return atomic_load(&p->validation_errors); }
+int64_t mmapqi_batch_queue_latency_probe_validation_errors(BatchQueueLatencyProbe *p) { return atomic_load(&p->validation_errors); }
 
-void batch_queue_latency_probe_send_shutdown(BatchQueueLatencyProbe *p)
+void mmapqi_batch_queue_latency_probe_send_shutdown(BatchQueueLatencyProbe *p)
 {
     if (!p) return;
 
@@ -160,30 +160,30 @@ void batch_queue_latency_probe_send_shutdown(BatchQueueLatencyProbe *p)
     hdr->instance_id = p->instance_id;
     hdr->sequence    = SHUTDOWN_SEQ;
 
-    MutableBatch *b = indexed_batch_appender_start_batch(p->request_appender);
-    mutable_batch_append(b, p->msg_buffer, p->message_size);
-    indexed_batch_appender_commit_batch(p->request_appender, mutable_batch_complete(b));
+    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(p->request_appender);
+    mmapq_mutable_batch_append(b, p->msg_buffer, p->message_size);
+    mmapq_indexed_batch_appender_commit_batch(p->request_appender, mmapq_mutable_batch_complete(b));
 
-    uint64_t timeout_at = monotonic_nanos() + 2000000000ULL; /* 2 seconds */
-    while (!atomic_load(&p->response_received) && monotonic_nanos() < timeout_at)
-        indexed_batch_poller_poll(p->response_poller, client_handler, p);
+    uint64_t timeout_at = mmapq_monotonic_nanos() + 2000000000ULL; /* 2 seconds */
+    while (!atomic_load(&p->response_received) && mmapq_monotonic_nanos() < timeout_at)
+        mmapq_indexed_batch_poller_poll(p->response_poller, client_handler, p);
 
     p->current_request_seq = previous_seq;
 }
 
-void batch_queue_latency_probe_close(BatchQueueLatencyProbe *p)
+void mmapqi_batch_queue_latency_probe_close(BatchQueueLatencyProbe *p)
 {
     if (!p) return;
 
     /* Confirmed shutdown handshake — send shutdown signal and wait for echo.
-     * Mirrors queue_latency_probe_close() behaviour. Works for both internal
+     * Mirrors mmapqi_queue_latency_probe_close() behaviour. Works for both internal
      * and external server — the server exits on receiving sequence=0. */
-    batch_queue_latency_probe_send_shutdown(p);
+    mmapqi_batch_queue_latency_probe_send_shutdown(p);
 
-    indexed_batch_appender_close(p->request_appender);
-    indexed_batch_poller_close(p->response_poller);
-    indexed_batch_queue_close(p->request_queue);
-    indexed_batch_queue_close(p->response_queue);
+    mmapq_indexed_batch_appender_close(p->request_appender);
+    mmapq_indexed_batch_poller_close(p->response_poller);
+    mmapq_indexed_batch_queue_close(p->request_queue);
+    mmapq_indexed_batch_queue_close(p->response_queue);
     free(p->msg_buffer);
     free(p);
 }

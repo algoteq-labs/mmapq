@@ -12,7 +12,7 @@
 
 #define RANGE_INITIAL_CAPACITY 64
 
-static void ranges_ensure_capacity(UncommittedPayloadIterator *it)
+static void ranges_ensure_capacity(MmapqUncommittedPayloadIterator *it)
 {
     if (it->range_count < it->range_capacity) return;
 
@@ -25,7 +25,7 @@ static void ranges_ensure_capacity(UncommittedPayloadIterator *it)
     it->range_capacity = new_cap;
 }
 
-static void ranges_insert(UncommittedPayloadIterator *it, int64_t start, int64_t end)
+static void ranges_insert(MmapqUncommittedPayloadIterator *it, int64_t start, int64_t end)
 {
     MMAP_ASSERT(start < end, "ranges_insert: start must be < end");
 
@@ -45,14 +45,14 @@ static void ranges_insert(UncommittedPayloadIterator *it, int64_t start, int64_t
     it->range_count++;
 }
 
-static void ranges_clear(UncommittedPayloadIterator *it)
+static void ranges_clear(MmapqUncommittedPayloadIterator *it)
 {
     it->range_count   = 0;
     it->current_range = 0;
 }
 
 /* Prune ranges whose end <= start_offset (already behind us) */
-static void ranges_prune_up_to(UncommittedPayloadIterator *it, int64_t offset)
+static void ranges_prune_up_to(MmapqUncommittedPayloadIterator *it, int64_t offset)
 {
     int i = 0;
     while (i < it->range_count && it->ranges[i].end <= offset) {
@@ -69,7 +69,7 @@ static void ranges_prune_up_to(UncommittedPayloadIterator *it, int64_t offset)
 
 /* ── Header scan: build committed ranges ─────────────────────────────────── */
 
-static int scan_committed_ranges(UncommittedPayloadIterator *it)
+static int scan_committed_ranges(MmapqUncommittedPayloadIterator *it)
 {
     ranges_clear(it);
 
@@ -78,18 +78,18 @@ static int scan_committed_ranges(UncommittedPayloadIterator *it)
     int64_t current_end   = PAYLOAD_ITERATOR_NOT_SET;
 
     /*
-     * We need a separate PayloadIterator for walking payload within each
+     * We need a separate MmapqPayloadIterator for walking payload within each
      * committed span. We re-use it->inner for this purpose during the scan,
      * then reinitialise it for gap traversal after the scan completes.
      *
      * The inner iterator must be initialised from the start of stream.
      */
     int64_t stream_start = it->start_of_stream_offset(it->stream_ctx);
-    payload_iterator_init(it->inner, stream_start, PAYLOAD_ITERATOR_NOT_SET);
+    mmapqi_payload_iterator_init(it->inner, stream_start, PAYLOAD_ITERATOR_NOT_SET);
 
     while (1) {
         /* Read header at header_index */
-        uint64_t header = header_read(it->header_accessor, &it->header_buf,
+        uint64_t header = mmapqi_header_read(it->header_accessor, &it->header_buf,
                                        header_index, it->queue_name);
 
         if (header == HEADER_NULL) break;  /* end of committed headers */
@@ -103,20 +103,20 @@ static int scan_committed_ranges(UncommittedPayloadIterator *it)
 
         if (current_start == PAYLOAD_ITERATOR_NOT_SET) {
             /* ── First entry: init range from this offset ──────────────── */
-            payload_iterator_init(it->inner, header_offset, PAYLOAD_ITERATOR_NOT_SET);
+            mmapqi_payload_iterator_init(it->inner, header_offset, PAYLOAD_ITERATOR_NOT_SET);
 
-            if (!payload_iterator_advance(it->inner)) return 0;
+            if (!mmapqi_payload_iterator_advance(it->inner)) return 0;
             if (it->inner->current_message_offset != header_offset) return 0;
             current_start = header_offset;
             current_end   = it->inner->next_probing_offset;
 
-        } else if (!payload_iterator_advance(it->inner) ||
+        } else if (!mmapqi_payload_iterator_advance(it->inner) ||
                    it->inner->current_message_offset != header_offset) {
             /* ── Gap detected: flush current range, start new one ────────── */
             ranges_insert(it, current_start, current_end);
 
-            payload_iterator_init(it->inner, header_offset, PAYLOAD_ITERATOR_NOT_SET);
-            if (!payload_iterator_advance(it->inner)) return 0;
+            mmapqi_payload_iterator_init(it->inner, header_offset, PAYLOAD_ITERATOR_NOT_SET);
+            if (!mmapqi_payload_iterator_advance(it->inner)) return 0;
             if (it->inner->current_message_offset != header_offset) return 0;
 
             current_start = header_offset;
@@ -139,7 +139,7 @@ static int scan_committed_ranges(UncommittedPayloadIterator *it)
 
 /* ── Init gap traversal after scan ──────────────────────────────────────── */
 
-static void init_first_gap(UncommittedPayloadIterator *it, int64_t start)
+static void init_first_gap(MmapqUncommittedPayloadIterator *it, int64_t start)
 {
     /*
      * Find the first gap at or after `start`.
@@ -157,7 +157,7 @@ static void init_first_gap(UncommittedPayloadIterator *it, int64_t start)
 
     if (it->current_range >= it->range_count) {
         /* No more committed ranges ahead — gap runs to fixed_end_of_stream */
-        payload_iterator_init(it->inner, start, it->fixed_end_of_stream);
+        mmapqi_payload_iterator_init(it->inner, start, it->fixed_end_of_stream);
     } else {
         int64_t range_start = it->ranges[it->current_range].start;
 
@@ -178,18 +178,18 @@ static void init_first_gap(UncommittedPayloadIterator *it, int64_t start)
             } else {
                 gap_end = it->ranges[it->current_range].start;
             }
-            payload_iterator_init(it->inner, range_end, gap_end);
+            mmapqi_payload_iterator_init(it->inner, range_end, gap_end);
         } else {
             /* start is before the next committed range — gap up to range_start */
             gap_end = range_start;
-            payload_iterator_init(it->inner, start, gap_end);
+            mmapqi_payload_iterator_init(it->inner, start, gap_end);
         }
     }
 }
 
 /* ── Move to next gap ────────────────────────────────────────────────────── */
 
-static int switch_to_next_gap(UncommittedPayloadIterator *it)
+static int switch_to_next_gap(MmapqUncommittedPayloadIterator *it)
 {
     /* Consume the current committed range and any adjacent ones */
     if (it->current_range >= it->range_count) return 0;
@@ -215,21 +215,21 @@ static int switch_to_next_gap(UncommittedPayloadIterator *it)
         gap_end = it->ranges[it->current_range].start;
     }
 
-    payload_iterator_init(it->inner, committed_end, gap_end);
+    mmapqi_payload_iterator_init(it->inner, committed_end, gap_end);
     return 1;
 }
 
-/* ── uncommitted_iterator_create ─────────────────────────────────────────── */
+/* ── mmapqi_uncommitted_iterator_create ─────────────────────────────────────────── */
 
-int uncommitted_iterator_create(
+int mmapqi_uncommitted_iterator_create(
     const char      *queue_name,
     uint8_t          appender_id,
     int64_t        (*start_of_stream_offset)(void *ctx),
     int64_t        (*end_of_stream_offset)(void *ctx),
     void            *stream_ctx,
     RegionAccessor  *header_accessor,
-    PayloadIterator *inner,
-    UncommittedPayloadIterator **out)
+    MmapqPayloadIterator *inner,
+    MmapqUncommittedPayloadIterator **out)
 {
     if (out == NULL) return MMAPQ_EINVAL;
     *out = NULL;
@@ -239,7 +239,7 @@ int uncommitted_iterator_create(
     if (header_accessor == NULL) return MMAPQ_EINVAL;
     if (inner == NULL) return MMAPQ_EINVAL;
 
-    UncommittedPayloadIterator *it = calloc(1, sizeof(UncommittedPayloadIterator));
+    MmapqUncommittedPayloadIterator *it = calloc(1, sizeof(MmapqUncommittedPayloadIterator));
     if (it == NULL) return MMAPQ_ENOMEM;
 
     it->queue_name              = queue_name;
@@ -259,14 +259,14 @@ int uncommitted_iterator_create(
     return 0;
 }
 
-/* ── uncommitted_iterator_init ───────────────────────────────────────────── */
+/* ── mmapqi_uncommitted_iterator_init ───────────────────────────────────────────── */
 
-UncommittedPayloadIterator *uncommitted_iterator_init(
-    UncommittedPayloadIterator *it,
+MmapqUncommittedPayloadIterator *mmapqi_uncommitted_iterator_init(
+    MmapqUncommittedPayloadIterator *it,
     int64_t                     start_offset,
     int64_t                     end_offset)
 {
-    MMAP_ASSERT(it != NULL, "uncommitted_iterator_init: it is NULL");
+    MMAP_ASSERT(it != NULL, "mmapqi_uncommitted_iterator_init: it is NULL");
 
     int64_t stream_start = it->start_of_stream_offset(it->stream_ctx);
 
@@ -305,15 +305,15 @@ UncommittedPayloadIterator *uncommitted_iterator_init(
     return it;
 }
 
-/* ── uncommitted_iterator_advance ────────────────────────────────────────── */
+/* ── mmapqi_uncommitted_iterator_advance ────────────────────────────────────────── */
 
-int uncommitted_iterator_advance(UncommittedPayloadIterator *it)
+int mmapqi_uncommitted_iterator_advance(MmapqUncommittedPayloadIterator *it)
 {
-    MMAP_ASSERT(it != NULL,         "uncommitted_iterator_advance: it is NULL");
+    MMAP_ASSERT(it != NULL,         "mmapqi_uncommitted_iterator_advance: it is NULL");
     if (!it->initialised) return 0;
 
     while (1) {
-        if (payload_iterator_advance(it->inner)) {
+        if (mmapqi_payload_iterator_advance(it->inner)) {
             int64_t msg_end = it->inner->next_probing_offset;
 
             /*
@@ -324,7 +324,7 @@ int uncommitted_iterator_advance(UncommittedPayloadIterator *it)
             if (it->current_range < it->range_count &&
                 msg_end > it->ranges[it->current_range].start) {
                 MMAP_ASSERT(0,
-                    "uncommitted_iterator_advance: message overlaps committed "
+                    "mmapqi_uncommitted_iterator_advance: message overlaps committed "
                     "range — payload stream is corrupt");
             }
 
@@ -338,14 +338,14 @@ int uncommitted_iterator_advance(UncommittedPayloadIterator *it)
     }
 }
 
-/* ── uncommitted_iterator_has_next ───────────────────────────────────────── */
+/* ── mmapqi_uncommitted_iterator_has_next ───────────────────────────────────────── */
 
-int uncommitted_iterator_has_next(const UncommittedPayloadIterator *it)
+int mmapqi_uncommitted_iterator_has_next(const MmapqUncommittedPayloadIterator *it)
 {
-    MMAP_ASSERT(it != NULL, "uncommitted_iterator_has_next: it is NULL");
+    MMAP_ASSERT(it != NULL, "mmapqi_uncommitted_iterator_has_next: it is NULL");
     if (!it->initialised) return 0;
 
-    if (payload_iterator_has_next(it->inner)) return 1;
+    if (mmapqi_payload_iterator_has_next(it->inner)) return 1;
 
     /* Check if any gap remains after current committed ranges */
     if (it->current_range >= it->range_count) return 0;
@@ -354,27 +354,27 @@ int uncommitted_iterator_has_next(const UncommittedPayloadIterator *it)
     return it->ranges[it->current_range].end < it->fixed_end_of_stream;
 }
 
-/* ── uncommitted_iterator_current ────────────────────────────────────────── */
+/* ── mmapqi_uncommitted_iterator_current ────────────────────────────────────────── */
 
-Buffer *uncommitted_iterator_current(UncommittedPayloadIterator *it)
+Buffer *mmapqi_uncommitted_iterator_current(MmapqUncommittedPayloadIterator *it)
 {
-    MMAP_ASSERT(it != NULL, "uncommitted_iterator_current: it is NULL");
-    return payload_iterator_current(it->inner);
+    MMAP_ASSERT(it != NULL, "mmapqi_uncommitted_iterator_current: it is NULL");
+    return mmapqi_payload_iterator_current(it->inner);
 }
 
-/* ── uncommitted_iterator_rewind ─────────────────────────────────────────── */
+/* ── mmapqi_uncommitted_iterator_rewind ─────────────────────────────────────────── */
 
-UncommittedPayloadIterator *uncommitted_iterator_rewind(UncommittedPayloadIterator *it)
+MmapqUncommittedPayloadIterator *mmapqi_uncommitted_iterator_rewind(MmapqUncommittedPayloadIterator *it)
 {
-    MMAP_ASSERT(it != NULL,      "uncommitted_iterator_rewind: it is NULL");
+    MMAP_ASSERT(it != NULL,      "mmapqi_uncommitted_iterator_rewind: it is NULL");
     if (!it->initialised) return NULL;
 
-    return uncommitted_iterator_init(it, it->init_start_offset, it->init_end_offset);
+    return mmapqi_uncommitted_iterator_init(it, it->init_start_offset, it->init_end_offset);
 }
 
-/* ── uncommitted_iterator_destroy ────────────────────────────────────────── */
+/* ── mmapqi_uncommitted_iterator_destroy ────────────────────────────────────────── */
 
-void uncommitted_iterator_destroy(UncommittedPayloadIterator *it)
+void mmapqi_uncommitted_iterator_destroy(MmapqUncommittedPayloadIterator *it)
 {
     if (it == NULL) return;
     free(it->ranges);

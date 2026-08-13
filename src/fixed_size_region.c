@@ -71,7 +71,7 @@ static int32_t fixed_size(RegionAccessor *self)
 
 /* ── Factory ─────────────────────────────────────────────────────────────── */
 
-int fixed_size_region_create(
+int mmapqi_fixed_size_region_create(
     const char      *file_path,
     int32_t          size,
     FileInitialiser  initialiser,
@@ -165,7 +165,7 @@ int fixed_size_region_create(
 
 /* ── Destroy ─────────────────────────────────────────────────────────────── */
 
-void fixed_size_region_destroy(RegionAccessor *acc)
+void mmapqi_fixed_size_region_destroy(RegionAccessor *acc)
 {
     if (acc == NULL) return;
 

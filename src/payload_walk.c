@@ -4,7 +4,7 @@
 #include <string.h>
 
 /*
- * payload_walk_advance — the core payload traversal primitive.
+ * mmapqi_payload_walk_advance — the core payload traversal primitive.
  *
  * This is the only place in the codebase that handles padding.
  * Gets it right here so everything above it inherits correctness.
@@ -17,7 +17,7 @@
  *               *probing_offset     = position after message (next probe)
  *   return == 0: end of stream, neither output modified meaningfully
  */
-int32_t payload_walk_advance(
+int32_t mmapqi_payload_walk_advance(
     const char     *queue_name,
     int64_t        *probing_offset,
     int64_t        *message_offset_out,
@@ -56,7 +56,7 @@ int32_t payload_walk_advance(
         int32_t skip = payload_long_padding_skip(length);
 
         MMAP_ASSERT(payload_buf->capacity == skip,
-            "payload_walk_advance: long padding size mismatch — "
+            "mmapqi_payload_walk_advance: long padding size mismatch — "
             "payload stream is corrupt");
 
         position += skip;

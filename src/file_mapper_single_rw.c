@@ -114,7 +114,7 @@ static int rw_init(SingleFileRwImpl *impl)
         return 0;
     }
 
-    /* Run initialiser (typically file_init_zeros for new files) */
+    /* Run initialiser (typically mmapqi_file_init_zeros for new files) */
     if (impl->initialiser != NULL) {
         struct stat st;
         fstat(fd, &st);
@@ -208,7 +208,7 @@ static void rw_close(FileMapper *self)
 
 /* ── Factory ─────────────────────────────────────────────────────────────── */
 
-int file_mapper_single_rw_create(
+int mmapqi_file_mapper_single_rw_create(
     const char      *file_path,
     int64_t          max_size,
     FileInitialiser  initialiser,

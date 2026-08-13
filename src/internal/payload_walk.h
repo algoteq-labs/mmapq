@@ -14,8 +14,8 @@
  * Normal queue polling does NOT use this — pollers use the header to jump
  * directly to the payload position. PayloadWalk is only needed during:
  *   - Appender initialisation (find end of stream after restart)
- *   - UncommittedPayloadIterator (walk gaps between committed spans)
- *   - PayloadIterator (sequential scan of a payload stream)
+ *   - MmapqUncommittedPayloadIterator (walk gaps between committed spans)
+ *   - MmapqPayloadIterator (sequential scan of a payload stream)
  *
  * PADDING RULES:
  *   Short padding: capacity <= 4 bytes at region end.
@@ -44,7 +44,7 @@
  *   > 0  : message payload length (bytes, excluding 4-byte length prefix)
  *   == 0 : end of stream at probing_offset
  */
-int32_t payload_walk_advance(
+int32_t mmapqi_payload_walk_advance(
     const char     *queue_name,
     int64_t        *probing_offset,     /* in/out: current probe position  */
     int64_t        *message_offset_out, /* out:    position of length prefix */

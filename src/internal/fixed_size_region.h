@@ -33,7 +33,7 @@
  *
  * file_path:       path to the backing file (created if it does not exist)
  * size:            exact size of the region in bytes (must be page-aligned)
- * initialiser:     called when file is newly created (typically file_init_zeros)
+ * initialiser:     called when file is newly created (typically mmapqi_file_init_zeros)
  * initialiser_ctx: context passed to initialiser (may be NULL)
  * out:             out-parameter for the created accessor (NULL on failure)
  *
@@ -41,7 +41,7 @@
  * MMAPQ_ENOMEM on allocation failure, MMAPQ_ETIMEDOUT on mmap failure.
  * Sets *out to NULL on failure.
  */
-int fixed_size_region_create(
+int mmapqi_fixed_size_region_create(
     const char      *file_path,
     int32_t          size,
     FileInitialiser  initialiser,
@@ -52,6 +52,6 @@ int fixed_size_region_create(
  * Destroy a FixedSizeRegion and free all memory.
  * Calls close() then frees the RegionAccessor and its impl.
  */
-void fixed_size_region_destroy(RegionAccessor *acc);
+void mmapqi_fixed_size_region_destroy(RegionAccessor *acc);
 
 #endif /* FIXED_SIZE_REGION_H */

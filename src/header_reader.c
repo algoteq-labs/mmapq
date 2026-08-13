@@ -5,9 +5,9 @@
 #include <stdint.h>
 #include <stdatomic.h>
 
-/* ── header_read ─────────────────────────────────────────────────────────── */
+/* ── mmapqi_header_read ─────────────────────────────────────────────────────────── */
 
-uint64_t header_read(
+uint64_t mmapqi_header_read(
     RegionAccessor *header_accessor,
     Buffer         *buf,
     int64_t         index,
@@ -35,19 +35,19 @@ uint64_t header_read(
 
     /* WRAP_UNWRAPPED — fatal */
     MMAP_ASSERT(0,
-        "header_read: FATAL — unexpected wrap result. "
+        "mmapqi_header_read: FATAL — unexpected wrap result. "
         "This indicates region corruption.");
     return HEADER_NULL;  /* unreachable */
 }
 
 /*
- * header_read_sequential — like header_read but uses wrap() to trigger
+ * mmapqi_header_read_sequential — like mmapqi_header_read but uses wrap() to trigger
  * premap of the next region. Use for sequential pollers advancing forward.
- * Use header_read for random-access readers and search algorithms.
+ * Use mmapqi_header_read for random-access readers and search algorithms.
  *
  * Returns HEADER_NULL on mapping timeout (caller should retry).
  */
-uint64_t header_read_sequential(
+uint64_t mmapqi_header_read_sequential(
     RegionAccessor *header_accessor,
     Buffer         *buf,
     int64_t         index,
@@ -68,12 +68,12 @@ uint64_t header_read_sequential(
     }
 
     MMAP_ASSERT(0,
-        "header_read_sequential: FATAL — unexpected wrap result. "
+        "mmapqi_header_read_sequential: FATAL — unexpected wrap result. "
         "This indicates region corruption.");
     return HEADER_NULL;
 }
 
-/* ── header_search_last_index ────────────────────────────────────────────── */
+/* ── mmapqi_header_search_last_index ────────────────────────────────────────────── */
 
 /*
  * Mirrors Java HeaderReader.searchLastIndex exactly, including
@@ -86,7 +86,7 @@ uint64_t header_read_sequential(
  *   4. On NULL in either phase: check if start_index advanced past
  *      the probe point (archive hole) — if so, restart.
  */
-int64_t header_search_last_index(
+int64_t mmapqi_header_search_last_index(
     int64_t            from_index,
     StartIndexSupplier start_index_fn,
     void              *start_index_ctx,

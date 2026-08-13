@@ -18,7 +18,7 @@ static const int64_t  MAX_FILE  = (int64_t)4096 * 16 * 64;
 static const int      RING_SZ   = 4;
 static const uint64_t TIMEOUT   = 5000000000ULL;
 
-static Runtime *rt = NULL;
+static MmapqRuntime *rt = NULL;
 
 static void cleanup(void)
 {
@@ -27,36 +27,36 @@ static void cleanup(void)
     int rc = system(cmd); (void)rc;
 }
 
-static IndexedBatchAppender *create_archivable_batch_appender(void)
+static MmapqIndexedBatchAppender *create_archivable_batch_appender(void)
 {
     char dir_path[512];
     snprintf(dir_path, sizeof(dir_path), "%s/%s", DIR, QUEUE);
     mkdir(dir_path, 0775);
 
     QueueMeta *m = NULL;
-    int qmerr = queue_meta_open_rw(DIR, QUEUE, 0,
+    int qmerr = mmapqi_queue_meta_open_rw(DIR, QUEUE, 0,
         REGION_SZ, MAX_FILE, /* archivable= */ 1, QUEUE_TYPE_BATCH, &m);
     TEST_ASSERT_EQUAL_INT(0, qmerr);
     TEST_ASSERT_NOT_NULL(m);
-    queue_meta_close(m);
+    mmapqi_queue_meta_close(m);
 
-    IndexedBatchAppender *a = NULL;
-    int rc = indexed_batch_appender_create(DIR, QUEUE,
+    MmapqIndexedBatchAppender *a = NULL;
+    int rc = mmapq_indexed_batch_appender_create(DIR, QUEUE,
         REGION_SZ, RING_SZ, MAX_FILE, TIMEOUT, 0, rt, 0, &a);
     if (rc != 0) return NULL;
     return a;
 }
 
-static NextMove advance_handler(int64_t bi, BatchReadingContext *ctx, void *user_ctx)
+static MmapqNextMove advance_handler(int64_t bi, MmapqBatchReadingContext *ctx, void *user_ctx)
 {
     (void)bi; (void)ctx; (void)user_ctx;
-    return NEXT_ADVANCE;
+    return MMAPQ_NEXT_ADVANCE;
 }
 
 void setUp(void)
 {
     cleanup();
-    int rc_rt = runtime_region_mapper(&rt);
+    int rc_rt = mmapq_runtime_region_mapper(&rt);
     TEST_ASSERT_EQUAL_INT(0, rc_rt);
     TEST_ASSERT_NOT_NULL(rt);
 }
@@ -70,180 +70,180 @@ void tearDown(void)
 
 void test_batch_archiver_start_index_initially_zero(void)
 {
-    IndexedBatchAppender *a = create_archivable_batch_appender();
-    MutableBatch *b = indexed_batch_appender_start_batch(a);
-    mutable_batch_append(b, "x", 1);
-    indexed_batch_appender_commit_batch(a, mutable_batch_complete(b));
-    indexed_batch_appender_close(a);
+    MmapqIndexedBatchAppender *a = create_archivable_batch_appender();
+    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    mmapq_mutable_batch_append(b, "x", 1);
+    mmapq_indexed_batch_appender_commit_batch(a, mmapq_mutable_batch_complete(b));
+    mmapq_indexed_batch_appender_close(a);
 
-    IndexedBatchArchiver *arch = NULL;
-    int rc_ba = indexed_batch_archiver_create(DIR, QUEUE, RING_SZ, rt, &arch);
+    MmapqIndexedBatchArchiver *arch = NULL;
+    int rc_ba = mmapq_indexed_batch_archiver_create(DIR, QUEUE, RING_SZ, rt, &arch);
     TEST_ASSERT_EQUAL_INT(0, rc_ba);
     TEST_ASSERT_NOT_NULL(arch);
-    TEST_ASSERT_EQUAL_INT64(0, indexed_batch_archiver_start_index(arch));
-    TEST_ASSERT_EQUAL_INT(1, indexed_batch_archiver_archivable(arch));
-    indexed_batch_archiver_close(arch);
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_batch_archiver_start_index(arch));
+    TEST_ASSERT_EQUAL_INT(1, mmapq_indexed_batch_archiver_archivable(arch));
+    mmapq_indexed_batch_archiver_close(arch);
 }
 
 void test_batch_archiver_archive_forward_updates_start_index(void)
 {
-    IndexedBatchAppender *a = create_archivable_batch_appender();
+    MmapqIndexedBatchAppender *a = create_archivable_batch_appender();
     for (int i = 0; i < 5; i++) {
-        MutableBatch *b = indexed_batch_appender_start_batch(a);
+        MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
         char msg[32];
         snprintf(msg, sizeof(msg), "batch%d", i);
-        mutable_batch_append(b, msg, (int32_t)strlen(msg));
-        indexed_batch_appender_commit_batch(a, mutable_batch_complete(b));
+        mmapq_mutable_batch_append(b, msg, (int32_t)strlen(msg));
+        mmapq_indexed_batch_appender_commit_batch(a, mmapq_mutable_batch_complete(b));
     }
-    indexed_batch_appender_close(a);
+    mmapq_indexed_batch_appender_close(a);
 
-    IndexedBatchArchiver *arch = NULL;
-    int rc_ba = indexed_batch_archiver_create(DIR, QUEUE, RING_SZ, rt, &arch);
+    MmapqIndexedBatchArchiver *arch = NULL;
+    int rc_ba = mmapq_indexed_batch_archiver_create(DIR, QUEUE, RING_SZ, rt, &arch);
     TEST_ASSERT_EQUAL_INT(0, rc_ba);
     TEST_ASSERT_NOT_NULL(arch);
-    indexed_batch_archiver_archive_up_to_index(arch, 3);
-    TEST_ASSERT_EQUAL_INT64(3, indexed_batch_archiver_start_index(arch));
-    indexed_batch_archiver_close(arch);
+    mmapq_indexed_batch_archiver_archive_up_to_index(arch, 3);
+    TEST_ASSERT_EQUAL_INT64(3, mmapq_indexed_batch_archiver_start_index(arch));
+    mmapq_indexed_batch_archiver_close(arch);
 }
 
 void test_batch_archiver_poller_returns_archived_below_start(void)
 {
-    IndexedBatchAppender *a = create_archivable_batch_appender();
+    MmapqIndexedBatchAppender *a = create_archivable_batch_appender();
     for (int i = 0; i < 5; i++) {
-        MutableBatch *b = indexed_batch_appender_start_batch(a);
-        mutable_batch_append(b, "x", 1);
-        indexed_batch_appender_commit_batch(a, mutable_batch_complete(b));
+        MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+        mmapq_mutable_batch_append(b, "x", 1);
+        mmapq_indexed_batch_appender_commit_batch(a, mmapq_mutable_batch_complete(b));
     }
-    indexed_batch_appender_close(a);
+    mmapq_indexed_batch_appender_close(a);
 
     /* Create poller BEFORE archiving — cursor starts at 0 */
-    IndexedBatchPoller *p = NULL;
-    int rc_p = indexed_batch_poller_create(DIR, QUEUE, RING_SZ, TIMEOUT, rt, &p);
+    MmapqIndexedBatchPoller *p = NULL;
+    int rc_p = mmapq_indexed_batch_poller_create(DIR, QUEUE, RING_SZ, TIMEOUT, rt, &p);
     TEST_ASSERT_EQUAL_INT(0, rc_p);
     TEST_ASSERT_NOT_NULL(p);
 
     /* Verify batch 0 is readable before archive */
-    BatchPollResult r = indexed_batch_poller_poll(p, advance_handler, NULL);
-    TEST_ASSERT_EQUAL_INT(POLL_ADVANCED, r);
+    BatchPollResult r = mmapq_indexed_batch_poller_poll(p, advance_handler, NULL);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_ADVANCED, r);
 
     /* Reset to 0 */
-    indexed_batch_poller_move_to_index(p, 0);
+    mmapq_indexed_batch_poller_move_to_index(p, 0);
 
     /* Archive batches 0..2 */
-    IndexedBatchArchiver *arch = NULL;
-    int rc_ba = indexed_batch_archiver_create(DIR, QUEUE, RING_SZ, rt, &arch);
+    MmapqIndexedBatchArchiver *arch = NULL;
+    int rc_ba = mmapq_indexed_batch_archiver_create(DIR, QUEUE, RING_SZ, rt, &arch);
     TEST_ASSERT_EQUAL_INT(0, rc_ba);
     TEST_ASSERT_NOT_NULL(arch);
-    indexed_batch_archiver_archive_up_to_index(arch, 3);
-    indexed_batch_archiver_close(arch);
+    mmapq_indexed_batch_archiver_archive_up_to_index(arch, 3);
+    mmapq_indexed_batch_archiver_close(arch);
 
-    /* Cursor at 0, start_index now 3 — returns POLL_ARCHIVED */
-    r = indexed_batch_poller_poll(p, advance_handler, NULL);
-    TEST_ASSERT_EQUAL_INT(POLL_ARCHIVED, r);
+    /* Cursor at 0, start_index now 3 — returns MMAPQ_POLL_ARCHIVED */
+    r = mmapq_indexed_batch_poller_poll(p, advance_handler, NULL);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_ARCHIVED, r);
 
-    indexed_batch_poller_close(p);
+    mmapq_indexed_batch_poller_close(p);
 
     /* New poller starts at start_index=3 automatically */
-    IndexedBatchPoller *p2 = NULL;
-    int rc_p2 = indexed_batch_poller_create(DIR, QUEUE, RING_SZ, TIMEOUT, rt, &p2);
+    MmapqIndexedBatchPoller *p2 = NULL;
+    int rc_p2 = mmapq_indexed_batch_poller_create(DIR, QUEUE, RING_SZ, TIMEOUT, rt, &p2);
     TEST_ASSERT_EQUAL_INT(0, rc_p2);
     TEST_ASSERT_NOT_NULL(p2);
-    r = indexed_batch_poller_poll(p2, advance_handler, NULL);
-    TEST_ASSERT_EQUAL_INT(POLL_ADVANCED, r); /* batch 3 */
+    r = mmapq_indexed_batch_poller_poll(p2, advance_handler, NULL);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_ADVANCED, r); /* batch 3 */
 
-    r = indexed_batch_poller_poll(p2, advance_handler, NULL);
-    TEST_ASSERT_EQUAL_INT(POLL_ADVANCED, r); /* batch 4 */
+    r = mmapq_indexed_batch_poller_poll(p2, advance_handler, NULL);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_ADVANCED, r); /* batch 4 */
 
-    r = indexed_batch_poller_poll(p2, advance_handler, NULL);
-    TEST_ASSERT_EQUAL_INT(POLL_END_OF_STREAM, r);
+    r = mmapq_indexed_batch_poller_poll(p2, advance_handler, NULL);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_END_OF_STREAM, r);
 
-    indexed_batch_poller_close(p2);
+    mmapq_indexed_batch_poller_close(p2);
 }
 
 void test_batch_archiver_start_offset_advances_after_archive(void)
 {
-    IndexedBatchAppender *a = create_archivable_batch_appender();
-    uint8_t appender_id = indexed_batch_appender_id(a);
+    MmapqIndexedBatchAppender *a = create_archivable_batch_appender();
+    uint8_t appender_id = mmapq_indexed_batch_appender_id(a);
     for (int i = 0; i < 3; i++) {
-        MutableBatch *b = indexed_batch_appender_start_batch(a);
-        mutable_batch_append(b, "msg", 3);
-        indexed_batch_appender_commit_batch(a, mutable_batch_complete(b));
+        MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+        mmapq_mutable_batch_append(b, "msg", 3);
+        mmapq_indexed_batch_appender_commit_batch(a, mmapq_mutable_batch_complete(b));
     }
-    indexed_batch_appender_close(a);
+    mmapq_indexed_batch_appender_close(a);
 
-    IndexedBatchArchiver *arch = NULL;
-    int rc_ba = indexed_batch_archiver_create(DIR, QUEUE, RING_SZ, rt, &arch);
+    MmapqIndexedBatchArchiver *arch = NULL;
+    int rc_ba = mmapq_indexed_batch_archiver_create(DIR, QUEUE, RING_SZ, rt, &arch);
     TEST_ASSERT_EQUAL_INT(0, rc_ba);
     TEST_ASSERT_NOT_NULL(arch);
     int64_t before = 0;
-    int ok = indexed_batch_archiver_start_offset(arch, appender_id, &before);
+    int ok = mmapq_indexed_batch_archiver_start_offset(arch, appender_id, &before);
     TEST_ASSERT_EQUAL_INT(1, ok);
 
-    indexed_batch_archiver_archive_up_to_index(arch, 2);
+    mmapq_indexed_batch_archiver_archive_up_to_index(arch, 2);
 
     int64_t after = 0;
-    ok = indexed_batch_archiver_start_offset(arch, appender_id, &after);
+    ok = mmapq_indexed_batch_archiver_start_offset(arch, appender_id, &after);
     TEST_ASSERT_EQUAL_INT(1, ok);
     TEST_ASSERT_TRUE(after > before);
-    TEST_ASSERT_EQUAL_INT64(2, indexed_batch_archiver_start_index(arch));
-    indexed_batch_archiver_close(arch);
+    TEST_ASSERT_EQUAL_INT64(2, mmapq_indexed_batch_archiver_start_index(arch));
+    mmapq_indexed_batch_archiver_close(arch);
 }
 
 void test_batch_archiver_archivable_files_none_at_start_zero(void)
 {
-    IndexedBatchAppender *a = create_archivable_batch_appender();
-    MutableBatch *b = indexed_batch_appender_start_batch(a);
-    mutable_batch_append(b, "x", 1);
-    indexed_batch_appender_commit_batch(a, mutable_batch_complete(b));
-    indexed_batch_appender_close(a);
+    MmapqIndexedBatchAppender *a = create_archivable_batch_appender();
+    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    mmapq_mutable_batch_append(b, "x", 1);
+    mmapq_indexed_batch_appender_commit_batch(a, mmapq_mutable_batch_complete(b));
+    mmapq_indexed_batch_appender_close(a);
 
-    IndexedBatchArchiver *arch = NULL;
-    int rc_ba = indexed_batch_archiver_create(DIR, QUEUE, RING_SZ, rt, &arch);
+    MmapqIndexedBatchArchiver *arch = NULL;
+    int rc_ba = mmapq_indexed_batch_archiver_create(DIR, QUEUE, RING_SZ, rt, &arch);
     TEST_ASSERT_EQUAL_INT(0, rc_ba);
     TEST_ASSERT_NOT_NULL(arch);
     char *paths[64];
-    int n = indexed_batch_archiver_archivable_files(arch, paths, 64);
+    int n = mmapq_indexed_batch_archiver_archivable_files(arch, paths, 64);
     TEST_ASSERT_EQUAL_INT(0, n);
-    indexed_batch_archiver_close(arch);
+    mmapq_indexed_batch_archiver_close(arch);
 }
 
 void test_batch_archiver_backward_unarchive(void)
 {
-    IndexedBatchAppender *a = create_archivable_batch_appender();
+    MmapqIndexedBatchAppender *a = create_archivable_batch_appender();
     for (int i = 0; i < 4; i++) {
-        MutableBatch *b = indexed_batch_appender_start_batch(a);
-        mutable_batch_append(b, "x", 1);
-        indexed_batch_appender_commit_batch(a, mutable_batch_complete(b));
+        MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+        mmapq_mutable_batch_append(b, "x", 1);
+        mmapq_indexed_batch_appender_commit_batch(a, mmapq_mutable_batch_complete(b));
     }
-    indexed_batch_appender_close(a);
+    mmapq_indexed_batch_appender_close(a);
 
-    IndexedBatchArchiver *arch = NULL;
-    int rc_ba = indexed_batch_archiver_create(DIR, QUEUE, RING_SZ, rt, &arch);
+    MmapqIndexedBatchArchiver *arch = NULL;
+    int rc_ba = mmapq_indexed_batch_archiver_create(DIR, QUEUE, RING_SZ, rt, &arch);
     TEST_ASSERT_EQUAL_INT(0, rc_ba);
     TEST_ASSERT_NOT_NULL(arch);
-    indexed_batch_archiver_archive_up_to_index(arch, 3);
-    TEST_ASSERT_EQUAL_INT64(3, indexed_batch_archiver_start_index(arch));
+    mmapq_indexed_batch_archiver_archive_up_to_index(arch, 3);
+    TEST_ASSERT_EQUAL_INT64(3, mmapq_indexed_batch_archiver_start_index(arch));
 
-    indexed_batch_archiver_archive_up_to_index(arch, 1);
-    TEST_ASSERT_EQUAL_INT64(1, indexed_batch_archiver_start_index(arch));
-    indexed_batch_archiver_close(arch);
+    mmapq_indexed_batch_archiver_archive_up_to_index(arch, 1);
+    TEST_ASSERT_EQUAL_INT64(1, mmapq_indexed_batch_archiver_start_index(arch));
+    mmapq_indexed_batch_archiver_close(arch);
 }
 
 void test_batch_archiver_noop_when_index_equals_start(void)
 {
-    IndexedBatchAppender *a = create_archivable_batch_appender();
-    MutableBatch *b = indexed_batch_appender_start_batch(a);
-    mutable_batch_append(b, "x", 1);
-    indexed_batch_appender_commit_batch(a, mutable_batch_complete(b));
-    indexed_batch_appender_close(a);
+    MmapqIndexedBatchAppender *a = create_archivable_batch_appender();
+    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    mmapq_mutable_batch_append(b, "x", 1);
+    mmapq_indexed_batch_appender_commit_batch(a, mmapq_mutable_batch_complete(b));
+    mmapq_indexed_batch_appender_close(a);
 
-    IndexedBatchArchiver *arch = NULL;
-    int rc_ba = indexed_batch_archiver_create(DIR, QUEUE, RING_SZ, rt, &arch);
+    MmapqIndexedBatchArchiver *arch = NULL;
+    int rc_ba = mmapq_indexed_batch_archiver_create(DIR, QUEUE, RING_SZ, rt, &arch);
     TEST_ASSERT_EQUAL_INT(0, rc_ba);
     TEST_ASSERT_NOT_NULL(arch);
-    indexed_batch_archiver_archive_up_to_index(arch, 0); /* no-op */
-    TEST_ASSERT_EQUAL_INT64(0, indexed_batch_archiver_start_index(arch));
-    indexed_batch_archiver_close(arch);
+    mmapq_indexed_batch_archiver_archive_up_to_index(arch, 0); /* no-op */
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_batch_archiver_start_index(arch));
+    mmapq_indexed_batch_archiver_close(arch);
 }
 
 void test_batch_archive_up_to_index_rejects_non_archivable(void)
@@ -252,39 +252,39 @@ void test_batch_archive_up_to_index_rejects_non_archivable(void)
     snprintf(dir_path, sizeof(dir_path), "%s/%s", DIR, QUEUE);
     mkdir(dir_path, 0775);
 
-    IndexedBatchAppender *a = NULL;
-    int rc_a = indexed_batch_appender_create(DIR, QUEUE,
+    MmapqIndexedBatchAppender *a = NULL;
+    int rc_a = mmapq_indexed_batch_appender_create(DIR, QUEUE,
         REGION_SZ, RING_SZ, MAX_FILE, TIMEOUT, 0, rt, 0, &a);
     TEST_ASSERT_EQUAL_INT(0, rc_a);
     TEST_ASSERT_NOT_NULL(a);
-    MutableBatch *b = indexed_batch_appender_start_batch(a);
-    mutable_batch_append(b, "msg", 3);
-    indexed_batch_appender_commit_batch(a, mutable_batch_complete(b));
-    indexed_batch_appender_close(a);
+    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    mmapq_mutable_batch_append(b, "msg", 3);
+    mmapq_indexed_batch_appender_commit_batch(a, mmapq_mutable_batch_complete(b));
+    mmapq_indexed_batch_appender_close(a);
 
-    IndexedBatchArchiver *arch = NULL;
-    int rc_ba = indexed_batch_archiver_create(DIR, QUEUE, RING_SZ, rt, &arch);
+    MmapqIndexedBatchArchiver *arch = NULL;
+    int rc_ba = mmapq_indexed_batch_archiver_create(DIR, QUEUE, RING_SZ, rt, &arch);
     TEST_ASSERT_EQUAL_INT(0, rc_ba);
     TEST_ASSERT_NOT_NULL(arch);
     TEST_ASSERT_NOT_NULL(arch);
-    int rc = indexed_batch_archiver_archive_up_to_index(arch, 1);
+    int rc = mmapq_indexed_batch_archiver_archive_up_to_index(arch, 1);
     TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL, rc);
-    indexed_batch_archiver_close(arch);
+    mmapq_indexed_batch_archiver_close(arch);
 }
 
 void test_batch_archive_forward_empty_queue(void)
 {
-    IndexedBatchAppender *a = create_archivable_batch_appender();
+    MmapqIndexedBatchAppender *a = create_archivable_batch_appender();
     TEST_ASSERT_NOT_NULL(a);
-    indexed_batch_appender_close(a);
+    mmapq_indexed_batch_appender_close(a);
 
-    IndexedBatchArchiver *arch = NULL;
-    int rc = indexed_batch_archiver_create(DIR, QUEUE, RING_SZ, rt, &arch);
+    MmapqIndexedBatchArchiver *arch = NULL;
+    int rc = mmapq_indexed_batch_archiver_create(DIR, QUEUE, RING_SZ, rt, &arch);
     TEST_ASSERT_EQUAL_INT(0, rc);
     TEST_ASSERT_NOT_NULL(arch);
-    int rc2 = indexed_batch_archiver_archive_up_to_index(arch, 5);
+    int rc2 = mmapq_indexed_batch_archiver_archive_up_to_index(arch, 5);
     TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL, rc2);
-    indexed_batch_archiver_close(arch);
+    mmapq_indexed_batch_archiver_close(arch);
 }
 
 int main(void)

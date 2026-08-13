@@ -59,7 +59,7 @@ static int appender_meta_open_internal(
     appender_meta_file_path(directory, queue_name, appender_id, path, sizeof(path));
 
     RegionAccessor *region = NULL;
-    int fsrerr = fixed_size_region_create(
+    int fsrerr = mmapqi_fixed_size_region_create(
         path,
         APPENDER_META_ENCODED_LENGTH,
         initialiser,
@@ -71,13 +71,13 @@ static int appender_meta_open_internal(
     Buffer buf = {0};
     WrapResult r = region_accessor_wrap(region, 0, &buf);
     if (r != WRAP_SUCCESS) {
-        fixed_size_region_destroy(region);
+        mmapqi_fixed_size_region_destroy(region);
         return MMAPQ_ENOMEM;
     }
 
     AppenderMeta *m = calloc(1, sizeof(AppenderMeta));
     if (m == NULL) {
-        fixed_size_region_destroy(region);
+        mmapqi_fixed_size_region_destroy(region);
         return MMAPQ_ENOMEM;
     }
 
@@ -89,9 +89,9 @@ static int appender_meta_open_internal(
     return 0;
 }
 
-/* ── appender_meta_open_rw ───────────────────────────────────────────────── */
+/* ── mmapqi_appender_meta_open_rw ───────────────────────────────────────────────── */
 
-int appender_meta_open_rw(
+int mmapqi_appender_meta_open_rw(
     const char *directory,
     const char *queue_name,
     uint8_t     appender_id,
@@ -109,9 +109,9 @@ int appender_meta_open_rw(
         appender_meta_file_init, &ctx, out);
 }
 
-/* ── appender_meta_open_ro ───────────────────────────────────────────────── */
+/* ── mmapqi_appender_meta_open_ro ───────────────────────────────────────────────── */
 
-int appender_meta_open_ro(
+int mmapqi_appender_meta_open_ro(
     const char *directory,
     const char *queue_name,
     uint8_t     appender_id,
@@ -130,16 +130,16 @@ int appender_meta_open_ro(
 
     return appender_meta_open_internal(
         directory, queue_name, appender_id,
-        file_init_none, NULL, out);
+        mmapqi_file_init_none, NULL, out);
 }
 
-/* ── appender_meta_close ─────────────────────────────────────────────────── */
+/* ── mmapqi_appender_meta_close ─────────────────────────────────────────────────── */
 
-void appender_meta_close(AppenderMeta *m)
+void mmapqi_appender_meta_close(AppenderMeta *m)
 {
     if (m == NULL) return;
     if (m->region != NULL) {
-        fixed_size_region_destroy(m->region);
+        mmapqi_fixed_size_region_destroy(m->region);
         m->region = NULL;
     }
     free(m);

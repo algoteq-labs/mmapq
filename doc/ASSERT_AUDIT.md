@@ -34,7 +34,7 @@ Last verified: 2026-08-13 (Phase 14 — regenerated).
 
 ### file_mapper_rolled.c — 10 (all I)
 
-Lines 81, 152-153, 157, 179-181, 189, 194, 224.
+Lines 81, 152-153, 157, 179-181, 189, 195, 225.
 Internal: null checks on self/entry, invariant checks on
 oldest_idx/ref_count/length coherence. No caller-controlled values.
 
@@ -111,7 +111,7 @@ Lines 30, 269, 312, 326, 345, 361, 369. Internal dispatch null checks.
 | File | Line | Assert | Action |
 |---|---|---|---|
 | `batch_payload_iterator.c` | 83 | capacity == padded | Return MMAPQ_ECORRUPT on mismatch |
-| `indexed_reader.c` | 163 | length > 0 | Set ENTRY_ERROR instead of assert |
+| `indexed_reader.c` | 163 | length > 0 | Set MMAPQ_ENTRY_ERROR instead of assert |
 
 ## Files with zero asserts (all V-class already converted)
 

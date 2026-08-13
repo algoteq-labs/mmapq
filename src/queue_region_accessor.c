@@ -37,7 +37,7 @@ static int make_ring_accessor(
     int         regions_to_map_ahead,
     double      premap_ratio,
     uint64_t    timeout_ns,
-    Runtime    *runtime,
+    MmapqRuntime    *runtime,
     RegionAccessor **out)
 {
     if (out == NULL) return MMAPQ_EINVAL;
@@ -46,16 +46,16 @@ static int make_ring_accessor(
     RegionRing *ring = NULL;
     int rc;
     if (runtime == NULL) {
-        rc = region_ring_sync_create(ring_size, region_size, mapper, timeout_ns, &ring);
+        rc = mmapqi_region_ring_sync_create(ring_size, region_size, mapper, timeout_ns, &ring);
     } else {
-        rc = region_ring_async_create(ring_size, region_size, mapper, timeout_ns, runtime, &ring);
+        rc = mmapqi_region_ring_async_create(ring_size, region_size, mapper, timeout_ns, runtime, &ring);
     }
     if (rc != 0) return rc;
 
-    rc = region_ring_accessor_create(
+    rc = mmapqi_region_ring_accessor_create(
         ring, region_size, regions_to_map_ahead, premap_ratio, out);
     if (rc != 0) {
-        region_ring_destroy(ring);
+        mmapqi_region_ring_destroy(ring);
         return rc;
     }
     return 0;
@@ -71,7 +71,7 @@ static QueueRegionAccessor *acc_alloc(
     int         regions_to_map_ahead,
     int64_t     max_file_size,
     uint64_t    timeout_ns,
-    Runtime    *runtime,
+    MmapqRuntime    *runtime,
     int         read_only)
 {
     QueueRegionAccessor *acc = calloc(1, sizeof(QueueRegionAccessor));
@@ -92,9 +92,9 @@ static QueueRegionAccessor *acc_alloc(
     return acc;
 }
 
-/* ── queue_region_accessor_create_rw ─────────────────────────────────────── */
+/* ── mmapqi_queue_region_accessor_create_rw ─────────────────────────────────────── */
 
-int queue_region_accessor_create_rw(
+int mmapqi_queue_region_accessor_create_rw(
     const char *directory,
     const char *queue_name,
     int32_t     region_size,
@@ -102,7 +102,7 @@ int queue_region_accessor_create_rw(
     int         regions_to_map_ahead,
     int64_t     max_file_size,
     uint64_t    timeout_ns,
-    Runtime    *runtime,
+    MmapqRuntime    *runtime,
     uint8_t     appender_id,
     QueueRegionAccessor **out)
 {
@@ -122,9 +122,9 @@ int queue_region_accessor_create_rw(
 
     FileMapper *hdr_mapper = NULL;
     {
-        int rc = file_mapper_rolled_create(
+        int rc = mmapqi_file_mapper_rolled_create(
             hdr_path, max_file_size, region_size,
-            file_init_none, NULL,
+            mmapqi_file_init_none, NULL,
             MAP_MODE_READ_WRITE,
             ring_size + 2, 1, &hdr_mapper);
         if (rc != 0) { free(acc->queue_name); free(acc->directory); free(acc); return rc; }
@@ -148,13 +148,13 @@ int queue_region_accessor_create_rw(
 
     FileMapper *pay_mapper = NULL;
     {
-        int rc = file_mapper_rolled_create(
+        int rc = mmapqi_file_mapper_rolled_create(
             pay_path, max_file_size, region_size,
-            file_init_none, NULL,
+            mmapqi_file_init_none, NULL,
             MAP_MODE_READ_WRITE,
             ring_size + 2, 1, &pay_mapper);
         if (rc != 0) {
-            queue_region_accessor_close(acc);
+            mmapqi_queue_region_accessor_close(acc);
             return rc;
         }
     }
@@ -166,7 +166,7 @@ int queue_region_accessor_create_rw(
                                      timeout_ns, runtime,
                                      &acc->payload[appender_id].accessor);
         if (rc != 0) {
-            queue_region_accessor_close(acc);
+            mmapqi_queue_region_accessor_close(acc);
             return rc;
         }
     }
@@ -176,9 +176,9 @@ int queue_region_accessor_create_rw(
     return 0;
 }
 
-/* ── queue_region_accessor_create_ro ─────────────────────────────────────── */
+/* ── mmapqi_queue_region_accessor_create_ro ─────────────────────────────────────── */
 
-int queue_region_accessor_create_ro(
+int mmapqi_queue_region_accessor_create_ro(
     const char *directory,
     const char *queue_name,
     int32_t     region_size,
@@ -186,7 +186,7 @@ int queue_region_accessor_create_ro(
     int         regions_to_map_ahead,
     int64_t     max_file_size,
     uint64_t    timeout_ns,
-    Runtime    *runtime,
+    MmapqRuntime    *runtime,
     QueueRegionAccessor **out)
 {
     if (out == NULL) return MMAPQ_EINVAL;
@@ -205,9 +205,9 @@ int queue_region_accessor_create_ro(
 
     FileMapper *hdr_mapper = NULL;
     {
-        int rc = file_mapper_rolled_create(
+        int rc = mmapqi_file_mapper_rolled_create(
             hdr_path, max_file_size, region_size,
-            file_init_none, NULL,
+            mmapqi_file_init_none, NULL,
             MAP_MODE_READ_ONLY,
             ring_size + 2, 1, &hdr_mapper);
         if (rc != 0) { free(acc->queue_name); free(acc->directory); free(acc); return rc; }
@@ -225,14 +225,14 @@ int queue_region_accessor_create_ro(
         }
     }
 
-    /* Payload accessors are created lazily in queue_region_accessor_payload() */
+    /* Payload accessors are created lazily in mmapqi_queue_region_accessor_payload() */
     *out = acc;
     return 0;
 }
 
-/* ── queue_region_accessor_payload ───────────────────────────────────────── */
+/* ── mmapqi_queue_region_accessor_payload ───────────────────────────────────────── */
 
-RegionAccessor *queue_region_accessor_payload(QueueRegionAccessor *acc,
+RegionAccessor *mmapqi_queue_region_accessor_payload(QueueRegionAccessor *acc,
                                                uint8_t appender_id)
 {
     if (acc == NULL) return NULL;
@@ -254,9 +254,9 @@ RegionAccessor *queue_region_accessor_payload(QueueRegionAccessor *acc,
      */
     int check_file_size = acc->read_only ? 0 : 1;
     FileMapper *pay_mapper = NULL;
-    if (file_mapper_rolled_create(
+    if (mmapqi_file_mapper_rolled_create(
             pay_path, acc->max_file_size, acc->region_size,
-            file_init_none, NULL,
+            mmapqi_file_init_none, NULL,
             mode,
             acc->ring_size + 2,
             check_file_size,
@@ -276,20 +276,20 @@ RegionAccessor *queue_region_accessor_payload(QueueRegionAccessor *acc,
     return acc->payload[appender_id].accessor;
 }
 
-/* ── queue_region_accessor_close ─────────────────────────────────────────── */
+/* ── mmapqi_queue_region_accessor_close ─────────────────────────────────────────── */
 
-void queue_region_accessor_close(QueueRegionAccessor *acc)
+void mmapqi_queue_region_accessor_close(QueueRegionAccessor *acc)
 {
     if (acc == NULL) return;
 
     if (acc->header != NULL) {
-        region_ring_accessor_destroy(acc->header);
+        mmapqi_region_ring_accessor_destroy(acc->header);
         acc->header = NULL;
     }
 
     for (int i = 0; i < MAX_APPENDERS; i++) {
         if (acc->payload[i].occupied && acc->payload[i].accessor != NULL) {
-            region_ring_accessor_destroy(acc->payload[i].accessor);
+            mmapqi_region_ring_accessor_destroy(acc->payload[i].accessor);
             acc->payload[i].accessor = NULL;
             acc->payload[i].occupied = 0;
         }

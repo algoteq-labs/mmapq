@@ -54,7 +54,7 @@
  * Returns 0 on success, MMAPQ_EINVAL for NULL/invalid args,
  * MMAPQ_ENOMEM on allocation failure. Sets *out to NULL on failure.
  */
-int region_ring_accessor_create(
+int mmapqi_region_ring_accessor_create(
     RegionRing    *ring,
     int32_t        region_size,
     int            regions_to_map_ahead,
@@ -62,14 +62,14 @@ int region_ring_accessor_create(
     RegionAccessor **out);
 
 /**
- * Destroy a RegionRingAccessor created by region_ring_accessor_create().
+ * Destroy a RegionRingAccessor created by mmapqi_region_ring_accessor_create().
  *
  * Calls close() on the accessor (which closes the underlying ring),
  * then frees all memory. After destroy(), the pointer must not be used.
  *
- * Note: pass the RegionAccessor* returned by region_ring_accessor_create().
+ * Note: pass the RegionAccessor* returned by mmapqi_region_ring_accessor_create().
  */
-void region_ring_accessor_destroy(RegionAccessor *acc);
+void mmapqi_region_ring_accessor_destroy(RegionAccessor *acc);
 
 /* ── Default configuration ───────────────────────────────────────────────── */
 #define REGION_RING_ACCESSOR_DEFAULT_PREMAP_RATIO   0.5

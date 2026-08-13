@@ -102,7 +102,7 @@ static inline int32_t region_size(Region *r)
  *
  * INVARIANT: region_size must be a power of two (MMAP_ASSERT enforced).
  */
-int region_sync_create(
+int mmapqi_region_sync_create(
     FileMapper *file_mapper,
     int32_t     region_size,
     uint64_t    timeout_ns,
@@ -135,7 +135,7 @@ int region_sync_create(
  * INVARIANT: process_request() must only be called from the RegionMapper thread.
  * INVARIANT: region_size must be a power of two (MMAP_ASSERT enforced).
  */
-int region_async_create(
+int mmapqi_region_async_create(
     FileMapper *file_mapper,
     int32_t     region_size,
     uint64_t    timeout_ns,
@@ -148,14 +148,14 @@ int region_async_create(
  * Called only by the RegionMapper thread — not part of the Region vtable
  * to keep the hot path interface clean.
  */
-int  region_async_process_request(Region *r);  /* returns 1 if work done */
-void region_async_unmanage(Region *r);
+int  mmapqi_region_async_process_request(Region *r);  /* returns 1 if work done */
+void mmapqi_region_async_unmanage(Region *r);
 
 /**
  * Destroy a Region and free all associated memory.
  * Calls close() then frees the Region struct and its impl.
  */
-void region_destroy(Region *r);
+void mmapqi_region_destroy(Region *r);
 
 /* ── Default error thresholds (mirrors Java IRegionFactory constants) ────── */
 #define REGION_MAX_FILE_NOT_FOUND_ERRORS    3

@@ -69,7 +69,7 @@
  * read directly from the mapped buffer; start_index uses atomic access.
  *
  * Ownership: QueueMeta owns the RegionAccessor and manages its lifetime.
- * The caller must call queue_meta_close() when done.
+ * The caller must call mmapqi_queue_meta_close() when done.
  */
 typedef struct {
     RegionAccessor *region;   /* FixedSizeRegion backing the meta file       */
@@ -143,7 +143,7 @@ static inline void queue_meta_set_start_index(QueueMeta *m, int64_t index)
 /* ── Factory functions ───────────────────────────────────────────────────── */
 
 /**
- * queue_meta_open_rw — open or create the meta file for writing.
+ * mmapqi_queue_meta_open_rw — open or create the meta file for writing.
  *
  * If the file does not exist, it is created and initialised with the given
  * parameters. If it already exists, the existing values are used (the
@@ -162,7 +162,7 @@ static inline void queue_meta_set_start_index(QueueMeta *m, int64_t index)
  * MMAPQ_ENOMEM on allocation failure, MMAPQ_ETIMEDOUT on I/O error,
  * MMAPQ_ESCHEMA on schema mismatch. Sets *out to NULL on failure.
  */
-int queue_meta_open_rw(
+int mmapqi_queue_meta_open_rw(
     const char *directory,
     const char *queue_name,
     int64_t     start_index,
@@ -173,7 +173,7 @@ int queue_meta_open_rw(
     QueueMeta **out);
 
 /**
- * queue_meta_open_ro — open the meta file for reading only.
+ * mmapqi_queue_meta_open_ro — open the meta file for reading only.
  *
  * directory:       base directory for the queue
  * queue_name:      queue subdirectory name
@@ -184,19 +184,19 @@ int queue_meta_open_rw(
  * MMAPQ_ETIMEDOUT on I/O error, MMAPQ_ESCHEMA on type/schema mismatch,
  * MMAPQ_EINVAL for NULL args. Sets *out to NULL on failure.
  */
-int queue_meta_open_ro(
+int mmapqi_queue_meta_open_ro(
     const char *directory,
     const char *queue_name,
     uint8_t     expected_type,
     QueueMeta **out);
 
 /**
- * queue_meta_close — unmap and free a QueueMeta.
+ * mmapqi_queue_meta_close — unmap and free a QueueMeta.
  */
-void queue_meta_close(QueueMeta *m);
+void mmapqi_queue_meta_close(QueueMeta *m);
 
 /**
- * queue_meta_dest_check — validate a destination queue for import/copy.
+ * mmapqi_queue_meta_dest_check — validate a destination queue for import/copy.
  *
  * Returns 0 if the operation may proceed:
  *   - queue does not exist yet → caller should create it
@@ -214,8 +214,14 @@ void queue_meta_close(QueueMeta *m);
  * preserve:       1 if PRESERVE mode, 0 if REBASE
  * allow_append:   1 if appending to existing queue is permitted
  */
-int queue_meta_dest_check(
+int mmapqi_queue_meta_dest_check(
     const char *directory, const char *queue_name,
     uint8_t expected_type, int preserve, int allow_append);
+
+/* ── Reader internal accessors (declared here for cross-TU use) ─────────── */
+struct MmapqIndexedReader;
+struct MmapqIndexedBatchReader;
+QueueMeta *mmapqi_indexed_reader_queue_meta(struct MmapqIndexedReader *r);
+QueueMeta *mmapqi_indexed_batch_reader_queue_meta(struct MmapqIndexedBatchReader *r);
 
 #endif /* QUEUE_META_H */

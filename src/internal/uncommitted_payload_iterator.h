@@ -8,9 +8,9 @@
 #include "mmap_assert.h"
 
 /**
- * UncommittedPayloadIterator — iterate only uncommitted (unconfirmed) messages.
+ * MmapqUncommittedPayloadIterator — iterate only uncommitted (unconfirmed) messages.
  *
- * Mirrors Java UncommittedPayloadIterator exactly.
+ * Mirrors Java MmapqUncommittedPayloadIterator exactly.
  *
  * Used during appender restart recovery. After a crash, the appender's payload
  * file may contain messages that were written but never committed into the header.
@@ -24,10 +24,10 @@
  *     3. Walk the payload stream to build contiguous committed RANGES:
  *        [start_offset, end_offset) where all bytes are part of committed messages.
  *     4. Committed ranges are stored in a sorted array (by start_offset).
- *     5. The inner PayloadIterator traverses GAPS between committed ranges.
+ *     5. The inner MmapqPayloadIterator traverses GAPS between committed ranges.
  *
  *   At advance():
- *     1. Try to advance the inner PayloadIterator in the current gap.
+ *     1. Try to advance the inner MmapqPayloadIterator in the current gap.
  *     2. If the message end reaches the next committed range start, skip
  *        past that range (and any adjacent ranges) to the next gap.
  *     3. Return 1 if an uncommitted message was found, 0 if exhausted.
@@ -55,10 +55,10 @@ typedef struct {
     int64_t end;    /* first byte AFTER committed region (exclusive) */
 } CommittedRange;
 
-/* ── UncommittedPayloadIterator ──────────────────────────────────────────── */
+/* ── MmapqUncommittedPayloadIterator ──────────────────────────────────────────── */
 /* Completes the forward declaration from include/indexed_appender.h */
 
-typedef struct UncommittedPayloadIterator {
+typedef struct MmapqUncommittedPayloadIterator {
     const char     *queue_name;
     uint8_t         appender_id;
 
@@ -72,7 +72,7 @@ typedef struct UncommittedPayloadIterator {
     Buffer          header_buf;
 
     /* Inner iterator — walks gaps between committed ranges */
-    PayloadIterator *inner;
+    MmapqPayloadIterator *inner;
 
     /* Committed ranges — sorted ascending by start */
     CommittedRange *ranges;
@@ -87,12 +87,12 @@ typedef struct UncommittedPayloadIterator {
     int64_t         init_start_offset;
     int64_t         init_end_offset;
     int             initialised;
-} UncommittedPayloadIterator;
+} MmapqUncommittedPayloadIterator;
 
 /* ── Lifecycle ───────────────────────────────────────────────────────────── */
 
 /**
- * uncommitted_iterator_create — allocate and configure.
+ * mmapqi_uncommitted_iterator_create — allocate and configure.
  *
  * queue_name:              diagnostic name
  * appender_id:             which appender's committed spans to skip
@@ -100,21 +100,21 @@ typedef struct UncommittedPayloadIterator {
  * end_of_stream_offset:    callback returning current append position
  * stream_ctx:              context for both callbacks
  * header_accessor:         RO accessor for the queue header file
- * inner:                   PayloadIterator for gap traversal (ownership NOT taken;
+ * inner:                   MmapqPayloadIterator for gap traversal (ownership NOT taken;
  *                          caller must keep it alive for the iterator's lifetime)
  */
-int uncommitted_iterator_create(
+int mmapqi_uncommitted_iterator_create(
     const char     *queue_name,
     uint8_t         appender_id,
     int64_t       (*start_of_stream_offset)(void *ctx),
     int64_t       (*end_of_stream_offset)(void *ctx),
     void           *stream_ctx,
     RegionAccessor *header_accessor,
-    PayloadIterator *inner,
-    UncommittedPayloadIterator **out);
+    MmapqPayloadIterator *inner,
+    MmapqUncommittedPayloadIterator **out);
 
 /**
- * uncommitted_iterator_init — scan header and initialise gap traversal.
+ * mmapqi_uncommitted_iterator_init — scan header and initialise gap traversal.
  *
  * start_offset: payload start, or PAYLOAD_ITERATOR_NOT_SET
  * end_offset:   payload end (inclusive), or PAYLOAD_ITERATOR_NOT_SET
@@ -126,49 +126,49 @@ int uncommitted_iterator_create(
  * truncated (mapping timeout or offset mismatch at the committed header).
  * Callers must check for NULL before advancing.
  */
-UncommittedPayloadIterator *uncommitted_iterator_init(
-    UncommittedPayloadIterator *it,
+MmapqUncommittedPayloadIterator *mmapqi_uncommitted_iterator_init(
+    MmapqUncommittedPayloadIterator *it,
     int64_t                     start_offset,
     int64_t                     end_offset);
 
 /**
- * uncommitted_iterator_advance — move to the next uncommitted message.
+ * mmapqi_uncommitted_iterator_advance — move to the next uncommitted message.
  *
  * Returns 1 if an uncommitted message is available, 0 if exhausted.
  *
  * After a successful advance():
- *   uncommitted_iterator_current() returns the message buffer.
+ *   mmapqi_uncommitted_iterator_current() returns the message buffer.
  *   it->inner->current_message_length holds the payload length.
  *   it->inner->current_message_offset holds the length-prefix position.
  */
-int uncommitted_iterator_advance(UncommittedPayloadIterator *it);
+int mmapqi_uncommitted_iterator_advance(MmapqUncommittedPayloadIterator *it);
 
 /**
- * uncommitted_iterator_has_next — returns 1 if advance() would succeed.
+ * mmapqi_uncommitted_iterator_has_next — returns 1 if advance() would succeed.
  */
-int uncommitted_iterator_has_next(const UncommittedPayloadIterator *it);
+int mmapqi_uncommitted_iterator_has_next(const MmapqUncommittedPayloadIterator *it);
 
 /**
- * uncommitted_iterator_current — get the current message buffer.
+ * mmapqi_uncommitted_iterator_current — get the current message buffer.
  *
  * Valid only after a successful advance(). Delegates to inner iterator.
  * Aborts if no current message.
  */
-Buffer *uncommitted_iterator_current(UncommittedPayloadIterator *it);
+Buffer *mmapqi_uncommitted_iterator_current(MmapqUncommittedPayloadIterator *it);
 
 /**
- * uncommitted_iterator_rewind — re-init with same parameters.
+ * mmapqi_uncommitted_iterator_rewind — re-init with same parameters.
  *
  * Returns NULL if not yet initialised, or if the header scan fails.
  */
-UncommittedPayloadIterator *uncommitted_iterator_rewind(UncommittedPayloadIterator *it);
+MmapqUncommittedPayloadIterator *mmapqi_uncommitted_iterator_rewind(MmapqUncommittedPayloadIterator *it);
 
 /**
- * uncommitted_iterator_destroy — free the iterator and its range array.
+ * mmapqi_uncommitted_iterator_destroy — free the iterator and its range array.
  *
- * Does NOT destroy the inner PayloadIterator or header_accessor —
+ * Does NOT destroy the inner MmapqPayloadIterator or header_accessor —
  * those are owned by the caller.
  */
-void uncommitted_iterator_destroy(UncommittedPayloadIterator *it);
+void mmapqi_uncommitted_iterator_destroy(MmapqUncommittedPayloadIterator *it);
 
 #endif /* UNCOMMITTED_PAYLOAD_ITERATOR_H */

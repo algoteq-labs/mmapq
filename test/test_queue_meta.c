@@ -27,13 +27,13 @@ void setUp(void)
 
 void tearDown(void)
 {
-    if (meta) { queue_meta_close(meta); meta = NULL; }
+    if (meta) { mmapqi_queue_meta_close(meta); meta = NULL; }
     cleanup();
 }
 
 void test_open_rw_creates_file(void)
 {
-    qmerr = queue_meta_open_rw(DIR, QUEUE, 0, 4096, 4096 * 256, 0, QUEUE_TYPE_NORMAL, &meta);
+    qmerr = mmapqi_queue_meta_open_rw(DIR, QUEUE, 0, 4096, 4096 * 256, 0, QUEUE_TYPE_NORMAL, &meta);
     TEST_ASSERT_EQUAL_INT(0, qmerr);
     TEST_ASSERT_NOT_NULL(meta);
 
@@ -46,7 +46,7 @@ void test_open_rw_creates_file(void)
 
 void test_open_rw_stores_region_size(void)
 {
-    qmerr = queue_meta_open_rw(DIR, QUEUE, 0, 8192, 8192 * 256, 0, QUEUE_TYPE_NORMAL, &meta);
+    qmerr = mmapqi_queue_meta_open_rw(DIR, QUEUE, 0, 8192, 8192 * 256, 0, QUEUE_TYPE_NORMAL, &meta);
     TEST_ASSERT_EQUAL_INT(0, qmerr);
     TEST_ASSERT_EQUAL_INT32(8192, queue_meta_region_size(meta));
 }
@@ -54,14 +54,14 @@ void test_open_rw_stores_region_size(void)
 void test_open_rw_stores_max_file_size(void)
 {
     int64_t mfs = 4096LL * 512;
-    qmerr = queue_meta_open_rw(DIR, QUEUE, 0, 4096, mfs, 0, QUEUE_TYPE_NORMAL, &meta);
+    qmerr = mmapqi_queue_meta_open_rw(DIR, QUEUE, 0, 4096, mfs, 0, QUEUE_TYPE_NORMAL, &meta);
     TEST_ASSERT_EQUAL_INT(0, qmerr);
     TEST_ASSERT_EQUAL_INT64(mfs, queue_meta_max_file_size(meta));
 }
 
 void test_open_rw_schema_version(void)
 {
-    qmerr = queue_meta_open_rw(DIR, QUEUE, 0, 4096, 4096 * 256, 0, QUEUE_TYPE_NORMAL, &meta);
+    qmerr = mmapqi_queue_meta_open_rw(DIR, QUEUE, 0, 4096, 4096 * 256, 0, QUEUE_TYPE_NORMAL, &meta);
     TEST_ASSERT_EQUAL_INT(0, qmerr);
     TEST_ASSERT_EQUAL_INT32(QUEUE_META_SCHEMA_VERSION, queue_meta_schema_version(meta));
 }
@@ -69,48 +69,48 @@ void test_open_rw_schema_version(void)
 void test_open_ro_returns_null_when_missing(void)
 {
     QueueMeta *ro = NULL;
-    int roerr = queue_meta_open_ro(DIR, QUEUE, QUEUE_TYPE_NORMAL, &ro);
+    int roerr = mmapqi_queue_meta_open_ro(DIR, QUEUE, QUEUE_TYPE_NORMAL, &ro);
     TEST_ASSERT_EQUAL_INT(MMAPQ_ENOENT, roerr);
     TEST_ASSERT_NULL(ro);
 }
 
 void test_open_ro_reads_existing_file(void)
 {
-    int qmerr = queue_meta_open_rw(DIR, QUEUE, 0, 4096, 4096 * 256, 0, QUEUE_TYPE_NORMAL, &meta);
+    int qmerr = mmapqi_queue_meta_open_rw(DIR, QUEUE, 0, 4096, 4096 * 256, 0, QUEUE_TYPE_NORMAL, &meta);
     TEST_ASSERT_EQUAL_INT(0, qmerr);
-    queue_meta_close(meta);
+    mmapqi_queue_meta_close(meta);
     meta = NULL;
 
     QueueMeta *ro = NULL;
-    int roerr = queue_meta_open_ro(DIR, QUEUE, QUEUE_TYPE_NORMAL, &ro);
+    int roerr = mmapqi_queue_meta_open_ro(DIR, QUEUE, QUEUE_TYPE_NORMAL, &ro);
     TEST_ASSERT_EQUAL_INT(0, roerr);
     TEST_ASSERT_NOT_NULL(ro);
     TEST_ASSERT_EQUAL_INT32(4096, queue_meta_region_size(ro));
-    queue_meta_close(ro);
+    mmapqi_queue_meta_close(ro);
 }
 
 void test_start_index_zero_non_archivable(void)
 {
-    qmerr = queue_meta_open_rw(DIR, QUEUE, 0, 4096, 4096 * 256, 0, QUEUE_TYPE_NORMAL, &meta);
+    qmerr = mmapqi_queue_meta_open_rw(DIR, QUEUE, 0, 4096, 4096 * 256, 0, QUEUE_TYPE_NORMAL, &meta);
     TEST_ASSERT_EQUAL_INT(0, qmerr);
     TEST_ASSERT_EQUAL_INT64(0, queue_meta_start_index(meta));
 }
 
 void test_archivable_false(void)
 {
-    qmerr = queue_meta_open_rw(DIR, QUEUE, 0, 4096, 4096 * 256, 0, QUEUE_TYPE_NORMAL, &meta);
+    qmerr = mmapqi_queue_meta_open_rw(DIR, QUEUE, 0, 4096, 4096 * 256, 0, QUEUE_TYPE_NORMAL, &meta);
     TEST_ASSERT_EQUAL_INT(0, qmerr);
     TEST_ASSERT_EQUAL_INT(0, queue_meta_archivable(meta));
 }
 
 void test_reopen_rw_preserves_values(void)
 {
-    qmerr = queue_meta_open_rw(DIR, QUEUE, 0, 4096, 4096 * 256, 0, QUEUE_TYPE_NORMAL, &meta);
+    qmerr = mmapqi_queue_meta_open_rw(DIR, QUEUE, 0, 4096, 4096 * 256, 0, QUEUE_TYPE_NORMAL, &meta);
     TEST_ASSERT_EQUAL_INT(0, qmerr);
-    queue_meta_close(meta);
+    mmapqi_queue_meta_close(meta);
 
     /* Re-open with different params — existing values should be preserved */
-    qmerr = queue_meta_open_rw(DIR, QUEUE, 0, 8192, 8192 * 256, 0, QUEUE_TYPE_NORMAL, &meta);
+    qmerr = mmapqi_queue_meta_open_rw(DIR, QUEUE, 0, 8192, 8192 * 256, 0, QUEUE_TYPE_NORMAL, &meta);
     TEST_ASSERT_EQUAL_INT(0, qmerr);
     /* File already existed — region_size from file is 4096, not 8192 */
     TEST_ASSERT_EQUAL_INT32(4096, queue_meta_region_size(meta));

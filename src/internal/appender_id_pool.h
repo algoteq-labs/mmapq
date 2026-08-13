@@ -53,7 +53,7 @@ typedef struct {
 /* ── Factory ─────────────────────────────────────────────────────────────── */
 
 /**
- * appender_id_pool_open — open or create the appender ID pool.
+ * mmapqi_appender_id_pool_open — open or create the appender ID pool.
  *
  * Creates the file if it does not exist, initialised to all zeros (all IDs free).
  * The file is opened read-write since both readers and writers acquire IDs.
@@ -61,7 +61,7 @@ typedef struct {
  * Returns 0 on success and sets *out_pool. Returns MMAPQ_EINVAL for NULL args,
  * MMAPQ_ENOMEM for allocation failures. Sets *out_pool to NULL on failure.
  */
-int appender_id_pool_open(
+int mmapqi_appender_id_pool_open(
     const char *directory,
     const char *queue_name,
     AppenderIdPool **out_pool);
@@ -69,39 +69,39 @@ int appender_id_pool_open(
 /* ── Operations ──────────────────────────────────────────────────────────── */
 
 /**
- * appender_id_pool_acquire — allocate the next free appender ID.
+ * mmapqi_appender_id_pool_acquire — allocate the next free appender ID.
  *
  * Scans the bitset for a free slot and CAS-acquires it.
  * Retries up to APPENDER_ID_POOL_MAX_RETRIES times.
  *
  * Returns the acquired appender ID (0–255), or -1 if all IDs are in use.
  */
-int appender_id_pool_acquire(AppenderIdPool *pool);
+int mmapqi_appender_id_pool_acquire(AppenderIdPool *pool);
 
 /**
- * appender_id_pool_try_acquire — attempt to acquire a specific appender ID.
+ * mmapqi_appender_id_pool_try_acquire — attempt to acquire a specific appender ID.
  *
  * id: the specific ID to acquire (0–255).
  * Returns 1 if acquired successfully, 0 if already held by another appender.
  *
  * Used when an appender wants to resume with its previous ID after restart.
  */
-int appender_id_pool_try_acquire(AppenderIdPool *pool, uint8_t id);
+int mmapqi_appender_id_pool_try_acquire(AppenderIdPool *pool, uint8_t id);
 
 /**
- * appender_id_pool_release — release a previously acquired appender ID.
+ * mmapqi_appender_id_pool_release — release a previously acquired appender ID.
  *
  * Returns 1 if released, 0 if the ID was not held (double-release guard).
  */
-int appender_id_pool_release(AppenderIdPool *pool, uint8_t id);
+int mmapqi_appender_id_pool_release(AppenderIdPool *pool, uint8_t id);
 
 /**
- * appender_id_pool_close — unmap and free an AppenderIdPool.
+ * mmapqi_appender_id_pool_close — unmap and free an AppenderIdPool.
  *
  * Does NOT release any acquired IDs. The caller must call release() for
  * each held ID before calling close(), or accept that the IDs remain
  * held until another process clears them.
  */
-void appender_id_pool_close(AppenderIdPool *pool);
+void mmapqi_appender_id_pool_close(AppenderIdPool *pool);
 
 #endif /* APPENDER_ID_POOL_H */

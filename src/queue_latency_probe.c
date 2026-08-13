@@ -20,11 +20,11 @@ struct QueueLatencyProbe {
     int              validate_on_server;
     int              validate_on_client;
     
-    IndexedQueue    *request_queue;
-    IndexedQueue    *response_queue;
+    MmapqIndexedQueue    *request_queue;
+    MmapqIndexedQueue    *response_queue;
     
-    IndexedAppender *request_appender;
-    IndexedPoller   *response_poller;
+    MmapqIndexedAppender *request_appender;
+    MmapqIndexedPoller   *response_poller;
     
     atomic_int       response_received;
     uint32_t         current_request_seq;
@@ -55,7 +55,7 @@ static int verify_payload_pattern(const uint8_t *data, int32_t length, uint32_t 
 
 /* ── Client Handler ──────────────────────────────────────────────────────── */
 
-static NextMove client_handler(
+static MmapqNextMove client_handler(
     int64_t     index,
     uint8_t     appender_id,
     const void *data,
@@ -78,12 +78,12 @@ static NextMove client_handler(
         atomic_store_explicit(&p->response_received, 1, memory_order_relaxed);
     }
     
-    return NEXT_ADVANCE;
+    return MMAPQ_NEXT_ADVANCE;
 }
 
 /* ── Public API ──────────────────────────────────────────────────────────── */
 
-int queue_latency_probe_create(
+int mmapqi_queue_latency_probe_create(
     uint16_t    instance_id,
     const char *directory,
     const char *request_name,
@@ -91,8 +91,8 @@ int queue_latency_probe_create(
     int32_t     message_size,
     int         validate_on_server,
     int         validate_on_client,
-    Runtime    *write_runtime,
-    Runtime    *read_runtime,
+    MmapqRuntime    *write_runtime,
+    MmapqRuntime    *read_runtime,
     QueueLatencyProbe **out)
 {
     if (out == NULL) return MMAPQ_EINVAL;
@@ -113,23 +113,23 @@ int queue_latency_probe_create(
     memset(p->msg_buffer, 0, (size_t)message_size);
     
     {
-        int rc = indexed_queue_create_default(directory, request_name, write_runtime, read_runtime, &p->request_queue);
+        int rc = mmapq_indexed_queue_create_default(directory, request_name, write_runtime, read_runtime, &p->request_queue);
         if (rc != 0) { free(p->msg_buffer); free(p); return rc; }
     }
     {
-        int rc = indexed_queue_create_default(directory, response_name, write_runtime, read_runtime, &p->response_queue);
-        if (rc != 0) { indexed_queue_close(p->request_queue); free(p->msg_buffer); free(p); return rc; }
+        int rc = mmapq_indexed_queue_create_default(directory, response_name, write_runtime, read_runtime, &p->response_queue);
+        if (rc != 0) { mmapq_indexed_queue_close(p->request_queue); free(p->msg_buffer); free(p); return rc; }
     }
     
     p->request_appender = NULL;
     {
-        int rc = indexed_queue_create_appender(p->request_queue, &p->request_appender);
-        if (rc != 0) { indexed_queue_close(p->response_queue); indexed_queue_close(p->request_queue); free(p->msg_buffer); free(p); return rc; }
+        int rc = mmapq_indexed_queue_create_appender(p->request_queue, &p->request_appender);
+        if (rc != 0) { mmapq_indexed_queue_close(p->response_queue); mmapq_indexed_queue_close(p->request_queue); free(p->msg_buffer); free(p); return rc; }
     }
     p->response_poller = NULL;
     {
-        int rc = indexed_queue_create_poller(p->response_queue, &p->response_poller);
-        if (rc != 0) { indexed_appender_close(p->request_appender); indexed_queue_close(p->response_queue); indexed_queue_close(p->request_queue); free(p->msg_buffer); free(p); return rc; }
+        int rc = mmapq_indexed_queue_create_poller(p->response_queue, &p->response_poller);
+        if (rc != 0) { mmapq_indexed_appender_close(p->request_appender); mmapq_indexed_queue_close(p->response_queue); mmapq_indexed_queue_close(p->request_queue); free(p->msg_buffer); free(p); return rc; }
     }
     
     atomic_store(&p->validation_errors, 0);
@@ -138,17 +138,17 @@ int queue_latency_probe_create(
     return 0;
 }
 
-int64_t queue_latency_probe_validation_errors(QueueLatencyProbe *p)
+int64_t mmapqi_queue_latency_probe_validation_errors(QueueLatencyProbe *p)
 {
     return (int64_t)atomic_load_explicit(&p->validation_errors, memory_order_relaxed);
 }
 
-void queue_latency_probe_move_to_end(QueueLatencyProbe *p)
+void mmapqi_queue_latency_probe_move_to_end(QueueLatencyProbe *p)
 {
-    indexed_poller_move_to_end(p->response_poller);
+    mmapq_indexed_poller_move_to_end(p->response_poller);
 }
 
-uint64_t queue_latency_probe_execute(QueueLatencyProbe *p)
+uint64_t mmapqi_queue_latency_probe_execute(QueueLatencyProbe *p)
 {
     atomic_store_explicit(&p->response_received, 0, memory_order_relaxed);
     p->current_request_seq++;
@@ -161,18 +161,18 @@ uint64_t queue_latency_probe_execute(QueueLatencyProbe *p)
         fill_payload_pattern(p->msg_buffer, p->message_size, p->current_request_seq);
     }
     
-    uint64_t start = monotonic_nanos();
+    uint64_t start = mmapq_monotonic_nanos();
     
-    indexed_appender_append(p->request_appender, p->msg_buffer, p->message_size);
+    mmapq_indexed_appender_append(p->request_appender, p->msg_buffer, p->message_size);
     
     while (!atomic_load_explicit(&p->response_received, memory_order_relaxed)) {
-        indexed_poller_poll(p->response_poller, client_handler, p);
+        mmapq_indexed_poller_poll(p->response_poller, client_handler, p);
     }
     
-    return monotonic_nanos() - start;
+    return mmapq_monotonic_nanos() - start;
 }
 
-void queue_latency_probe_close(QueueLatencyProbe *p)
+void mmapqi_queue_latency_probe_close(QueueLatencyProbe *p)
 {
     if (p == NULL) return;
     
@@ -185,20 +185,20 @@ void queue_latency_probe_close(QueueLatencyProbe *p)
     hdr->instance_id = p->instance_id;
     hdr->sequence    = SHUTDOWN_SEQ;
     
-    indexed_appender_append(p->request_appender, p->msg_buffer, p->message_size);
+    mmapq_indexed_appender_append(p->request_appender, p->msg_buffer, p->message_size);
     
-    uint64_t timeout_at = monotonic_nanos() + 2000000000ULL; /* 2 seconds */
+    uint64_t timeout_at = mmapq_monotonic_nanos() + 2000000000ULL; /* 2 seconds */
     while (!atomic_load_explicit(&p->response_received, memory_order_relaxed) && 
-           monotonic_nanos() < timeout_at) {
-        indexed_poller_poll(p->response_poller, client_handler, p);
+           mmapq_monotonic_nanos() < timeout_at) {
+        mmapq_indexed_poller_poll(p->response_poller, client_handler, p);
     }
     p->current_request_seq = previous_seq;
 
-    indexed_appender_close(p->request_appender);
-    indexed_poller_close(p->response_poller);
+    mmapq_indexed_appender_close(p->request_appender);
+    mmapq_indexed_poller_close(p->response_poller);
     
-    indexed_queue_close(p->request_queue);
-    indexed_queue_close(p->response_queue);
+    mmapq_indexed_queue_close(p->request_queue);
+    mmapq_indexed_queue_close(p->response_queue);
     
     free(p->msg_buffer);
     free(p);

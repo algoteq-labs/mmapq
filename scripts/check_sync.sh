@@ -63,6 +63,21 @@ echo "PASS: feature-matrix.md binding-coverage section is current"
 # Verify every strdup() is followed by a NULL check
 bash mmapq/scripts/check_strdup_guards.sh
 
+# Verify binding symbols are declared in public headers
+bash mmapq/scripts/check_binding_symbols.sh
+
+# Verify no unprefixed symbols in the archive (strong linker gate)
+bash mmapq/scripts/api_surface.sh --linker
+
+# Verify static inline functions in public headers have mmapq_ prefix
+BAD_INLINES=$(grep -rn '^static inline' mmapq/include/ 2>/dev/null \
+    | grep -v 'mmapq_\|MMAPQ_\|mmapqi_' || true)
+if [ -n "$BAD_INLINES" ]; then
+    echo "ERROR: static inline functions in public headers without mmapq_ prefix:" >&2
+    echo "$BAD_INLINES" >&2
+    exit 1
+fi
+
 # Verify every gate fails closed when its inputs are absent (P5)
 bash mmapq/scripts/check_gates_fail_closed.sh
 

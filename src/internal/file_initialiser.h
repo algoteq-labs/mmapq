@@ -31,19 +31,19 @@ typedef int (*FileInitialiser)(int fd, size_t size, void *ctx);
  */
 
 /**
- * file_init_zeros — initialise file to the given size, all bytes zero.
+ * mmapqi_file_init_zeros — initialise file to the given size, all bytes zero.
  *
  * Uses ftruncate — the simplest and most efficient approach on Linux.
  * The OS guarantees zero-filled pages on first access.
  */
-int file_init_zeros(int fd, size_t size, void *ctx);
+int mmapqi_file_init_zeros(int fd, size_t size, void *ctx);
 
 /**
- * file_init_none — no-op initialiser.
+ * mmapqi_file_init_none — no-op initialiser.
  *
  * Use when the file already exists and no initialisation is required.
  * Returns 0 immediately.
  */
-int file_init_none(int fd, size_t size, void *ctx);
+int mmapqi_file_init_none(int fd, size_t size, void *ctx);
 
 #endif /* FILE_INITIALISER_H */

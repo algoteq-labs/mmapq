@@ -1,11 +1,11 @@
-#ifndef INDEXED_ARCHIVER_H
-#define INDEXED_ARCHIVER_H
+#ifndef MMAPQ_INDEXED_ARCHIVER_H
+#define MMAPQ_INDEXED_ARCHIVER_H
 
 #include <stdint.h>
 #include "runtime.h"
 
 /**
- * IndexedArchiver — manages archiving of entries in an indexed queue.
+ * MmapqIndexedArchiver — manages archiving of entries in an indexed queue.
  *
  * The archiver advances the queue's start index, updates per-appender
  * start offsets so new appenders resume from the correct payload position
@@ -24,10 +24,10 @@
  *
  * Thread-confined: not safe for concurrent access.
  *
- * Mirrors Java IIndexedArchiver / IndexedArchiver.
+ * Mirrors Java IIndexedArchiver / MmapqIndexedArchiver.
  */
 
-typedef struct IndexedArchiver IndexedArchiver;
+typedef struct MmapqIndexedArchiver MmapqIndexedArchiver;
 
 /* ── Factory ─────────────────────────────────────────────────────────────── */
 
@@ -45,12 +45,12 @@ typedef struct IndexedArchiver IndexedArchiver;
  * runtime:    background region-mapper runtime for header access
  * Returns: a new archiver; never NULL (asserts on allocation failure)
  */
-int indexed_archiver_create(
+int mmapq_indexed_archiver_create(
     const char *directory,
     const char *queue_name,
     int         ring_size,
-    Runtime    *runtime,
-    IndexedArchiver **out);
+    MmapqRuntime    *runtime,
+    MmapqIndexedArchiver **out);
 
 /* ── Archiving ───────────────────────────────────────────────────────────── */
 
@@ -60,7 +60,7 @@ int indexed_archiver_create(
  * A queue is archivable if and only if its meta file was created with
  * archivable=1. Non-archivable queues always have start_index=0.
  */
-int indexed_archiver_archivable(IndexedArchiver *a);
+int mmapq_indexed_archiver_archivable(MmapqIndexedArchiver *a);
 
 /**
  * Archive all entries up to @p index (exclusive).
@@ -88,14 +88,14 @@ int indexed_archiver_archivable(IndexedArchiver *a);
  * Returns: 0 on success, MMAPQ_EINVAL if archiver is NULL, index < 0,
  *         queue not created, or queue not archivable.
  */
-int indexed_archiver_archive_up_to_index(IndexedArchiver *a, int64_t index);
+int mmapq_indexed_archiver_archive_up_to_index(MmapqIndexedArchiver *a, int64_t index);
 
 /* ── Query ───────────────────────────────────────────────────────────────── */
 
 /**
  * Return the current start index (first unarchived entry).
  */
-int64_t indexed_archiver_start_index(IndexedArchiver *a);
+int64_t mmapq_indexed_archiver_start_index(MmapqIndexedArchiver *a);
 
 /**
  * Return the payload start offset for the given appender at start_index.
@@ -104,8 +104,8 @@ int64_t indexed_archiver_start_index(IndexedArchiver *a);
  * appender would resume writing after archiving. Returns -1 if the appender
  * ID is not used by this queue.
  */
-int indexed_archiver_start_offset(
-    IndexedArchiver *a, uint8_t appender_id, int64_t *out_offset);
+int mmapq_indexed_archiver_start_offset(
+    MmapqIndexedArchiver *a, uint8_t appender_id, int64_t *out_offset);
 
 /**
  * Populate @p paths_out with paths to files fully covered by the archive
@@ -120,8 +120,8 @@ int indexed_archiver_start_offset(
  * max_paths: capacity of paths_out
  * Returns: number of paths written to paths_out (may be less than max_paths)
  */
-int indexed_archiver_archivable_files(
-    IndexedArchiver *a,
+int mmapq_indexed_archiver_archivable_files(
+    MmapqIndexedArchiver *a,
     char           **paths_out,
     int              max_paths);
 
@@ -134,7 +134,7 @@ int indexed_archiver_archivable_files(
  * n:  size of @p sb
  * Returns: number of bytes written (excluding null terminator)
  */
-int indexed_archiver_print_summary(IndexedArchiver *a, char *sb, int n);
+int mmapq_indexed_archiver_print_summary(MmapqIndexedArchiver *a, char *sb, int n);
 
 /* ── Lifecycle ───────────────────────────────────────────────────────────── */
 
@@ -143,6 +143,6 @@ int indexed_archiver_print_summary(IndexedArchiver *a, char *sb, int n);
  *
  * After this call the pointer must not be used.
  */
-void indexed_archiver_close(IndexedArchiver *a);
+void mmapq_indexed_archiver_close(MmapqIndexedArchiver *a);
 
-#endif /* INDEXED_ARCHIVER_H */
+#endif /* MMAPQ_INDEXED_ARCHIVER_H */

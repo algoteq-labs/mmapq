@@ -6,7 +6,7 @@
 
 /* ── File existence ───────────────────────────────────────────────────────── */
 
-int queue_file_exists(const char *path)
+int mmapqi_queue_file_exists(const char *path)
 {
     struct stat st;
     return stat(path, &st) == 0;
@@ -14,7 +14,7 @@ int queue_file_exists(const char *path)
 
 /* ── Appender ID discovery ───────────────────────────────────────────────── */
 
-int queue_files_get_appender_ids(
+int mmapqi_queue_files_get_appender_ids(
     const char *directory,
     const char *queue_name,
     uint8_t    *ids,
@@ -39,7 +39,7 @@ int queue_files_get_appender_ids(
 
 /* ── FileIndexSet iteration ───────────────────────────────────────────────── */
 
-int file_index_set_first(const FileIndexSet *s)
+int mmapqi_file_index_set_first(const FileIndexSet *s)
 {
     for (int w = 0; w < FILE_INDEX_SET_WORDS; w++) {
         if (s->bits[w]) {
@@ -50,7 +50,7 @@ int file_index_set_first(const FileIndexSet *s)
     return -1;
 }
 
-int file_index_set_next(const FileIndexSet *s, int after)
+int mmapqi_file_index_set_next(const FileIndexSet *s, int after)
 {
     if (after < 0 || after >= FILE_INDEX_SET_MAX - 1) return -1;
     int start = after + 1;

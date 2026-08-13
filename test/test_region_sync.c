@@ -26,12 +26,12 @@ static void cleanup_files(void)
 void setUp(void)
 {
     cleanup_files();
-    int fmerr = file_mapper_rolled_create(
+    int fmerr = mmapqi_file_mapper_rolled_create(
         FILE_PREFIX, MAX_FILE_SIZE, REGION_SIZE,
-        file_init_zeros, NULL, MAP_MODE_READ_WRITE, 4, 1, &fm);
+        mmapqi_file_init_zeros, NULL, MAP_MODE_READ_WRITE, 4, 1, &fm);
     TEST_ASSERT_EQUAL_INT(0, fmerr);
     TEST_ASSERT_NOT_NULL(fm);
-    int rerr = region_sync_create(fm, REGION_SIZE, TIMEOUT_NS,
+    int rerr = mmapqi_region_sync_create(fm, REGION_SIZE, TIMEOUT_NS,
                               REGION_MAX_FILE_NOT_FOUND_ERRORS,
                               REGION_MAX_BEYOND_FILE_SIZE_ERRORS,
                               &reg);
@@ -41,8 +41,8 @@ void setUp(void)
 
 void tearDown(void)
 {
-    if (reg) { region_destroy(reg); reg = NULL; }
-    if (fm)  { file_mapper_close(fm); file_mapper_destroy(fm); fm = NULL; }
+    if (reg) { mmapqi_region_destroy(reg); reg = NULL; }
+    if (fm)  { file_mapper_close(fm); mmapqi_file_mapper_destroy(fm); fm = NULL; }
     cleanup_files();
 }
 

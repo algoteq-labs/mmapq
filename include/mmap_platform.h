@@ -1,5 +1,5 @@
-#ifndef MMAP_PLATFORM_H
-#define MMAP_PLATFORM_H
+#ifndef MMAPQ_MMAP_PLATFORM_H
+#define MMAPQ_MMAP_PLATFORM_H
 
 /*
  * Return codes used across the queue API.
@@ -90,12 +90,12 @@ static inline const char *mmapq_version(void) {
 #include <sys/mman.h>
 
 /**
- * spin_hint — yield the CPU pipeline during a spin-wait loop.
+ * mmapq_spin_hint — yield the CPU pipeline during a spin-wait loop.
  *
  * x86_64: PAUSE instruction.
  * ARM64:  YIELD instruction (same semantics, different mnemonic).
  */
-static inline void spin_hint(void)
+static inline void mmapq_spin_hint(void)
 {
 #if defined(__x86_64__)
     __builtin_ia32_pause();
@@ -107,12 +107,12 @@ static inline void spin_hint(void)
 }
 
 /**
- * monotonic_nanos — current time in nanoseconds from a monotonic clock.
+ * mmapq_monotonic_nanos — current time in nanoseconds from a monotonic clock.
  *
  * Linux: CLOCK_MONOTONIC — uses VDSO for sub-100ns overhead.
  * macOS: CLOCK_MONOTONIC.
  */
-static inline uint64_t monotonic_nanos(void)
+static inline uint64_t mmapq_monotonic_nanos(void)
 {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -120,23 +120,23 @@ static inline uint64_t monotonic_nanos(void)
 }
 
 /**
- * thread_set_name — set the name of a pthread (for debugger visibility).
+ * mmapq_thread_set_name — set the name of a pthread (for debugger visibility).
  *
  * Linux: pthread_setname_np(thread, name).
  *        Requires _GNU_SOURCE on the compiler command line.
  */
-static inline void thread_set_name(pthread_t thread, const char *name)
+static inline void mmapq_thread_set_name(pthread_t thread, const char *name)
 {
     pthread_setname_np(thread, name);
 }
 
 /**
- * thread_set_affinity_of — pin a specific thread to a specific CPU core.
+ * mmapq_thread_set_affinity_of — pin a specific thread to a specific CPU core.
  *
  * Linux: uses pthread_setaffinity_np.
  * Non-Linux: no-op (not supported via standard API).
  */
-static inline int thread_set_affinity_of(pthread_t thread, int cpu_core)
+static inline int mmapq_thread_set_affinity_of(pthread_t thread, int cpu_core)
 {
 #if defined(__linux__)
     cpu_set_t cpuset;
@@ -151,11 +151,11 @@ static inline int thread_set_affinity_of(pthread_t thread, int cpu_core)
 }
 
 /**
- * thread_set_affinity — pin the current thread to a specific CPU core.
+ * mmapq_thread_set_affinity — pin the current thread to a specific CPU core.
  */
-static inline int thread_set_affinity(int cpu_core)
+static inline int mmapq_thread_set_affinity(int cpu_core)
 {
-    return thread_set_affinity_of(pthread_self(), cpu_core);
+    return mmapq_thread_set_affinity_of(pthread_self(), cpu_core);
 }
 
-#endif /* MMAP_PLATFORM_H */
+#endif /* MMAPQ_MMAP_PLATFORM_H */

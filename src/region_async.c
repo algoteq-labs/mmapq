@@ -242,7 +242,7 @@ static WrapResult await_mapped(AsyncRegionImpl *impl, int64_t region_start_posit
         return WRAP_SUCCESS;
     }
 
-    uint64_t start_ns = monotonic_nanos();
+    uint64_t start_ns = mmapq_monotonic_nanos();
     int spin = 0;
 
     while (1) {
@@ -281,10 +281,10 @@ static WrapResult await_mapped(AsyncRegionImpl *impl, int64_t region_start_posit
             set_state(impl, &UNMAPPED_OPS);
         }
 
-        if (monotonic_nanos() - start_ns >= impl->timeout_ns) {
+        if (mmapq_monotonic_nanos() - start_ns >= impl->timeout_ns) {
             return WRAP_MAP_TIMED_OUT;
         }
-        spin_hint();
+        mmapq_spin_hint();
         if (++spin >= 1000) {
             spin = 0;
             sched_yield();
@@ -324,7 +324,7 @@ static void async_close(RegionAccessor *self)
     MMAP_ASSERT(self != NULL, "async_close: self is NULL");
 
     AsyncRegionImpl *impl  = (AsyncRegionImpl *)self->impl;
-    uint64_t start_ns = monotonic_nanos();
+    uint64_t start_ns = mmapq_monotonic_nanos();
 
     while (1) {
         const RegionStateOps *s    = get_state(impl);
@@ -338,7 +338,7 @@ static void async_close(RegionAccessor *self)
             set_state(impl, &UNMAPPED_OPS);
             break;
         }
-        if (monotonic_nanos() - start_ns >= impl->timeout_ns) break;
+        if (mmapq_monotonic_nanos() - start_ns >= impl->timeout_ns) break;
 
         /*
          * Self-drive: process any pending MAP_REQUESTED or UNMAP_REQUESTED
@@ -353,9 +353,9 @@ static void async_close(RegionAccessor *self)
          * runtime (region_ring_close waits for deregistration), so the mapper
          * thread is guaranteed not to call process_request() concurrently.
          */
-        region_async_process_request((Region *)self);
+        mmapqi_region_async_process_request((Region *)self);
 
-        spin_hint();
+        mmapq_spin_hint();
     }
 }
 
@@ -395,9 +395,9 @@ static int async_unmap(Region *self)
 
 /* ── RegionMapper thread interface ───────────────────────────────────────── */
 
-int region_async_process_request(Region *r)
+int mmapqi_region_async_process_request(Region *r)
 {
-    MMAP_ASSERT(r != NULL, "region_async_process_request: r is NULL");
+    MMAP_ASSERT(r != NULL, "mmapqi_region_async_process_request: r is NULL");
     AsyncRegionImpl *impl = (AsyncRegionImpl *)r->base.impl;
     const RegionStateOps *s    = get_state(impl);
     const RegionStateOps *next = s->process_request(impl);
@@ -405,15 +405,15 @@ int region_async_process_request(Region *r)
     return 0;
 }
 
-void region_async_unmanage(Region *r)
+void mmapqi_region_async_unmanage(Region *r)
 {
-    MMAP_ASSERT(r != NULL, "region_async_unmanage: r is NULL");
+    MMAP_ASSERT(r != NULL, "mmapqi_region_async_unmanage: r is NULL");
     set_state((AsyncRegionImpl *)r->base.impl, &UNMANAGED_OPS);
 }
 
 /* ── Factory ─────────────────────────────────────────────────────────────── */
 
-int region_async_create(
+int mmapqi_region_async_create(
     FileMapper *file_mapper,
     int32_t     region_size,
     uint64_t    timeout_ns,

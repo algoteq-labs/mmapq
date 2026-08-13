@@ -1,49 +1,49 @@
-#ifndef INDEXED_BATCH_APPENDER_H
-#define INDEXED_BATCH_APPENDER_H
+#ifndef MMAPQ_INDEXED_BATCH_APPENDER_H
+#define MMAPQ_INDEXED_BATCH_APPENDER_H
 
 #include <stdint.h>
 #include "batch_payload_iterator.h"
 #include "runtime.h"
 
 /**
- * IndexedBatchAppender — producer-side entry point for appending batched messages
+ * MmapqIndexedBatchAppender — producer-side entry point for appending batched messages
  * to an indexed queue.
  *
  * Batches are constructed and committed in a two-phase flow:
  *
- *   1. Start a new batch:   MutableBatch *b = indexed_batch_appender_start_batch(a);
- *   2. Append messages:     mutable_batch_append(b, data, length);
- *   3. Complete the batch:  int64_t offset = mutable_batch_complete(b);
- *   4. Commit the batch:    int64_t index  = indexed_batch_appender_commit_batch(a, offset);
+ *   1. Start a new batch:   MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+ *   2. Append messages:     mmapq_mutable_batch_append(b, data, length);
+ *   3. Complete the batch:  int64_t offset = mmapq_mutable_batch_complete(b);
+ *   4. Commit the batch:    int64_t index  = mmapq_indexed_batch_appender_commit_batch(a, offset);
  *
  * The returned batch index can be used for random-access reading via an
  * indexed batch reader.
  *
  * Thread safety: one appender per producer lane. Multiple producers may
  * operate concurrently on separate appender instances; they must not share
- * a single IndexedBatchAppender.
+ * a single MmapqIndexedBatchAppender.
  *
  * Mirrors Java IIndexedBatchAppender.
  */
 
-typedef struct IndexedBatchAppender IndexedBatchAppender;
+typedef struct MmapqIndexedBatchAppender MmapqIndexedBatchAppender;
 
 /**
- * MutableBatch — an in-progress batch being constructed before commit.
+ * MmapqMutableBatch — an in-progress batch being constructed before commit.
  *
- * Owned by the appender. Valid only between indexed_batch_appender_start_batch()
- * and indexed_batch_appender_commit_batch(). Do not retain a pointer to it across
+ * Owned by the appender. Valid only between mmapq_indexed_batch_appender_start_batch()
+ * and mmapq_indexed_batch_appender_commit_batch(). Do not retain a pointer to it across
  * a commit or close.
  *
- * The internal iterator used by mutable_batch_get() and mutable_batch_iterator()
+ * The internal iterator used by mmapq_mutable_batch_get() and mmapq_mutable_batch_iterator()
  * is shared — these two accessors must not be used concurrently on the same batch.
  *
  * Mirrors Java IMutableBatch.
  */
-typedef struct MutableBatch       MutableBatch;
+typedef struct MmapqMutableBatch       MmapqMutableBatch;
 
-struct MutableBatch {
-    IndexedBatchAppender *appender;
+struct MmapqMutableBatch {
+    MmapqIndexedBatchAppender *appender;
     int64_t               batch_offset;
     int32_t               message_count;
 };
@@ -68,7 +68,7 @@ struct MutableBatch {
  * start_index: logical start index for the queue (0 for fresh, preserved on import/copy)
  * Returns: a new appender; never NULL (asserts on allocation failure)
  */
-int indexed_batch_appender_create(
+int mmapq_indexed_batch_appender_create(
     const char *directory,
     const char *queue_name,
     int32_t     region_size,
@@ -76,9 +76,9 @@ int indexed_batch_appender_create(
     int64_t     max_file_size,
     uint64_t    timeout_ns,
     int         archivable,
-    Runtime    *runtime,
+    MmapqRuntime    *runtime,
     int64_t     start_index,
-    IndexedBatchAppender **out);
+    MmapqIndexedBatchAppender **out);
 
 /**
  * Create a batch appender with a specific appender ID.
@@ -86,10 +86,10 @@ int indexed_batch_appender_create(
  * Acquires the given ID from the queue's appender ID pool. Returns NULL
  * if the ID is already in use.
  *
- * All parameters same as indexed_batch_appender_create, plus:
+ * All parameters same as mmapq_indexed_batch_appender_create, plus:
  * appender_id: the desired appender ID (0-255)
  */
-int indexed_batch_appender_create_with_id(
+int mmapq_indexed_batch_appender_create_with_id(
     const char *directory,
     const char *queue_name,
     int32_t     region_size,
@@ -97,26 +97,26 @@ int indexed_batch_appender_create_with_id(
     int64_t     max_file_size,
     uint64_t    timeout_ns,
     int         archivable,
-    Runtime    *runtime,
+    MmapqRuntime    *runtime,
     uint8_t     appender_id,
     int64_t     start_index,
-    IndexedBatchAppender **out);
+    MmapqIndexedBatchAppender **out);
 
 /* ── Batch lifecycle ─────────────────────────────────────────────────────── */
 
 /**
  * Start a new batch.
  *
- * The returned MutableBatch is in-progress. Messages must be appended,
- * the batch completed with mutable_batch_complete(), and then committed
- * with indexed_batch_appender_commit_batch().
+ * The returned MmapqMutableBatch is in-progress. Messages must be appended,
+ * the batch completed with mmapq_mutable_batch_complete(), and then committed
+ * with mmapq_indexed_batch_appender_commit_batch().
  *
  * Only one batch may be in progress at a time per appender.
  *
- * Returns: pointer to the appender-owned MutableBatch (valid until commit or close),
+ * Returns: pointer to the appender-owned MmapqMutableBatch (valid until commit or close),
  *         or NULL on mapping timeout
  */
-MutableBatch *indexed_batch_appender_start_batch(IndexedBatchAppender *a);
+MmapqMutableBatch *mmapq_indexed_batch_appender_start_batch(MmapqIndexedBatchAppender *a);
 
 /**
  * Finalise the batch by writing the message count to the batch header.
@@ -125,9 +125,9 @@ MutableBatch *indexed_batch_appender_start_batch(IndexedBatchAppender *a);
  *
  * b: the in-progress batch
  * Returns: the payload offset of the completed batch (to be passed to
- *         indexed_batch_appender_commit_batch()), or -1 on mapping timeout
+ *         mmapq_indexed_batch_appender_commit_batch()), or -1 on mapping timeout
  */
-int64_t mutable_batch_complete(MutableBatch *b);
+int64_t mmapq_mutable_batch_complete(MmapqMutableBatch *b);
 
 /**
  * Commit a completed batch, making it visible to pollers and readers.
@@ -136,39 +136,39 @@ int64_t mutable_batch_complete(MutableBatch *b);
  * waiting on this index will see the batch.
  *
  * a:           the appender
- * batch_offset: the value returned by mutable_batch_complete()
+ * batch_offset: the value returned by mmapq_mutable_batch_complete()
  * Returns: the zero-based index of the committed batch,
  *         or -1 on mapping timeout
  */
-int64_t indexed_batch_appender_commit_batch(IndexedBatchAppender *a, int64_t batch_offset);
+int64_t mmapq_indexed_batch_appender_commit_batch(MmapqIndexedBatchAppender *a, int64_t batch_offset);
 
 /**
  * Discard an in-progress batch without committing it.
  *
  * Resets the appender's payload write position to @p batch_offset,
  * effectively undoing all appends made since the corresponding
- * indexed_batch_appender_start_batch() call. A zero message count is
+ * mmapq_indexed_batch_appender_start_batch() call. A zero message count is
  * written at the batch offset so recovery scanners skip past it.
  *
  * Safe to call when the batch was started but never completed, or after
- * mutable_batch_complete() was called but before commit. Not needed when
+ * mmapq_mutable_batch_complete() was called but before commit. Not needed when
  * commit succeeds — the batch is then permanent.
  *
  * a:           the appender
- * batch_offset: the value returned by mutable_batch_complete(),
+ * batch_offset: the value returned by mmapq_mutable_batch_complete(),
  *                     or the offset from start_batch if never completed
  */
-void indexed_batch_appender_discard_batch(IndexedBatchAppender *a, int64_t batch_offset);
+void mmapq_indexed_batch_appender_discard_batch(MmapqIndexedBatchAppender *a, int64_t batch_offset);
 
 /**
  * Convenience: start, append, complete, and commit a single-message batch
  * in one call.
  *
  * Equivalent to:
- *   MutableBatch *b = indexed_batch_appender_start_batch(a);
- *   mutable_batch_append(b, data, length);
- *   int64_t off = mutable_batch_complete(b);
- *   return indexed_batch_appender_commit_batch(a, off);
+ *   MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+ *   mmapq_mutable_batch_append(b, data, length);
+ *   int64_t off = mmapq_mutable_batch_complete(b);
+ *   return mmapq_indexed_batch_appender_commit_batch(a, off);
  *
  * a:     the appender
  * data:  pointer to the message payload
@@ -176,7 +176,7 @@ void indexed_batch_appender_discard_batch(IndexedBatchAppender *a, int64_t batch
  * Returns: the zero-based index of the committed batch,
  *         or -1 on mapping timeout, or MMAPQ_EINVAL if message exceeds region size
  */
-int64_t indexed_batch_appender_append_and_commit(IndexedBatchAppender *a, const void *data, int32_t length);
+int64_t mmapq_indexed_batch_appender_append_and_commit(MmapqIndexedBatchAppender *a, const void *data, int32_t length);
 
 /* ── Message append ──────────────────────────────────────────────────────── */
 
@@ -196,15 +196,15 @@ int64_t indexed_batch_appender_append_and_commit(IndexedBatchAppender *a, const 
  * Returns: the zero-based index of the newly appended message within the batch,
  *         or -1 on mapping timeout, or MMAPQ_EINVAL if message exceeds region size
  */
-int32_t mutable_batch_append(MutableBatch *b, const void *data, int32_t length);
+int32_t mmapq_mutable_batch_append(MmapqMutableBatch *b, const void *data, int32_t length);
 
 /**
  * Reserve space for a message to be written in-place later.
  *
  * Writes a length prefix and advances the payload cursor by @p length bytes,
  * but does not copy any payload. The reserved slot is included in the batch
- * message count. Use mutable_batch_get() or mutable_batch_iterator() to
- * populate the reserved bytes before calling mutable_batch_complete().
+ * message count. Use mmapq_mutable_batch_get() or mmapq_mutable_batch_iterator() to
+ * populate the reserved bytes before calling mmapq_mutable_batch_complete().
  *
  * b:       the in-progress batch
  * length:  number of payload bytes to reserve
@@ -215,10 +215,10 @@ int32_t mutable_batch_append(MutableBatch *b, const void *data, int32_t length);
  * Returns: the zero-based index of the reserved message slot within the batch,
  *         or -1 on mapping timeout, or MMAPQ_EINVAL if length exceeds region size
  */
-int32_t mutable_batch_append_reserved(MutableBatch *b, int32_t length, void **out_data);
+int32_t mmapq_mutable_batch_append_reserved(MmapqMutableBatch *b, int32_t length, void **out_data);
 
 /**
- * Append all remaining messages from a BatchPayloadIterator into this batch.
+ * Append all remaining messages from a MmapqBatchPayloadIterator into this batch.
  *
  * Useful for copying data between batches (replay, aggregation, re-batching).
  * The iterator must not be backed by the same in-progress batch to avoid
@@ -233,7 +233,7 @@ int32_t mutable_batch_append_reserved(MutableBatch *b, int32_t length, void **ou
  * Returns: the number of messages appended on success,
  *         or a negative MMAPQ_* error code on failure
  */
-int32_t mutable_batch_append_remaining_from(MutableBatch *b, BatchPayloadIterator *it);
+int32_t mmapq_mutable_batch_append_remaining_from(MmapqMutableBatch *b, MmapqBatchPayloadIterator *it);
 
 /* ── Random access within in-progress batch ─────────────────────────────── */
 
@@ -243,7 +243,7 @@ int32_t mutable_batch_append_remaining_from(MutableBatch *b, BatchPayloadIterato
  * The returned pointer is into the mapped payload region — it is a flyweight
  * view valid only until the next append, remap, or close. Do not retain it.
  *
- * WARNING: mutable_batch_get() and mutable_batch_iterator() share the
+ * WARNING: mmapq_mutable_batch_get() and mmapq_mutable_batch_iterator() share the
  * appender's internal iterator state and must not be used concurrently
  * with an active iteration.
  *
@@ -252,19 +252,19 @@ int32_t mutable_batch_append_remaining_from(MutableBatch *b, BatchPayloadIterato
  * out_length:    set to the length of the message on return
  * Returns: pointer to the raw payload bytes; NULL if index is out of range
  */
-const void *mutable_batch_get(MutableBatch *b, int32_t message_index, int32_t *out_length);
+const void *mmapq_mutable_batch_get(MmapqMutableBatch *b, int32_t message_index, int32_t *out_length);
 
 /**
- * Return a BatchPayloadIterator positioned at the given message index.
+ * Return a MmapqBatchPayloadIterator positioned at the given message index.
  *
- * Shares the same internal state as mutable_batch_get() — the two must not
+ * Shares the same internal state as mmapq_mutable_batch_get() — the two must not
  * be used simultaneously.
  *
  * b:                  the in-progress batch
  * start_message_index: zero-based index to begin from
  * Returns: pointer to the appender's internal iterator; valid until next append or close
  */
-BatchPayloadIterator *mutable_batch_iterator(MutableBatch *b, int32_t start_message_index);
+MmapqBatchPayloadIterator *mmapq_mutable_batch_iterator(MmapqMutableBatch *b, int32_t start_message_index);
 
 /* ── Metadata ─────────────────────────────────────────────────────────────── */
 
@@ -273,7 +273,7 @@ BatchPayloadIterator *mutable_batch_iterator(MutableBatch *b, int32_t start_mess
  *
  * b: the in-progress batch
  */
-int32_t mutable_batch_message_count(const MutableBatch *b);
+int32_t mmapq_mutable_batch_message_count(const MmapqMutableBatch *b);
 
 /**
  * Return the appender's per-lane ID (0–255).
@@ -281,7 +281,7 @@ int32_t mutable_batch_message_count(const MutableBatch *b);
  * Each appender is assigned a unique ID from the queue's appender ID pool.
  * Payload files are per-appender, named by this ID.
  */
-uint8_t indexed_batch_appender_id(const IndexedBatchAppender *a);
+uint8_t mmapq_indexed_batch_appender_id(const MmapqIndexedBatchAppender *a);
 
 /* ── Lifecycle ────────────────────────────────────────────────────────────── */
 
@@ -290,6 +290,6 @@ uint8_t indexed_batch_appender_id(const IndexedBatchAppender *a);
  *
  * After this call the pointer must not be used.
  */
-void indexed_batch_appender_close(IndexedBatchAppender *a);
+void mmapq_indexed_batch_appender_close(MmapqIndexedBatchAppender *a);
 
-#endif /* INDEXED_BATCH_APPENDER_H */
+#endif /* MMAPQ_INDEXED_BATCH_APPENDER_H */

@@ -1,11 +1,11 @@
-#ifndef BATCH_PAYLOAD_ITERATOR_H
-#define BATCH_PAYLOAD_ITERATOR_H
+#ifndef MMAPQ_BATCH_PAYLOAD_ITERATOR_H
+#define MMAPQ_BATCH_PAYLOAD_ITERATOR_H
 
 #include <stdint.h>
 #include <stddef.h>
 
 /**
- * BatchPayloadIterator — zero-copy flyweight iterator over a single batch
+ * MmapqBatchPayloadIterator — zero-copy flyweight iterator over a single batch
  * in the payload region of an indexed queue.
  *
  * Wire format (per batch in the payload stream):
@@ -22,25 +22,25 @@
  * header src/internal/batch_payload_iterator_internal.h for zero-cost
  * inline access.
  *
- * batch_iterator_current_data_ffi() and batch_iterator_current_length_ffi()
- * are only valid after a successful call to batch_iterator_advance() (returns 1).
+ * mmapq_batch_iterator_current_data_ffi() and mmapq_batch_iterator_current_length_ffi()
+ * are only valid after a successful call to mmapq_batch_iterator_advance() (returns 1).
  *
- * Mirrors Java IBatch / BatchPayloadIterator.
+ * Mirrors Java IBatch / MmapqBatchPayloadIterator.
  */
 
 /** Offset of the message count field at the start of each batch. */
-#define BATCH_MSG_COUNT_OFFSET    ((int32_t)0)
+#define MMAPQ_BATCH_MSG_COUNT_OFFSET    ((int32_t)0)
 
 /** Size in bytes of the message count field. */
-#define BATCH_MSG_COUNT_SIZE      ((int32_t)4)
+#define MMAPQ_BATCH_MSG_COUNT_SIZE      ((int32_t)4)
 
 /** Offset of the first message within the batch (immediately after count). */
-#define BATCH_FIRST_MSG_OFFSET    ((int32_t)4)
+#define MMAPQ_BATCH_FIRST_MSG_OFFSET    ((int32_t)4)
 
-/** Sentinel value returned by batch_iterator_probe_batch when no valid batch found. */
-#define BATCH_ITERATOR_INVALID_POSITION ((int64_t)-1)
+/** Sentinel value returned by mmapq_batch_iterator_probe_batch when no valid batch found. */
+#define MMAPQ_BATCH_ITERATOR_INVALID_POSITION ((int64_t)-1)
 
-typedef struct BatchPayloadIterator BatchPayloadIterator;
+typedef struct MmapqBatchPayloadIterator MmapqBatchPayloadIterator;
 
 /**
  * Initialise the iterator for a known batch.
@@ -54,8 +54,8 @@ typedef struct BatchPayloadIterator BatchPayloadIterator;
  * start_msg_index: zero-based message index to start iteration from
  * Returns: @p it (for chaining)
  */
-BatchPayloadIterator *batch_iterator_init(
-    BatchPayloadIterator *it,
+MmapqBatchPayloadIterator *mmapq_batch_iterator_init(
+    MmapqBatchPayloadIterator *it,
     int64_t               batch_offset,
     int32_t               message_count,
     int32_t               start_msg_index);
@@ -70,7 +70,7 @@ BatchPayloadIterator *batch_iterator_init(
  * batch_offset: absolute payload offset of the batch to probe
  * Returns: the message count, or -1 if the region cannot be mapped
  */
-int32_t batch_iterator_read_message_count(BatchPayloadIterator *it, int64_t batch_offset);
+int32_t mmapq_batch_iterator_read_message_count(MmapqBatchPayloadIterator *it, int64_t batch_offset);
 
 /**
  * Check whether a valid batch exists at @p offset, skipping short-padding markers.
@@ -80,55 +80,55 @@ int32_t batch_iterator_read_message_count(BatchPayloadIterator *it, int64_t batc
  *
  * it:     the iterator
  * offset: payload offset to probe
- * Returns: the resolved batch offset, or BATCH_ITERATOR_INVALID_POSITION if none found
+ * Returns: the resolved batch offset, or MMAPQ_BATCH_ITERATOR_INVALID_POSITION if none found
  */
-int64_t batch_iterator_probe_batch(BatchPayloadIterator *it, int64_t offset);
+int64_t mmapq_batch_iterator_probe_batch(MmapqBatchPayloadIterator *it, int64_t offset);
 
 /**
  * Advance to the next message in the batch.
  *
- * On the first call after batch_iterator_init(), moves to message 0 (or
+ * On the first call after mmapq_batch_iterator_init(), moves to message 0 (or
  * start_msg_index if non-zero). On subsequent calls, moves to the next message.
  *
- * After a successful call, batch_iterator_current_data_ffi() and
- * batch_iterator_current_length_ffi() return valid values for the current message.
+ * After a successful call, mmapq_batch_iterator_current_data_ffi() and
+ * mmapq_batch_iterator_current_length_ffi() return valid values for the current message.
  *
  * Returns: 1 if advanced successfully; 0 if the batch is exhausted
  */
-int batch_iterator_advance(BatchPayloadIterator *it);
+int mmapq_batch_iterator_advance(MmapqBatchPayloadIterator *it);
 
 /**
  * Return 1 if the iterator is positioned on a valid message (advance() returned 1).
  */
-int batch_iterator_has_current_ffi(const BatchPayloadIterator *it);
+int mmapq_batch_iterator_has_current_ffi(const MmapqBatchPayloadIterator *it);
 
 /**
  * Return a pointer to the current message's payload bytes.
  *
- * Flyweight — valid only until the next batch_iterator_advance() call or
+ * Flyweight — valid only until the next mmapq_batch_iterator_advance() call or
  * any re-wrap of the underlying region. Do not retain across iterations.
  *
- * Only valid after a successful batch_iterator_advance() call.
+ * Only valid after a successful mmapq_batch_iterator_advance() call.
  */
-const void *batch_iterator_current_data_ffi(const BatchPayloadIterator *it);
+const void *mmapq_batch_iterator_current_data_ffi(const MmapqBatchPayloadIterator *it);
 
 /**
  * Return the byte count of the current message's payload.
  *
- * Only valid after a successful batch_iterator_advance() call.
+ * Only valid after a successful mmapq_batch_iterator_advance() call.
  */
-int32_t batch_iterator_current_length_ffi(const BatchPayloadIterator *it);
+int32_t mmapq_batch_iterator_current_length_ffi(const MmapqBatchPayloadIterator *it);
 
 /**
  * Return the byte offset immediately after the last message in the batch.
  *
- * Valid after batch_iterator_exhaust() or after batch_iterator_advance()
+ * Valid after mmapq_batch_iterator_exhaust() or after mmapq_batch_iterator_advance()
  * returns 0. This is the position where the next batch begins in the
  * payload stream.
  *
- * Mirrors Java BatchPayloadIterator.nextPayloadPosition().
+ * Mirrors Java MmapqBatchPayloadIterator.nextPayloadPosition().
  */
-int64_t batch_iterator_next_payload_position_ffi(const BatchPayloadIterator *it);
+int64_t mmapq_batch_iterator_next_payload_position_ffi(const MmapqBatchPayloadIterator *it);
 
 /**
  * Skip all remaining messages in the batch, leaving the iterator exhausted.
@@ -136,6 +136,6 @@ int64_t batch_iterator_next_payload_position_ffi(const BatchPayloadIterator *it)
  * Used to skip remaining messages and position next_message_position at
  * the start of the following batch.
  */
-void batch_iterator_exhaust(BatchPayloadIterator *it);
+void mmapq_batch_iterator_exhaust(MmapqBatchPayloadIterator *it);
 
-#endif /* BATCH_PAYLOAD_ITERATOR_H */
+#endif /* MMAPQ_BATCH_PAYLOAD_ITERATOR_H */

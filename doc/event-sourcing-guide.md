@@ -199,29 +199,29 @@ Pseudocode of the heart of the system (C API; Rust and Python are
 one-to-one):
 
 ```c
-IndexedQueue      *cmd_q = indexed_queue_create(dir, "commands", ...);
-IndexedBatchQueue *evt_q = indexed_batch_queue_create(dir, "events", ...);
+MmapqIndexedQueue      *cmd_q = mmapq_indexed_queue_create(dir, "commands", ...);
+MmapqIndexedBatchQueue *evt_q = mmapq_indexed_batch_queue_create(dir, "events", ...);
 
-IndexedPoller        *commands = indexed_queue_create_poller(cmd_q);
-IndexedBatchAppender *events   = indexed_batch_queue_create_appender(evt_q);
+MmapqIndexedPoller        *commands = mmapq_indexed_queue_create_poller(cmd_q);
+MmapqIndexedBatchAppender *events   = mmapq_indexed_batch_queue_create_appender(evt_q);
 
 /* 1. Recover: rebuild state from committed events (or snapshot + tail). */
 replay_committed_events(&state, evt_q);
 
 /* 2. Position the command poller after the last command whose batch
       committed — the event stream records how far processing got. */
-indexed_poller_move_to_index(commands, last_processed_command(&state) + 1);
+mmapq_indexed_poller_move_to_index(commands, last_processed_command(&state) + 1);
 
 /* 3. The loop. One command in, one batch out, atomically. */
-NextMove on_command(int64_t index, uint8_t src, const void *cmd, int32_t len, void *ctx) {
-    MutableBatch *b = indexed_batch_appender_new_batch(events);
+MmapqNextMove on_command(int64_t index, uint8_t src, const void *cmd, int32_t len, void *ctx) {
+    MmapqMutableBatch *b = indexed_batch_appender_new_batch(events);
 
     process_command(&state, cmd, len, b);   /* validates, emits N events  */
-                                            /* via mutable_batch_append,  */
+                                            /* via mmapq_mutable_batch_append,  */
                                             /* applying each to `state`   */
 
     mutable_batch_commit(b);                /* command happened, atomically */
-    return NEXT_ADVANCE;                    /* crash before this line ==   */
+    return MMAPQ_NEXT_ADVANCE;                    /* crash before this line ==   */
 }                                           /* command never happened      */
 ```
 

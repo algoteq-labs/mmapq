@@ -23,9 +23,9 @@ column are design decisions, not roadmap items.
 | Version macro (`MMAPQ_VERSION_MAJOR`/`_MINOR`/`_PATCH`, `mmapq_version()`) | ✓ | — (via C if needed) | — |
 | Error-string lookup (`mmapq_strerror`) | ✓ `src/mmapq_strerror.c`; `scripts/check_error_codes.sh` gate | — (Rust `Display` covers this) | — (exception messages cover this) |
 | Create/open single-message queue (full config) | ✓ | ✓ `QueueConfig` builder | ◐ dir/name + `archivable` kwarg; other params defaulted |
-| Create/open batch queue | ✓ | ✓ | ✓ `batch_queue.py:IndexedBatchQueue.create()` with `region_size`, `ring_size`, `max_file_size`, `start_index`, `timeout_ns`, `archivable` |
+| Create/open batch queue | ✓ | ✓ | ✓ `batch_queue.py:MmapqIndexedBatchQueue.create()` with `region_size`, `ring_size`, `max_file_size`, `start_index`, `timeout_ns`, `archivable` |
 | `archivable` creation parameter (default 0) | ✓ | ✓ `.archivable(bool)` | ✓ `archivable=False` kwarg |
-| Async region mapping via Runtime (background mapper) | ✓ | ✓ `Runtime` + singletons | ✓ `Runtime.region_mapper()` at `runtime.py:26`; `test_runtime_kept_alive_by_queue` at `test_batch_queue.py:1421` |
+| Async region mapping via MmapqRuntime (background mapper) | ✓ | ✓ `MmapqRuntime` + singletons | ✓ `MmapqRuntime.region_mapper()` at `runtime.py:26`; `test_runtime_kept_alive_by_queue` at `test_batch_queue.py:1421` |
 | Custom runtime config (idle strategies, close timeout) | ✓ | ✓ | — |
 | Queue metadata accessors (region size, max file size, start index) | ✓ | ✓ | — |
 | queue_type discriminator validated on every open (normal/batch/fixed-8) | ✓ | ✓ (via C) | ✓ (via C) |
@@ -90,7 +90,7 @@ column are design decisions, not roadmap items.
 | Queue-to-queue copy | ✓ | ✓ | ✓ |
 | Batch variants (incl. flat-stream import) | ✓ | ✓ | — |
 | Appender ID mapper callback (identity / remap / merge) | ✓ | ✓ | ✓ |
-| ConflictBehavior (AUTO fallback / ABORT error) | ✓ | ✓ | ✓ |
+| MmapqConflictBehavior (AUTO fallback / ABORT error) | ✓ | ✓ | ✓ |
 
 ## Cross-cutting guarantees (all languages, enforced in the C core)
 

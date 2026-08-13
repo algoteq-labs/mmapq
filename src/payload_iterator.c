@@ -7,16 +7,16 @@
 #include <string.h>
 #include <stdio.h>
 
-/* ── payload_iterator_create ─────────────────────────────────────────────── */
+/* ── mmapqi_payload_iterator_create ─────────────────────────────────────────────── */
 
-int payload_iterator_create(
+int mmapqi_payload_iterator_create(
     const char     *queue_name,
     RegionAccessor *payload_accessor,
     int64_t       (*start_of_stream_offset)(void *ctx),
     int64_t       (*end_of_stream_offset)(void *ctx),
     void           *stream_ctx,
     int             fix_end_of_stream,
-    PayloadIterator **out)
+    MmapqPayloadIterator **out)
 {
     if (out == NULL) return MMAPQ_EINVAL;
     *out = NULL;
@@ -25,7 +25,7 @@ int payload_iterator_create(
     if (start_of_stream_offset == NULL) return MMAPQ_EINVAL;
     if (end_of_stream_offset == NULL) return MMAPQ_EINVAL;
 
-    PayloadIterator *it = calloc(1, sizeof(PayloadIterator));
+    MmapqPayloadIterator *it = calloc(1, sizeof(MmapqPayloadIterator));
     if (it == NULL) return MMAPQ_ENOMEM;
 
     it->queue_name             = queue_name;
@@ -47,14 +47,14 @@ int payload_iterator_create(
     return 0;
 }
 
-/* ── payload_iterator_init ───────────────────────────────────────────────── */
+/* ── mmapqi_payload_iterator_init ───────────────────────────────────────────────── */
 
-PayloadIterator *payload_iterator_init(
-    PayloadIterator *it,
+MmapqPayloadIterator *mmapqi_payload_iterator_init(
+    MmapqPayloadIterator *it,
     int64_t          start_offset,
     int64_t          end_offset)
 {
-    MMAP_ASSERT(it != NULL, "payload_iterator_init: it is NULL");
+    MMAP_ASSERT(it != NULL, "mmapqi_payload_iterator_init: it is NULL");
 
     int64_t start_of_stream = it->start_of_stream_offset(it->stream_ctx);
 
@@ -85,18 +85,18 @@ PayloadIterator *payload_iterator_init(
 
 /* ── Effective end of stream ─────────────────────────────────────────────── */
 
-static inline int64_t effective_end(const PayloadIterator *it)
+static inline int64_t effective_end(const MmapqPayloadIterator *it)
 {
     return it->fix_end_of_stream
         ? it->end_of_stream_at_init
         : it->end_of_stream_offset(it->stream_ctx);
 }
 
-/* ── payload_iterator_has_next ───────────────────────────────────────────── */
+/* ── mmapqi_payload_iterator_has_next ───────────────────────────────────────────── */
 
-int payload_iterator_has_next(const PayloadIterator *it)
+int mmapqi_payload_iterator_has_next(const MmapqPayloadIterator *it)
 {
-    MMAP_ASSERT(it != NULL, "payload_iterator_has_next: it is NULL");
+    MMAP_ASSERT(it != NULL, "mmapqi_payload_iterator_has_next: it is NULL");
 
     if (it->next_probing_offset == PAYLOAD_ITERATOR_NOT_SET) return 0;
     if (it->next_probing_offset >= effective_end(it)) return 0;
@@ -105,18 +105,18 @@ int payload_iterator_has_next(const PayloadIterator *it)
     return 1;
 }
 
-/* ── payload_iterator_advance ────────────────────────────────────────────── */
+/* ── mmapqi_payload_iterator_advance ────────────────────────────────────────────── */
 
-int payload_iterator_advance(PayloadIterator *it)
+int mmapqi_payload_iterator_advance(MmapqPayloadIterator *it)
 {
-    MMAP_ASSERT(it != NULL, "payload_iterator_advance: it is NULL");
+    MMAP_ASSERT(it != NULL, "mmapqi_payload_iterator_advance: it is NULL");
 
-    if (!payload_iterator_has_next(it)) return 0;
+    if (!mmapqi_payload_iterator_has_next(it)) return 0;
 
     int64_t  message_offset = PAYLOAD_ITERATOR_NOT_SET;
     int32_t  length;
 
-    length = payload_walk_advance(
+    length = mmapqi_payload_walk_advance(
         it->queue_name,
         &it->next_probing_offset,
         &message_offset,
@@ -140,25 +140,25 @@ int payload_iterator_advance(PayloadIterator *it)
     return 1;
 }
 
-/* ── payload_iterator_current ────────────────────────────────────────────── */
+/* ── mmapqi_payload_iterator_current ────────────────────────────────────────────── */
 
-Buffer *payload_iterator_current(PayloadIterator *it)
+Buffer *mmapqi_payload_iterator_current(MmapqPayloadIterator *it)
 {
-    MMAP_ASSERT(it != NULL, "payload_iterator_current: it is NULL");
+    MMAP_ASSERT(it != NULL, "mmapqi_payload_iterator_current: it is NULL");
     MMAP_ASSERT(it->current_message_length != (int32_t)PAYLOAD_ITERATOR_NOT_SET,
-        "payload_iterator_current: no current message — call advance() first");
+        "mmapqi_payload_iterator_current: no current message — call advance() first");
 
     /* message_buf was set by advance(); return pointer to it */
     return &it->message_buf;
 }
 
-/* ── payload_iterator_rewind ─────────────────────────────────────────────── */
+/* ── mmapqi_payload_iterator_rewind ─────────────────────────────────────────────── */
 
-PayloadIterator *payload_iterator_rewind(PayloadIterator *it)
+MmapqPayloadIterator *mmapqi_payload_iterator_rewind(MmapqPayloadIterator *it)
 {
-    MMAP_ASSERT(it != NULL, "payload_iterator_rewind: it is NULL");
+    MMAP_ASSERT(it != NULL, "mmapqi_payload_iterator_rewind: it is NULL");
     MMAP_ASSERT(it->start_offset != PAYLOAD_ITERATOR_NOT_SET,
-        "payload_iterator_rewind: iterator not yet initialised");
+        "mmapqi_payload_iterator_rewind: iterator not yet initialised");
 
     it->next_probing_offset    = it->start_offset;
     it->current_message_offset = PAYLOAD_ITERATOR_NOT_SET;
@@ -167,9 +167,9 @@ PayloadIterator *payload_iterator_rewind(PayloadIterator *it)
     return it;
 }
 
-/* ── payload_iterator_destroy ────────────────────────────────────────────── */
+/* ── mmapqi_payload_iterator_destroy ────────────────────────────────────────────── */
 
-void payload_iterator_destroy(PayloadIterator *it)
+void mmapqi_payload_iterator_destroy(MmapqPayloadIterator *it)
 {
     if (it == NULL) return;
     /* payload_accessor is NOT owned by the iterator */

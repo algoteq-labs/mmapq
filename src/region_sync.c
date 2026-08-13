@@ -99,7 +99,7 @@ static WrapResult sync_do_wrap(RegionAccessor *self, int64_t position, Buffer *b
     int32_t region_offset         = (int32_t)(position & (impl->region_size - 1));
     int64_t region_start_position = position - region_offset;
 
-    uint64_t start_ns = monotonic_nanos();
+    uint64_t start_ns = mmapq_monotonic_nanos();
 
     while (1) {
         if (impl->current_position == region_start_position && impl->current_address != 0) {
@@ -157,10 +157,10 @@ static WrapResult sync_do_wrap(RegionAccessor *self, int64_t position, Buffer *b
             }
         }
 
-        if (monotonic_nanos() - start_ns >= impl->timeout_ns) {
+        if (mmapq_monotonic_nanos() - start_ns >= impl->timeout_ns) {
             return WRAP_MAP_TIMED_OUT;
         }
-        spin_hint();
+        mmapq_spin_hint();
     }
 }
 
@@ -196,7 +196,7 @@ static int32_t sync_size(RegionAccessor *self)
 
 /* ── Factory ─────────────────────────────────────────────────────────────── */
 
-int region_sync_create(
+int mmapqi_region_sync_create(
     FileMapper *file_mapper,
     int32_t     region_size,
     uint64_t    timeout_ns,
@@ -241,7 +241,7 @@ int region_sync_create(
 
 /* ── Destroy ─────────────────────────────────────────────────────────────── */
 
-void region_destroy(Region *r)
+void mmapqi_region_destroy(Region *r)
 {
     if (r == NULL) return;
     region_close(r);

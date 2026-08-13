@@ -17,11 +17,11 @@ typedef struct __attribute__((packed)) {
 } LatencyHeader;
 
 typedef struct {
-    IndexedAppender *response_appender;
+    MmapqIndexedAppender *response_appender;
     volatile int     shutdown_requested;
 } ServerCtx;
 
-static NextMove echo_handler(
+static MmapqNextMove echo_handler(
     int64_t     index,
     uint8_t     appender_id,
     const void *data,
@@ -35,9 +35,9 @@ static NextMove echo_handler(
         s->shutdown_requested = 1;
     }
     /* Echo the entire payload back to the response queue */
-    indexed_appender_append(s->response_appender, data, length);
+    mmapq_indexed_appender_append(s->response_appender, data, length);
     
-    return NEXT_ADVANCE;
+    return MMAPQ_NEXT_ADVANCE;
 }
 
 int main(int argc, char *argv[])
@@ -73,37 +73,37 @@ int main(int argc, char *argv[])
     if (cpu_core >= 0) printf("  Core:   %d\n", cpu_core);
     if (!use_sync && mapper_cpu >= 0) printf("  Mapper: %d\n", mapper_cpu);
 
-    Runtime *write_rt = NULL;
-    Runtime *read_rt  = NULL;
+    MmapqRuntime *write_rt = NULL;
+    MmapqRuntime *read_rt  = NULL;
 
     if (use_sync) {
         write_rt = NULL; read_rt = NULL;
     } else if (use_mixed) {
-        if (runtime_region_mapper(&write_rt) != 0) { fprintf(stderr, "runtime_region_mapper failed\n"); return 1; }
+        if (mmapq_runtime_region_mapper(&write_rt) != 0) { fprintf(stderr, "mmapq_runtime_region_mapper failed\n"); return 1; }
         read_rt  = NULL;
-        if (mapper_cpu >= 0) runtime_set_affinity(write_rt, mapper_cpu);
+        if (mapper_cpu >= 0) mmapq_runtime_set_affinity(write_rt, mapper_cpu);
     } else {
-        if (runtime_region_mapper(&write_rt) != 0) { fprintf(stderr, "runtime_region_mapper failed\n"); return 1; }
+        if (mmapq_runtime_region_mapper(&write_rt) != 0) { fprintf(stderr, "mmapq_runtime_region_mapper failed\n"); return 1; }
         read_rt  = write_rt;
-        if (mapper_cpu >= 0) runtime_set_affinity(write_rt, mapper_cpu);
+        if (mapper_cpu >= 0) mmapq_runtime_set_affinity(write_rt, mapper_cpu);
     }
     
     /* Pin main thread AFTER spawning the mapper to prevent affinity inheritance */
     if (cpu_core >= 0) {
-        if (thread_set_affinity(cpu_core) != 0) {
-            perror("thread_set_affinity failed");
+        if (mmapq_thread_set_affinity(cpu_core) != 0) {
+            perror("mmapq_thread_set_affinity failed");
         }
     }
     
-    IndexedQueue *q_req = NULL, *q_res = NULL;
-    if (indexed_queue_create_default(dir, req_name, write_rt, read_rt, &q_req) != 0) return 1;
-    if (indexed_queue_create_default(dir, res_name, write_rt, read_rt, &q_res) != 0) return 1;
+    MmapqIndexedQueue *q_req = NULL, *q_res = NULL;
+    if (mmapq_indexed_queue_create_default(dir, req_name, write_rt, read_rt, &q_req) != 0) return 1;
+    if (mmapq_indexed_queue_create_default(dir, res_name, write_rt, read_rt, &q_res) != 0) return 1;
     
-    IndexedPoller *poller = NULL;
-    if (indexed_queue_create_poller(q_req, &poller) != 0) return 1;
+    MmapqIndexedPoller *poller = NULL;
+    if (mmapq_indexed_queue_create_poller(q_req, &poller) != 0) return 1;
     if (poller == NULL) return 1;
-    IndexedAppender *appender = NULL;
-    if (indexed_queue_create_appender(q_res, &appender) != 0) return 1;
+    MmapqIndexedAppender *appender = NULL;
+    if (mmapq_indexed_queue_create_appender(q_res, &appender) != 0) return 1;
     if (appender == NULL) return 1;
     
     ServerCtx ctx = {
@@ -114,15 +114,15 @@ int main(int argc, char *argv[])
     printf("Waiting for requests...\n");
 
     while (!ctx.shutdown_requested) {
-        indexed_poller_poll(poller, echo_handler, &ctx);
+        mmapq_indexed_poller_poll(poller, echo_handler, &ctx);
     }
 
     printf("Shutdown requested. Closing...\n");
 
-    indexed_appender_close(appender);
-    indexed_poller_close(poller);
-    indexed_queue_close(q_req);
-    indexed_queue_close(q_res);
+    mmapq_indexed_appender_close(appender);
+    mmapq_indexed_poller_close(poller);
+    mmapq_indexed_queue_close(q_req);
+    mmapq_indexed_queue_close(q_res);
 
     return 0;
 }

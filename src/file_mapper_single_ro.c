@@ -51,7 +51,7 @@ static int ro_init(SingleFileRoImpl *impl)
         return 0;
     }
 
-    /* Run initialiser — for RO this is typically file_init_none */
+    /* Run initialiser — for RO this is typically mmapqi_file_init_none */
     if (impl->initialiser != NULL) {
         if (impl->initialiser(fd, (size_t)st.st_size, impl->initialiser_ctx) != 0) {
             close(fd);
@@ -133,7 +133,7 @@ static void ro_close(FileMapper *self)
 
 /* ── Factory ─────────────────────────────────────────────────────────────── */
 
-int file_mapper_single_ro_create(
+int mmapqi_file_mapper_single_ro_create(
     const char      *file_path,
     FileInitialiser  initialiser,
     void            *initialiser_ctx,

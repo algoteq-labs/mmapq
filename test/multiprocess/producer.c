@@ -53,30 +53,30 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    Runtime      *rt = NULL;
-    if (runtime_region_mapper(&rt) != 0) { fprintf(stderr, "runtime_region_mapper failed\n"); return 1; }
-    IndexedQueue *q  = NULL;
-    if (indexed_queue_create(
+    MmapqRuntime      *rt = NULL;
+    if (mmapq_runtime_region_mapper(&rt) != 0) { fprintf(stderr, "mmapq_runtime_region_mapper failed\n"); return 1; }
+    MmapqIndexedQueue *q  = NULL;
+    if (mmapq_indexed_queue_create(
         dir, name,
         REGION_SIZE, RING_SIZE, 1,
         MAX_FILE_SIZE, 0,
-        TIMEOUT_NS, 0, rt, rt, &q) != 0) { fprintf(stderr, "indexed_queue_create failed\n"); return 1; }
+        TIMEOUT_NS, 0, rt, rt, &q) != 0) { fprintf(stderr, "mmapq_indexed_queue_create failed\n"); return 1; }
 
-    IndexedAppender *a;
+    MmapqIndexedAppender *a;
     if (requested_id >= 0) {
-        if (indexed_queue_create_appender_with_id(q, (uint8_t)requested_id, &a) != 0) {
+        if (mmapq_indexed_queue_create_appender_with_id(q, (uint8_t)requested_id, &a) != 0) {
             fprintf(stderr, "producer: create appender with id failed\n");
             return 1;
         }
     } else {
-        if (indexed_queue_create_appender(q, &a) != 0) {
+        if (mmapq_indexed_queue_create_appender(q, &a) != 0) {
             fprintf(stderr, "producer: create appender failed\n");
             return 1;
         }
     }
 
     fprintf(stderr, "producer: appender_id=%d writing %ld messages\n",
-            indexed_appender_id(a), count);
+            mmapq_indexed_appender_id(a), count);
 
     TestMessage msg;
     memset(msg.tag, 0, sizeof(msg.tag));
@@ -85,13 +85,13 @@ int main(int argc, char *argv[])
     for (int64_t i = 0; i < count; i++) {
         msg.sequence = i;
         msg.checksum = checksum_of(i);
-        indexed_appender_append(a, &msg, sizeof(msg));
+        mmapq_indexed_appender_append(a, &msg, sizeof(msg));
     }
 
     fprintf(stderr, "producer: done — wrote %ld messages, last index %ld\n",
-            count, indexed_appender_current_index(a) - 1);
+            count, mmapq_indexed_appender_current_index(a) - 1);
 
-    indexed_appender_close(a);
-    indexed_queue_close(q);
+    mmapq_indexed_appender_close(a);
+    mmapq_indexed_queue_close(q);
     return 0;
 }

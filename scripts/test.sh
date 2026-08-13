@@ -74,7 +74,7 @@ run_test() {
     local cflags="$3"
     local bin="/tmp/mmapq_${test}_${label}"
 
-    if ! gcc $cflags $SRCS "test/${test}.c" $UNITY -o "$bin" $LDFLAGS 2>&1; then
+    if ! gcc $cflags -Wno-missing-prototypes -Wno-strict-prototypes $SRCS "test/${test}.c" $UNITY -o "$bin" $LDFLAGS 2>&1; then
         echo "FAIL ($label): $test (compile error)"
         return 1
     fi

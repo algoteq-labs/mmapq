@@ -26,11 +26,11 @@ void tearDown(void)
     unlink(TEST_FILE);
 }
 
-/* ── file_init_zeros ─────────────────────────────────────────────────────── */
+/* ── mmapqi_file_init_zeros ─────────────────────────────────────────────────────── */
 
 void test_file_init_zeros_sets_file_size(void)
 {
-    int result = file_init_zeros(test_fd, 4096, NULL);
+    int result = mmapqi_file_init_zeros(test_fd, 4096, NULL);
     TEST_ASSERT_EQUAL_INT(0, result);
 
     struct stat st;
@@ -40,7 +40,7 @@ void test_file_init_zeros_sets_file_size(void)
 
 void test_file_init_zeros_multiple_pages(void)
 {
-    int result = file_init_zeros(test_fd, 4096 * 4, NULL);
+    int result = mmapqi_file_init_zeros(test_fd, 4096 * 4, NULL);
     TEST_ASSERT_EQUAL_INT(0, result);
 
     struct stat st;
@@ -51,7 +51,7 @@ void test_file_init_zeros_multiple_pages(void)
 void test_file_init_zeros_content_is_zero(void)
 {
     size_t size = 4096;
-    file_init_zeros(test_fd, size, NULL);
+    mmapqi_file_init_zeros(test_fd, size, NULL);
 
     /* Read back and verify zeros */
     lseek(test_fd, 0, SEEK_SET);
@@ -64,7 +64,7 @@ void test_file_init_zeros_content_is_zero(void)
     }
 }
 
-/* ── file_init_none ──────────────────────────────────────────────────────── */
+/* ── mmapqi_file_init_none ──────────────────────────────────────────────────────── */
 
 void test_file_init_none_does_not_change_size(void)
 {
@@ -75,7 +75,7 @@ void test_file_init_none_does_not_change_size(void)
     struct stat st_before;
     fstat(test_fd, &st_before);
 
-    int result = file_init_none(test_fd, 99999, NULL);
+    int result = mmapqi_file_init_none(test_fd, 99999, NULL);
     TEST_ASSERT_EQUAL_INT(0, result);
 
     struct stat st_after;
@@ -86,7 +86,7 @@ void test_file_init_none_does_not_change_size(void)
 void test_file_init_none_ignores_ctx(void)
 {
     int ctx_value = 42;
-    int result = file_init_none(test_fd, 4096, &ctx_value);
+    int result = mmapqi_file_init_none(test_fd, 4096, &ctx_value);
     TEST_ASSERT_EQUAL_INT(0, result);
 }
 

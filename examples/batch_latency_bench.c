@@ -31,67 +31,67 @@ typedef struct __attribute__((packed)) {
 } BatchLatencyHeader;
 
 typedef struct {
-    IndexedBatchAppender *response_appender;
+    MmapqIndexedBatchAppender *response_appender;
     volatile int          shutdown_requested;
 } BatchServerCtx;
 
-static NextMove internal_echo_handler(
+static MmapqNextMove internal_echo_handler(
     int64_t              b_idx,
-    BatchReadingContext *ctx,
+    MmapqBatchReadingContext *ctx,
     void                *user_ctx)
 {
     (void)b_idx;
     BatchServerCtx *s = (BatchServerCtx *)user_ctx;
 
-    if (!batch_iterator_advance(ctx->iterator))
-        return NEXT_ADVANCE;
+    if (!mmapq_batch_iterator_advance(ctx->iterator))
+        return MMAPQ_NEXT_ADVANCE;
     const BatchLatencyHeader *hdr = batch_iterator_current_data(ctx->iterator);
     if (hdr->sequence == SHUTDOWN_SEQ)
         s->shutdown_requested = 1;
 
-    MutableBatch *b = indexed_batch_appender_start_batch(s->response_appender);
-    mutable_batch_append(b, batch_iterator_current_data(ctx->iterator),
+    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(s->response_appender);
+    mmapq_mutable_batch_append(b, batch_iterator_current_data(ctx->iterator),
                             batch_iterator_current_length(ctx->iterator));
-    mutable_batch_append_remaining_from(b, ctx->iterator);
-    indexed_batch_appender_commit_batch(s->response_appender, mutable_batch_complete(b));
+    mmapq_mutable_batch_append_remaining_from(b, ctx->iterator);
+    mmapq_indexed_batch_appender_commit_batch(s->response_appender, mmapq_mutable_batch_complete(b));
 
-    return NEXT_ADVANCE;
+    return MMAPQ_NEXT_ADVANCE;
 }
 
 typedef struct {
     const char           *dir;
     int                   cpu;
-    Runtime              *write_rt;
-    Runtime              *read_rt;
+    MmapqRuntime              *write_rt;
+    MmapqRuntime              *read_rt;
     volatile int          ready;
     BatchServerCtx        ctx;
-    IndexedBatchPoller   *poller;
-    IndexedBatchAppender *appender;
-    IndexedBatchQueue    *q_req;
-    IndexedBatchQueue    *q_res;
+    MmapqIndexedBatchPoller   *poller;
+    MmapqIndexedBatchAppender *appender;
+    MmapqIndexedBatchQueue    *q_req;
+    MmapqIndexedBatchQueue    *q_res;
 } InternalServerArgs;
 
 static void *internal_server_thread(void *arg)
 {
     InternalServerArgs *a = (InternalServerArgs *)arg;
-    if (a->cpu >= 0) thread_set_affinity(a->cpu);
+    if (a->cpu >= 0) mmapq_thread_set_affinity(a->cpu);
 
-    if (indexed_batch_queue_create_default(a->dir, "request", a->write_rt, a->read_rt, &a->q_req) != 0) return NULL;
-    if (indexed_batch_queue_create_default(a->dir, "response", a->write_rt, a->read_rt, &a->q_res) != 0) return NULL;
-    if (indexed_batch_queue_create_poller(a->q_req, &a->poller) != 0) return NULL;
-    if (indexed_batch_queue_create_appender(a->q_res, &a->appender) != 0) return NULL;
+    if (mmapq_indexed_batch_queue_create_default(a->dir, "request", a->write_rt, a->read_rt, &a->q_req) != 0) return NULL;
+    if (mmapq_indexed_batch_queue_create_default(a->dir, "response", a->write_rt, a->read_rt, &a->q_res) != 0) return NULL;
+    if (mmapq_indexed_batch_queue_create_poller(a->q_req, &a->poller) != 0) return NULL;
+    if (mmapq_indexed_batch_queue_create_appender(a->q_res, &a->appender) != 0) return NULL;
     a->ctx.response_appender = a->appender;
     a->ctx.shutdown_requested = 0;
 
     __atomic_store_n(&a->ready, 1, __ATOMIC_RELEASE);
 
     while (!a->ctx.shutdown_requested)
-        indexed_batch_poller_poll(a->poller, internal_echo_handler, &a->ctx);
+        mmapq_indexed_batch_poller_poll(a->poller, internal_echo_handler, &a->ctx);
 
-    indexed_batch_appender_close(a->appender);
-    indexed_batch_poller_close(a->poller);
-    indexed_batch_queue_close(a->q_req);
-    indexed_batch_queue_close(a->q_res);
+    mmapq_indexed_batch_appender_close(a->appender);
+    mmapq_indexed_batch_poller_close(a->poller);
+    mmapq_indexed_batch_queue_close(a->q_req);
+    mmapq_indexed_batch_queue_close(a->q_res);
     return NULL;
 }
 
@@ -133,12 +133,12 @@ int main(int argc, char *argv[])
     if (use_sync)       mode_str = "SYNCHRONOUS";
     else if (use_mixed) mode_str = "MIXED";
 
-    Runtime *write_rt = NULL, *read_rt = NULL;
+    MmapqRuntime *write_rt = NULL, *read_rt = NULL;
     if (!use_sync) {
-        Runtime *rt = NULL;
-        int rc_rt = runtime_region_mapper(&rt);
-        if (rc_rt != 0) { fprintf(stderr, "runtime_region_mapper failed\n"); return 1; }
-        if (mapper_cpu >= 0) runtime_set_affinity(rt, mapper_cpu);
+        MmapqRuntime *rt = NULL;
+        int rc_rt = mmapq_runtime_region_mapper(&rt);
+        if (rc_rt != 0) { fprintf(stderr, "mmapq_runtime_region_mapper failed\n"); return 1; }
+        if (mapper_cpu >= 0) mmapq_runtime_set_affinity(rt, mapper_cpu);
         if (use_mixed) { write_rt = rt; read_rt = NULL; }
         else           { write_rt = rt; read_rt = rt;   }
     }
@@ -167,10 +167,10 @@ int main(int argc, char *argv[])
             printf("  Internal Server started on Core %d\n", server_cpu);
     }
 
-    if (client_cpu >= 0) thread_set_affinity(client_cpu);
+    if (client_cpu >= 0) mmapq_thread_set_affinity(client_cpu);
 
     BatchQueueLatencyProbe *probe = NULL;
-    if (batch_queue_latency_probe_create(
+    if (mmapqi_batch_queue_latency_probe_create(
         1, dir, "request", "response", msg_size,
         validate_server, validate_client,
         write_rt, read_rt, &probe) != 0) {
@@ -178,24 +178,24 @@ int main(int argc, char *argv[])
     }
 
     printf("Warming up...\n");
-    batch_queue_latency_probe_move_to_end(probe);
+    mmapqi_batch_queue_latency_probe_move_to_end(probe);
     for (int i = 0; i < warmup; i++)
-        batch_queue_latency_probe_execute(probe);
+        mmapqi_batch_queue_latency_probe_execute(probe);
 
     printf("Measuring...\n");
     uint64_t *results = malloc(sizeof(uint64_t) * (size_t)iterations);
-    uint64_t start = monotonic_nanos();
+    uint64_t start = mmapq_monotonic_nanos();
     for (int i = 0; i < iterations; i++)
-        results[i] = batch_queue_latency_probe_execute(probe);
-    uint64_t elapsed = monotonic_nanos() - start;
+        results[i] = mmapqi_batch_queue_latency_probe_execute(probe);
+    uint64_t elapsed = mmapq_monotonic_nanos() - start;
 
-    long errors = batch_queue_latency_probe_validation_errors(probe);
+    long errors = mmapqi_batch_queue_latency_probe_validation_errors(probe);
     if (errors > 0)
         printf("!!! WARNING: %ld validation errors detected !!!\n\n", errors);
 
     mmap_stats_print(results, iterations, elapsed, "Batch Round-Trip Latency Statistics (nanoseconds):");
 
-    batch_queue_latency_probe_close(probe);
+    mmapqi_batch_queue_latency_probe_close(probe);
     free(results);
 
     if (!external_server) {

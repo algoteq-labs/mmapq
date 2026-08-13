@@ -94,7 +94,7 @@ static inline void file_mapper_close(FileMapper *fm)
  * Returns 0 on success, MMAPQ_EINVAL for NULL args,
  * MMAPQ_ENOMEM on allocation failure. Sets *out to NULL on failure.
  */
-int file_mapper_single_ro_create(
+int mmapqi_file_mapper_single_ro_create(
     const char      *file_path,
     FileInitialiser  initialiser,
     void            *initialiser_ctx,
@@ -113,7 +113,7 @@ int file_mapper_single_ro_create(
  * Returns 0 on success, MMAPQ_EINVAL for NULL/invalid args,
  * MMAPQ_ENOMEM on allocation failure. Sets *out to NULL on failure.
  */
-int file_mapper_single_rw_create(
+int mmapqi_file_mapper_single_rw_create(
     const char      *file_path,
     int64_t          max_size,
     FileInitialiser  initialiser,
@@ -142,7 +142,7 @@ int file_mapper_single_rw_create(
  * Returns 0 on success, MMAPQ_EINVAL for NULL/invalid args,
  * MMAPQ_ENOMEM on allocation failure. Sets *out to NULL on failure.
  */
-int file_mapper_rolled_create(
+int mmapqi_file_mapper_rolled_create(
     const char      *file_prefix,
     int64_t          max_file_size,
     int32_t          region_size,
@@ -159,6 +159,6 @@ int file_mapper_rolled_create(
  * Calls close() then frees the FileMapper struct and its impl.
  * After destroy(), the pointer must not be used.
  */
-void file_mapper_destroy(FileMapper *fm);
+void mmapqi_file_mapper_destroy(FileMapper *fm);
 
 #endif /* FILE_MAPPER_H */

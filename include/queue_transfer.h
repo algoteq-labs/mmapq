@@ -1,5 +1,5 @@
-#ifndef QUEUE_TRANSFER_H
-#define QUEUE_TRANSFER_H
+#ifndef MMAPQ_QUEUE_TRANSFER_H
+#define MMAPQ_QUEUE_TRANSFER_H
 
 /**
  * QueueTransfer — export, import, and copy a single-message indexed queue
@@ -12,14 +12,14 @@
  *   [uint16 appender_id][int32 payload_length][uint8 payload...] ... (× total_entries)
  *
  * USAGE — Export:
- *   queue_transfer_export(reader, stdout, 0, reader_last, QUEUE_TRANSFER_REBASE, NULL, NULL, NULL);
+ *   mmapq_queue_transfer_export(reader, stdout, 0, reader_last, MMAPQ_QUEUE_TRANSFER_REBASE, NULL, NULL, NULL);
  *
  * USAGE — Import:
- *   queue_transfer_import(stdin, "/data/queues", "orders", 0, QUEUE_TRANSFER_REBASE, rt, rt, 0);
+ *   mmapq_queue_transfer_import(stdin, "/data/queues", "orders", 0, MMAPQ_QUEUE_TRANSFER_REBASE, rt, rt, 0);
  *
  * USAGE — Copy:
- *   queue_transfer_copy(reader, "/backup/queues", "orders_bak",
- *                       0, last, QUEUE_TRANSFER_REBASE, NULL, NULL, NULL, rt, rt, 0);
+ *   mmapq_queue_transfer_copy(reader, "/backup/queues", "orders_bak",
+ *                       0, last, MMAPQ_QUEUE_TRANSFER_REBASE, NULL, NULL, NULL, rt, rt, 0);
  *
  * All functions support optional include/exclude filters.  Pass NULL for
  * both to accept all entries.
@@ -34,20 +34,20 @@
 #include "runtime.h"
 
 /* Forward declarations for cross-type copy functions */
-typedef struct IndexedBatchReader IndexedBatchReader;
+typedef struct MmapqIndexedBatchReader MmapqIndexedBatchReader;
 
 /* ── Start index mode ─────────────────────────────────────────────────────── */
 
 /** Start index in the export stream is rebased to 0 (default). */
-#define QUEUE_TRANSFER_REBASE    0
+#define MMAPQ_QUEUE_TRANSFER_REBASE    0
 
 /** Start index in the export stream matches the source range start. */
-#define QUEUE_TRANSFER_PRESERVE  1
+#define MMAPQ_QUEUE_TRANSFER_PRESERVE  1
 
 /* ── Appender ID mapper ──────────────────────────────────────────────────── */
 
 /** Return -1 to auto-assign the next available appender ID. */
-#define APPENDER_ID_AUTO (-1)
+#define MMAPQ_APPENDER_ID_AUTO (-1)
 
 /**
  * Map a source appender ID to a destination appender ID.
@@ -57,20 +57,20 @@ typedef struct IndexedBatchReader IndexedBatchReader;
  *
  * source_aid: appender ID from the source (export stream or reader)
  * ctx:        caller-supplied context (passed through from the API call)
- * Returns: a valid appender ID (0-255), or APPENDER_ID_AUTO for auto-assign
+ * Returns: a valid appender ID (0-255), or MMAPQ_APPENDER_ID_AUTO for auto-assign
  */
-typedef int32_t (*AppenderIdMapper)(uint16_t source_aid, void *ctx);
+typedef int32_t (*MmapqAppenderIdMapper)(uint16_t source_aid, void *ctx);
 
 /**
- * ConflictBehavior — what to do when a mapped appender ID is already in use.
+ * MmapqConflictBehavior — what to do when a mapped appender ID is already in use.
  *
- * CONFLICT_AUTO:  fall back to auto-assign (create_appender) — always succeeds
- * CONFLICT_ABORT: return MMAPQ_EIDCONFLICT immediately
+ * MMAPQ_CONFLICT_AUTO:  fall back to auto-assign (create_appender) — always succeeds
+ * MMAPQ_CONFLICT_ABORT: return MMAPQ_EIDCONFLICT immediately
  */
 typedef enum {
-    CONFLICT_AUTO  = 0,
-    CONFLICT_ABORT = 1,
-} ConflictBehavior;
+    MMAPQ_CONFLICT_AUTO  = 0,
+    MMAPQ_CONFLICT_ABORT = 1,
+} MmapqConflictBehavior;
 
 /* ── Filter callback ─────────────────────────────────────────────────────── */
 
@@ -86,7 +86,7 @@ typedef enum {
  * ctx:      caller-supplied context (passed through from the API call)
  * Returns: 1 to include, 0 to skip
  */
-typedef int (*QueueFilterFn)(int64_t index, const void *data,
+typedef int (*MmapqQueueFilterFn)(int64_t index, const void *data,
                              int32_t length, void *ctx);
 
 /**
@@ -103,7 +103,7 @@ typedef int (*QueueFilterFn)(int64_t index, const void *data,
  * ctx:          caller-supplied context
  * Returns: 1 to include, 0 to skip
  */
-typedef int (*BatchQueueFilterFn)(int64_t batch_index, int32_t msg_index,
+typedef int (*MmapqBatchQueueFilterFn)(int64_t batch_index, int32_t msg_index,
                                    int32_t msg_count, const void *data,
                                    int32_t length, void *ctx);
 
@@ -119,16 +119,16 @@ typedef int (*BatchQueueFilterFn)(int64_t batch_index, int32_t msg_index,
  * out:             output stream (FILE*, typically a file or stdout)
  * start:           first index to export (inclusive)
  * end:             last index to export (inclusive)
- * start_index_mode: QUEUE_TRANSFER_REBASE or QUEUE_TRANSFER_PRESERVE
+ * start_index_mode: MMAPQ_QUEUE_TRANSFER_REBASE or MMAPQ_QUEUE_TRANSFER_PRESERVE
  * include:         optional include filter (NULL = accept all)
  * exclude:         optional exclude filter (NULL = skip none)
  * ctx:             caller context passed to filter callbacks
  * Returns: number of entries written, or -1 on I/O error
  */
-int64_t queue_transfer_export(
-    IndexedReader *reader, FILE *out,
+int64_t mmapq_queue_transfer_export(
+    MmapqIndexedReader *reader, FILE *out,
     int64_t start, int64_t end, int start_index_mode,
-    QueueFilterFn include, QueueFilterFn exclude, void *ctx);
+    MmapqQueueFilterFn include, MmapqQueueFilterFn exclude, void *ctx);
 
 /**
  * Chunked export — split a range of entries into multiple files of
@@ -146,16 +146,16 @@ int64_t queue_transfer_export(
  * start:          first index to export (inclusive)
  * end:            last index to export (inclusive)
  * chunk_size_mb:  approximate maximum size of each chunk in MB
- * start_index_mode: QUEUE_TRANSFER_REBASE or QUEUE_TRANSFER_PRESERVE
+ * start_index_mode: MMAPQ_QUEUE_TRANSFER_REBASE or MMAPQ_QUEUE_TRANSFER_PRESERVE
  * include:        optional include filter (NULL = accept all)
  * exclude:        optional exclude filter (NULL = skip none)
  * ctx:            caller context passed to filter callbacks
  * Returns: total entries exported across all chunks, or -1 on error
  */
-int64_t queue_transfer_export_chunked(
-    IndexedReader *reader, const char *base_path,
+int64_t mmapq_queue_transfer_export_chunked(
+    MmapqIndexedReader *reader, const char *base_path,
     int64_t start, int64_t end, int chunk_size_mb, int start_index_mode,
-    QueueFilterFn include, QueueFilterFn exclude, void *ctx);
+    MmapqQueueFilterFn include, MmapqQueueFilterFn exclude, void *ctx);
 
 /* ── Import ──────────────────────────────────────────────────────────────── */
 
@@ -178,23 +178,23 @@ int64_t queue_transfer_export_chunked(
  * in:               input stream (FILE*, typically a file or stdin)
  * directory:        queue base directory
  * queue_name:       queue subdirectory name
- * start_index_mode: QUEUE_TRANSFER_REBASE or QUEUE_TRANSFER_PRESERVE
+ * start_index_mode: MMAPQ_QUEUE_TRANSFER_REBASE or MMAPQ_QUEUE_TRANSFER_PRESERVE
  * write_rt:         runtime for writers (NULL = sync)
  * read_rt:          runtime for readers (NULL = sync)
  * allow_append:     1 to allow appending to an existing queue, 0 to forbid
- * mapper:           AppenderIdMapper callback (NULL = identity mapping)
+ * mapper:           MmapqAppenderIdMapper callback (NULL = identity mapping)
  * mapper_ctx:       caller context passed to the mapper callback
- * on_conflict:      CONFLICT_AUTO (fall back to auto-assign) or
- *                   CONFLICT_ABORT (return MMAPQ_EIDCONFLICT)
+ * on_conflict:      MMAPQ_CONFLICT_AUTO (fall back to auto-assign) or
+ *                   MMAPQ_CONFLICT_ABORT (return MMAPQ_EIDCONFLICT)
  * Returns: number of entries imported, or -1 on error
  */
-int64_t queue_transfer_import(
+int64_t mmapq_queue_transfer_import(
     FILE *in, const char *directory, const char *queue_name,
     int start_index_mode,
-    Runtime *write_rt, Runtime *read_rt,
+    MmapqRuntime *write_rt, MmapqRuntime *read_rt,
     int allow_append,
-    AppenderIdMapper mapper, void *mapper_ctx,
-    ConflictBehavior on_conflict);
+    MmapqAppenderIdMapper mapper, void *mapper_ctx,
+    MmapqConflictBehavior on_conflict);
 
 /**
  * Import a batched (batch queue) stream into a normal queue, flattening
@@ -204,8 +204,8 @@ int64_t queue_transfer_import(
  * and flattens every batch — each message in the batch becomes its own
  * entry in the output queue.
  *
- * Start index determined automatically (same rules as queue_transfer_import).
- * Destination-exists enforcement same as queue_transfer_import.
+ * Start index determined automatically (same rules as mmapq_queue_transfer_import).
+ * Destination-exists enforcement same as mmapq_queue_transfer_import.
  *
  * Each batch in the stream carries a uint16 appender ID (matching the
  * normal queue framing). The mapper controls how these IDs are assigned
@@ -214,22 +214,22 @@ int64_t queue_transfer_import(
  * in:               input stream (FILE*) containing batch stream
  * directory:        queue base directory
  * queue_name:       queue subdirectory name
- * start_index_mode: QUEUE_TRANSFER_REBASE or QUEUE_TRANSFER_PRESERVE
+ * start_index_mode: MMAPQ_QUEUE_TRANSFER_REBASE or MMAPQ_QUEUE_TRANSFER_PRESERVE
  * write_rt:         runtime for writers (NULL = sync)
  * read_rt:          runtime for readers (NULL = sync)
  * allow_append:     1 to allow appending to an existing queue, 0 to forbid
- * mapper:           AppenderIdMapper callback (NULL = identity mapping)
+ * mapper:           MmapqAppenderIdMapper callback (NULL = identity mapping)
  * mapper_ctx:       caller context passed to the mapper callback
- * on_conflict:      CONFLICT_AUTO or CONFLICT_ABORT
+ * on_conflict:      MMAPQ_CONFLICT_AUTO or MMAPQ_CONFLICT_ABORT
  * Returns: total number of individual messages imported, or -1 on error
  */
-int64_t queue_transfer_import_batch_stream(
+int64_t mmapq_queue_transfer_import_batch_stream(
     FILE *in, const char *directory, const char *queue_name,
     int start_index_mode,
-    Runtime *write_rt, Runtime *read_rt,
+    MmapqRuntime *write_rt, MmapqRuntime *read_rt,
     int allow_append,
-    AppenderIdMapper mapper, void *mapper_ctx,
-    ConflictBehavior on_conflict);
+    MmapqAppenderIdMapper mapper, void *mapper_ctx,
+    MmapqConflictBehavior on_conflict);
 
 /* ── Copy ────────────────────────────────────────────────────────────────── */
 
@@ -237,9 +237,9 @@ int64_t queue_transfer_import_batch_stream(
  * Copy entries [start, end] directly from a source queue reader to a new
  * destination queue.  Supports optional filters.
  *
- * Destination-exists enforcement same as queue_transfer_import.
+ * Destination-exists enforcement same as mmapq_queue_transfer_import.
  *
- * Each entry's appender ID (from ReadingContext) is passed through the
+ * Each entry's appender ID (from MmapqReadingContext) is passed through the
  * mapper to determine its destination appender.
  *
  * reader:          source queue reader
@@ -247,27 +247,27 @@ int64_t queue_transfer_import_batch_stream(
  * dest_queue:      destination queue name
  * start:           first index to copy (inclusive)
  * end:             last index to copy (inclusive)
- * start_index_mode: QUEUE_TRANSFER_REBASE or QUEUE_TRANSFER_PRESERVE
+ * start_index_mode: MMAPQ_QUEUE_TRANSFER_REBASE or MMAPQ_QUEUE_TRANSFER_PRESERVE
  * include:         optional include filter (NULL = accept all)
  * exclude:         optional exclude filter (NULL = skip none)
  * ctx:             caller context passed to filter callbacks
  * write_rt:        runtime for writers (NULL = sync)
  * read_rt:         runtime for readers (NULL = sync)
  * allow_append:    1 to allow appending to an existing queue, 0 to forbid
- * mapper:          AppenderIdMapper callback (NULL = identity mapping)
+ * mapper:          MmapqAppenderIdMapper callback (NULL = identity mapping)
  * mapper_ctx:      caller context passed to the mapper callback
- * on_conflict:     CONFLICT_AUTO or CONFLICT_ABORT
+ * on_conflict:     MMAPQ_CONFLICT_AUTO or MMAPQ_CONFLICT_ABORT
  * Returns: number of entries copied, or -1 on error
  */
-int64_t queue_transfer_copy(
-    IndexedReader *reader,
+int64_t mmapq_queue_transfer_copy(
+    MmapqIndexedReader *reader,
     const char *dest_dir, const char *dest_queue,
     int64_t start, int64_t end, int start_index_mode,
-    QueueFilterFn include, QueueFilterFn exclude, void *ctx,
-    Runtime *write_rt, Runtime *read_rt,
+    MmapqQueueFilterFn include, MmapqQueueFilterFn exclude, void *ctx,
+    MmapqRuntime *write_rt, MmapqRuntime *read_rt,
     int allow_append,
-    AppenderIdMapper mapper, void *mapper_ctx,
-    ConflictBehavior on_conflict);
+    MmapqAppenderIdMapper mapper, void *mapper_ctx,
+    MmapqConflictBehavior on_conflict);
 
 /**
  * Copy batches [start, end] from a batch queue reader and flatten each
@@ -276,9 +276,9 @@ int64_t queue_transfer_copy(
  * Each message in the source batch becomes its own entry in the destination
  * normal queue.  Supports optional message-level filters.
  *
- * Destination-exists enforcement same as queue_transfer_import.
+ * Destination-exists enforcement same as mmapq_queue_transfer_import.
  *
- * Each batch's appender ID (from BatchReadingContext.appender_id) is
+ * Each batch's appender ID (from MmapqBatchReadingContext.appender_id) is
  * passed through the mapper to determine its destination appender.
  * All messages within a batch share the same appender ID.
  *
@@ -287,26 +287,26 @@ int64_t queue_transfer_copy(
  * dest_queue:      destination normal queue name
  * start:           first batch index to copy (inclusive)
  * end:             last batch index to copy (inclusive)
- * start_index_mode: QUEUE_TRANSFER_REBASE or QUEUE_TRANSFER_PRESERVE
+ * start_index_mode: MMAPQ_QUEUE_TRANSFER_REBASE or MMAPQ_QUEUE_TRANSFER_PRESERVE
  * include:         optional batch message include filter (NULL = accept all)
  * exclude:         optional batch message exclude filter (NULL = skip none)
  * ctx:             caller context passed to filter callbacks
  * write_rt:        runtime for writers (NULL = sync)
  * read_rt:         runtime for readers (NULL = sync)
  * allow_append:    1 to allow appending to an existing queue, 0 to forbid
- * mapper:          AppenderIdMapper callback (NULL = identity mapping)
+ * mapper:          MmapqAppenderIdMapper callback (NULL = identity mapping)
  * mapper_ctx:      caller context passed to the mapper callback
- * on_conflict:     CONFLICT_AUTO or CONFLICT_ABORT
+ * on_conflict:     MMAPQ_CONFLICT_AUTO or MMAPQ_CONFLICT_ABORT
  * Returns: number of individual messages copied, or -1 on error
  */
-int64_t queue_transfer_copy_batch_to_normal(
-    IndexedBatchReader *reader,
+int64_t mmapq_queue_transfer_copy_batch_to_normal(
+    MmapqIndexedBatchReader *reader,
     const char *dest_dir, const char *dest_queue,
     int64_t start, int64_t end, int start_index_mode,
-    BatchQueueFilterFn include, BatchQueueFilterFn exclude, void *ctx,
-    Runtime *write_rt, Runtime *read_rt,
+    MmapqBatchQueueFilterFn include, MmapqBatchQueueFilterFn exclude, void *ctx,
+    MmapqRuntime *write_rt, MmapqRuntime *read_rt,
     int allow_append,
-    AppenderIdMapper mapper, void *mapper_ctx,
-    ConflictBehavior on_conflict);
+    MmapqAppenderIdMapper mapper, void *mapper_ctx,
+    MmapqConflictBehavior on_conflict);
 
-#endif /* QUEUE_TRANSFER_H */
+#endif /* MMAPQ_QUEUE_TRANSFER_H */

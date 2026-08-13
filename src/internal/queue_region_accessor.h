@@ -73,13 +73,13 @@ typedef struct QueueRegionAccessor {
     int                 regions_to_map_ahead;
     int64_t             max_file_size;
     uint64_t            timeout_ns;
-    Runtime            *runtime;
+    MmapqRuntime            *runtime;
 } QueueRegionAccessor;
 
 /* ── Factory ─────────────────────────────────────────────────────────────── */
 
 /**
- * queue_region_accessor_create_rw — create read-write accessors (for appenders).
+ * mmapqi_queue_region_accessor_create_rw — create read-write accessors (for appenders).
  *
  * Creates a RW header accessor and a RW payload accessor for appender_id.
  * The header file is created if it does not exist. The payload file is
@@ -92,7 +92,7 @@ typedef struct QueueRegionAccessor {
  * MMAPQ_ENOMEM on allocation failure, MMAPQ_ETIMEDOUT on I/O error.
  * Sets *out to NULL on failure.
  */
-int queue_region_accessor_create_rw(
+int mmapqi_queue_region_accessor_create_rw(
     const char *directory,
     const char *queue_name,
     int32_t     region_size,
@@ -100,15 +100,15 @@ int queue_region_accessor_create_rw(
     int         regions_to_map_ahead,
     int64_t     max_file_size,
     uint64_t    timeout_ns,
-    Runtime    *runtime,
+    MmapqRuntime    *runtime,
     uint8_t     appender_id,
     QueueRegionAccessor **out);
 
 /**
- * queue_region_accessor_create_ro — create read-only accessors (for pollers/readers).
+ * mmapqi_queue_region_accessor_create_ro — create read-only accessors (for pollers/readers).
  *
  * Creates a RO header accessor. Payload accessors are created lazily on
- * first access via queue_region_accessor_payload().
+ * first access via mmapqi_queue_region_accessor_payload().
  *
  * runtime: the region mapper runtime for async mapping.
  * out:     out-parameter for the created accessor (NULL on failure)
@@ -117,7 +117,7 @@ int queue_region_accessor_create_rw(
  * MMAPQ_ENOMEM on allocation failure, MMAPQ_ETIMEDOUT on I/O error.
  * Sets *out to NULL on failure.
  */
-int queue_region_accessor_create_ro(
+int mmapqi_queue_region_accessor_create_ro(
     const char *directory,
     const char *queue_name,
     int32_t     region_size,
@@ -125,7 +125,7 @@ int queue_region_accessor_create_ro(
     int         regions_to_map_ahead,
     int64_t     max_file_size,
     uint64_t    timeout_ns,
-    Runtime    *runtime,
+    MmapqRuntime    *runtime,
     QueueRegionAccessor **out);
 
 /* ── Accessor retrieval ──────────────────────────────────────────────────── */
@@ -141,20 +141,20 @@ static inline RegionAccessor *queue_region_accessor_header(QueueRegionAccessor *
 }
 
 /**
- * queue_region_accessor_payload — get (or lazily create) a payload RegionAccessor.
+ * mmapqi_queue_region_accessor_payload — get (or lazily create) a payload RegionAccessor.
  *
  * For RO accessors: creates the payload accessor on first call for this appender_id.
  * For RW accessor: the appender's own payload accessor was created at construction.
  *
  * Returns the RegionAccessor for appender_id's payload file.
  */
-RegionAccessor *queue_region_accessor_payload(QueueRegionAccessor *acc, uint8_t appender_id);
+RegionAccessor *mmapqi_queue_region_accessor_payload(QueueRegionAccessor *acc, uint8_t appender_id);
 
 /* ── Lifecycle ───────────────────────────────────────────────────────────── */
 
 /**
- * queue_region_accessor_close — close all owned accessors and free memory.
+ * mmapqi_queue_region_accessor_close — close all owned accessors and free memory.
  */
-void queue_region_accessor_close(QueueRegionAccessor *acc);
+void mmapqi_queue_region_accessor_close(QueueRegionAccessor *acc);
 
 #endif /* QUEUE_REGION_ACCESSOR_H */

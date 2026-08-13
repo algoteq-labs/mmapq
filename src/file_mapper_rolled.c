@@ -84,7 +84,7 @@ static void cache_evict_oldest(RolledImpl *impl)
 
     FileCacheEntry *entry = &impl->cache[oldest_idx];
     file_mapper_close(entry->mapper);
-    file_mapper_destroy(entry->mapper);
+    mmapqi_file_mapper_destroy(entry->mapper);
 
     /* Compact the cache array by shifting remaining entries down */
     int last = impl->cache_count - 1;
@@ -118,14 +118,14 @@ static FileCacheEntry *cache_get_or_open(RolledImpl *impl, int file_index)
     FileMapper *mapper = NULL;
     int fmerr;
     if (impl->mode == MAP_MODE_READ_ONLY) {
-        fmerr = file_mapper_single_ro_create(
+        fmerr = mmapqi_file_mapper_single_ro_create(
             file_name,
             impl->initialiser,
             impl->initialiser_ctx,
             impl->check_file_size,
             &mapper);
     } else {
-        fmerr = file_mapper_single_rw_create(
+        fmerr = mmapqi_file_mapper_single_rw_create(
             file_name,
             impl->max_file_size,
             impl->initialiser,
@@ -187,6 +187,7 @@ static void rolled_unmap(FileMapper *self, uintptr_t address,
 
     FileCacheEntry *entry = cache_find(impl, file_index);
     MMAP_ASSERT(entry != NULL, "rolled_unmap: no cache entry for file_index — unmap without map?");
+    if (entry == NULL) return;   /* NDEBUG: degrade rather than deref NULL */
 
     file_mapper_unmap(entry->mapper, address, position_in_file, length);
 
@@ -205,7 +206,7 @@ static void rolled_unmap(FileMapper *self, uintptr_t address,
     if (entry->ref_count == 0 && impl->mode == MAP_MODE_READ_WRITE) {
         /* Eagerly evict completed RW file — appending never goes backwards */
         file_mapper_close(entry->mapper);
-        file_mapper_destroy(entry->mapper);
+        mmapqi_file_mapper_destroy(entry->mapper);
 
         /* Compact */
         int idx  = (int)(entry - impl->cache);
@@ -229,7 +230,7 @@ static void rolled_close(FileMapper *self)
     for (int i = 0; i < impl->cache_count; i++) {
         if (impl->cache[i].mapper != NULL) {
             file_mapper_close(impl->cache[i].mapper);
-            file_mapper_destroy(impl->cache[i].mapper);
+            mmapqi_file_mapper_destroy(impl->cache[i].mapper);
             impl->cache[i].mapper = NULL;
         }
     }
@@ -238,7 +239,7 @@ static void rolled_close(FileMapper *self)
 
 /* ── Factory ─────────────────────────────────────────────────────────────── */
 
-int file_mapper_rolled_create(
+int mmapqi_file_mapper_rolled_create(
     const char      *file_prefix,
     int64_t          max_file_size,
     int32_t          region_size,
@@ -289,7 +290,7 @@ int file_mapper_rolled_create(
 
 /* ── Destroy ─────────────────────────────────────────────────────────────── */
 
-void file_mapper_destroy(FileMapper *fm)
+void mmapqi_file_mapper_destroy(FileMapper *fm)
 {
     if (fm == NULL) return;
 
@@ -297,7 +298,7 @@ void file_mapper_destroy(FileMapper *fm)
      * Close first — unmaps all regions and closes file descriptors.
      * file_mapper_close is idempotent; calling it here is safe even if
      * the caller already closed it (e.g. region_ring_close -> file_mapper_close).
-     * For rolled mappers, close also calls file_mapper_destroy on each
+     * For rolled mappers, close also calls mmapqi_file_mapper_destroy on each
      * cached sub-mapper, so those are fully cleaned up here.
      */
     file_mapper_close(fm);

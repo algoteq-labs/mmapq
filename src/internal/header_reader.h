@@ -35,7 +35,7 @@
 #define HEADER_NULL_INDEX  ((int64_t)-1)
 
 /**
- * header_read — read the header at the given index.
+ * mmapqi_header_read — read the header at the given index.
  *
  * header_accessor: the RegionAccessor for the header file.
  * buf:             caller-provided Buffer, filled by wrap().
@@ -45,20 +45,20 @@
  * Returns the uint64 header, or HEADER_NULL if not yet written.
  * Aborts on MAP_TIMED_OUT or WRAP_UNWRAPPED.
  */
-uint64_t header_read(
+uint64_t mmapqi_header_read(
     RegionAccessor *header_accessor,
     Buffer         *buf,
     int64_t         index,
     const char     *queue_name);
 
 /**
- * header_read_sequential — like header_read but uses wrap() to trigger
+ * mmapqi_header_read_sequential — like mmapqi_header_read but uses wrap() to trigger
  * premap of the next region.
  *
  * Use this for sequential pollers advancing forward through the queue.
- * Use header_read for random-access readers and search algorithms (header_search_last_index).
+ * Use mmapqi_header_read for random-access readers and search algorithms (mmapqi_header_search_last_index).
  */
-uint64_t header_read_sequential(
+uint64_t mmapqi_header_read_sequential(
     RegionAccessor *header_accessor,
     Buffer         *buf,
     int64_t         index,
@@ -73,7 +73,7 @@ static inline int header_found(
     int64_t         index,
     const char     *queue_name)
 {
-    return header_read(header_accessor, buf, index, queue_name) != HEADER_NULL;
+    return mmapqi_header_read(header_accessor, buf, index, queue_name) != HEADER_NULL;
 }
 
 /**
@@ -87,7 +87,7 @@ static inline int header_found(
 typedef int64_t (*StartIndexSupplier)(void *ctx);
 
 /**
- * header_search_last_index — find the highest committed queue index.
+ * mmapqi_header_search_last_index — find the highest committed queue index.
  *
  * Algorithm (mirrors Java HeaderReader.searchLastIndex):
  *   1. Exponential probe forward from from_index to find an upper bound.
@@ -104,7 +104,7 @@ typedef int64_t (*StartIndexSupplier)(void *ctx);
  *
  * Returns the highest valid index, or HEADER_NULL_INDEX if queue is empty.
  */
-int64_t header_search_last_index(
+int64_t mmapqi_header_search_last_index(
     int64_t          from_index,
     StartIndexSupplier start_index_fn,
     void             *start_index_ctx,

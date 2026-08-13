@@ -87,9 +87,9 @@ static int meta_validate(const QueueMeta *m, uint8_t expected_type,
     return 0;
 }
 
-/* ── queue_meta_open_rw ──────────────────────────────────────────────────── */
+/* ── mmapqi_queue_meta_open_rw ──────────────────────────────────────────────────── */
 
-int queue_meta_open_rw(
+int mmapqi_queue_meta_open_rw(
     const char *directory,
     const char *queue_name,
     int64_t     start_index,
@@ -118,7 +118,7 @@ int queue_meta_open_rw(
     };
 
     RegionAccessor *region = NULL;
-    int fsrerr = fixed_size_region_create(
+    int fsrerr = mmapqi_fixed_size_region_create(
         path,
         QUEUE_META_ENCODED_LENGTH,
         meta_file_init,
@@ -129,17 +129,17 @@ int queue_meta_open_rw(
 
     Buffer buf = {0};
     WrapResult r = region_accessor_wrap(region, 0, &buf);
-    if (r != WRAP_SUCCESS) { fixed_size_region_destroy(region); return MMAPQ_ETIMEDOUT; }
+    if (r != WRAP_SUCCESS) { mmapqi_fixed_size_region_destroy(region); return MMAPQ_ETIMEDOUT; }
 
     QueueMeta *m = calloc(1, sizeof(QueueMeta));
-    if (m == NULL) { fixed_size_region_destroy(region); return MMAPQ_ENOMEM; }
+    if (m == NULL) { mmapqi_fixed_size_region_destroy(region); return MMAPQ_ENOMEM; }
 
     m->region = region;
     m->base   = buf.data;
     meta_cache_fields(m);
 
     if (meta_validate(m, queue_type, directory, queue_name) != 0) {
-        fixed_size_region_destroy(region);
+        mmapqi_fixed_size_region_destroy(region);
         free(m);
         return MMAPQ_ESCHEMA;
     }
@@ -148,9 +148,9 @@ int queue_meta_open_rw(
     return 0;
 }
 
-/* ── queue_meta_open_ro ──────────────────────────────────────────────────── */
+/* ── mmapqi_queue_meta_open_ro ──────────────────────────────────────────────────── */
 
-int queue_meta_open_ro(
+int mmapqi_queue_meta_open_ro(
     const char *directory,
     const char *queue_name,
     uint8_t     expected_type,
@@ -174,10 +174,10 @@ int queue_meta_open_ro(
     }
 
     RegionAccessor *region = NULL;
-    int fsrerr = fixed_size_region_create(
+    int fsrerr = mmapqi_fixed_size_region_create(
         path,
         QUEUE_META_ENCODED_LENGTH,
-        file_init_none,
+        mmapqi_file_init_none,
         NULL,
         &region);
 
@@ -187,14 +187,14 @@ int queue_meta_open_ro(
     WrapResult r = region_accessor_wrap(region, 0, &buf);
     if (r != WRAP_SUCCESS) {
         region_accessor_close(region);
-        fixed_size_region_destroy(region);
+        mmapqi_fixed_size_region_destroy(region);
         return MMAPQ_ETIMEDOUT;
     }
 
     QueueMeta *m = calloc(1, sizeof(QueueMeta));
     if (m == NULL) {
         region_accessor_close(region);
-        fixed_size_region_destroy(region);
+        mmapqi_fixed_size_region_destroy(region);
         return MMAPQ_ENOMEM;
     }
 
@@ -204,7 +204,7 @@ int queue_meta_open_ro(
 
     if (meta_validate(m, expected_type, directory, queue_name) != 0) {
         region_accessor_close(region);
-        fixed_size_region_destroy(region);
+        mmapqi_fixed_size_region_destroy(region);
         free(m);
         return MMAPQ_ESCHEMA;
     }
@@ -213,31 +213,31 @@ int queue_meta_open_ro(
     return 0;
 }
 
-/* ── queue_meta_close ────────────────────────────────────────────────────── */
+/* ── mmapqi_queue_meta_close ────────────────────────────────────────────────────── */
 
-void queue_meta_close(QueueMeta *m)
+void mmapqi_queue_meta_close(QueueMeta *m)
 {
     if (m == NULL) return;
     if (m->region != NULL) {
-        fixed_size_region_destroy(m->region);
+        mmapqi_fixed_size_region_destroy(m->region);
         m->region = NULL;
     }
     free(m);
 }
 
-/* ── queue_meta_dest_check ────────────────────────────────────────────────── */
+/* ── mmapqi_queue_meta_dest_check ────────────────────────────────────────────────── */
 
-int queue_meta_dest_check(
+int mmapqi_queue_meta_dest_check(
     const char *directory, const char *queue_name,
     uint8_t expected_type, int preserve, int allow_append)
 {
     QueueMeta *dm = NULL;
-    int qerr = queue_meta_open_ro(directory, queue_name, expected_type, &dm);
+    int qerr = mmapqi_queue_meta_open_ro(directory, queue_name, expected_type, &dm);
     if (qerr != 0) {
         if (qerr == MMAPQ_ENOENT) return 0;
         return qerr;
     }
-    queue_meta_close(dm);
+    mmapqi_queue_meta_close(dm);
 
     if (!allow_append) return MMAPQ_EEXIST;
     if (preserve) return MMAPQ_EINVAL;

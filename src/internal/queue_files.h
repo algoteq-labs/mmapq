@@ -16,7 +16,7 @@
 /**
  * Return 1 if @p path exists on disk, 0 otherwise.
  */
-int queue_file_exists(const char *path);
+int mmapqi_queue_file_exists(const char *path);
 
 /* ── Appender ID discovery ───────────────────────────────────────────────── */
 
@@ -30,7 +30,7 @@ int queue_file_exists(const char *path);
  * max_ids:   capacity of @p ids
  * Returns: number of IDs written
  */
-int queue_files_get_appender_ids(
+int mmapqi_queue_files_get_appender_ids(
     const char *directory,
     const char *queue_name,
     uint8_t    *ids,
@@ -77,9 +77,9 @@ static inline void file_index_set_set(FileIndexSet *s, int idx)
 
 /**
  * Iterate over set bits. Usage:
- *   for (int i = file_index_set_first(s); i >= 0; i = file_index_set_next(s, i))
+ *   for (int i = mmapqi_file_index_set_first(s); i >= 0; i = mmapqi_file_index_set_next(s, i))
  */
-int file_index_set_first(const FileIndexSet *s);
-int file_index_set_next(const FileIndexSet *s, int after);
+int mmapqi_file_index_set_first(const FileIndexSet *s);
+int mmapqi_file_index_set_next(const FileIndexSet *s, int after);
 
 #endif /* QUEUE_FILES_H */

@@ -3,7 +3,7 @@
  *
  * Runs a single-process producer/consumer loop using the batch queue API.
  * The appender writes 3 batches (1, 2, and 3 messages each); the poller
- * reads them all using batch_iterator_advance().
+ * reads them all using mmapq_batch_iterator_advance().
  *
  * The queue files are written to /tmp/mmap_batch_demo/ and cleaned up
  * on exit.
@@ -29,9 +29,9 @@
 #define MAX_FILE_SIZE    ((int64_t)REGION_SIZE * 256)  /* ~1 GB max        */
 #define TIMEOUT_NS       5000000000ULL         /* 5 second mapping timeout */
 
-static NextMove batch_handler(
+static MmapqNextMove batch_handler(
     int64_t                   batch_index,
-    BatchReadingContext       *ctx,
+    MmapqBatchReadingContext       *ctx,
     void                      *user_data)
 {
     int64_t *total_messages = (int64_t *)user_data;
@@ -40,7 +40,7 @@ static NextMove batch_handler(
 
     printf("  batch[%ld] — %d message(s):\n", batch_index, msg_count);
 
-    while (batch_iterator_advance(ctx->iterator)) {
+    while (mmapq_batch_iterator_advance(ctx->iterator)) {
         const void *data = batch_iterator_current_data(ctx->iterator);
         int32_t length   = batch_iterator_current_length(ctx->iterator);
         printf("    msg[%d]: %.*s\n", seen, length, (const char *)data);
@@ -48,7 +48,7 @@ static NextMove batch_handler(
         (*total_messages)++;
     }
 
-    return NEXT_ADVANCE;
+    return MMAPQ_NEXT_ADVANCE;
 }
 
 int main(void)
@@ -65,68 +65,68 @@ int main(void)
     }
 
     /* Create runtime */
-    Runtime *rt = NULL;
-    int rc = runtime_region_mapper(&rt);
-    if (rc != 0) { fprintf(stderr, "runtime_region_mapper failed\n"); return 1; }
+    MmapqRuntime *rt = NULL;
+    int rc = mmapq_runtime_region_mapper(&rt);
+    if (rc != 0) { fprintf(stderr, "mmapq_runtime_region_mapper failed\n"); return 1; }
 
     /* Create the batch queue */
-    IndexedBatchQueue *q = NULL;
-    rc = indexed_batch_queue_create(
+    MmapqIndexedBatchQueue *q = NULL;
+    rc = mmapq_indexed_batch_queue_create(
         QUEUE_DIR, QUEUE_NAME,
         REGION_SIZE, RING_SIZE, 1,
         MAX_FILE_SIZE, 0, TIMEOUT_NS, 0,
         rt, rt, &q);
-    if (rc != 0) { fprintf(stderr, "indexed_batch_queue_create failed (rc=%d)\n", rc); return 1; }
+    if (rc != 0) { fprintf(stderr, "mmapq_indexed_batch_queue_create failed (rc=%d)\n", rc); return 1; }
 
     /* Create appender and poller */
-    IndexedBatchAppender *appender = NULL;
-    rc = indexed_batch_queue_create_appender(q, &appender);
+    MmapqIndexedBatchAppender *appender = NULL;
+    rc = mmapq_indexed_batch_queue_create_appender(q, &appender);
     if (rc != 0) { fprintf(stderr, "create_appender failed (rc=%d)\n", rc); return 1; }
 
-    IndexedBatchPoller *poller = NULL;
-    rc = indexed_batch_queue_create_poller(q, &poller);
+    MmapqIndexedBatchPoller *poller = NULL;
+    rc = mmapq_indexed_batch_queue_create_poller(q, &poller);
     if (rc != 0) { fprintf(stderr, "create_poller failed (rc=%d)\n", rc); return 1; }
 
-    printf("appender ID: %d\n\n", indexed_batch_appender_id(appender));
+    printf("appender ID: %d\n\n", mmapq_indexed_batch_appender_id(appender));
 
     /* Produce 3 batches with increasing message counts */
     printf("Producing batches...\n");
 
     /* Batch 0: 1 message */
     {
-        MutableBatch *b = indexed_batch_appender_start_batch(appender);
+        MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(appender);
         if (!b) { fprintf(stderr, "start_batch failed\n"); return 1; }
-        if (mutable_batch_append(b, "hello", 5) < 0) { fprintf(stderr, "append failed\n"); return 1; }
-        int64_t off = mutable_batch_complete(b);
+        if (mmapq_mutable_batch_append(b, "hello", 5) < 0) { fprintf(stderr, "append failed\n"); return 1; }
+        int64_t off = mmapq_mutable_batch_complete(b);
         if (off < 0) { fprintf(stderr, "complete failed\n"); return 1; }
-        int64_t idx = indexed_batch_appender_commit_batch(appender, off);
+        int64_t idx = mmapq_indexed_batch_appender_commit_batch(appender, off);
         if (idx < 0) { fprintf(stderr, "commit_batch failed\n"); return 1; }
         printf("  batch[%ld] committed (1 message)\n", idx);
     }
 
     /* Batch 1: 2 messages */
     {
-        MutableBatch *b = indexed_batch_appender_start_batch(appender);
+        MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(appender);
         if (!b) { fprintf(stderr, "start_batch failed\n"); return 1; }
-        if (mutable_batch_append(b, "foo", 3) < 0) { fprintf(stderr, "append failed\n"); return 1; }
-        if (mutable_batch_append(b, "bar", 3) < 0) { fprintf(stderr, "append failed\n"); return 1; }
-        int64_t off = mutable_batch_complete(b);
+        if (mmapq_mutable_batch_append(b, "foo", 3) < 0) { fprintf(stderr, "append failed\n"); return 1; }
+        if (mmapq_mutable_batch_append(b, "bar", 3) < 0) { fprintf(stderr, "append failed\n"); return 1; }
+        int64_t off = mmapq_mutable_batch_complete(b);
         if (off < 0) { fprintf(stderr, "complete failed\n"); return 1; }
-        int64_t idx = indexed_batch_appender_commit_batch(appender, off);
+        int64_t idx = mmapq_indexed_batch_appender_commit_batch(appender, off);
         if (idx < 0) { fprintf(stderr, "commit_batch failed\n"); return 1; }
         printf("  batch[%ld] committed (2 messages)\n", idx);
     }
 
     /* Batch 2: 3 messages */
     {
-        MutableBatch *b = indexed_batch_appender_start_batch(appender);
+        MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(appender);
         if (!b) { fprintf(stderr, "start_batch failed\n"); return 1; }
-        if (mutable_batch_append(b, "alpha", 5) < 0) { fprintf(stderr, "append failed\n"); return 1; }
-        if (mutable_batch_append(b, "beta", 4) < 0) { fprintf(stderr, "append failed\n"); return 1; }
-        if (mutable_batch_append(b, "gamma", 5) < 0) { fprintf(stderr, "append failed\n"); return 1; }
-        int64_t off = mutable_batch_complete(b);
+        if (mmapq_mutable_batch_append(b, "alpha", 5) < 0) { fprintf(stderr, "append failed\n"); return 1; }
+        if (mmapq_mutable_batch_append(b, "beta", 4) < 0) { fprintf(stderr, "append failed\n"); return 1; }
+        if (mmapq_mutable_batch_append(b, "gamma", 5) < 0) { fprintf(stderr, "append failed\n"); return 1; }
+        int64_t off = mmapq_mutable_batch_complete(b);
         if (off < 0) { fprintf(stderr, "complete failed\n"); return 1; }
-        int64_t idx = indexed_batch_appender_commit_batch(appender, off);
+        int64_t idx = mmapq_indexed_batch_appender_commit_batch(appender, off);
         if (idx < 0) { fprintf(stderr, "commit_batch failed\n"); return 1; }
         printf("  batch[%ld] committed (3 messages)\n", idx);
     }
@@ -136,8 +136,8 @@ int main(void)
     int64_t total_messages = 0;
 
     for (int i = 0; i < 3; i++) {
-        PollResult r = indexed_batch_poller_poll(poller, batch_handler, &total_messages);
-        if (r == POLL_END_OF_STREAM) {
+        MmapqPollResult r = mmapq_indexed_batch_poller_poll(poller, batch_handler, &total_messages);
+        if (r == MMAPQ_POLL_END_OF_STREAM) {
             printf("  end of stream (batch %d)\n", i);
             break;
         }
@@ -155,9 +155,9 @@ int main(void)
     }
 
     /* Cleanup */
-    indexed_batch_appender_close(appender);
-    indexed_batch_poller_close(poller);
-    indexed_batch_queue_close(q);
+    mmapq_indexed_batch_appender_close(appender);
+    mmapq_indexed_batch_poller_close(poller);
+    mmapq_indexed_batch_queue_close(q);
 
     {
         char cmd[256];

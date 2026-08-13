@@ -15,7 +15,7 @@ static const int64_t  MAX_FILE_SIZE = 4096 * 16;
 static const int      RING_SIZE     = 4;
 static const uint64_t TIMEOUT_NS    = 2000000000ULL;
 
-static Runtime         *rt  = NULL;
+static MmapqRuntime         *rt  = NULL;
 static FileMapper      *fm  = NULL;
 static RegionAccessor  *acc = NULL;
 
@@ -31,24 +31,24 @@ static void cleanup_files(void)
 void setUp(void)
 {
     cleanup_files();
-    int rc_rt = runtime_region_mapper(&rt);
+    int rc_rt = mmapq_runtime_region_mapper(&rt);
     TEST_ASSERT_EQUAL_INT(0, rc_rt);
     TEST_ASSERT_NOT_NULL(rt);
 
-    int fmerr = file_mapper_rolled_create(
+    int fmerr = mmapqi_file_mapper_rolled_create(
         FILE_PREFIX, MAX_FILE_SIZE, REGION_SIZE,
-        file_init_zeros, NULL, MAP_MODE_READ_WRITE,
+        mmapqi_file_init_zeros, NULL, MAP_MODE_READ_WRITE,
         RING_SIZE + 2, 1, &fm);
     TEST_ASSERT_EQUAL_INT(0, fmerr);
     TEST_ASSERT_NOT_NULL(fm);
 
     RegionRing *ring = NULL;
-    int rerr = region_ring_async_create(
+    int rerr = mmapqi_region_ring_async_create(
         RING_SIZE, REGION_SIZE, fm, TIMEOUT_NS, rt, &ring);
     TEST_ASSERT_EQUAL_INT(0, rerr);
     TEST_ASSERT_NOT_NULL(ring);
 
-    int rerr2 = region_ring_accessor_create(
+    int rerr2 = mmapqi_region_ring_accessor_create(
         ring, REGION_SIZE,
         REGION_RING_ACCESSOR_DEFAULT_REGIONS_AHEAD,
         REGION_RING_ACCESSOR_DEFAULT_PREMAP_RATIO,
@@ -59,10 +59,10 @@ void setUp(void)
 
 void tearDown(void)
 {
-    if (acc) { region_ring_accessor_destroy(acc); acc = NULL; fm = NULL; }
-    else if (fm) { file_mapper_close(fm); file_mapper_destroy(fm); fm = NULL; }
+    if (acc) { mmapqi_region_ring_accessor_destroy(acc); acc = NULL; fm = NULL; }
+    else if (fm) { file_mapper_close(fm); mmapqi_file_mapper_destroy(fm); fm = NULL; }
     cleanup_files();
-    /* Note: runtime_region_mapper() is a singleton — don't destroy it */
+    /* Note: mmapq_runtime_region_mapper() is a singleton — don't destroy it */
 }
 
 /* ── Basic wrap tests ────────────────────────────────────────────────────── */

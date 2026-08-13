@@ -2,7 +2,7 @@
 #define BATCH_PAYLOAD_ITERATOR_INTERNAL_H
 
 /**
- * Internal (private) header — full definition of BatchPayloadIterator.
+ * Internal (private) header — full definition of MmapqBatchPayloadIterator.
  *
  * This header exposes the struct layout and inline accessors for C code
  * inside this library. Bindings (Rust FFI, Python cffi) MUST NOT include
@@ -16,7 +16,7 @@
 #include "header_codec.h"
 
 /* Complete the forward declaration from batch_payload_iterator.h */
-struct BatchPayloadIterator {
+struct MmapqBatchPayloadIterator {
     const char     *queue_name;
     RegionAccessor *payload_acc;
     Buffer          payload_buf;
@@ -32,22 +32,22 @@ struct BatchPayloadIterator {
     int             exhausted;
 };
 
-static inline int batch_iterator_has_current(const BatchPayloadIterator *it)
+static inline int batch_iterator_has_current(const MmapqBatchPayloadIterator *it)
 {
     return it->current_msg_index >= 0 && !it->exhausted;
 }
 
-static inline const void *batch_iterator_current_data(const BatchPayloadIterator *it)
+static inline const void *batch_iterator_current_data(const MmapqBatchPayloadIterator *it)
 {
     return it->payload_buf.data + PAYLOAD_DATA_OFFSET;
 }
 
-static inline int32_t batch_iterator_current_length(const BatchPayloadIterator *it)
+static inline int32_t batch_iterator_current_length(const MmapqBatchPayloadIterator *it)
 {
     return it->current_msg_length;
 }
 
-static inline int64_t batch_iterator_next_payload_position(const BatchPayloadIterator *it)
+static inline int64_t batch_iterator_next_payload_position(const MmapqBatchPayloadIterator *it)
 {
     return it->next_message_position;
 }

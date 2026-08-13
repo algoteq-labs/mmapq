@@ -14,7 +14,7 @@ static const int32_t REGION_SIZE   = 4096;
 static const int64_t MAX_FILE_SIZE = 4096 * 8;
 static const uint64_t TIMEOUT_NS   = 2000000000ULL;  /* 2 seconds */
 
-static Runtime    *rt  = NULL;
+static MmapqRuntime    *rt  = NULL;
 static FileMapper *fm  = NULL;
 static Region     *reg = NULL;
 
@@ -30,35 +30,35 @@ static void cleanup_files(void)
 void setUp(void)
 {
     cleanup_files();
-    IdleStrategy *idle = NULL;
-    int rc_idle = idle_strategy_busy_spin_create(&idle);
+    MmapqIdleStrategy *idle = NULL;
+    int rc_idle = mmapq_idle_strategy_busy_spin_create(&idle);
     TEST_ASSERT_EQUAL_INT(0, rc_idle);
     TEST_ASSERT_NOT_NULL(idle);
-    int rc_rt = runtime_create("test-mapper",
+    int rc_rt = mmapq_runtime_create("test-mapper",
                                idle,
-                               RUNTIME_DEFAULT_CLOSE_TIMEOUT_NS,
+                               MMAPQ_RUNTIME_DEFAULT_CLOSE_TIMEOUT_NS,
                                NULL, NULL, &rt);
     TEST_ASSERT_EQUAL_INT(0, rc_rt);
     TEST_ASSERT_NOT_NULL(rt);
-    int fmerr = file_mapper_rolled_create(
+    int fmerr = mmapqi_file_mapper_rolled_create(
         FILE_PREFIX, MAX_FILE_SIZE, REGION_SIZE,
-        file_init_zeros, NULL, MAP_MODE_READ_WRITE, 4, 1, &fm);
+        mmapqi_file_init_zeros, NULL, MAP_MODE_READ_WRITE, 4, 1, &fm);
     TEST_ASSERT_EQUAL_INT(0, fmerr);
     TEST_ASSERT_NOT_NULL(fm);
-    int rerr = region_async_create(fm, REGION_SIZE, TIMEOUT_NS,
+    int rerr = mmapqi_region_async_create(fm, REGION_SIZE, TIMEOUT_NS,
                                REGION_MAX_FILE_NOT_FOUND_ERRORS,
                                REGION_MAX_BEYOND_FILE_SIZE_ERRORS,
                                &reg);
     TEST_ASSERT_EQUAL_INT(0, rerr);
     TEST_ASSERT_NOT_NULL(reg);
-    /* Region is driven manually in tests via region_async_process_request() */
+    /* Region is driven manually in tests via mmapqi_region_async_process_request() */
 }
 
 void tearDown(void)
 {
-    if (reg) { region_destroy(reg); reg = NULL; }
-    if (fm)  { file_mapper_close(fm); file_mapper_destroy(fm); fm = NULL; }
-    if (rt)  { runtime_destroy(rt); rt = NULL; }
+    if (reg) { mmapqi_region_destroy(reg); reg = NULL; }
+    if (fm)  { file_mapper_close(fm); mmapqi_file_mapper_destroy(fm); fm = NULL; }
+    if (rt)  { mmapq_runtime_destroy(rt); rt = NULL; }
     cleanup_files();
 }
 
@@ -68,7 +68,7 @@ static void drive_until_mapped(Region *r, int64_t position, int max_iters)
 {
     region_map(r, position);
     for (int i = 0; i < max_iters; i++) {
-        if (region_async_process_request(r)) {
+        if (mmapqi_region_async_process_request(r)) {
             /* Check if now mapped */
             Buffer buf = {0};
             if (region_wrap(r, position, &buf) == WRAP_SUCCESS) {
@@ -95,7 +95,7 @@ void test_async_wrap_returns_timeout_when_not_mapped(void)
 {
     /* Create a fresh region with very short timeout — no mapping requested */
     Region *fast_timeout = NULL;
-    int rerr2 = region_async_create(
+    int rerr2 = mmapqi_region_async_create(
         fm, REGION_SIZE, 1000ULL,  /* 1 microsecond */
         REGION_MAX_FILE_NOT_FOUND_ERRORS,
         REGION_MAX_BEYOND_FILE_SIZE_ERRORS,
@@ -109,7 +109,7 @@ void test_async_wrap_returns_timeout_when_not_mapped(void)
     WrapResult r = region_wrap(fast_timeout, 0, &buf);
     TEST_ASSERT_EQUAL(WRAP_MAP_TIMED_OUT, r);
 
-    region_destroy(fast_timeout);
+    mmapqi_region_destroy(fast_timeout);
 }
 
 void test_async_map_request_is_idempotent(void)
@@ -151,7 +151,7 @@ void test_async_unmap_and_remap(void)
     TEST_ASSERT_EQUAL(WRAP_SUCCESS, region_wrap(reg, 0, &buf));
 
     region_unmap(reg);
-    region_async_process_request(reg);
+    mmapqi_region_async_process_request(reg);
 
     /* Remap at different position */
     drive_until_mapped(reg, REGION_SIZE, 100);
@@ -169,11 +169,11 @@ void test_async_process_request_returns_work_done(void)
 {
     region_map(reg, 0);
     /* First process should do work (MAP_REQUESTED → MAPPED) */
-    int work = region_async_process_request(reg);
+    int work = mmapqi_region_async_process_request(reg);
     TEST_ASSERT_GREATER_THAN(0, work);
 
     /* Second process — already MAPPED, no work */
-    int work2 = region_async_process_request(reg);
+    int work2 = mmapqi_region_async_process_request(reg);
     TEST_ASSERT_EQUAL_INT(0, work2);
 }
 
@@ -181,9 +181,9 @@ void test_async_close_unmaps_region(void)
 {
     drive_until_mapped(reg, 0, 100);
     /* close() should not crash and should unmap */
-    region_async_process_request(reg);  /* ensure state is settled */
-    /* region_destroy calls close() internally */
-    region_destroy(reg);
+    mmapqi_region_async_process_request(reg);  /* ensure state is settled */
+    /* mmapqi_region_destroy calls close() internally */
+    mmapqi_region_destroy(reg);
     reg = NULL;  /* prevent double-free in tearDown */
 }
 

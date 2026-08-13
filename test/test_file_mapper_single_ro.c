@@ -18,7 +18,7 @@ void setUp(void)
 {
     /* Create a test file with known content */
     int fd = open(TEST_FILE, O_RDWR | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
-    file_init_zeros(fd, REGION_SIZE * 2, NULL);
+    mmapqi_file_init_zeros(fd, REGION_SIZE * 2, NULL);
 
     /* Write a known value at offset 0 */
     uint64_t magic = 0xDEADBEEFCAFEBABEULL;
@@ -30,7 +30,7 @@ void setUp(void)
 
     close(fd);
 
-    int fmerr = file_mapper_single_ro_create(TEST_FILE, file_init_none, NULL, 1, &fm);
+    int fmerr = mmapqi_file_mapper_single_ro_create(TEST_FILE, mmapqi_file_init_none, NULL, 1, &fm);
     TEST_ASSERT_EQUAL_INT(0, fmerr);
     TEST_ASSERT_NOT_NULL(fm);
 }
@@ -39,7 +39,7 @@ void tearDown(void)
 {
     if (fm != NULL) {
         file_mapper_close(fm);
-        file_mapper_destroy(fm);
+        mmapqi_file_mapper_destroy(fm);
         fm = NULL;
     }
     unlink(TEST_FILE);
@@ -82,8 +82,8 @@ void test_ro_map_second_region(void)
 void test_ro_map_missing_file_returns_file_not_found(void)
 {
     FileMapper *missing = NULL;
-    int fmerr2 = file_mapper_single_ro_create(
-        MISSING_FILE, file_init_none, NULL, 1, &missing);
+    int fmerr2 = mmapqi_file_mapper_single_ro_create(
+        MISSING_FILE, mmapqi_file_init_none, NULL, 1, &missing);
     TEST_ASSERT_EQUAL_INT(0, fmerr2);
     TEST_ASSERT_NOT_NULL(missing);
 
@@ -91,7 +91,7 @@ void test_ro_map_missing_file_returns_file_not_found(void)
     TEST_ASSERT_EQUAL(FILE_MAPPER_FILE_NOT_FOUND, addr);
 
     file_mapper_close(missing);
-    file_mapper_destroy(missing);
+    mmapqi_file_mapper_destroy(missing);
 }
 
 void test_ro_map_beyond_file_size_returns_sentinel(void)

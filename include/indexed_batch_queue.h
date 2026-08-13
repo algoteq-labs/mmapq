@@ -1,5 +1,5 @@
-#ifndef INDEXED_BATCH_QUEUE_H
-#define INDEXED_BATCH_QUEUE_H
+#ifndef MMAPQ_INDEXED_BATCH_QUEUE_H
+#define MMAPQ_INDEXED_BATCH_QUEUE_H
 
 #include <stdint.h>
 #include "indexed_batch_appender.h"
@@ -9,7 +9,7 @@
 #include "runtime.h"
 
 /**
- * IndexedBatchQueue — factory and lifecycle owner for an indexed batch queue.
+ * MmapqIndexedBatchQueue — factory and lifecycle owner for an indexed batch queue.
  *
  * A batch queue stores ordered sequences of batches, each containing one or
  * more messages. It is the top-level object from which appenders, pollers,
@@ -22,10 +22,10 @@
  * The queue does not own the appenders/pollers/readers it creates — each must
  * be closed independently before or after closing the queue.
  *
- * Mirrors Java IIndexedBatchQueue / IndexedBatchQueue.
+ * Mirrors Java IIndexedBatchQueue / MmapqIndexedBatchQueue.
  */
 
-typedef struct IndexedBatchQueue IndexedBatchQueue;
+typedef struct MmapqIndexedBatchQueue MmapqIndexedBatchQueue;
 
 /* ── Factory ─────────────────────────────────────────────────────────────── */
 
@@ -50,7 +50,7 @@ typedef struct IndexedBatchQueue IndexedBatchQueue;
  * out:                on success, set to the new queue
  * Returns: 0 on success, or an MMAPQ_* error code
  */
-int indexed_batch_queue_create(
+int mmapq_indexed_batch_queue_create(
     const char *directory,
     const char *queue_name,
     int32_t     region_size,
@@ -60,9 +60,9 @@ int indexed_batch_queue_create(
     int64_t     start_index,
     uint64_t    timeout_ns,
     int         archivable,
-    Runtime    *write_runtime,
-    Runtime    *read_runtime,
-    IndexedBatchQueue **out);
+    MmapqRuntime    *write_runtime,
+    MmapqRuntime    *read_runtime,
+    MmapqIndexedBatchQueue **out);
 
 /**
  * Create an indexed batch queue with default parameters.
@@ -78,12 +78,12 @@ int indexed_batch_queue_create(
  * out:          on success, set to the new queue
  * Returns: 0 on success, or an MMAPQ_* error code
  */
-int indexed_batch_queue_create_default(
+int mmapq_indexed_batch_queue_create_default(
     const char *directory,
     const char *queue_name,
-    Runtime    *write_runtime,
-    Runtime    *read_runtime,
-    IndexedBatchQueue **out);
+    MmapqRuntime    *write_runtime,
+    MmapqRuntime    *read_runtime,
+    MmapqIndexedBatchQueue **out);
 
 /* ── Component factories ─────────────────────────────────────────────────── */
 
@@ -91,14 +91,14 @@ int indexed_batch_queue_create_default(
  * Create a batch appender on the write side of this queue.
  *
  * Uses the queue's write_runtime for background region mapping.
- * The appender must be closed independently with indexed_batch_appender_close().
+ * The appender must be closed independently with mmapq_indexed_batch_appender_close().
  *
  * q:   the queue (must not be closed)
  * out: on success, set to the new appender
  * Returns: 0 on success, or an MMAPQ_* error code
  */
-int indexed_batch_queue_create_appender(
-    IndexedBatchQueue *q, IndexedBatchAppender **out);
+int mmapq_indexed_batch_queue_create_appender(
+    MmapqIndexedBatchQueue *q, MmapqIndexedBatchAppender **out);
 
 /**
  * Create a batch appender with a specific appender ID.
@@ -111,34 +111,34 @@ int indexed_batch_queue_create_appender(
  * out:         on success, set to the new appender
  * Returns: 0 on success, or an MMAPQ_* error code
  */
-int indexed_batch_queue_create_appender_with_id(
-    IndexedBatchQueue *q, uint8_t appender_id, IndexedBatchAppender **out);
+int mmapq_indexed_batch_queue_create_appender_with_id(
+    MmapqIndexedBatchQueue *q, uint8_t appender_id, MmapqIndexedBatchAppender **out);
 
 /**
  * Create a batch poller on the read side of this queue.
  *
  * Uses the queue's read_runtime for background region mapping.
- * The poller must be closed independently with indexed_batch_poller_close().
+ * The poller must be closed independently with mmapq_indexed_batch_poller_close().
  *
  * q:   the queue (must not be closed)
  * out: on success, set to the new poller positioned at the queue's start index
  * Returns: 0 on success, or an MMAPQ_* error code
  */
-int indexed_batch_queue_create_poller(
-    IndexedBatchQueue *q, IndexedBatchPoller **out);
+int mmapq_indexed_batch_queue_create_poller(
+    MmapqIndexedBatchQueue *q, MmapqIndexedBatchPoller **out);
 
 /**
  * Create a batch reader on the read side of this queue.
  *
  * Uses the queue's read_runtime for background region mapping.
- * The reader must be closed independently with indexed_batch_reader_close().
+ * The reader must be closed independently with mmapq_indexed_batch_reader_close().
  *
  * q:   the queue (must not be closed)
  * out: on success, set to the new reader
  * Returns: 0 on success, or an MMAPQ_* error code
  */
-int indexed_batch_queue_create_reader(
-    IndexedBatchQueue *q, IndexedBatchReader **out);
+int mmapq_indexed_batch_queue_create_reader(
+    MmapqIndexedBatchQueue *q, MmapqIndexedBatchReader **out);
 
 /* ── Lifecycle ────────────────────────────────────────────────────────────── */
 
@@ -147,14 +147,14 @@ int indexed_batch_queue_create_reader(
  *
  * The queue meta file must have been created with the archivable flag set
  * (via queue_meta_open_rw with archivable=1). The archiver must be closed
- * independently with indexed_batch_archiver_close().
+ * independently with mmapq_indexed_batch_archiver_close().
  *
  * q:   the queue (must not be closed)
  * out: on success, set to the new batch archiver
  * Returns: 0 on success, or an MMAPQ_* error code
  */
-int indexed_batch_queue_create_archiver(
-    IndexedBatchQueue *q, IndexedBatchArchiver **out);
+int mmapq_indexed_batch_queue_create_archiver(
+    MmapqIndexedBatchQueue *q, MmapqIndexedBatchArchiver **out);
 
 /**
  * Close the queue and release its configuration resources.
@@ -163,6 +163,6 @@ int indexed_batch_queue_create_archiver(
  * those must be closed independently. After this call the queue pointer
  * must not be used.
  */
-void indexed_batch_queue_close(IndexedBatchQueue *q);
+void mmapq_indexed_batch_queue_close(MmapqIndexedBatchQueue *q);
 
-#endif /* INDEXED_BATCH_QUEUE_H */
+#endif /* MMAPQ_INDEXED_BATCH_QUEUE_H */

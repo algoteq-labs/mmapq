@@ -312,8 +312,8 @@ assume).
    surface as `Err` from participant creation.
 4. Add one integration test (new file `tests/queue_type.rs`, own binary,
    PID-suffixed temp dir like `tests/runtime_uaf.rs`): create a normal queue
-   via `IndexedQueue` + appender + one append, drop everything, then attempt
-   `IndexedBatchQueue`-side participant creation on the same path and assert
+   via `MmapqIndexedQueue` + appender + one append, drop everything, then attempt
+   `MmapqIndexedBatchQueue`-side participant creation on the same path and assert
    it returns `Err`. (Creation errors currently surface as
    `Internal`/`PoolExhausted`-style variants because create paths return
    NULL, not codes — assert `is_err()`, do NOT assert the specific variant.)

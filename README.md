@@ -110,38 +110,38 @@ library you audit today is the library you run in five years.
 
 /* Background mapper thread — handles file mapping asynchronously.
  * It is a process-wide singleton; call once at startup. */
-Runtime *rt = NULL;
-int rc = runtime_region_mapper(&rt);
+MmapqRuntime *rt = NULL;
+int rc = mmapq_runtime_region_mapper(&rt);
 assert(rc == 0);
 
 /* Open or create a queue (separate write and read runtimes — same here) */
-IndexedQueue *q = NULL;
-rc = indexed_queue_create_default("/tmp", "orders", rt, rt, &q);
+MmapqIndexedQueue *q = NULL;
+rc = mmapq_indexed_queue_create_default("/tmp", "orders", rt, rt, &q);
 assert(rc == 0);
 
 /* Append a message */
-IndexedAppender *a = NULL;
-rc = indexed_queue_create_appender(q, &a);
+MmapqIndexedAppender *a = NULL;
+rc = mmapq_indexed_queue_create_appender(q, &a);
 assert(rc == 0);
-int64_t idx = indexed_appender_append(a, "hello", 5);
+int64_t idx = mmapq_indexed_appender_append(a, "hello", 5);
 
 /* Poll messages */
-IndexedPoller *p = NULL;
-rc = indexed_queue_create_poller(q, &p);
+MmapqIndexedPoller *p = NULL;
+rc = mmapq_indexed_queue_create_poller(q, &p);
 assert(rc == 0);
 
-static NextMove my_handler(int64_t index, uint8_t appender_id,
+static MmapqNextMove my_handler(int64_t index, uint8_t appender_id,
                             const void *data, int32_t length, void *ctx) {
     printf("[%ld] %.*s\n", index, length, (const char *)data);
-    return NEXT_ADVANCE;
+    return MMAPQ_NEXT_ADVANCE;
 }
 
-PollResult r = indexed_poller_poll(p, my_handler, NULL);
+MmapqPollResult r = mmapq_indexed_poller_poll(p, my_handler, NULL);
 
 /* Close participants before the queue */
-indexed_appender_close(a);
-indexed_poller_close(p);
-indexed_queue_close(q);
+mmapq_indexed_appender_close(a);
+mmapq_indexed_poller_close(p);
+mmapq_indexed_queue_close(q);
 ```
 
 Save, compile with `make`, and run. See `examples/demo.c` for a complete
@@ -158,47 +158,47 @@ header CAS operations and improving throughput for high-frequency messages.
 #include "runtime.h"
 #include "indexed_batch_queue.h"
 
-Runtime *rt = NULL;
-int rc = runtime_region_mapper(&rt);
+MmapqRuntime *rt = NULL;
+int rc = mmapq_runtime_region_mapper(&rt);
 assert(rc == 0);
 
-IndexedBatchQueue *q = NULL;
-rc = indexed_batch_queue_create_default("/tmp", "events", rt, rt, &q);
+MmapqIndexedBatchQueue *q = NULL;
+rc = mmapq_indexed_batch_queue_create_default("/tmp", "events", rt, rt, &q);
 assert(rc == 0);
 
 /* Batch three messages together (single header commit) */
-IndexedBatchAppender *a = NULL;
-rc = indexed_batch_queue_create_appender(q, &a);
+MmapqIndexedBatchAppender *a = NULL;
+rc = mmapq_indexed_batch_queue_create_appender(q, &a);
 assert(rc == 0);
 
-MutableBatch *b = indexed_batch_appender_start_batch(a);
-mutable_batch_append(b, "msg0", 4);
-mutable_batch_append(b, "msg1", 4);
-mutable_batch_append(b, "msg2", 4);
-int64_t batch_idx = indexed_batch_appender_commit_batch(a, mutable_batch_complete(b));
+MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+mmapq_mutable_batch_append(b, "msg0", 4);
+mmapq_mutable_batch_append(b, "msg1", 4);
+mmapq_mutable_batch_append(b, "msg2", 4);
+int64_t batch_idx = mmapq_indexed_batch_appender_commit_batch(a, mmapq_mutable_batch_complete(b));
 
 /* Poll one batch at a time — handler receives the full batch context */
-IndexedBatchPoller *p = NULL;
-rc = indexed_batch_queue_create_poller(q, &p);
+MmapqIndexedBatchPoller *p = NULL;
+rc = mmapq_indexed_batch_queue_create_poller(q, &p);
 assert(rc == 0);
 
-static NextMove my_handler(int64_t batch_index, BatchReadingContext *ctx,
+static MmapqNextMove my_handler(int64_t batch_index, MmapqBatchReadingContext *ctx,
                             void *user_ctx) {
     /* Iterate through messages in the batch */
-    BatchPayloadIterator *it = ctx->iterator;
-    while (batch_iterator_advance(it)) {
-        int32_t len = batch_iterator_current_length_ffi(it);
+    MmapqBatchPayloadIterator *it = ctx->iterator;
+    while (mmapq_batch_iterator_advance(it)) {
+        int32_t len = mmapq_batch_iterator_current_length_ffi(it);
         printf("batch[%ld]: %.*s\n", batch_index, (int)len,
-               (const char *)batch_iterator_current_data_ffi(it));
+               (const char *)mmapq_batch_iterator_current_data_ffi(it));
     }
-    return NEXT_ADVANCE;
+    return MMAPQ_NEXT_ADVANCE;
 }
 
-PollResult r = indexed_batch_poller_poll(p, my_handler, NULL);
+MmapqPollResult r = mmapq_indexed_batch_poller_poll(p, my_handler, NULL);
 
-indexed_batch_appender_close(a);
-indexed_batch_poller_close(p);
-indexed_batch_queue_close(q);
+mmapq_indexed_batch_appender_close(a);
+mmapq_indexed_batch_poller_close(p);
+mmapq_indexed_batch_queue_close(q);
 ```
 
 ---
@@ -247,11 +247,11 @@ across different cache lines (512 byte stride).
 | **Appender** | A writer. Appends messages to a per-appender payload file and commits an 8-byte header atomically via CAS. Up to 256 concurrent appenders per queue. |
 | **Poller** | A sequential consumer. Reads headers in index order, follows the payload pointer, and delivers messages to a callback. |
 | **Reader** | A random-access consumer. Reads any entry by index without advancing a cursor. |
-| **Runtime** | A background thread that maps/unmaps file regions ahead of the hot loop. Absorbs `ftruncate`, page-zeroing, and `MAP_POPULATE` costs so the hot thread never stalls. |
+| **MmapqRuntime** | A background thread that maps/unmaps file regions ahead of the hot loop. Absorbs `ftruncate`, page-zeroing, and `MAP_POPULATE` costs so the hot thread never stalls. |
 | **Single-message queue** | One header commit per message. Maximum throughput for large messages, minimum overhead per message. |
 | **Batch queue** | Groups N messages under one header commit. Higher throughput for small messages (fewer CAS operations). Wire-format compatible with the Java batch queue. |
 | **Deferred commit** | Append payload without committing the header. Commit later, possibly in a different order. Useful for UDP resequencing or pipelined writes. |
-| **Mixed Runtime** | Use separate runtimes for writing (async) and reading (sync). The writer offloads `ftruncate` to a background thread; the reader runs without any background interference for minimum latency. |
+| **Mixed MmapqRuntime** | Use separate runtimes for writing (async) and reading (sync). The writer offloads `ftruncate` to a background thread; the reader runs without any background interference for minimum latency. |
 
 ---
 
@@ -347,10 +347,10 @@ cross-over combinations:
 
 | Import function | Stream format | Destination | Behaviour |
 |:---|---|---|---|
-| `queue_transfer_import` | flat (single-message) | normal queue | Direct append |
-| `queue_transfer_import_batch_stream` | batched | normal queue | Flatten batches |
-| `batch_queue_transfer_import` | batched | batch queue | Direct batch commit |
-| `batch_queue_transfer_import_flat_stream` | flat | batch queue | 1-msg batches |
+| `mmapq_queue_transfer_import` | flat (single-message) | normal queue | Direct append |
+| `mmapq_queue_transfer_import_batch_stream` | batched | normal queue | Flatten batches |
+| `mmapq_batch_queue_transfer_import` | batched | batch queue | Direct batch commit |
+| `mmapq_batch_queue_transfer_import_flat_stream` | flat | batch queue | 1-msg batches |
 
 **Start index mode** controls how the stream's `start_index` metadata is
 interpreted:
@@ -417,7 +417,7 @@ payload visibility — no locks, no kernel calls on the hot path.
 
 ### Async region mapping
 
-A background thread (`runtime_region_mapper`) maps and unmaps file regions
+A background thread (`mmapq_runtime_region_mapper`) maps and unmaps file regions
 in advance. Writers trigger premap at the start of each region (ratio 0.0);
 readers trigger premap at the halfway point (ratio 0.5). The writer
 extends the file with `ftruncate` and pre-touches pages via atomic CAS to
@@ -532,18 +532,18 @@ BENCH_ITER=5000000 BENCH_MAPPER=11 ./scripts/bench.sh
 
 | Function | What it does |
 | :--- | :--- |
-| `runtime_region_mapper(&rt)` | Get the singleton background mapping thread (call once at startup) |
-| `indexed_queue_create_default(dir, name, wrt, rrt, &q)` | Open or create a single-message queue |
-| `indexed_queue_create_appender(q, &a)` | Create a writer |
-| `indexed_queue_create_poller(q, &p)` | Create a sequential reader |
-| `indexed_appender_append(a, data, len)` | Write and commit a message |
-| `indexed_poller_poll(p, handler, ctx)` | Process one message via callback |
-| `indexed_batch_queue_create_default(dir, name, wrt, rrt, &q)` | Open or create a batch queue |
-| `indexed_batch_appender_start_batch()` | Begin a new batch |
-| `mutable_batch_append()` | Add a message to an in-progress batch |
-| `indexed_batch_appender_commit_batch()` | Commit the batch atomically |
+| `mmapq_runtime_region_mapper(&rt)` | Get the singleton background mapping thread (call once at startup) |
+| `mmapq_indexed_queue_create_default(dir, name, wrt, rrt, &q)` | Open or create a single-message queue |
+| `mmapq_indexed_queue_create_appender(q, &a)` | Create a writer |
+| `mmapq_indexed_queue_create_poller(q, &p)` | Create a sequential reader |
+| `mmapq_indexed_appender_append(a, data, len)` | Write and commit a message |
+| `mmapq_indexed_poller_poll(p, handler, ctx)` | Process one message via callback |
+| `mmapq_indexed_batch_queue_create_default(dir, name, wrt, rrt, &q)` | Open or create a batch queue |
+| `mmapq_indexed_batch_appender_start_batch()` | Begin a new batch |
+| `mmapq_mutable_batch_append()` | Add a message to an in-progress batch |
+| `mmapq_indexed_batch_appender_commit_batch()` | Commit the batch atomically |
 
-`indexed_queue_create` and `indexed_batch_queue_create` accept an `archivable` parameter
+`mmapq_indexed_queue_create` and `mmapq_indexed_batch_queue_create` accept an `archivable` parameter
 (0 = non-archivable, performant; 1 = archivable, atomic start_index reads).
 Applies at creation only; existing queues keep their on-disk value.
 
@@ -551,69 +551,69 @@ Applies at creation only; existing queues keep their on-disk value.
 
 | Function | Description |
 |---|---|
-| `indexed_queue_create()` | Open or create with explicit parameters |
-| `indexed_queue_create_reader()` | Create a random-access reader |
-| `indexed_queue_create_archiver()` | Create an archiver |
-| `indexed_queue_close()` | Close the queue |
-| `indexed_appender_append_uncommitted()` | Write without committing |
-| `indexed_appender_commit()` | Commit a previously written payload |
-| `indexed_poller_move_to_end()` | Jump past the last entry |
-| `indexed_poller_move_to_index()` | Jump to a specific index |
-| `indexed_reader_read()` | Read entry at a specific index |
-| `indexed_reader_read_last()` | Read the last committed entry |
-| `indexed_archiver_archive_up_to_index()` | Archive entries up to an index |
-| `indexed_archiver_archivable_files()` | List files safe to delete/archive |
-| `indexed_archiver_print_summary()` | Print queue file layout summary |
+| `mmapq_indexed_queue_create()` | Open or create with explicit parameters |
+| `mmapq_indexed_queue_create_reader()` | Create a random-access reader |
+| `mmapq_indexed_queue_create_archiver()` | Create an archiver |
+| `mmapq_indexed_queue_close()` | Close the queue |
+| `mmapq_indexed_appender_append_uncommitted()` | Write without committing |
+| `mmapq_indexed_appender_commit()` | Commit a previously written payload |
+| `mmapq_indexed_poller_move_to_end()` | Jump past the last entry |
+| `mmapq_indexed_poller_move_to_index()` | Jump to a specific index |
+| `mmapq_indexed_reader_read()` | Read entry at a specific index |
+| `mmapq_indexed_reader_read_last()` | Read the last committed entry |
+| `mmapq_indexed_archiver_archive_up_to_index()` | Archive entries up to an index |
+| `mmapq_indexed_archiver_archivable_files()` | List files safe to delete/archive |
+| `mmapq_indexed_archiver_print_summary()` | Print queue file layout summary |
 
-The poll callback returns `NEXT_ADVANCE`, `NEXT_STOP`, or `NEXT_RETREAT`.
+The poll callback returns `MMAPQ_NEXT_ADVANCE`, `MMAPQ_NEXT_STOP`, or `MMAPQ_NEXT_RETREAT`.
 
 ### Batch queue
 
 | Function | Description |
 |---|---|
-| `indexed_batch_queue_create()` | Open or create a batch queue with explicit parameters |
-| `indexed_batch_queue_create_poller()` | Create a batch sequential consumer |
-| `indexed_batch_queue_create_reader()` | Create a batch random-access reader |
-| `indexed_batch_queue_create_archiver()` | Create a batch archiver |
-| `mutable_batch_complete()` | Finalise the batch |
-| `mutable_batch_append_reserved()` | Reserve space in a batch and get raw write address |
-| `mutable_batch_get()` | Read a message from an in-progress batch by index |
-| `mutable_batch_iterator()` | Iterate over messages in an in-progress batch |
-| `indexed_batch_poller_poll()` | Process one message via callback |
-| `indexed_batch_reader_read()` | Read a batch at a specific index |
-| `indexed_batch_reader_read_last()` | Read the last committed batch |
-| `indexed_batch_archiver_archive_up_to_index()` | Archive batches up to an index |
-| `indexed_batch_archiver_archivable_files()` | List files safe to delete/archive |
+| `mmapq_indexed_batch_queue_create()` | Open or create a batch queue with explicit parameters |
+| `mmapq_indexed_batch_queue_create_poller()` | Create a batch sequential consumer |
+| `mmapq_indexed_batch_queue_create_reader()` | Create a batch random-access reader |
+| `mmapq_indexed_batch_queue_create_archiver()` | Create a batch archiver |
+| `mmapq_mutable_batch_complete()` | Finalise the batch |
+| `mmapq_mutable_batch_append_reserved()` | Reserve space in a batch and get raw write address |
+| `mmapq_mutable_batch_get()` | Read a message from an in-progress batch by index |
+| `mmapq_mutable_batch_iterator()` | Iterate over messages in an in-progress batch |
+| `mmapq_indexed_batch_poller_poll()` | Process one message via callback |
+| `mmapq_indexed_batch_reader_read()` | Read a batch at a specific index |
+| `mmapq_indexed_batch_reader_read_last()` | Read the last committed batch |
+| `mmapq_indexed_batch_archiver_archive_up_to_index()` | Archive batches up to an index |
+| `mmapq_indexed_batch_archiver_archivable_files()` | List files safe to delete/archive |
 
-The batch poll callback returns `NEXT_ADVANCE`, `NEXT_STOP`, or
-`NEXT_RETREAT` — the same `NextMove` enum used by the single-message
+The batch poll callback returns `MMAPQ_NEXT_ADVANCE`, `MMAPQ_NEXT_STOP`, or
+`MMAPQ_NEXT_RETREAT` — the same `MmapqNextMove` enum used by the single-message
 poller.
 
 ### Export / import (QueueTransfer)
 
 | Function | Description |
 |---|---|
-| `queue_transfer_export()` | Export queue entries to a flat stream |
-| `queue_transfer_export_chunked()` | Export split into ~N MB chunk files |
-| `queue_transfer_import()` | Import flat stream into a normal queue |
-| `queue_transfer_import_batch_stream()` | Import batch stream into a normal queue (flatten) |
-| `queue_transfer_copy()` | Copy entries directly between queues |
-| `batch_queue_transfer_export()` | Export batch queue entries to a batched stream |
-| `batch_queue_transfer_export_chunked()` | Batch export split into ~N MB chunk files |
-| `batch_queue_transfer_import()` | Import batched stream into a batch queue |
-| `batch_queue_transfer_import_flat_stream()` | Import flat stream into a batch queue (1-msg batches) |
-| `batch_queue_transfer_copy()` | Copy batches directly between queues |
+| `mmapq_queue_transfer_export()` | Export queue entries to a flat stream |
+| `mmapq_queue_transfer_export_chunked()` | Export split into ~N MB chunk files |
+| `mmapq_queue_transfer_import()` | Import flat stream into a normal queue |
+| `mmapq_queue_transfer_import_batch_stream()` | Import batch stream into a normal queue (flatten) |
+| `mmapq_queue_transfer_copy()` | Copy entries directly between queues |
+| `mmapq_batch_queue_transfer_export()` | Export batch queue entries to a batched stream |
+| `mmapq_batch_queue_transfer_export_chunked()` | Batch export split into ~N MB chunk files |
+| `mmapq_batch_queue_transfer_import()` | Import batched stream into a batch queue |
+| `mmapq_batch_queue_transfer_import_flat_stream()` | Import flat stream into a batch queue (1-msg batches) |
+| `mmapq_batch_queue_transfer_copy()` | Copy batches directly between queues |
 
 All export/copy functions support optional include/exclude filter callbacks
 and `REBASE` / `PRESERVE` start index mode.
 
-### Runtime
+### MmapqRuntime
 
 | Function | Description |
 |---|---|
-| `runtime_create()` | Create a named runtime with a custom idle strategy |
-| `runtime_close()` | Stop the runtime thread |
-| `runtime_set_affinity()` | Pin the runtime thread to a CPU core |
+| `mmapq_runtime_create()` | Create a named runtime with a custom idle strategy |
+| `mmapq_runtime_close()` | Stop the runtime thread |
+| `mmapq_runtime_set_affinity()` | Pin the runtime thread to a CPU core |
 
 ---
 

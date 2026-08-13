@@ -142,7 +142,7 @@ static int32_t ring_accessor_size(RegionAccessor *self)
 
 /* ── Factory ─────────────────────────────────────────────────────────────── */
 
-int region_ring_accessor_create(
+int mmapqi_region_ring_accessor_create(
     RegionRing    *ring,
     int32_t        region_size,
     int            regions_to_map_ahead,
@@ -192,13 +192,13 @@ int region_ring_accessor_create(
 
 /* ── Destroy ─────────────────────────────────────────────────────────────── */
 
-void region_ring_accessor_destroy(RegionAccessor *acc)
+void mmapqi_region_ring_accessor_destroy(RegionAccessor *acc)
 {
     if (acc == NULL) return;
     region_accessor_close(acc);
 
     RingAccessorImpl *impl = (RingAccessorImpl *)acc->impl;
-    region_ring_destroy(impl->ring);
+    mmapqi_region_ring_destroy(impl->ring);
 
     free(impl);
     free(acc);

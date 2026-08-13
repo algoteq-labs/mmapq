@@ -22,7 +22,7 @@
  * the queue head. Falls back to a jump-based search for efficient catch-up. */
 #define MAX_LINEAR_ATTEMPTS_BEFORE_SEARCH  100
 
-struct IndexedAppender {
+struct MmapqIndexedAppender {
     char                *directory;
     char                *queue_name;
     uint8_t              appender_id;
@@ -48,9 +48,9 @@ struct IndexedAppender {
     Buffer payload_buf;
 
     /* Iterators — created lazily on first iterator() call */
-    PayloadIterator            *payload_iter;
-    PayloadIterator            *uncommitted_inner;
-    UncommittedPayloadIterator *uncommitted_iter;
+    MmapqPayloadIterator            *payload_iter;
+    MmapqPayloadIterator            *uncommitted_inner;
+    MmapqUncommittedPayloadIterator *uncommitted_iter;
 
     int closed;
 };
@@ -59,13 +59,13 @@ struct IndexedAppender {
 
 static int64_t appender_start_of_stream(void *ctx)
 {
-    IndexedAppender *a = (IndexedAppender *)ctx;
+    MmapqIndexedAppender *a = (MmapqIndexedAppender *)ctx;
     return appender_meta_start_offset(a->appender_meta);
 }
 
 static int64_t appender_end_of_stream(void *ctx)
 {
-    IndexedAppender *a = (IndexedAppender *)ctx;
+    MmapqIndexedAppender *a = (MmapqIndexedAppender *)ctx;
     return a->current_payload_position;
 }
 
@@ -78,7 +78,7 @@ static int64_t appender_start_index_from_meta(void *ctx)
 
 /* ── Write padding at region boundary ───────────────────────────────────── */
 
-static int write_padding_if_needed(IndexedAppender *a, int32_t length)
+static int write_padding_if_needed(MmapqIndexedAppender *a, int32_t length)
 {
     WrapResult r = region_accessor_wrap(a->payload_acc,
                                          a->current_payload_position,
@@ -118,7 +118,7 @@ static int write_padding_if_needed(IndexedAppender *a, int32_t length)
 
 /* ── Write payload bytes ─────────────────────────────────────────────────── */
 
-static int write_payload(IndexedAppender *a, const void *data, int32_t length,
+static int write_payload(MmapqIndexedAppender *a, const void *data, int32_t length,
                           int64_t *out_offset)
 {
     MMAP_ASSERT(length + PAYLOAD_LENGTH_SIZE <= queue_meta_region_size(a->queue_meta),
@@ -142,7 +142,7 @@ static int write_payload(IndexedAppender *a, const void *data, int32_t length,
 
 /* ── CAS header commit ───────────────────────────────────────────────────── */
 
-static int move_to_last_header(IndexedAppender *a)
+static int move_to_last_header(MmapqIndexedAppender *a)
 {
     int attempts = 0;
     while (attempts < MAX_LINEAR_ATTEMPTS_BEFORE_SEARCH) {
@@ -162,7 +162,7 @@ static int move_to_last_header(IndexedAppender *a)
     }
 
     /* Fall back to jump-based search — the appender is far behind the head */
-    int64_t last_index = header_search_last_index(
+    int64_t last_index = mmapqi_header_search_last_index(
         a->current_index + 1,
         appender_start_index_from_meta, a->queue_meta,
         a->ro_header, &a->ro_buf,
@@ -189,7 +189,7 @@ static int move_to_last_header(IndexedAppender *a)
     return 0;
 }
 
-static int commit_header(IndexedAppender *a, int64_t payload_offset, int64_t *out_index)
+static int commit_header(MmapqIndexedAppender *a, int64_t payload_offset, int64_t *out_index)
 {
     uint64_t header = header_encode(a->appender_id, payload_offset);
 
@@ -225,7 +225,7 @@ static int commit_header(IndexedAppender *a, int64_t payload_offset, int64_t *ou
 
 /* ── Initialise append position after (re)start ──────────────────────────── */
 
-static int initialise_append_position(IndexedAppender *a, int64_t start_index)
+static int initialise_append_position(MmapqIndexedAppender *a, int64_t start_index)
 {
     /*
      * Step 1: Use the stored RO accessor to find lastIndex via
@@ -235,7 +235,7 @@ static int initialise_append_position(IndexedAppender *a, int64_t start_index)
     RegionAccessor *ro_header = a->ro_header;
     Buffer         *ro_buf   = &a->ro_buf;
 
-    int64_t last_index = header_search_last_index(
+    int64_t last_index = mmapqi_header_search_last_index(
         start_index,
         appender_start_index_from_meta, a->queue_meta,
         ro_header, ro_buf,
@@ -257,7 +257,7 @@ static int initialise_append_position(IndexedAppender *a, int64_t start_index)
         int64_t committed_payload_pos = PAYLOAD_ITERATOR_NOT_SET;
 
         for (int64_t i = last_index; i >= 0; i--) {
-            uint64_t hdr = header_read(ro_header, ro_buf, i, a->queue_name);
+            uint64_t hdr = mmapqi_header_read(ro_header, ro_buf, i, a->queue_name);
             if (hdr == HEADER_NULL) break;
             if (header_appender_id(hdr) == a->appender_id) {
                 committed_payload_pos = header_payload_position(hdr);
@@ -275,13 +275,13 @@ static int initialise_append_position(IndexedAppender *a, int64_t start_index)
              *         of the payload stream.
              */
             RegionAccessor *ro_payload =
-                queue_region_accessor_payload(a->ro_acc, a->appender_id);
+                mmapqi_queue_region_accessor_payload(a->ro_acc, a->appender_id);
 
             int64_t probing = committed_payload_pos;
             int64_t msg_off = PAYLOAD_ITERATOR_NOT_SET;
 
             /* Walk past the committed message itself first */
-            int32_t len = payload_walk_advance(a->queue_name,
+            int32_t len = mmapqi_payload_walk_advance(a->queue_name,
                                                 &probing, &msg_off,
                                                 ro_payload, ro_buf);
             if (len <= 0) {
@@ -292,7 +292,7 @@ static int initialise_append_position(IndexedAppender *a, int64_t start_index)
             while (1) {
                 int64_t next_probing = probing;
                 int64_t next_msg_off = PAYLOAD_ITERATOR_NOT_SET;
-                int32_t next_len = payload_walk_advance(a->queue_name,
+                int32_t next_len = mmapqi_payload_walk_advance(a->queue_name,
                                                           &next_probing,
                                                           &next_msg_off,
                                                           ro_payload, ro_buf);
@@ -326,16 +326,16 @@ static int appender_create_internal(
     int64_t         max_file_size,
     uint64_t        timeout_ns,
     int             archivable,
-    Runtime        *runtime,
+    MmapqRuntime        *runtime,
     AppenderIdPool *id_pool,
     uint8_t         appender_id,
     int64_t         start_index,
-    IndexedAppender **out)
+    MmapqIndexedAppender **out)
 {
     if (out == NULL) return MMAPQ_EINVAL;
     *out = NULL;
 
-    IndexedAppender *a = calloc(1, sizeof(IndexedAppender));
+    MmapqIndexedAppender *a = calloc(1, sizeof(MmapqIndexedAppender));
     if (a == NULL) return MMAPQ_ENOMEM;
 
     a->directory    = strdup(directory);
@@ -346,22 +346,22 @@ static int appender_create_internal(
     a->id_pool      = id_pool;
     a->closed       = 0;
 
-    a->current_index           = INDEXED_APPENDER_NOT_INITIALISED;
-    a->current_header_position = INDEXED_APPENDER_NOT_INITIALISED;
-    a->current_payload_position = INDEXED_APPENDER_NOT_INITIALISED;
+    a->current_index           = MMAPQ_INDEXED_APPENDER_NOT_INITIALISED;
+    a->current_header_position = MMAPQ_INDEXED_APPENDER_NOT_INITIALISED;
+    a->current_payload_position = MMAPQ_INDEXED_APPENDER_NOT_INITIALISED;
 
     /*
      * Open (or create) the queue meta file.
      */
-    int rc = queue_meta_open_rw(directory, queue_name,
+    int rc = mmapqi_queue_meta_open_rw(directory, queue_name,
                                  start_index,
                                  region_size, max_file_size,
                                  archivable,
                                  QUEUE_TYPE_NORMAL,
                                  &a->queue_meta);
     if (rc != 0) {
-        appender_id_pool_release(a->id_pool, a->appender_id);
-        appender_id_pool_close(a->id_pool);
+        mmapqi_appender_id_pool_release(a->id_pool, a->appender_id);
+        mmapqi_appender_id_pool_close(a->id_pool);
         free(a->directory);
         free(a->queue_name);
         free(a);
@@ -373,11 +373,11 @@ static int appender_create_internal(
     int64_t reconciled_max_file_size = queue_meta_max_file_size(a->queue_meta);
 
     /* Open appender meta (creates file if new) */
-    rc = appender_meta_open_rw(directory, queue_name, appender_id, &a->appender_meta);
+    rc = mmapqi_appender_meta_open_rw(directory, queue_name, appender_id, &a->appender_meta);
     if (rc != 0) {
-        if (a->queue_meta) queue_meta_close(a->queue_meta);
-        appender_id_pool_release(a->id_pool, a->appender_id);
-        appender_id_pool_close(a->id_pool);
+        if (a->queue_meta) mmapqi_queue_meta_close(a->queue_meta);
+        mmapqi_appender_id_pool_release(a->id_pool, a->appender_id);
+        mmapqi_appender_id_pool_close(a->id_pool);
         free(a->directory);
         free(a->queue_name);
         free(a);
@@ -385,16 +385,16 @@ static int appender_create_internal(
     }
 
     /* Create RW region accessors */
-    rc = queue_region_accessor_create_rw(
+    rc = mmapqi_queue_region_accessor_create_rw(
         directory, queue_name, reconciled_region_size, ring_size,
         REGION_RING_ACCESSOR_DEFAULT_REGIONS_AHEAD,
         reconciled_max_file_size, timeout_ns, runtime, appender_id,
         &a->rw_acc);
     if (rc != 0) {
-        appender_meta_close(a->appender_meta);
-        if (a->queue_meta) queue_meta_close(a->queue_meta);
-        appender_id_pool_release(a->id_pool, a->appender_id);
-        appender_id_pool_close(a->id_pool);
+        mmapqi_appender_meta_close(a->appender_meta);
+        if (a->queue_meta) mmapqi_queue_meta_close(a->queue_meta);
+        mmapqi_appender_id_pool_release(a->id_pool, a->appender_id);
+        mmapqi_appender_id_pool_close(a->id_pool);
         free(a->directory);
         free(a->queue_name);
         free(a);
@@ -402,21 +402,21 @@ static int appender_create_internal(
     }
 
     a->header_acc  = queue_region_accessor_header(a->rw_acc);
-    a->payload_acc = queue_region_accessor_payload(a->rw_acc, appender_id);
+    a->payload_acc = mmapqi_queue_region_accessor_payload(a->rw_acc, appender_id);
 
     /* Create RO accessor for header search fallback */
-    rc = queue_region_accessor_create_ro(
+    rc = mmapqi_queue_region_accessor_create_ro(
         directory, queue_name,
         reconciled_region_size, ring_size,
         0,
         reconciled_max_file_size, timeout_ns, runtime,
         &a->ro_acc);
     if (rc != 0) {
-        queue_region_accessor_close(a->rw_acc);
-        appender_meta_close(a->appender_meta);
-        if (a->queue_meta) queue_meta_close(a->queue_meta);
-        appender_id_pool_release(a->id_pool, a->appender_id);
-        appender_id_pool_close(a->id_pool);
+        mmapqi_queue_region_accessor_close(a->rw_acc);
+        mmapqi_appender_meta_close(a->appender_meta);
+        if (a->queue_meta) mmapqi_queue_meta_close(a->queue_meta);
+        mmapqi_appender_id_pool_release(a->id_pool, a->appender_id);
+        mmapqi_appender_id_pool_close(a->id_pool);
         free(a->directory);
         free(a->queue_name);
         free(a);
@@ -427,12 +427,12 @@ static int appender_create_internal(
     /* Find where to resume appending */
     int init_rc = initialise_append_position(a, start_index);
     if (init_rc != 0) {
-        queue_region_accessor_close(a->ro_acc);
-        queue_region_accessor_close(a->rw_acc);
-        appender_meta_close(a->appender_meta);
-        if (a->queue_meta) queue_meta_close(a->queue_meta);
-        appender_id_pool_release(a->id_pool, a->appender_id);
-        appender_id_pool_close(a->id_pool);
+        mmapqi_queue_region_accessor_close(a->ro_acc);
+        mmapqi_queue_region_accessor_close(a->rw_acc);
+        mmapqi_appender_meta_close(a->appender_meta);
+        if (a->queue_meta) mmapqi_queue_meta_close(a->queue_meta);
+        mmapqi_appender_id_pool_release(a->id_pool, a->appender_id);
+        mmapqi_appender_id_pool_close(a->id_pool);
         free(a->directory);
         free(a->queue_name);
         free(a);
@@ -445,7 +445,7 @@ static int appender_create_internal(
 
 /* ── Factory functions ───────────────────────────────────────────────────── */
 
-int indexed_appender_create(
+int mmapq_indexed_appender_create(
     const char *directory,
     const char *queue_name,
     int32_t     region_size,
@@ -453,9 +453,9 @@ int indexed_appender_create(
     int64_t     max_file_size,
     uint64_t    timeout_ns,
     int         archivable,
-    Runtime    *runtime,
+    MmapqRuntime    *runtime,
     int64_t     start_index,
-    IndexedAppender **out)
+    MmapqIndexedAppender **out)
 {
     if (out == NULL) return MMAPQ_EINVAL;
     *out = NULL;
@@ -464,12 +464,12 @@ int indexed_appender_create(
 
     /* Acquire an ID from the pool — pool is opened here and owned by the appender */
     AppenderIdPool *pool = NULL;
-    int rc = appender_id_pool_open(directory, queue_name, &pool);
+    int rc = mmapqi_appender_id_pool_open(directory, queue_name, &pool);
     if (rc != 0) return rc;
 
-    int id = appender_id_pool_acquire(pool);
+    int id = mmapqi_appender_id_pool_acquire(pool);
     if (id < 0) {
-        appender_id_pool_close(pool);
+        mmapqi_appender_id_pool_close(pool);
         return MMAPQ_EIDCONFLICT;
     }
 
@@ -478,7 +478,7 @@ int indexed_appender_create(
                                       pool, (uint8_t)id, start_index, out);
 }
 
-int indexed_appender_create_with_id(
+int mmapq_indexed_appender_create_with_id(
     const char *directory,
     const char *queue_name,
     int32_t     region_size,
@@ -486,10 +486,10 @@ int indexed_appender_create_with_id(
     int64_t     max_file_size,
     uint64_t    timeout_ns,
     int         archivable,
-    Runtime    *runtime,
+    MmapqRuntime    *runtime,
     uint8_t     appender_id,
     int64_t     start_index,
-    IndexedAppender **out)
+    MmapqIndexedAppender **out)
 {
     if (out == NULL) return MMAPQ_EINVAL;
     *out = NULL;
@@ -497,12 +497,12 @@ int indexed_appender_create_with_id(
     if (queue_name == NULL) return MMAPQ_EINVAL;
 
     AppenderIdPool *pool = NULL;
-    int rc = appender_id_pool_open(directory, queue_name, &pool);
+    int rc = mmapqi_appender_id_pool_open(directory, queue_name, &pool);
     if (rc != 0) return rc;
 
-    int ok = appender_id_pool_try_acquire(pool, appender_id);
+    int ok = mmapqi_appender_id_pool_try_acquire(pool, appender_id);
     if (!ok) {
-        appender_id_pool_close(pool);
+        mmapqi_appender_id_pool_close(pool);
         return MMAPQ_EIDCONFLICT;
     }
 
@@ -511,10 +511,10 @@ int indexed_appender_create_with_id(
                                       pool, appender_id, start_index, out);
 }
 
-/* ── indexed_appender_append ─────────────────────────────────────────────── */
+/* ── mmapq_indexed_appender_append ─────────────────────────────────────────────── */
 
-int64_t indexed_appender_append(
-    IndexedAppender *a,
+int64_t mmapq_indexed_appender_append(
+    MmapqIndexedAppender *a,
     const void      *data,
     int32_t          length)
 {
@@ -530,10 +530,10 @@ int64_t indexed_appender_append(
     return committed;
 }
 
-/* ── indexed_appender_append_uncommitted ─────────────────────────────────── */
+/* ── mmapq_indexed_appender_append_uncommitted ─────────────────────────────────── */
 
-int64_t indexed_appender_append_uncommitted(
-    IndexedAppender *a,
+int64_t mmapq_indexed_appender_append_uncommitted(
+    MmapqIndexedAppender *a,
     const void      *data,
     int32_t          length)
 {
@@ -546,10 +546,10 @@ int64_t indexed_appender_append_uncommitted(
     return payload_offset;
 }
 
-/* ── indexed_appender_commit ─────────────────────────────────────────────── */
+/* ── mmapq_indexed_appender_commit ─────────────────────────────────────────────── */
 
-int64_t indexed_appender_commit(
-    IndexedAppender *a,
+int64_t mmapq_indexed_appender_commit(
+    MmapqIndexedAppender *a,
     int64_t          payload_offset)
 {
     if (a == NULL) return MMAPQ_EINVAL;
@@ -561,15 +561,15 @@ int64_t indexed_appender_commit(
     return committed;
 }
 
-PayloadIterator *indexed_appender_iterator(
-    IndexedAppender *a,
+MmapqPayloadIterator *mmapq_indexed_appender_iterator(
+    MmapqIndexedAppender *a,
     int64_t          start_offset,
     int64_t          end_offset)
 {
     if (a == NULL) return NULL;
 
     if (a->payload_iter == NULL) {
-        payload_iterator_create(
+        mmapqi_payload_iterator_create(
             a->queue_name,
             a->payload_acc,
             appender_start_of_stream,
@@ -579,11 +579,11 @@ PayloadIterator *indexed_appender_iterator(
             &a->payload_iter);
     }
 
-    return payload_iterator_init(a->payload_iter, start_offset, end_offset);
+    return mmapqi_payload_iterator_init(a->payload_iter, start_offset, end_offset);
 }
 
-UncommittedPayloadIterator *indexed_appender_uncommitted_iterator(
-    IndexedAppender *a,
+MmapqUncommittedPayloadIterator *mmapq_indexed_appender_uncommitted_iterator(
+    MmapqIndexedAppender *a,
     int64_t          start_offset,
     int64_t          end_offset)
 {
@@ -591,7 +591,7 @@ UncommittedPayloadIterator *indexed_appender_uncommitted_iterator(
 
     /* Create inner iterator with fixed end-of-stream */
     if (a->uncommitted_inner == NULL) {
-        payload_iterator_create(
+        mmapqi_payload_iterator_create(
             a->queue_name,
             a->payload_acc,
             appender_start_of_stream,
@@ -602,7 +602,7 @@ UncommittedPayloadIterator *indexed_appender_uncommitted_iterator(
     }
 
     if (a->uncommitted_iter == NULL) {
-        uncommitted_iterator_create(
+        mmapqi_uncommitted_iterator_create(
             a->queue_name,
             a->appender_id,
             appender_start_of_stream,
@@ -613,74 +613,74 @@ UncommittedPayloadIterator *indexed_appender_uncommitted_iterator(
             &a->uncommitted_iter);
     }
 
-    return uncommitted_iterator_init(a->uncommitted_iter, start_offset, end_offset);
+    return mmapqi_uncommitted_iterator_init(a->uncommitted_iter, start_offset, end_offset);
 }
 
 /* ── Metadata ─────────────────────────────────────────────────────────────── */
 
-uint8_t indexed_appender_id(const IndexedAppender *a)
+uint8_t mmapq_indexed_appender_id(const MmapqIndexedAppender *a)
 {
     if (a == NULL) return 0;
     return a->appender_id;
 }
 
-int64_t indexed_appender_current_index(const IndexedAppender *a)
+int64_t mmapq_indexed_appender_current_index(const MmapqIndexedAppender *a)
 {
     if (a == NULL) return 0;
     return a->current_index;
 }
 
-int64_t indexed_appender_start_offset(const IndexedAppender *a)
+int64_t mmapq_indexed_appender_start_offset(const MmapqIndexedAppender *a)
 {
     if (a == NULL) return 0;
     return appender_meta_start_offset(a->appender_meta);
 }
 
-/* ── indexed_appender_close ──────────────────────────────────────────────── */
+/* ── mmapq_indexed_appender_close ──────────────────────────────────────────────── */
 
-void indexed_appender_close(IndexedAppender *a)
+void mmapq_indexed_appender_close(MmapqIndexedAppender *a)
 {
     if (a == NULL || a->closed) return;
     a->closed = 1;
 
     if (a->uncommitted_iter != NULL) {
-        uncommitted_iterator_destroy(a->uncommitted_iter);
+        mmapqi_uncommitted_iterator_destroy(a->uncommitted_iter);
         a->uncommitted_iter = NULL;
     }
     if (a->uncommitted_inner != NULL) {
-        payload_iterator_destroy(a->uncommitted_inner);
+        mmapqi_payload_iterator_destroy(a->uncommitted_inner);
         a->uncommitted_inner = NULL;
     }
     if (a->payload_iter != NULL) {
-        payload_iterator_destroy(a->payload_iter);
+        mmapqi_payload_iterator_destroy(a->payload_iter);
         a->payload_iter = NULL;
     }
 
     if (a->appender_meta != NULL) {
-        appender_meta_close(a->appender_meta);
+        mmapqi_appender_meta_close(a->appender_meta);
         a->appender_meta = NULL;
     }
 
     if (a->queue_meta != NULL) {
-        queue_meta_close(a->queue_meta);
+        mmapqi_queue_meta_close(a->queue_meta);
         a->queue_meta = NULL;
     }
 
     if (a->rw_acc != NULL) {
-        queue_region_accessor_close(a->rw_acc);
+        mmapqi_queue_region_accessor_close(a->rw_acc);
         a->rw_acc = NULL;
     }
 
     if (a->ro_acc != NULL) {
         /* ro_header is owned by ro_acc — no separate close */
-        queue_region_accessor_close(a->ro_acc);
+        mmapqi_queue_region_accessor_close(a->ro_acc);
         a->ro_acc    = NULL;
         a->ro_header = NULL;
     }
 
     if (a->id_pool != NULL) {
-        appender_id_pool_release(a->id_pool, a->appender_id);
-        appender_id_pool_close(a->id_pool);
+        mmapqi_appender_id_pool_release(a->id_pool, a->appender_id);
+        mmapqi_appender_id_pool_close(a->id_pool);
         a->id_pool = NULL;
     }
 

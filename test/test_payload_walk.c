@@ -15,7 +15,7 @@ static const char *FILE_PREFIX  = "/tmp/mmap_test_pwalk";
 static const int32_t REGION_SIZE = 4096;
 static const int64_t MAX_FILE   = 4096 * 16;
 
-static Runtime         *rt  = NULL;
+static MmapqRuntime         *rt  = NULL;
 static RegionAccessor  *acc = NULL;
 
 /* Helper — write an int32 length + payload bytes into mapped memory */
@@ -52,29 +52,29 @@ static void cleanup(void)
 void setUp(void)
 {
     cleanup();
-    int rc_rt = runtime_region_mapper(&rt);
+    int rc_rt = mmapq_runtime_region_mapper(&rt);
     TEST_ASSERT_EQUAL_INT(0, rc_rt);
     TEST_ASSERT_NOT_NULL(rt);
 
     FileMapper *fm = NULL;
-    int fmerr = file_mapper_rolled_create(
+    int fmerr = mmapqi_file_mapper_rolled_create(
         FILE_PREFIX, MAX_FILE, REGION_SIZE,
-        file_init_zeros, NULL, MAP_MODE_READ_WRITE, 6, 1, &fm);
+        mmapqi_file_init_zeros, NULL, MAP_MODE_READ_WRITE, 6, 1, &fm);
     TEST_ASSERT_EQUAL_INT(0, fmerr);
     TEST_ASSERT_NOT_NULL(fm);
 
     RegionRing *ring = NULL;
-    int rerr = region_ring_async_create(4, REGION_SIZE, fm, 2000000000ULL, rt, &ring);
+    int rerr = mmapqi_region_ring_async_create(4, REGION_SIZE, fm, 2000000000ULL, rt, &ring);
     TEST_ASSERT_EQUAL_INT(0, rerr);
     TEST_ASSERT_NOT_NULL(ring);
-    int rerr2 = region_ring_accessor_create(ring, REGION_SIZE, 1, 0.5, &acc);
+    int rerr2 = mmapqi_region_ring_accessor_create(ring, REGION_SIZE, 1, 0.5, &acc);
     TEST_ASSERT_EQUAL_INT(0, rerr2);
     TEST_ASSERT_NOT_NULL(acc);
 }
 
 void tearDown(void)
 {
-    if (acc) { region_ring_accessor_destroy(acc); acc = NULL; }
+    if (acc) { mmapqi_region_ring_accessor_destroy(acc); acc = NULL; }
     cleanup();
 }
 
@@ -89,7 +89,7 @@ void test_advance_valid_message(void)
 
     int64_t probing   = INITIAL_PAYLOAD_POSITION;
     int64_t msg_off   = -1;
-    int32_t length = payload_walk_advance("test", &probing, &msg_off, acc, &buf);
+    int32_t length = mmapqi_payload_walk_advance("test", &probing, &msg_off, acc, &buf);
 
     TEST_ASSERT_EQUAL_INT32(5, length);
     TEST_ASSERT_EQUAL_INT64(INITIAL_PAYLOAD_POSITION, msg_off);
@@ -105,7 +105,7 @@ void test_advance_end_of_stream_returns_zero(void)
 
     int64_t probing = INITIAL_PAYLOAD_POSITION;
     int64_t msg_off = -1;
-    int32_t length = payload_walk_advance("test", &probing, &msg_off, acc, &buf);
+    int32_t length = mmapqi_payload_walk_advance("test", &probing, &msg_off, acc, &buf);
 
     TEST_ASSERT_EQUAL_INT32(0, length);
 }
@@ -126,16 +126,16 @@ void test_advance_multiple_messages(void)
     int64_t msg_off = -1;
     int32_t len;
 
-    len = payload_walk_advance("test", &probing, &msg_off, acc, &buf);
+    len = mmapqi_payload_walk_advance("test", &probing, &msg_off, acc, &buf);
     TEST_ASSERT_EQUAL_INT32(4, len);
 
-    len = payload_walk_advance("test", &probing, &msg_off, acc, &buf);
+    len = mmapqi_payload_walk_advance("test", &probing, &msg_off, acc, &buf);
     TEST_ASSERT_EQUAL_INT32(5, len);
 
-    len = payload_walk_advance("test", &probing, &msg_off, acc, &buf);
+    len = mmapqi_payload_walk_advance("test", &probing, &msg_off, acc, &buf);
     TEST_ASSERT_EQUAL_INT32(6, len);
 
-    len = payload_walk_advance("test", &probing, &msg_off, acc, &buf);
+    len = mmapqi_payload_walk_advance("test", &probing, &msg_off, acc, &buf);
     TEST_ASSERT_EQUAL_INT32(0, len);  /* end of stream */
 }
 
@@ -191,7 +191,7 @@ void test_probing_offset_advances_correctly(void)
     int64_t msg_off    = -1;
     int64_t expected   = INITIAL_PAYLOAD_POSITION + PAYLOAD_LENGTH_SIZE + 4;
 
-    payload_walk_advance("test", &probing, &msg_off, acc, &buf);
+    mmapqi_payload_walk_advance("test", &probing, &msg_off, acc, &buf);
 
     TEST_ASSERT_EQUAL_INT64(expected, probing);
 }

@@ -16,11 +16,11 @@
 
 /* ── Internal struct ─────────────────────────────────────────────────────── */
 
-struct IndexedArchiver {
+struct MmapqIndexedArchiver {
     char        *directory;
     char        *queue_name;
     int          ring_size;
-    Runtime     *runtime;
+    MmapqRuntime     *runtime;
 
     /* Lazy-initialised on first use */
     QueueMeta           *ro_meta;
@@ -37,12 +37,12 @@ struct IndexedArchiver {
 
 /* ── Lazy initialisers ───────────────────────────────────────────────────── */
 
-static QueueMeta *ro_init(IndexedArchiver *a)
+static QueueMeta *ro_init(MmapqIndexedArchiver *a)
 {
     if (a->ro_meta) return a->ro_meta;
     if (a->meta_init_failed) return NULL;
 
-    int rc = queue_meta_open_ro(a->directory, a->queue_name, QUEUE_TYPE_NORMAL, &a->ro_meta);
+    int rc = mmapqi_queue_meta_open_ro(a->directory, a->queue_name, QUEUE_TYPE_NORMAL, &a->ro_meta);
     if (rc != 0) {
         if (rc != MMAPQ_ENOENT && rc != MMAPQ_ENOTREADY && rc != MMAPQ_ETIMEDOUT)
             a->meta_init_failed = 1;
@@ -51,7 +51,7 @@ static QueueMeta *ro_init(IndexedArchiver *a)
 
     /* Sync mapping (regions_to_map_ahead = 0): the archiver does a single
      * sequential pass over headers and never benefits from background premap. */
-    int acc_rc = queue_region_accessor_create_ro(
+    int acc_rc = mmapqi_queue_region_accessor_create_ro(
         a->directory, a->queue_name,
         queue_meta_region_size(a->ro_meta),
         a->ring_size,
@@ -60,7 +60,7 @@ static QueueMeta *ro_init(IndexedArchiver *a)
         10000000000ULL, a->runtime,
         &a->ro_acc);
     if (acc_rc != 0) {
-        queue_meta_close(a->ro_meta);
+        mmapqi_queue_meta_close(a->ro_meta);
         a->ro_meta = NULL;
         return NULL;
     }
@@ -78,10 +78,10 @@ static QueueMeta *ro_init(IndexedArchiver *a)
  * write through rw_meta is immediately visible via ro_meta on all cores.
  * queue_meta_set_start_index(rwm, index) writes atomically; the next
  * queue_meta_start_index() read through ro_meta will see the new value. */
-static QueueMeta *rw_meta_open(IndexedArchiver *a)
+static QueueMeta *rw_meta_open(MmapqIndexedArchiver *a)
 {
     if (a->rw_meta) return a->rw_meta;
-    if (queue_meta_open_rw(a->directory, a->queue_name,
+    if (mmapqi_queue_meta_open_rw(a->directory, a->queue_name,
         queue_meta_start_index(a->ro_meta),
         queue_meta_region_size(a->ro_meta),
         queue_meta_max_file_size(a->ro_meta),
@@ -91,14 +91,14 @@ static QueueMeta *rw_meta_open(IndexedArchiver *a)
     return a->rw_meta;
 }
 
-static AppenderMeta *get_appender_meta(IndexedArchiver *a, uint8_t id)
+static AppenderMeta *get_appender_meta(MmapqIndexedArchiver *a, uint8_t id)
 {
     if (!a->appender_metas[id]) {
         char path[4096];
         snprintf(path, sizeof(path), "%s/%s/appender_meta_%u",
                  a->directory, a->queue_name, (unsigned)id);
-        if (!queue_file_exists(path)) return NULL;
-        if (appender_meta_open_rw(
+        if (!mmapqi_queue_file_exists(path)) return NULL;
+        if (mmapqi_appender_meta_open_rw(
                 a->directory, a->queue_name, id, &a->appender_metas[id]) != 0) return NULL;
     }
     return a->appender_metas[id];
@@ -106,12 +106,12 @@ static AppenderMeta *get_appender_meta(IndexedArchiver *a, uint8_t id)
 
 /* ── Factory ─────────────────────────────────────────────────────────────── */
 
-int indexed_archiver_create(
+int mmapq_indexed_archiver_create(
     const char *directory,
     const char *queue_name,
     int         ring_size,
-    Runtime    *runtime,
-    IndexedArchiver **out)
+    MmapqRuntime    *runtime,
+    MmapqIndexedArchiver **out)
 {
     if (out == NULL) return MMAPQ_EINVAL;
     *out = NULL;
@@ -119,7 +119,7 @@ int indexed_archiver_create(
     if (queue_name == NULL) return MMAPQ_EINVAL;
     if (ring_size <= 0) return MMAPQ_EINVAL;
 
-    IndexedArchiver *a = calloc(1, sizeof(IndexedArchiver));
+    MmapqIndexedArchiver *a = calloc(1, sizeof(MmapqIndexedArchiver));
     if (a == NULL) return MMAPQ_ENOMEM;
 
     a->directory  = strdup(directory);
@@ -134,7 +134,7 @@ int indexed_archiver_create(
 
 /* ── Archiving ───────────────────────────────────────────────────────────── */
 
-int indexed_archiver_archivable(IndexedArchiver *a)
+int mmapq_indexed_archiver_archivable(MmapqIndexedArchiver *a)
 {
     if (a == NULL) return 0;
     QueueMeta *m = ro_init(a);
@@ -142,7 +142,7 @@ int indexed_archiver_archivable(IndexedArchiver *a)
     return queue_meta_archivable(m);
 }
 
-int indexed_archiver_archive_up_to_index(IndexedArchiver *a, int64_t index)
+int mmapq_indexed_archiver_archive_up_to_index(MmapqIndexedArchiver *a, int64_t index)
 {
     if (a == NULL || index < 0) return MMAPQ_EINVAL;
 
@@ -170,7 +170,7 @@ int indexed_archiver_archive_up_to_index(IndexedArchiver *a, int64_t index)
             }
 
             for (int64_t i = index - 1; i >= current; i--) {
-                uint64_t hdr = header_read(a->header_acc, &a->header_buf,
+                uint64_t hdr = mmapqi_header_read(a->header_acc, &a->header_buf,
                                            i, a->queue_name);
                 if (hdr == HEADER_NULL)
                     return MMAPQ_EINVAL;
@@ -187,7 +187,7 @@ int indexed_archiver_archive_up_to_index(IndexedArchiver *a, int64_t index)
                 if (pos == OFFSET_NOT_SET) continue;
 
                 RegionAccessor *pay_acc =
-                    queue_region_accessor_payload(a->ro_acc, (uint8_t)aid);
+                    mmapqi_queue_region_accessor_payload(a->ro_acc, (uint8_t)aid);
                 Buffer pay_buf = {0};
                 WrapResult wr = region_accessor_wrap(pay_acc, pos, &pay_buf);
                 if (wr == WRAP_MAP_TIMED_OUT)
@@ -215,6 +215,7 @@ int indexed_archiver_archive_up_to_index(IndexedArchiver *a, int64_t index)
             for (int aid = 0; aid < MAX_APPENDERS; aid++) {
                 if (next_offsets[aid] == OFFSET_NOT_SET) continue;
                 AppenderMeta *m = get_appender_meta(a, (uint8_t)aid);
+                if (m == NULL) return MMAPQ_ECORRUPT;
                 appender_meta_set_start_offset(m, next_offsets[aid]);
             }
         } else {
@@ -244,7 +245,7 @@ int indexed_archiver_archive_up_to_index(IndexedArchiver *a, int64_t index)
         }
 
         for (int64_t i = index; i < current; i++) {
-            uint64_t hdr = header_read(a->header_acc, &a->header_buf,
+            uint64_t hdr = mmapqi_header_read(a->header_acc, &a->header_buf,
                                        i, a->queue_name);
             if (hdr == HEADER_NULL)
                 return MMAPQ_EINVAL;
@@ -261,12 +262,12 @@ int indexed_archiver_archive_up_to_index(IndexedArchiver *a, int64_t index)
         }
 
         /* Validate all required header files exist */
-        for (int fi = file_index_set_first(&hdr_files); fi >= 0;
-             fi = file_index_set_next(&hdr_files, fi)) {
+        for (int fi = mmapqi_file_index_set_first(&hdr_files); fi >= 0;
+             fi = mmapqi_file_index_set_next(&hdr_files, fi)) {
             char path[4096];
             snprintf(path, sizeof(path), "%s/%s/header_%d",
                      a->directory, a->queue_name, fi);
-            if (!queue_file_exists(path))
+            if (!mmapqi_queue_file_exists(path))
                 return MMAPQ_ECORRUPT;
         }
 
@@ -275,12 +276,12 @@ int indexed_archiver_archive_up_to_index(IndexedArchiver *a, int64_t index)
             if (first_positions[aid] == OFFSET_NOT_SET) continue;
             if (first_positions[aid] < INITIAL_PAYLOAD_POSITION)
                 return MMAPQ_ECORRUPT;
-            for (int fi = file_index_set_first(&pay_files[aid]); fi >= 0;
-                 fi = file_index_set_next(&pay_files[aid], fi)) {
+            for (int fi = mmapqi_file_index_set_first(&pay_files[aid]); fi >= 0;
+                 fi = mmapqi_file_index_set_next(&pay_files[aid], fi)) {
                 char path[4096];
                 snprintf(path, sizeof(path), "%s/%s/payload_%d_%d",
                          a->directory, a->queue_name, aid, fi);
-                if (!queue_file_exists(path))
+                if (!mmapqi_queue_file_exists(path))
                     return MMAPQ_ECORRUPT;
             }
         }
@@ -296,6 +297,7 @@ int indexed_archiver_archive_up_to_index(IndexedArchiver *a, int64_t index)
         for (int aid = 0; aid < MAX_APPENDERS; aid++) {
             if (first_positions[aid] == OFFSET_NOT_SET) continue;
             AppenderMeta *m = get_appender_meta(a, (uint8_t)aid);
+            if (m == NULL) return MMAPQ_ECORRUPT;
             appender_meta_set_start_offset(m, first_positions[aid]);
         }
     }
@@ -313,7 +315,7 @@ int indexed_archiver_archive_up_to_index(IndexedArchiver *a, int64_t index)
 
 /* ── Query ───────────────────────────────────────────────────────────────── */
 
-int64_t indexed_archiver_start_index(IndexedArchiver *a)
+int64_t mmapq_indexed_archiver_start_index(MmapqIndexedArchiver *a)
 {
     if (a == NULL) return 0;
     QueueMeta *m = ro_init(a);
@@ -321,8 +323,8 @@ int64_t indexed_archiver_start_index(IndexedArchiver *a)
     return queue_meta_start_index(m);
 }
 
-int indexed_archiver_start_offset(
-    IndexedArchiver *a, uint8_t appender_id, int64_t *out_offset)
+int mmapq_indexed_archiver_start_offset(
+    MmapqIndexedArchiver *a, uint8_t appender_id, int64_t *out_offset)
 {
     if (a == NULL || out_offset == NULL) return 0;
 
@@ -335,8 +337,8 @@ int indexed_archiver_start_offset(
     return 1;
 }
 
-int indexed_archiver_archivable_files(
-    IndexedArchiver  *a,
+int mmapq_indexed_archiver_archivable_files(
+    MmapqIndexedArchiver  *a,
     char            **paths_out,
     int               max_paths)
 {
@@ -359,7 +361,7 @@ int indexed_archiver_archivable_files(
         snprintf(path, sizeof(path), "%s/%s/header_%d",
                  a->directory, a->queue_name, i);
         /* Caller must free each returned string */
-        if (queue_file_exists(path)) {
+        if (mmapqi_queue_file_exists(path)) {
             paths_out[count] = strdup(path);
             if (paths_out[count] == NULL) {
                 for (int j = 0; j < count; j++) free(paths_out[j]);
@@ -372,7 +374,7 @@ int indexed_archiver_archivable_files(
     /* Fully covered payload files: files whose byte range < start_offset */
     if (!queue_meta_fixed_size_8bytes(m)) {
         uint8_t ids[MAX_APPENDERS];
-        int n_ids = queue_files_get_appender_ids(
+        int n_ids = mmapqi_queue_files_get_appender_ids(
             a->directory, a->queue_name, ids, MAX_APPENDERS);
         for (int k = 0; k < n_ids && count < max_paths; k++) {
             AppenderMeta *am = get_appender_meta(a, ids[k]);
@@ -383,7 +385,7 @@ int indexed_archiver_archivable_files(
                 char path[4096];
                 snprintf(path, sizeof(path), "%s/%s/payload_%u_%d",
                          a->directory, a->queue_name, (unsigned)ids[k], fi);
-                if (queue_file_exists(path)) {
+                if (mmapqi_queue_file_exists(path)) {
                     paths_out[count] = strdup(path);
                     if (paths_out[count] == NULL) {
                         for (int j = 0; j < count; j++) free(paths_out[j]);
@@ -403,7 +405,7 @@ static int64_t archiver_start_index_fn(void *ctx)
     return queue_meta_start_index((QueueMeta *)ctx);
 }
 
-int indexed_archiver_print_summary(IndexedArchiver *a, char *sb, int n)
+int mmapq_indexed_archiver_print_summary(MmapqIndexedArchiver *a, char *sb, int n)
 {
     if (a == NULL || sb == NULL || n <= 0) return 0;
 
@@ -430,7 +432,7 @@ int indexed_archiver_print_summary(IndexedArchiver *a, char *sb, int n)
 
     int64_t max_file_size   = queue_meta_max_file_size(m);
     int64_t headers_in_file = max_file_size / HEADER_SIZE;
-    int64_t last_index      = header_search_last_index(
+    int64_t last_index      = mmapqi_header_search_last_index(
         0, archiver_start_index_fn, m,
         a->header_acc, &a->header_buf, a->queue_name);
 
@@ -447,7 +449,7 @@ int indexed_archiver_print_summary(IndexedArchiver *a, char *sb, int n)
         char path[4096];
         snprintf(path, sizeof(path), "%s/%s/header_%ld",
                  a->directory, a->queue_name, (long)fi);
-        if (!queue_file_exists(path)) continue;
+        if (!mmapqi_queue_file_exists(path)) continue;
         int64_t s = fi * headers_in_file;
         int64_t e = (fi + 1) * headers_in_file - 1;
         if (e > last_index) e = last_index;
@@ -457,7 +459,7 @@ int indexed_archiver_print_summary(IndexedArchiver *a, char *sb, int n)
     if (!queue_meta_fixed_size_8bytes(m)) {
         APPEND("\nPayload Files:\n");
         uint8_t ids[MAX_APPENDERS];
-        int n_ids = queue_files_get_appender_ids(
+        int n_ids = mmapqi_queue_files_get_appender_ids(
             a->directory, a->queue_name, ids, MAX_APPENDERS);
         for (int k = 0; k < n_ids; k++) {
             APPEND("  Appender %u:\n", (unsigned)ids[k]);
@@ -465,7 +467,7 @@ int indexed_archiver_print_summary(IndexedArchiver *a, char *sb, int n)
                 char path[4096];
                 snprintf(path, sizeof(path), "%s/%s/payload_%u_%d",
                          a->directory, a->queue_name, (unsigned)ids[k], fi);
-                if (!queue_file_exists(path)) break;
+                if (!mmapqi_queue_file_exists(path)) break;
                 APPEND("    payload_%u_%d\n", (unsigned)ids[k], fi);
             }
         }
@@ -478,17 +480,17 @@ int indexed_archiver_print_summary(IndexedArchiver *a, char *sb, int n)
 
 /* ── Lifecycle ───────────────────────────────────────────────────────────── */
 
-void indexed_archiver_close(IndexedArchiver *a)
+void mmapq_indexed_archiver_close(MmapqIndexedArchiver *a)
 {
     if (!a) return;
 
     for (int i = 0; i < MAX_APPENDERS; i++) {
         if (a->appender_metas[i])
-            appender_meta_close(a->appender_metas[i]);
+            mmapqi_appender_meta_close(a->appender_metas[i]);
     }
-    if (a->ro_acc)  queue_region_accessor_close(a->ro_acc);
-    if (a->ro_meta) queue_meta_close(a->ro_meta);
-    if (a->rw_meta) queue_meta_close(a->rw_meta);
+    if (a->ro_acc)  mmapqi_queue_region_accessor_close(a->ro_acc);
+    if (a->ro_meta) mmapqi_queue_meta_close(a->ro_meta);
+    if (a->rw_meta) mmapqi_queue_meta_close(a->rw_meta);
 
     free(a->directory);
     free(a->queue_name);

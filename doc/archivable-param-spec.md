@@ -77,10 +77,10 @@ The flow mirrors how `region_size` travels today: factory → queue struct →
 participant creation → `queue_meta_open_rw`.
 
 1. **`include/indexed_queue.h` / `src/indexed_queue.c`:**
-   `indexed_queue_create(...)` gains `int archivable` as the parameter
-   immediately after `start_index` (keep runtimes last). The `IndexedQueue`
+   `mmapq_indexed_queue_create(...)` gains `int archivable` as the parameter
+   immediately after `start_index` (keep runtimes last). The `MmapqIndexedQueue`
    struct (src/indexed_queue.c, ~line 18) gains `int archivable;` stored
-   from the parameter. `indexed_queue_create_default` passes 0.
+   from the parameter. `mmapq_indexed_queue_create_default` passes 0.
    Doc comment on the parameter (house style):
 
    ```
@@ -91,13 +91,13 @@ participant creation → `queue_meta_open_rw`.
    ```
 
 2. **`include/indexed_appender.h` / `src/indexed_appender.c`:**
-   `indexed_appender_create` and `indexed_appender_create_with_id` gain
+   `mmapq_indexed_appender_create` and `mmapq_indexed_appender_create_with_id` gain
    `int archivable` (same position convention). The internal create path
    replaces the hardcoded `/* archivable = */ 0` at the
    `queue_meta_open_rw` call (~line 343) with the parameter.
 
 3. **`src/indexed_queue.c` participant factories:**
-   `indexed_queue_create_appender` / `_with_id` forward `q->archivable`.
+   `mmapq_indexed_queue_create_appender` / `_with_id` forward `q->archivable`.
    Pollers/readers open meta RO and need no change.
 
 4. **Batch side, same pattern:** `include/indexed_batch_queue.h`,
@@ -105,7 +105,7 @@ participant creation → `queue_meta_open_rw`.
    `include/indexed_batch_appender.h`, `src/indexed_batch_appender.c`
    (param, replace hardcoded 0 at its `queue_meta_open_rw` call, ~line 158).
 
-5. **Call-site sweep:** `grep -rn "indexed_appender_create\|indexed_batch_appender_create\|indexed_queue_create\b\|indexed_batch_queue_create" src/ examples/ bench/ test/ tools/ 2>/dev/null`
+5. **Call-site sweep:** `grep -rn "mmapq_indexed_appender_create\|mmapq_indexed_batch_appender_create\|mmapq_indexed_queue_create\b\|mmapq_indexed_batch_queue_create" src/ examples/ bench/ test/ tools/ 2>/dev/null`
    Every call site gains an explicit `0` (or `1` where a test intends
    archivable). Known non-test callers to check: `src/queue_transfer.c`,
    `src/batch_queue_transfer.c`, `src/queue_latency_probe.c`,
@@ -124,8 +124,8 @@ change** — appenders are created from the C queue's stored state.
 
 1. Sync the C changes into `c/` and verify with the bidirectional diff
    (AGENTS.md mirror discipline).
-2. `src/ffi.rs`: update `indexed_queue_create` /
-   `indexed_batch_queue_create` (if the batch FFI takes the queue-level
+2. `src/ffi.rs`: update `mmapq_indexed_queue_create` /
+   `mmapq_indexed_batch_queue_create` (if the batch FFI takes the queue-level
    params) and the appender-create declarations to match the new C
    signatures exactly. A signature mismatch here is silent stack corruption,
    not a compile error — copy from the headers, do not type from memory.
@@ -142,14 +142,14 @@ change** — appenders are created from the C queue's stored state.
    }
    ```
 
-   `IndexedQueue::create` passes `config.archivable as i32` in the FFI call.
+   `MmapqIndexedQueue::create` passes `config.archivable as i32` in the FFI call.
 4. Batch config equivalently, if/where the batch path takes queue params.
 
 ## A3. Python — `mmapq-py`
 
 1. `setup.py` cdef: update the changed C signatures exactly (same
    silent-corruption warning as Rust).
-2. `single_queue.py`: `IndexedQueue.create(..., archivable: bool = False)`,
+2. `single_queue.py`: `MmapqIndexedQueue.create(..., archivable: bool = False)`,
    passed as `1 if archivable else 0`. Docstring carries the same
    creation-only + performance sentence. Same for `batch_queue.py`.
 3. Appender/poller wrappers unchanged.
@@ -166,7 +166,7 @@ spec makes the archiver publicly reachable, so its validation must survive
 
 - **(V) Validation** — checks caller input, on-disk state, or cross-process
   state. CONVERT to a real runtime check. Known examples that are (V):
-  - `indexed_archiver_create`: NULL directory/queue_name, ring_size > 0 →
+  - `mmapq_indexed_archiver_create`: NULL directory/queue_name, ring_size > 0 →
     return NULL (creation functions return pointers).
   - `archive_up_to_index`: NULL archiver → return; `index >= 0` and
     "queue is not archivable" and "queue not created yet" → these are in a
@@ -200,18 +200,18 @@ teardown, `RUN_TEST` registered — an unregistered test does not exist).
 1. **`test_archivable_roundtrip`** (in `test/test_indexed_archiver.c`):
    create a queue via the PUBLIC factory with `archivable=1`; `pread` byte
    24 of `<dir>/<q>/meta` and assert `== 1`; create an archiver and assert
-   `indexed_archiver_archivable(a) == 1`; close all; reopen the queue with
+   `mmapq_indexed_archiver_archivable(a) == 1`; close all; reopen the queue with
    `archivable=0` and assert the queue is STILL archivable (disk wins —
    pins the reconciliation semantics).
 2. **`test_default_not_archivable`**: create via factory with `archivable=0`;
-   byte 24 == 0; `indexed_archiver_archivable == 0`.
+   byte 24 == 0; `mmapq_indexed_archiver_archivable == 0`.
 3. **`test_archive_up_to_index_rejects_non_archivable`**: on an
    archivable=0 queue, `archive_up_to_index` returns `MMAPQ_EINVAL` (this
    pins a Part-B conversion — it MUST be run under release flags, see 5).
 4. Rust: extend an existing integration test or add
    `tests/archivable.rs`: `QueueConfig::new(...).archivable(true)` →
    create → byte-24 check via `std::fs` read → assert 1. Python: one test:
-   `IndexedQueue.create(d, "q", archivable=True)` → read byte 24 → 1;
+   `MmapqIndexedQueue.create(d, "q", archivable=True)` → read byte 24 → 1;
    plus default-False → 0.
 5. **Release-flags loop:** add `test_indexed_archiver` to the release test
    list in `scripts/test.sh`. This is the first archiver coverage under

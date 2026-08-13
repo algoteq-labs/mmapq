@@ -18,32 +18,32 @@ typedef struct __attribute__((packed)) {
 } LatencyHeader;
 
 typedef struct {
-    IndexedBatchAppender *response_appender;
+    MmapqIndexedBatchAppender *response_appender;
     volatile int          shutdown_requested;
 } ServerCtx;
 
-static NextMove echo_handler(
+static MmapqNextMove echo_handler(
     int64_t              b_idx,
-    BatchReadingContext *ctx,
+    MmapqBatchReadingContext *ctx,
     void                *user_ctx)
 {
     (void)b_idx;
     ServerCtx *s = (ServerCtx *)user_ctx;
 
-    if (!batch_iterator_advance(ctx->iterator))
-        return NEXT_ADVANCE;
+    if (!mmapq_batch_iterator_advance(ctx->iterator))
+        return MMAPQ_NEXT_ADVANCE;
     const LatencyHeader *hdr = batch_iterator_current_data(ctx->iterator);
 
     if (hdr->sequence == SHUTDOWN_SEQ)
         s->shutdown_requested = 1;
 
-    MutableBatch *b = indexed_batch_appender_start_batch(s->response_appender);
-    mutable_batch_append(b, batch_iterator_current_data(ctx->iterator),
+    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(s->response_appender);
+    mmapq_mutable_batch_append(b, batch_iterator_current_data(ctx->iterator),
                             batch_iterator_current_length(ctx->iterator));
-    mutable_batch_append_remaining_from(b, ctx->iterator);
-    indexed_batch_appender_commit_batch(s->response_appender, mutable_batch_complete(b));
+    mmapq_mutable_batch_append_remaining_from(b, ctx->iterator);
+    mmapq_indexed_batch_appender_commit_batch(s->response_appender, mmapq_mutable_batch_complete(b));
 
-    return NEXT_ADVANCE;
+    return MMAPQ_NEXT_ADVANCE;
 }
 
 int main(int argc, char *argv[])
@@ -71,30 +71,30 @@ int main(int argc, char *argv[])
     if (use_sync)        mode_str = "SYNCHRONOUS";
     else if (use_mixed)  mode_str = "MIXED";
 
-    Runtime *write_rt = NULL, *read_rt = NULL;
+    MmapqRuntime *write_rt = NULL, *read_rt = NULL;
     if (!use_sync) {
-        Runtime *rt = NULL;
-        int rc_rt = runtime_region_mapper(&rt);
-        if (rc_rt != 0) { fprintf(stderr, "runtime_region_mapper failed\n"); return 1; }
-        if (mapper_cpu >= 0) runtime_set_affinity(rt, mapper_cpu);
+        MmapqRuntime *rt = NULL;
+        int rc_rt = mmapq_runtime_region_mapper(&rt);
+        if (rc_rt != 0) { fprintf(stderr, "mmapq_runtime_region_mapper failed\n"); return 1; }
+        if (mapper_cpu >= 0) mmapq_runtime_set_affinity(rt, mapper_cpu);
         if (use_mixed) { write_rt = rt; read_rt = NULL; }
         else           { write_rt = rt; read_rt = rt;   }
     }
 
-    if (cpu_core >= 0) thread_set_affinity(cpu_core);
+    if (cpu_core >= 0) mmapq_thread_set_affinity(cpu_core);
 
-    IndexedBatchQueue    *q_req    = NULL;
-    IndexedBatchQueue    *q_res    = NULL;
-    IndexedBatchPoller   *poller   = NULL;
-    IndexedBatchAppender *appender = NULL;
+    MmapqIndexedBatchQueue    *q_req    = NULL;
+    MmapqIndexedBatchQueue    *q_res    = NULL;
+    MmapqIndexedBatchPoller   *poller   = NULL;
+    MmapqIndexedBatchAppender *appender = NULL;
 
-    int rc_qr = indexed_batch_queue_create_default(dir, req, write_rt, read_rt, &q_req);
+    int rc_qr = mmapq_indexed_batch_queue_create_default(dir, req, write_rt, read_rt, &q_req);
     if (rc_qr != 0) { fprintf(stderr, "failed to create request queue\n"); return 1; }
-    int rc_qs = indexed_batch_queue_create_default(dir, res, write_rt, read_rt, &q_res);
+    int rc_qs = mmapq_indexed_batch_queue_create_default(dir, res, write_rt, read_rt, &q_res);
     if (rc_qs != 0) { fprintf(stderr, "failed to create response queue\n"); return 1; }
-    int rc_p = indexed_batch_queue_create_poller(q_req, &poller);
+    int rc_p = mmapq_indexed_batch_queue_create_poller(q_req, &poller);
     if (rc_p != 0) { fprintf(stderr, "failed to create poller\n"); return 1; }
-    int rc_ap = indexed_batch_queue_create_appender(q_res, &appender);
+    int rc_ap = mmapq_indexed_batch_queue_create_appender(q_res, &appender);
     if (rc_ap != 0) { fprintf(stderr, "failed to create appender\n"); return 1; }
 
     ServerCtx ctx = { .response_appender = appender, .shutdown_requested = 0 };
@@ -106,15 +106,15 @@ int main(int argc, char *argv[])
     printf("Waiting for requests...\n");
 
     while (!ctx.shutdown_requested) {
-        indexed_batch_poller_poll(poller, echo_handler, &ctx);
+        mmapq_indexed_batch_poller_poll(poller, echo_handler, &ctx);
     }
 
     printf("Shutdown requested. Closing...\n");
 
-    indexed_batch_appender_close(appender);
-    indexed_batch_poller_close(poller);
-    indexed_batch_queue_close(q_req);
-    indexed_batch_queue_close(q_res);
+    mmapq_indexed_batch_appender_close(appender);
+    mmapq_indexed_batch_poller_close(poller);
+    mmapq_indexed_batch_queue_close(q_req);
+    mmapq_indexed_batch_queue_close(q_res);
 
     return 0;
 }

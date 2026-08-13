@@ -59,17 +59,17 @@ To reproduce the **~280ns median round-trip** latencies, the following optimizat
 The `region_accessor_wrap` fast-path (address range check) and `header_read` logic are implemented as `static inline` in their respective headers. This eliminates the stack-frame and branching overhead of 3+ function calls per message, saving ~40ns per round trip.
 
 ### Atomic Background Pre-Touch
-The `rw_pretouch` function uses an atomic CAS (`0 -> 0`) on every new page boundary. This forces a hardware **Read-For-Ownership (RFO)** and marks the page as **Dirty** in the background. This ensures the background `Runtime` thread takes the "Dirty Bit" penalty so the hot IPC loop never stalls at 4KB boundaries.
+The `rw_pretouch` function uses an atomic CAS (`0 -> 0`) on every new page boundary. This forces a hardware **Read-For-Ownership (RFO)** and marks the page as **Dirty** in the background. This ensures the background `MmapqRuntime` thread takes the "Dirty Bit" penalty so the hot IPC loop never stalls at 4KB boundaries.
 
 ### Hardware Prefetch Stride
-The `IndexedPoller` uses `__builtin_prefetch` to warm the next logical header. Because of the Vertical Walk, the stride must be **512 bytes**, not 64. Prefetching 512 bytes ahead ensures the L1/L2 cache is ready before the index increments.
+The `MmapqIndexedPoller` uses `__builtin_prefetch` to warm the next logical header. Because of the Vertical Walk, the stride must be **512 bytes**, not 64. Prefetching 512 bytes ahead ensures the L1/L2 cache is ready before the index increments.
 
 ### Measurement Memory Warmup
 Always `memset` any large results/timestamp arrays (e.g. 160MB for 20M iterations) before measurement. This ensures the benchmark process has fully paged-in its own memory, preventing recording jitter during the clock run.
 
 ### System Configuration Requirements
 To achieve deterministic sub-300ns performance on Linux:
-*   **Core Isolation**: Use the `5, 7, 9` pattern. Pin the client loop to core 5, the server loop to core 7, and the background `Runtime` mapper to core 9.
+*   **Core Isolation**: Use the `5, 7, 9` pattern. Pin the client loop to core 5, the server loop to core 7, and the background `MmapqRuntime` mapper to core 9.
 *   **External Process Rule**: When running client and server in separate processes, **never** pin multiple mappers to the same isolated core. If cores are scarce, it is better to let the mappers float on the OS housekeeping cores than to oversubscribe an isolated core, which triggers disruptive Inter-Processor Interrupt (IPI) noise.
 *   **Huge Pages**: Transparent Huge Pages (THP) should be enabled. The library calls `huge_pages_hint` (MADV_HUGEPAGE) on data segments to reduce TLB pressure.
 *   **VDSO Timing**: Use `CLOCK_MONOTONIC`. Bypassing the VDSO path can add ~50-100ns of overhead per clock read.
@@ -96,12 +96,12 @@ During development, several aggressive optimizations were attempted and subseque
 *   **Theory**: Remove `MAP_POPULATE` from `mmap` calls to let the kernel map lazily and avoid heavy locks during mapping.
 *   **Reality**: Removing `MAP_POPULATE` was tried and **made latency worse**. Without it, the kernel only allocates virtual address space during `mmap` — when the hot reader thread enters a new region for the first time it takes ~1,000 page faults synchronously on the critical path (one per 4KB page in a 4MB region).
 *   **Java Clue**: Java warms pages via a user-space atomic CAS pre-touch loop. The C port achieves the equivalent via `rw_pretouch` (writer side) and `MAP_POPULATE` (mapper thread, reader side). Both keep the hot path page-fault-free.
-*   **Current code status**: `MAP_POPULATE` is **present and intentional** at all three `mmap` call sites (`file_mapper_single_rw.c`, `file_mapper_single_ro.c`, `fixed_size_region.c`). The background `Runtime` mapper thread absorbs all page-fault cost asynchronously, keeping the hot poll/append loop clean. Do not remove it.
+*   **Current code status**: `MAP_POPULATE` is **present and intentional** at all three `mmap` call sites (`file_mapper_single_rw.c`, `file_mapper_single_ro.c`, `fixed_size_region.c`). The background `MmapqRuntime` mapper thread absorbs all page-fault cost asynchronously, keeping the hot poll/append loop clean. Do not remove it.
 
 ### Anti-Pattern D: Early Parent Pinning (Affinity Inheritance)
 *   **Theory**: Pin the main thread to its isolated core as early as possible in `main()` to ensure the process starts correctly.
-*   **Reality**: On Linux, `pthread_create` inherits the parent's CPU affinity mask. If `main()` pins itself to Core 7 *before* spawning the `Runtime` mapper thread, the mapper is born hard-locked to `{7}`. If the mapper is then left "floating" (`-1`), it remains stuck on Core 7, directly preempting the hot IPC loop on every scheduler quantum (1–4ms on a non-RT kernel). The symptom is distinctive: p50–p99.99 identical to single-process results, only p99.999 exploding to 2–3ms.
-*   **The Fix**: Always spawn child threads (Runtime, Echo Server, etc.) **before** pinning the main thread to a single isolated core. This ensures children inherit the full system affinity mask and can either float on housekeeping cores or be independently pinned without conflict. This ordering is already correct in `latency_bench.c` and has been applied to `echo_server.c`.
+*   **Reality**: On Linux, `pthread_create` inherits the parent's CPU affinity mask. If `main()` pins itself to Core 7 *before* spawning the `MmapqRuntime` mapper thread, the mapper is born hard-locked to `{7}`. If the mapper is then left "floating" (`-1`), it remains stuck on Core 7, directly preempting the hot IPC loop on every scheduler quantum (1–4ms on a non-RT kernel). The symptom is distinctive: p50–p99.99 identical to single-process results, only p99.999 exploding to 2–3ms.
+*   **The Fix**: Always spawn child threads (MmapqRuntime, Echo Server, etc.) **before** pinning the main thread to a single isolated core. This ensures children inherit the full system affinity mask and can either float on housekeeping cores or be independently pinned without conflict. This ordering is already correct in `latency_bench.c` and has been applied to `echo_server.c`.
 
 ---
 

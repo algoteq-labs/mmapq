@@ -9,8 +9,18 @@
 #   make test-multi run multiprocess tests
 #   make clean      remove build artefacts
 
+PREFIX    ?= /usr/local
+LIBDIR    ?= $(PREFIX)/lib
+INCLUDEDIR ?= $(PREFIX)/include
+NATIVE    ?= 0
+LTO       ?= 0
+
 CC      = gcc
-CFLAGS  = -std=gnu11 -O3 -march=native -flto -DNDEBUG -Wall -Wextra -Wno-unused-parameter -D_GNU_SOURCE -I include -I src
+NATIVE_FLAGS = $(if $(filter 1,$(NATIVE)),-march=native,)
+LTO_FLAGS    = $(if $(filter 1,$(LTO)),-flto,)
+CFLAGS  = -std=gnu11 -O3 $(NATIVE_FLAGS) $(LTO_FLAGS) -DNDEBUG -Wall -Wextra \
+          -Wno-unused-parameter -Wmissing-prototypes -Wstrict-prototypes \
+          -Wnull-dereference -D_GNU_SOURCE -I include -I src
 LDFLAGS = -pthread -lm
 
 SRCS    = $(wildcard src/*.c)
@@ -28,27 +38,27 @@ $(LIB): $(OBJS)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 demo: $(LIB)
-	$(CC) $(CFLAGS) examples/demo.c -L. -lmmapq $(LDFLAGS) -o demo
+	$(CC) $(CFLAGS) -Wno-missing-prototypes examples/demo.c -L. -lmmapq $(LDFLAGS) -o demo
 	@echo "built: demo"
 
 batch_demo: $(LIB)
-	$(CC) $(CFLAGS) examples/batch_demo.c -L. -lmmapq $(LDFLAGS) -o batch_demo
+	$(CC) $(CFLAGS) -Wno-missing-prototypes examples/batch_demo.c -L. -lmmapq $(LDFLAGS) -o batch_demo
 	@echo "built: batch_demo"
 
 bench: $(LIB)
-	$(CC) $(CFLAGS) examples/latency_bench.c -L. -lmmapq $(LDFLAGS) -o latency_bench
+	$(CC) $(CFLAGS) -Wno-missing-prototypes examples/latency_bench.c -L. -lmmapq $(LDFLAGS) -o latency_bench
 	@echo "built: latency_bench"
 
 echo_server: $(LIB)
-	$(CC) $(CFLAGS) examples/echo_server.c -L. -lmmapq $(LDFLAGS) -o echo_server
+	$(CC) $(CFLAGS) -Wno-missing-prototypes examples/echo_server.c -L. -lmmapq $(LDFLAGS) -o echo_server
 	@echo "built: echo_server"
 
 batch_bench: $(LIB)
-	$(CC) $(CFLAGS) examples/batch_latency_bench.c -L. -lmmapq $(LDFLAGS) -o batch_latency_bench
+	$(CC) $(CFLAGS) -Wno-missing-prototypes examples/batch_latency_bench.c -L. -lmmapq $(LDFLAGS) -o batch_latency_bench
 	@echo "built: batch_latency_bench"
 
 batch_echo_server: $(LIB)
-	$(CC) $(CFLAGS) examples/batch_echo_server.c -L. -lmmapq $(LDFLAGS) -o batch_echo_server
+	$(CC) $(CFLAGS) -Wno-missing-prototypes examples/batch_echo_server.c -L. -lmmapq $(LDFLAGS) -o batch_echo_server
 	@echo "built: batch_echo_server"
 
 bench-suite: bench echo_server
@@ -79,10 +89,10 @@ scripts/test.sh test/multiprocess/test_multiprocess.sh:
 	chmod +x $@
 
 install: $(LIB)
-	install -d $(DESTDIR)$(PREFIX)/include/mmapq
-	install -m 644 $(addprefix include/,$(shell cat include/PUBLIC_HEADERS)) $(DESTDIR)$(PREFIX)/include/mmapq/
-	install -d $(DESTDIR)$(PREFIX)/lib
-	install -m 644 $(LIB) $(DESTDIR)$(PREFIX)/lib/
+	install -d $(DESTDIR)$(INCLUDEDIR)/mmapq
+	install -m 644 $(addprefix include/,$(shell cat include/PUBLIC_HEADERS)) $(DESTDIR)$(INCLUDEDIR)/mmapq/
+	install -d $(DESTDIR)$(LIBDIR)
+	install -m 644 $(LIB) $(DESTDIR)$(LIBDIR)/
 
 clean:
 	rm -f $(OBJS) $(LIB) demo latency_bench echo_server batch_demo batch_latency_bench batch_echo_server

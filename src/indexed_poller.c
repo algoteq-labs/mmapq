@@ -12,13 +12,13 @@
 
 /* ── Internal state ──────────────────────────────────────────────────────── */
 
-struct IndexedPoller {
+struct MmapqIndexedPoller {
     char                *directory;
     char                *queue_name;
     int                  ring_size;
     int                  regions_to_map_ahead;
     uint64_t             timeout_ns;
-    Runtime             *runtime;
+    MmapqRuntime             *runtime;
 
     /* Lazy-init state */
     QueueMeta           *queue_meta;
@@ -35,26 +35,26 @@ struct IndexedPoller {
     int closed;
     int meta_init_failed;
     int init_result;
-    int last_error;       /* MMAPQ_* code from last POLL_ERROR, 0 otherwise */
+    int last_error;       /* MMAPQ_* code from last MMAPQ_POLL_ERROR, 0 otherwise */
 };
 
 /* ── Start index supplier ────────────────────────────────────────────────── */
 
 static int64_t poller_start_index_fn(void *ctx)
 {
-    IndexedPoller *p = (IndexedPoller *)ctx;
+    MmapqIndexedPoller *p = (MmapqIndexedPoller *)ctx;
     if (p->queue_meta == NULL) return QUEUE_META_INITIAL_START_INDEX;
     return queue_meta_start_index(p->queue_meta);
 }
 
 /* ── Lazy init ───────────────────────────────────────────────────────────── */
 
-static int poller_init(IndexedPoller *p)
+static int poller_init(MmapqIndexedPoller *p)
 {
     if (p->queue_meta != NULL) return 1;
     if (p->meta_init_failed) return 0;
 
-    int rc = queue_meta_open_ro(p->directory, p->queue_name, QUEUE_TYPE_NORMAL, &p->queue_meta);
+    int rc = mmapqi_queue_meta_open_ro(p->directory, p->queue_name, QUEUE_TYPE_NORMAL, &p->queue_meta);
     if (rc != 0) {
         if (rc != MMAPQ_ENOENT && rc != MMAPQ_ENOTREADY && rc != MMAPQ_ETIMEDOUT)
             p->meta_init_failed = 1;
@@ -62,7 +62,7 @@ static int poller_init(IndexedPoller *p)
         return 0;
     }
 
-    int acc_rc = queue_region_accessor_create_ro(
+    int acc_rc = mmapqi_queue_region_accessor_create_ro(
         p->directory, p->queue_name,
         queue_meta_region_size(p->queue_meta),
         p->ring_size,
@@ -71,7 +71,7 @@ static int poller_init(IndexedPoller *p)
         p->timeout_ns, p->runtime,
         &p->ro_acc);
     if (acc_rc != 0) {
-        queue_meta_close(p->queue_meta);
+        mmapqi_queue_meta_close(p->queue_meta);
         p->queue_meta = NULL;
         p->init_result = acc_rc;
         return 0;
@@ -87,20 +87,20 @@ static int poller_init(IndexedPoller *p)
 
 /* ── Factory ─────────────────────────────────────────────────────────────── */
 
-int indexed_poller_create(
+int mmapq_indexed_poller_create(
     const char *directory,
     const char *queue_name,
     int         ring_size,
     uint64_t    timeout_ns,
-    Runtime    *runtime,
-    IndexedPoller **out)
+    MmapqRuntime    *runtime,
+    MmapqIndexedPoller **out)
 {
     if (out == NULL) return MMAPQ_EINVAL;
     *out = NULL;
     if (directory  == NULL) return MMAPQ_EINVAL;
     if (queue_name == NULL) return MMAPQ_EINVAL;
 
-    IndexedPoller *p = calloc(1, sizeof(IndexedPoller));
+    MmapqIndexedPoller *p = calloc(1, sizeof(MmapqIndexedPoller));
     if (p == NULL) return MMAPQ_ENOMEM;
 
     p->directory           = strdup(directory);
@@ -119,23 +119,23 @@ int indexed_poller_create(
     return 0;
 }
 
-/* ── indexed_poller_poll ─────────────────────────────────────────────────── */
+/* ── mmapq_indexed_poller_poll ─────────────────────────────────────────────────── */
 
-PollResult indexed_poller_poll(
-    IndexedPoller *p,
-    MessageHandler handler,
+MmapqPollResult mmapq_indexed_poller_poll(
+    MmapqIndexedPoller *p,
+    MmapqMessageHandler handler,
     void          *ctx)
 {
-    if (p == NULL)    return POLL_ERROR;
+    if (p == NULL)    return MMAPQ_POLL_ERROR;
     p->last_error = 0;
-    if (p->closed)    { p->last_error = MMAPQ_ECLOSED; return POLL_ERROR; }
-    if (handler == NULL) { p->last_error = MMAPQ_EINVAL; return POLL_ERROR; }
+    if (p->closed)    { p->last_error = MMAPQ_ECLOSED; return MMAPQ_POLL_ERROR; }
+    if (handler == NULL) { p->last_error = MMAPQ_EINVAL; return MMAPQ_POLL_ERROR; }
 
     if (!poller_init(p)) {
         if (p->init_result == MMAPQ_ENOENT || p->init_result == MMAPQ_ENOTREADY)
-            return POLL_END_OF_STREAM;
+            return MMAPQ_POLL_END_OF_STREAM;
         p->last_error = p->init_result;
-        return POLL_ERROR;
+        return MMAPQ_POLL_ERROR;
     }
 
     /* 
@@ -145,16 +145,16 @@ PollResult indexed_poller_poll(
     if (p->queue_meta->archivable) {
         int64_t start_index = queue_meta_start_index(p->queue_meta);
         if (p->current_index < start_index) {
-            return POLL_ARCHIVED;
+            return MMAPQ_POLL_ARCHIVED;
         }
     }
 
     /* Read header at current index — use sequential wrap to trigger premap */
-    uint64_t header = header_read_sequential(p->header_acc, &p->header_buf,
+    uint64_t header = mmapqi_header_read_sequential(p->header_acc, &p->header_buf,
                                               p->current_index, p->queue_name);
 
     if (header == HEADER_NULL) {
-        return POLL_END_OF_STREAM;
+        return MMAPQ_POLL_END_OF_STREAM;
     }
 
     /* Prefetch the next header slot (512 bytes ahead due to vertical walk) */
@@ -165,49 +165,49 @@ PollResult indexed_poller_poll(
     int64_t  payload_position = header_payload_position(header);
 
     RegionAccessor *payload_acc =
-        queue_region_accessor_payload(p->ro_acc, appender_id);
+        mmapqi_queue_region_accessor_payload(p->ro_acc, appender_id);
 
     WrapResult r = region_accessor_wrap(payload_acc, payload_position, &p->payload_buf);
-    if (r != WRAP_SUCCESS) { p->last_error = MMAPQ_ETIMEDOUT; return POLL_ERROR; }
+    if (r != WRAP_SUCCESS) { p->last_error = MMAPQ_ETIMEDOUT; return MMAPQ_POLL_ERROR; }
 
     int32_t length;
     memcpy(&length, p->payload_buf.data + PAYLOAD_LENGTH_OFFSET, sizeof(int32_t));
 
-    if (length <= 0) { p->last_error = MMAPQ_ECORRUPT; return POLL_CORRUPT; }
+    if (length <= 0) { p->last_error = MMAPQ_ECORRUPT; return MMAPQ_POLL_CORRUPT; }
 
     const void *data = p->payload_buf.data + PAYLOAD_DATA_OFFSET;
 
     /* Call handler */
-    NextMove directive =
+    MmapqNextMove directive =
         handler(p->current_index, appender_id, data, length, ctx);
 
     /* Apply directive */
     switch (directive) {
-    case NEXT_ADVANCE:
+    case MMAPQ_NEXT_ADVANCE:
         p->current_index++;
-        return POLL_ADVANCED;
+        return MMAPQ_POLL_ADVANCED;
 
-    case NEXT_RETREAT: {
+    case MMAPQ_NEXT_RETREAT: {
         int64_t start_index = queue_meta_start_index(p->queue_meta);
         if (p->current_index > start_index) {
             p->current_index--;
-            return POLL_RETREATED;
+            return MMAPQ_POLL_RETREATED;
         }
-        return POLL_STOPPED;
+        return MMAPQ_POLL_STOPPED;
     }
 
-    case NEXT_STOP:
-        return POLL_STOPPED;
+    case MMAPQ_NEXT_STOP:
+        return MMAPQ_POLL_STOPPED;
 
     default:
-        MMAP_ASSERT(0, "indexed_poller_poll: unknown handler directive");
-        return POLL_STOPPED;
+        MMAP_ASSERT(0, "mmapq_indexed_poller_poll: unknown handler directive");
+        return MMAPQ_POLL_STOPPED;
     }
 }
 
 /* ── Cursor positioning ──────────────────────────────────────────────────── */
 
-int indexed_poller_move_to_index(IndexedPoller *p, int64_t index)
+int mmapq_indexed_poller_move_to_index(MmapqIndexedPoller *p, int64_t index)
 {
     if (p == NULL)   return 0;
     if (p->closed)   return 0;
@@ -231,7 +231,7 @@ int indexed_poller_move_to_index(IndexedPoller *p, int64_t index)
     return 0;
 }
 
-int indexed_poller_move_to_end(IndexedPoller *p)
+int mmapq_indexed_poller_move_to_end(MmapqIndexedPoller *p)
 {
     if (p == NULL)  return 0;
     if (p->closed)  return 0;
@@ -242,7 +242,7 @@ int indexed_poller_move_to_end(IndexedPoller *p)
         ? p->current_index
         : queue_meta_start_index(p->queue_meta);
 
-    int64_t last = header_search_last_index(
+    int64_t last = mmapqi_header_search_last_index(
         from, poller_start_index_fn, p,
         p->header_acc, &p->header_buf, p->queue_name);
 
@@ -253,7 +253,7 @@ int indexed_poller_move_to_end(IndexedPoller *p)
     return 1;
 }
 
-int indexed_poller_move_to_last(IndexedPoller *p)
+int mmapq_indexed_poller_move_to_last(MmapqIndexedPoller *p)
 {
     if (p == NULL)  return 0;
     if (p->closed)  return 0;
@@ -265,7 +265,7 @@ int indexed_poller_move_to_last(IndexedPoller *p)
         ? from
         : queue_meta_start_index(p->queue_meta);
 
-    int64_t last = header_search_last_index(
+    int64_t last = mmapqi_header_search_last_index(
         from, poller_start_index_fn, p,
         p->header_acc, &p->header_buf, p->queue_name);
 
@@ -275,31 +275,31 @@ int indexed_poller_move_to_last(IndexedPoller *p)
     return 1;
 }
 
-int indexed_poller_move_to_start(IndexedPoller *p)
+int mmapq_indexed_poller_move_to_start(MmapqIndexedPoller *p)
 {
     if (p == NULL)  return 0;
     if (p->closed)  return 0;
 
-    p->current_index = indexed_poller_start_index(p);
+    p->current_index = mmapq_indexed_poller_start_index(p);
     return 1;
 }
 
 /* ── Metadata ─────────────────────────────────────────────────────────────── */
 
-int64_t indexed_poller_current_index(const IndexedPoller *p)
+int64_t mmapq_indexed_poller_current_index(const MmapqIndexedPoller *p)
 {
     if (p == NULL) return 0;
     return p->current_index;
 }
 
-int64_t indexed_poller_start_index(IndexedPoller *p)
+int64_t mmapq_indexed_poller_start_index(MmapqIndexedPoller *p)
 {
     if (p == NULL) return 0;
     if (!poller_init(p)) return QUEUE_META_INITIAL_START_INDEX;
     return queue_meta_start_index(p->queue_meta);
 }
 
-int indexed_poller_exists(IndexedPoller *p, int64_t index)
+int mmapq_indexed_poller_exists(MmapqIndexedPoller *p, int64_t index)
 {
     if (p == NULL) return 0;
     if (!poller_init(p)) return 0;
@@ -309,24 +309,24 @@ int indexed_poller_exists(IndexedPoller *p, int64_t index)
 
 /* ── Error accessor ────────────────────────────────────────────────────────── */
 
-int indexed_poller_last_error(const IndexedPoller *p)
+int mmapq_indexed_poller_last_error(const MmapqIndexedPoller *p)
 {
     return p == NULL ? 0 : p->last_error;
 }
 
-/* ── indexed_poller_close ────────────────────────────────────────────────── */
+/* ── mmapq_indexed_poller_close ────────────────────────────────────────────────── */
 
-void indexed_poller_close(IndexedPoller *p)
+void mmapq_indexed_poller_close(MmapqIndexedPoller *p)
 {
     if (p == NULL || p->closed) return;
     p->closed = 1;
 
     if (p->ro_acc != NULL) {
-        queue_region_accessor_close(p->ro_acc);
+        mmapqi_queue_region_accessor_close(p->ro_acc);
         p->ro_acc = NULL;
     }
     if (p->queue_meta != NULL) {
-        queue_meta_close(p->queue_meta);
+        mmapqi_queue_meta_close(p->queue_meta);
         p->queue_meta = NULL;
     }
 

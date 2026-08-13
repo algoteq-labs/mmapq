@@ -29,7 +29,7 @@ static void sync_ring_close(RegionRing *self)
     file_mapper_close(impl->file_mapper);
 }
 
-int region_ring_sync_create(
+int mmapqi_region_ring_sync_create(
     int         ring_size,
     int32_t     region_size,
     FileMapper *file_mapper,
@@ -48,7 +48,7 @@ int region_ring_sync_create(
     if (regions == NULL) return MMAPQ_ENOMEM;
 
     for (int i = 0; i < ring_size; i++) {
-        int rc = region_sync_create(
+        int rc = mmapqi_region_sync_create(
             file_mapper,
             region_size,
             timeout_ns,
@@ -56,7 +56,7 @@ int region_ring_sync_create(
             REGION_MAX_BEYOND_FILE_SIZE_ERRORS,
             &regions[i]);
         if (rc != 0) {
-            for (int j = 0; j < i; j++) region_destroy(regions[j]);
+            for (int j = 0; j < i; j++) mmapqi_region_destroy(regions[j]);
             free(regions);
             return rc;
         }
@@ -85,33 +85,33 @@ int region_ring_sync_create(
 /**
  * AsyncMappingExecutable — drives the async region state machines.
  *
- * Registered with the Runtime. On each execute() call, polls every region
+ * Registered with the MmapqRuntime. On each execute() call, polls every region
  * in the ring for pending map/unmap requests. Returns work count so the
- * Runtime's idle strategy can back off when no regions need mapping.
+ * MmapqRuntime's idle strategy can back off when no regions need mapping.
  */
 typedef struct {
     Region    **regions;
     int         ring_size;
-    Executable  exec;  /* embedded — registered with Runtime */
+    MmapqExecutable  exec;  /* embedded — registered with MmapqRuntime */
 } AsyncMappingImpl;
 
-static int async_mapping_execute(Executable *self)
+static int async_mapping_execute(MmapqExecutable *self)
 {
     AsyncMappingImpl *impl = (AsyncMappingImpl *)self->ctx;
     int work = 0;
     for (int i = 0; i < impl->ring_size; i++) {
-        work += region_async_process_request(impl->regions[i]);
+        work += mmapqi_region_async_process_request(impl->regions[i]);
     }
     return work;
 }
 
-static void async_mapping_close(Executable *self)
+static void async_mapping_close(MmapqExecutable *self)
 {
-    /* Runtime is shutting down — unmanage all regions so app thread
+    /* MmapqRuntime is shutting down — unmanage all regions so app thread
      * fails fast rather than spinning indefinitely waiting for mapping */
     AsyncMappingImpl *impl = (AsyncMappingImpl *)self->ctx;
     for (int i = 0; i < impl->ring_size; i++) {
-        region_async_unmanage(impl->regions[i]);
+        mmapqi_region_async_unmanage(impl->regions[i]);
     }
 }
 
@@ -119,7 +119,7 @@ static void async_mapping_close(Executable *self)
 
 typedef struct {
     FileMapper       *file_mapper;
-    Runtime          *runtime;
+    MmapqRuntime          *runtime;
     AsyncMappingImpl *mapping_impl;
     atomic_int        closed;
 } AsyncRingImpl;
@@ -129,19 +129,19 @@ typedef struct {
  * when the mapper task has been safely removed from the runtime.
  */
 typedef struct {
-    Runtime          *runtime;
-    Executable       *target;
+    MmapqRuntime          *runtime;
+    MmapqExecutable       *target;
     void             *target_ctx_to_free;
     atomic_int        done;    /* set to 1 after unregistration completes */
-    Executable        self_exec;
+    MmapqExecutable        self_exec;
 } WaitingDeregisterImpl;
 
-static int waiting_deregister_execute(Executable *self)
+static int waiting_deregister_execute(MmapqExecutable *self)
 {
     WaitingDeregisterImpl *impl = (WaitingDeregisterImpl *)self->ctx;
     /* Must be called from runtime thread — safe to call unregister */
-    runtime_unregister(impl->runtime, impl->target);
-    runtime_unregister(impl->runtime, &impl->self_exec);
+    mmapq_runtime_unregister(impl->runtime, impl->target);
+    mmapq_runtime_unregister(impl->runtime, &impl->self_exec);
     if (impl->target_ctx_to_free) {
         free(impl->target_ctx_to_free);
     }
@@ -150,7 +150,7 @@ static int waiting_deregister_execute(Executable *self)
     return 1;
 }
 
-static void waiting_deregister_close(Executable *self)
+static void waiting_deregister_close(MmapqExecutable *self)
 {
     WaitingDeregisterImpl *impl = (WaitingDeregisterImpl *)self->ctx;
     if (impl->target_ctx_to_free) {
@@ -176,7 +176,7 @@ static void async_ring_close(RegionRing *self)
      *         WAIT for the runtime thread to confirm it is done.
      *
      *         This MUST happen first. After this point the runtime thread
-     *         will never call region_async_process_request() on our regions
+     *         will never call mmapqi_region_async_process_request() on our regions
      *         again. Only then is it safe for region_close() to self-drive
      *         process_request() without racing against the mapper thread.
      *
@@ -198,10 +198,10 @@ static void async_ring_close(RegionRing *self)
     wait_impl.self_exec.close   = waiting_deregister_close;
     wait_impl.self_exec.ctx     = &wait_impl;
 
-    runtime_register(impl->runtime, &wait_impl.self_exec);
+    mmapq_runtime_register(impl->runtime, &wait_impl.self_exec);
 
     while (!atomic_load_explicit(&wait_impl.done, memory_order_acquire)) {
-        spin_hint();
+        mmapq_spin_hint();
     }
     /* Mapper thread has confirmed it is done. mapping_impl is freed by
      * waiting_deregister_execute via target_ctx_to_free. */
@@ -218,12 +218,12 @@ static void async_ring_close(RegionRing *self)
     file_mapper_close(impl->file_mapper);
 }
 
-int region_ring_async_create(
+int mmapqi_region_ring_async_create(
     int         ring_size,
     int32_t     region_size,
     FileMapper *file_mapper,
     uint64_t    timeout_ns,
-    Runtime    *runtime,
+    MmapqRuntime    *runtime,
     RegionRing **out)
 {
     if (out == NULL) return MMAPQ_EINVAL;
@@ -240,7 +240,7 @@ int region_ring_async_create(
     if (regions == NULL) return MMAPQ_ENOMEM;
 
     for (int i = 0; i < ring_size; i++) {
-        int rc = region_async_create(
+        int rc = mmapqi_region_async_create(
             file_mapper,
             region_size,
             timeout_ns,
@@ -248,7 +248,7 @@ int region_ring_async_create(
             REGION_MAX_BEYOND_FILE_SIZE_ERRORS,
             &regions[i]);
         if (rc != 0) {
-            for (int j = 0; j < i; j++) region_destroy(regions[j]);
+            for (int j = 0; j < i; j++) mmapqi_region_destroy(regions[j]);
             free(regions);
             return rc;
         }
@@ -263,7 +263,7 @@ int region_ring_async_create(
     mapping_impl->exec.close   = async_mapping_close;
     mapping_impl->exec.ctx     = mapping_impl;
 
-    if (!runtime_register(runtime, &mapping_impl->exec)) {
+    if (!mmapq_runtime_register(runtime, &mapping_impl->exec)) {
         free(mapping_impl);
         return MMAPQ_ETIMEDOUT;
     }
@@ -290,14 +290,14 @@ int region_ring_async_create(
 
 /* ── Destroy ─────────────────────────────────────────────────────────────── */
 
-void region_ring_destroy(RegionRing *ring)
+void mmapqi_region_ring_destroy(RegionRing *ring)
 {
     if (ring == NULL) return;
 
     /*
      * close() shuts down the async mapping executable (waiting for
      * deregistration) and calls file_mapper_close() on the ring's mapper.
-     * We then call file_mapper_destroy() to free the mapper's memory.
+     * We then call mmapqi_file_mapper_destroy() to free the mapper's memory.
      *
      * Ownership rule: FileMapper ownership is transferred to RegionRing
      * at region_ring_*_create(). The caller must not close or destroy
@@ -307,7 +307,7 @@ void region_ring_destroy(RegionRing *ring)
 
     for (int i = 0; i < ring->ring_size; i++) {
         if (ring->regions[i] != NULL) {
-            region_destroy(ring->regions[i]);
+            mmapqi_region_destroy(ring->regions[i]);
             ring->regions[i] = NULL;
         }
     }
@@ -322,14 +322,14 @@ void region_ring_destroy(RegionRing *ring)
          * file_mapper is fully owned by this ring — destroy it now.
          */
         if (impl->file_mapper != NULL) {
-            file_mapper_destroy(impl->file_mapper);
+            mmapqi_file_mapper_destroy(impl->file_mapper);
             impl->file_mapper = NULL;
         }
         free(impl);
     } else {
         SyncRingImpl *impl = (SyncRingImpl *)ring->impl;
         if (impl->file_mapper != NULL) {
-            file_mapper_destroy(impl->file_mapper);
+            mmapqi_file_mapper_destroy(impl->file_mapper);
             impl->file_mapper = NULL;
         }
         free(impl);

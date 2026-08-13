@@ -11,25 +11,25 @@
 #include <time.h>
 
 /* ═══════════════════════════════════════════════════════════════════════════
- * IdleStrategy implementations
+ * MmapqIdleStrategy implementations
  * ═══════════════════════════════════════════════════════════════════════════ */
 
 /* ── Busy spin ───────────────────────────────────────────────────────────── */
 
-static void busy_spin_idle(IdleStrategy *self, int work_done)
+static void busy_spin_idle(MmapqIdleStrategy *self, int work_done)
 {
     (void)self;
     (void)work_done;
-    spin_hint();
+    mmapq_spin_hint();
 }
 
-static void idle_noop_close(IdleStrategy *self) { (void)self; }
+static void idle_noop_close(MmapqIdleStrategy *self) { (void)self; }
 
-int idle_strategy_busy_spin_create(IdleStrategy **out)
+int mmapq_idle_strategy_busy_spin_create(MmapqIdleStrategy **out)
 {
     if (out == NULL) return MMAPQ_EINVAL;
     *out = NULL;
-    IdleStrategy *s = calloc(1, sizeof(IdleStrategy));
+    MmapqIdleStrategy *s = calloc(1, sizeof(MmapqIdleStrategy));
     if (s == NULL) return MMAPQ_ENOMEM;
     s->idle  = busy_spin_idle;
     s->close = idle_noop_close;
@@ -40,7 +40,7 @@ int idle_strategy_busy_spin_create(IdleStrategy **out)
 
 /* ── Yield ───────────────────────────────────────────────────────────────── */
 
-static void yield_idle(IdleStrategy *self, int work_done)
+static void yield_idle(MmapqIdleStrategy *self, int work_done)
 {
     (void)self;
     if (work_done == 0) {
@@ -48,11 +48,11 @@ static void yield_idle(IdleStrategy *self, int work_done)
     }
 }
 
-int idle_strategy_yield_create(IdleStrategy **out)
+int mmapq_idle_strategy_yield_create(MmapqIdleStrategy **out)
 {
     if (out == NULL) return MMAPQ_EINVAL;
     *out = NULL;
-    IdleStrategy *s = calloc(1, sizeof(IdleStrategy));
+    MmapqIdleStrategy *s = calloc(1, sizeof(MmapqIdleStrategy));
     if (s == NULL) return MMAPQ_ENOMEM;
     s->idle  = yield_idle;
     s->close = idle_noop_close;
@@ -69,7 +69,7 @@ typedef struct {
     uint64_t current_sleep_ns;
 } SleepCtx;
 
-static void sleep_idle(IdleStrategy *self, int work_done)
+static void sleep_idle(MmapqIdleStrategy *self, int work_done)
 {
     SleepCtx *ctx = (SleepCtx *)self->ctx;
     if (work_done > 0) {
@@ -88,12 +88,12 @@ static void sleep_idle(IdleStrategy *self, int work_done)
     }
 }
 
-static void sleep_close(IdleStrategy *self)
+static void sleep_close(MmapqIdleStrategy *self)
 {
     free(self->ctx);
 }
 
-int idle_strategy_sleep_create(uint64_t min_sleep_ns, uint64_t max_sleep_ns, IdleStrategy **out)
+int mmapq_idle_strategy_sleep_create(uint64_t min_sleep_ns, uint64_t max_sleep_ns, MmapqIdleStrategy **out)
 {
     if (out == NULL) return MMAPQ_EINVAL;
     *out = NULL;
@@ -106,7 +106,7 @@ int idle_strategy_sleep_create(uint64_t min_sleep_ns, uint64_t max_sleep_ns, Idl
     ctx->max_sleep_ns     = max_sleep_ns;
     ctx->current_sleep_ns = min_sleep_ns;
 
-    IdleStrategy *s = calloc(1, sizeof(IdleStrategy));
+    MmapqIdleStrategy *s = calloc(1, sizeof(MmapqIdleStrategy));
     if (s == NULL) { free(ctx); return MMAPQ_ENOMEM; }
     s->idle  = sleep_idle;
     s->close = sleep_close;
@@ -126,7 +126,7 @@ typedef struct {
     uint64_t sleep_ns;
 } BackoffCtx;
 
-static void backoff_idle(IdleStrategy *self, int work_done)
+static void backoff_idle(MmapqIdleStrategy *self, int work_done)
 {
     BackoffCtx *ctx = (BackoffCtx *)self->ctx;
     if (work_done > 0) {
@@ -138,7 +138,7 @@ static void backoff_idle(IdleStrategy *self, int work_done)
 
     if (ctx->spin_counter < ctx->spin_count) {
         ctx->spin_counter++;
-        spin_hint();
+        mmapq_spin_hint();
         return;
     }
     if (ctx->yield_counter < ctx->yield_count) {
@@ -160,16 +160,16 @@ static void backoff_idle(IdleStrategy *self, int work_done)
     }
 }
 
-static void backoff_close(IdleStrategy *self)
+static void backoff_close(MmapqIdleStrategy *self)
 {
     free(self->ctx);
 }
 
-int idle_strategy_backoff_create(
+int mmapq_idle_strategy_backoff_create(
     int      spin_count,
     int      yield_count,
     uint64_t max_sleep_ns,
-    IdleStrategy **out)
+    MmapqIdleStrategy **out)
 {
     if (out == NULL) return MMAPQ_EINVAL;
     *out = NULL;
@@ -183,7 +183,7 @@ int idle_strategy_backoff_create(
     ctx->yield_counter= 0;
     ctx->sleep_ns     = UINT64_C(1000);
 
-    IdleStrategy *s = calloc(1, sizeof(IdleStrategy));
+    MmapqIdleStrategy *s = calloc(1, sizeof(MmapqIdleStrategy));
     if (s == NULL) { free(ctx); return MMAPQ_ENOMEM; }
     s->idle  = backoff_idle;
     s->close = backoff_close;
@@ -192,7 +192,7 @@ int idle_strategy_backoff_create(
     return 0;
 }
 
-void idle_strategy_destroy(IdleStrategy *strategy)
+void mmapq_idle_strategy_destroy(MmapqIdleStrategy *strategy)
 {
     if (strategy == NULL) return;
     if (strategy->close) strategy->close(strategy);
@@ -212,7 +212,7 @@ void idle_strategy_destroy(IdleStrategy *strategy)
  * of each iteration — it sees the latest registration without locking.
  */
 typedef struct ExecList {
-    Executable **items;
+    MmapqExecutable **items;
     int          count;
     int          capacity;
 } ExecList;
@@ -221,30 +221,30 @@ static ExecList *exec_list_create(int capacity)
 {
     ExecList *list = calloc(1, sizeof(ExecList));
     if (list == NULL) return NULL;
-    list->items    = calloc((size_t)capacity, sizeof(Executable *));
+    list->items    = calloc((size_t)capacity, sizeof(MmapqExecutable *));
     list->count    = 0;
     list->capacity = capacity;
     return list;
 }
 
-static ExecList *exec_list_add(ExecList *old, Executable *exec)
+static ExecList *exec_list_add(ExecList *old, MmapqExecutable *exec)
 {
     int new_cap = old->capacity + 8;
     ExecList *next = calloc(1, sizeof(ExecList));
     if (next == NULL) return NULL;
-    next->items    = calloc((size_t)new_cap, sizeof(Executable *));
+    next->items    = calloc((size_t)new_cap, sizeof(MmapqExecutable *));
     next->count    = old->count + 1;
     next->capacity = new_cap;
-    memcpy(next->items, old->items, (size_t)old->count * sizeof(Executable *));
+    memcpy(next->items, old->items, (size_t)old->count * sizeof(MmapqExecutable *));
     next->items[old->count] = exec;
     return next;
 }
 
-static ExecList *exec_list_remove(ExecList *old, Executable *exec)
+static ExecList *exec_list_remove(ExecList *old, MmapqExecutable *exec)
 {
     ExecList *next = calloc(1, sizeof(ExecList));
     if (next == NULL) return NULL;
-    next->items    = calloc((size_t)old->capacity, sizeof(Executable *));
+    next->items    = calloc((size_t)old->capacity, sizeof(MmapqExecutable *));
     next->count    = 0;
     next->capacity = old->capacity;
     for (int i = 0; i < old->count; i++) {
@@ -276,14 +276,14 @@ typedef struct FreeNode {
 
 
 /* ═══════════════════════════════════════════════════════════════════════════
- * Runtime
+ * MmapqRuntime
  * ═══════════════════════════════════════════════════════════════════════════ */
 
-struct Runtime {
+struct MmapqRuntime {
     char         name[16];
-    IdleStrategy *idle;
+    MmapqIdleStrategy *idle;
     uint64_t      close_timeout_ns;
-    void        (*on_close)(Runtime *rt, void *ctx);
+    void        (*on_close)(MmapqRuntime *rt, void *ctx);
     void         *on_close_ctx;
 
     _Atomic(ExecList *) exec_list;
@@ -313,7 +313,7 @@ struct Runtime {
 
 /* ── Deferred free helpers ───────────────────────────────────────────────── */
 
-static void push_to_free(Runtime *rt, ExecList *old)
+static void push_to_free(MmapqRuntime *rt, ExecList *old)
 {
     if (old == NULL) return;
     FreeNode *node = calloc(1, sizeof(FreeNode));
@@ -328,7 +328,7 @@ static void push_to_free(Runtime *rt, ExecList *old)
                  memory_order_release, memory_order_relaxed));
 }
 
-static void drain_free_list(Runtime *rt)
+static void drain_free_list(MmapqRuntime *rt)
 {
     FreeNode *head = atomic_exchange_explicit(&rt->free_list, NULL, memory_order_acquire);
     while (head != NULL) {
@@ -343,11 +343,11 @@ static void drain_free_list(Runtime *rt)
 
 static void *runtime_thread_fn(void *arg)
 {
-    Runtime *rt = (Runtime *)arg;
+    MmapqRuntime *rt = (MmapqRuntime *)arg;
 
     /*
      * Set thread name from within the thread itself.
-     * thread_set_name() from the creator thread is sufficient, but
+     * mmapq_thread_set_name() from the creator thread is sufficient, but
      * calling it here too is harmless.
      */
 
@@ -362,14 +362,14 @@ static void *runtime_thread_fn(void *arg)
 
         /*
          * Load the current list snapshot at the top of each iteration.
-         * execute() calls may modify the list (via runtime_unregister),
+         * execute() calls may modify the list (via mmapq_runtime_unregister),
          * so we capture count and items upfront and iterate the snapshot.
          * After execute() the list pointer in rt->exec_list may have changed,
-         * but our local 'list' pointer is still valid — runtime_unregister
+         * but our local 'list' pointer is still valid — mmapq_runtime_unregister
          * pushes the old list onto free_list, which drain_free_list() will
          * collect at the top of the NEXT iteration, after we are done with it.
          *
-         * INVARIANT: runtime_unregister() must only be called at the top
+         * INVARIANT: mmapq_runtime_unregister() must only be called at the top
          * level of execute(), never while we are mid-iteration below.
          * The deregister executable satisfies this — it calls unregister
          * and returns immediately, so no nested iteration occurs.
@@ -379,11 +379,11 @@ static void *runtime_thread_fn(void *arg)
         int       work_count = 0;
 
         for (int i = 0; i < count; i++) {
-            Executable *exec = list->items[i];
+            MmapqExecutable *exec = list->items[i];
             int work = exec->execute(exec);
             if (work < 0) {
                 exec->close(exec);
-                runtime_unregister(rt, exec);
+                mmapq_runtime_unregister(rt, exec);
                 break;  /* list changed — restart on next outer iteration */
             }
             work_count += work;
@@ -408,20 +408,20 @@ static void *runtime_thread_fn(void *arg)
 
 /* ── Factory ─────────────────────────────────────────────────────────────── */
 
-int runtime_create(
+int mmapq_runtime_create(
     const char   *name,
-    IdleStrategy *idle,
+    MmapqIdleStrategy *idle,
     uint64_t      close_timeout_ns,
-    void        (*on_close)(Runtime *rt, void *ctx),
+    void        (*on_close)(MmapqRuntime *rt, void *ctx),
     void         *on_close_ctx,
-    Runtime     **out)
+    MmapqRuntime     **out)
 {
     if (out == NULL) return MMAPQ_EINVAL;
     *out = NULL;
     if (name == NULL) return MMAPQ_EINVAL;
     if (idle == NULL) return MMAPQ_EINVAL;
 
-    Runtime *rt = calloc(1, sizeof(Runtime));
+    MmapqRuntime *rt = calloc(1, sizeof(MmapqRuntime));
     if (rt == NULL) return MMAPQ_ENOMEM;
 
     strncpy(rt->name, name, sizeof(rt->name) - 1);
@@ -453,11 +453,11 @@ int runtime_create(
     pthread_attr_destroy(&attr);
 
     /* Set thread name for debugger visibility (macOS: thread sets its own name) */
-    thread_set_name(rt->thread, rt->name);
+    mmapq_thread_set_name(rt->thread, rt->name);
 
     /* Wait for thread to start so runtime_thread_id is set */
     while (!atomic_load(&rt->thread_started)) {
-        spin_hint();
+        mmapq_spin_hint();
     }
 
     *out = rt;
@@ -466,7 +466,7 @@ int runtime_create(
 
 /* ── register ────────────────────────────────────────────────────────────── */
 
-int runtime_register(Runtime *rt, Executable *exec)
+int mmapq_runtime_register(MmapqRuntime *rt, MmapqExecutable *exec)
 {
     if (rt == NULL || exec == NULL) return 0;
 
@@ -491,16 +491,16 @@ int runtime_register(Runtime *rt, Executable *exec)
     return 1;
 }
 
-/* ── unregister — MUST be called from Runtime thread ─────────────────────── */
+/* ── unregister — MUST be called from MmapqRuntime thread ─────────────────────── */
 
-int runtime_unregister(Runtime *rt, Executable *exec)
+int mmapq_runtime_unregister(MmapqRuntime *rt, MmapqExecutable *exec)
 {
     if (rt == NULL || exec == NULL) return 0;
 
     /* Threading contract enforcement */
     MMAP_ASSERT(pthread_equal(pthread_self(), rt->runtime_thread_id),
-        "runtime_unregister: must be called from the Runtime thread. "
-        "Use deregister_executable_create() for cross-thread unregistration.");
+        "mmapq_runtime_unregister: must be called from the MmapqRuntime thread. "
+        "Use mmapq_deregister_executable_create() for cross-thread unregistration.");
 
     if (atomic_load(&rt->closed)) {
         return 0;
@@ -525,28 +525,28 @@ int runtime_unregister(Runtime *rt, Executable *exec)
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
- * Runtime affinity helper
+ * MmapqRuntime affinity helper
  * ═══════════════════════════════════════════════════════════════════════════ */
 
 typedef struct {
     int        cpu_core;
-    Executable self_exec;
+    MmapqExecutable self_exec;
 } AffinityImpl;
 
-static int affinity_execute(Executable *self)
+static int affinity_execute(MmapqExecutable *self)
 {
     AffinityImpl *impl = (AffinityImpl *)self->ctx;
-    thread_set_affinity(impl->cpu_core);
+    mmapq_thread_set_affinity(impl->cpu_core);
     free(impl);
     return -1; /* unregister self after one-shot */
 }
 
-static void affinity_close(Executable *self)
+static void affinity_close(MmapqExecutable *self)
 {
     (void)self;
 }
 
-int runtime_set_affinity(Runtime *rt, int cpu_core)
+int mmapq_runtime_set_affinity(MmapqRuntime *rt, int cpu_core)
 {
     if (rt == NULL) return -1;
 
@@ -558,7 +558,7 @@ int runtime_set_affinity(Runtime *rt, int cpu_core)
     impl->self_exec.close   = affinity_close;
     impl->self_exec.ctx     = impl;
 
-    if (!runtime_register(rt, &impl->self_exec)) {
+    if (!mmapq_runtime_register(rt, &impl->self_exec)) {
         free(impl);
         return -1;
     }
@@ -568,13 +568,13 @@ int runtime_set_affinity(Runtime *rt, int cpu_core)
 
 /* ── close ───────────────────────────────────────────────────────────────── */
 
-int runtime_is_closed(const Runtime *rt)
+int mmapq_runtime_is_closed(const MmapqRuntime *rt)
 {
     if (rt == NULL) return 1;
     return atomic_load(&rt->closed);
 }
 
-void runtime_close(Runtime *rt)
+void mmapq_runtime_close(MmapqRuntime *rt)
 {
     if (rt == NULL) return;
 
@@ -585,12 +585,12 @@ void runtime_close(Runtime *rt)
 
     /* Wait for runtime thread to finish */
     pthread_mutex_lock(&rt->close_mutex);
-    uint64_t deadline = monotonic_nanos() + rt->close_timeout_ns;
+    uint64_t deadline = mmapq_monotonic_nanos() + rt->close_timeout_ns;
 
     while (!atomic_load(&rt->thread_done)) {
-        uint64_t now = monotonic_nanos();
+        uint64_t now = mmapq_monotonic_nanos();
         if (now >= deadline) {
-            fprintf(stderr, "runtime_close: timeout waiting for thread '%s' to stop\n",
+            fprintf(stderr, "mmapq_runtime_close: timeout waiting for thread '%s' to stop\n",
                     rt->name);
             break;
         }
@@ -609,7 +609,7 @@ void runtime_close(Runtime *rt)
     }
 }
 
-int runtime_clone(Runtime *rt, Runtime **out)
+int mmapq_runtime_clone(MmapqRuntime *rt, MmapqRuntime **out)
 {
     if (out == NULL) return MMAPQ_EINVAL;
     *out = NULL;
@@ -619,19 +619,19 @@ int runtime_clone(Runtime *rt, Runtime **out)
     return 0;
 }
 
-void runtime_destroy(Runtime *rt)
+void mmapq_runtime_destroy(MmapqRuntime *rt)
 {
     if (rt == NULL) return;
     if (    __atomic_fetch_sub(&rt->refcount, 1, __ATOMIC_ACQ_REL) > 1) {
         return;  /* other references still alive */
     }
-    runtime_close(rt);
+    mmapq_runtime_close(rt);
 
     ExecList *list = atomic_load(&rt->exec_list);
     exec_list_free(list);
     drain_free_list(rt);
 
-    idle_strategy_destroy(rt->idle);
+    mmapq_idle_strategy_destroy(rt->idle);
 
     pthread_mutex_destroy(&rt->register_mutex);
     pthread_mutex_destroy(&rt->close_mutex);
@@ -645,17 +645,17 @@ void runtime_destroy(Runtime *rt)
  * ═══════════════════════════════════════════════════════════════════════════ */
 
 typedef struct {
-    Runtime    *runtime;
-    Executable *target;
+    MmapqRuntime    *runtime;
+    MmapqExecutable *target;
     void       *target_ctx_to_free;  /* if non-NULL, freed after unregistration */
-    Executable  self_exec;
+    MmapqExecutable  self_exec;
 } DeregisterImpl;
 
-static int deregister_execute(Executable *self)
+static int deregister_execute(MmapqExecutable *self)
 {
     DeregisterImpl *impl = (DeregisterImpl *)self->ctx;
-    runtime_unregister(impl->runtime, impl->target);
-    runtime_unregister(impl->runtime, &impl->self_exec);
+    mmapq_runtime_unregister(impl->runtime, impl->target);
+    mmapq_runtime_unregister(impl->runtime, &impl->self_exec);
     if (impl->target_ctx_to_free) {
         free(impl->target_ctx_to_free);
     }
@@ -663,7 +663,7 @@ static int deregister_execute(Executable *self)
     return 1;
 }
 
-static void deregister_close(Executable *self)
+static void deregister_close(MmapqExecutable *self)
 {
     DeregisterImpl *impl = (DeregisterImpl *)self->ctx;
     if (impl->target_ctx_to_free) {
@@ -672,14 +672,14 @@ static void deregister_close(Executable *self)
     free(impl);
 }
 
-int deregister_executable_create(
-    Runtime *runtime, Executable *target, Executable **out)
+int mmapq_deregister_executable_create(
+    MmapqRuntime *runtime, MmapqExecutable *target, MmapqExecutable **out)
 {
-    return deregister_executable_create_with_free(runtime, target, NULL, out);
+    return mmapq_deregister_executable_create_with_free(runtime, target, NULL, out);
 }
 
-int deregister_executable_create_with_free(
-    Runtime *runtime, Executable *target, void *ctx_to_free, Executable **out)
+int mmapq_deregister_executable_create_with_free(
+    MmapqRuntime *runtime, MmapqExecutable *target, void *ctx_to_free, MmapqExecutable **out)
 {
     if (out == NULL) return MMAPQ_EINVAL;
     *out = NULL;
@@ -701,25 +701,25 @@ int deregister_executable_create_with_free(
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
- * runtime_unregister_and_wait — safe cross-thread unregistration
+ * mmapq_runtime_unregister_and_wait — safe cross-thread unregistration
  * ═══════════════════════════════════════════════════════════════════════════ */
 
 typedef struct {
-    Runtime    *runtime;
-    Executable *target;
+    MmapqRuntime    *runtime;
+    MmapqExecutable *target;
     atomic_int  done;     /* set to 1 by runtime thread after unregistration */
-    Executable  self_exec;
+    MmapqExecutable  self_exec;
 } UnregisterWaitImpl;
 
-static int unregister_wait_execute(Executable *self)
+static int unregister_wait_execute(MmapqExecutable *self)
 {
     UnregisterWaitImpl *impl = (UnregisterWaitImpl *)self->ctx;
 
     /* Unregister the target — we are on the runtime thread so this is safe */
-    runtime_unregister(impl->runtime, impl->target);
+    mmapq_runtime_unregister(impl->runtime, impl->target);
 
     /* Unregister ourselves */
-    runtime_unregister(impl->runtime, &impl->self_exec);
+    mmapq_runtime_unregister(impl->runtime, &impl->self_exec);
 
     /* Signal the waiting caller thread */
     atomic_store_explicit(&impl->done, 1, memory_order_release);
@@ -727,15 +727,15 @@ static int unregister_wait_execute(Executable *self)
     return 1;
 }
 
-static void unregister_wait_close(Executable *self)
+static void unregister_wait_close(MmapqExecutable *self)
 {
     (void)self;  /* impl is stack/caller-owned — do not free */
 }
 
-void runtime_unregister_and_wait(Runtime *rt, Executable *exec)
+void mmapq_runtime_unregister_and_wait(MmapqRuntime *rt, MmapqExecutable *exec)
 {
     if (rt == NULL || exec == NULL) return;
-    if (runtime_is_closed(rt)) return;
+    if (mmapq_runtime_is_closed(rt)) return;
 
     /*
      * Stack-allocate the helper — it must stay valid until done=1.
@@ -752,13 +752,13 @@ void runtime_unregister_and_wait(Runtime *rt, Executable *exec)
     impl.self_exec.ctx        = &impl;
 
     /* Register the helper — it will run on the runtime thread */
-    int ok = runtime_register(rt, &impl.self_exec);
+    int ok = mmapq_runtime_register(rt, &impl.self_exec);
     (void)ok;
-    MMAP_ASSERT(ok, "runtime_unregister_and_wait: failed to register helper");
+    MMAP_ASSERT(ok, "mmapq_runtime_unregister_and_wait: failed to register helper");
 
     /* Spin until the runtime thread signals completion */
     while (!atomic_load_explicit(&impl.done, memory_order_acquire)) {
-        spin_hint();
+        mmapq_spin_hint();
     }
 
     /* impl is stack-allocated — no free needed */
@@ -768,14 +768,14 @@ void runtime_unregister_and_wait(Runtime *rt, Executable *exec)
 
 typedef struct {
     int      runtime_id;
-    Runtime *runtime;
+    MmapqRuntime *runtime;
 } RuntimeEntry;
 
 static RuntimeEntry   registry[MAX_RUNTIME_INSTANCES];
 static int            registry_count = 0;
 static pthread_mutex_t registry_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-static void registry_on_close(Runtime *rt, void *ctx)
+static void registry_on_close(MmapqRuntime *rt, void *ctx)
 {
     int *runtime_id = (int *)ctx;
     pthread_mutex_lock(&registry_mutex);
@@ -790,12 +790,12 @@ static void registry_on_close(Runtime *rt, void *ctx)
     free(runtime_id);
 }
 
-int runtime_get_instance(
+int mmapq_runtime_get_instance(
     int           runtime_id,
     const char   *name,
-    IdleStrategy *idle,
+    MmapqIdleStrategy *idle,
     uint64_t      close_timeout_ns,
-    Runtime     **out)
+    MmapqRuntime     **out)
 {
     if (out == NULL) return MMAPQ_EINVAL;
     *out = NULL;
@@ -804,58 +804,58 @@ int runtime_get_instance(
 
     for (int i = 0; i < registry_count; i++) {
         if (registry[i].runtime_id == runtime_id) {
-            Runtime *existing = registry[i].runtime;
+            MmapqRuntime *existing = registry[i].runtime;
             pthread_mutex_unlock(&registry_mutex);
             /* Caller provided idle but won't be used — destroy it */
-            idle_strategy_destroy(idle);
-            return runtime_clone(existing, out);
+            mmapq_idle_strategy_destroy(idle);
+            return mmapq_runtime_clone(existing, out);
         }
     }
 
-    if (registry_count >= MAX_RUNTIME_INSTANCES) { pthread_mutex_unlock(&registry_mutex); idle_strategy_destroy(idle); return MMAPQ_ENOMEM; }
+    if (registry_count >= MAX_RUNTIME_INSTANCES) { pthread_mutex_unlock(&registry_mutex); mmapq_idle_strategy_destroy(idle); return MMAPQ_ENOMEM; }
 
     int *id_copy = malloc(sizeof(int));
-    if (id_copy == NULL) { pthread_mutex_unlock(&registry_mutex); idle_strategy_destroy(idle); return MMAPQ_ENOMEM; }
+    if (id_copy == NULL) { pthread_mutex_unlock(&registry_mutex); mmapq_idle_strategy_destroy(idle); return MMAPQ_ENOMEM; }
     *id_copy = runtime_id;
 
-    Runtime *rt = NULL;
-    int rc = runtime_create(name, idle, close_timeout_ns,
+    MmapqRuntime *rt = NULL;
+    int rc = mmapq_runtime_create(name, idle, close_timeout_ns,
                             registry_on_close, id_copy, &rt);
-    if (rc != 0) { pthread_mutex_unlock(&registry_mutex); idle_strategy_destroy(idle); free(id_copy); return rc; }
+    if (rc != 0) { pthread_mutex_unlock(&registry_mutex); mmapq_idle_strategy_destroy(idle); free(id_copy); return rc; }
 
     registry[registry_count].runtime_id = runtime_id;
     registry[registry_count].runtime    = rt;
     registry_count++;
 
     pthread_mutex_unlock(&registry_mutex);
-    /* Registry holds one permanent reference (refcount 1 from runtime_create).
+    /* Registry holds one permanent reference (refcount 1 from mmapq_runtime_create).
      * Every caller, including the first, receives a clone — caller owns their
      * own reference and destroy-all-handles never drops the registry's hold. */
-    return runtime_clone(rt, out);
+    return mmapq_runtime_clone(rt, out);
 }
 
-int runtime_region_mapper(Runtime **out)
+int mmapq_runtime_region_mapper(MmapqRuntime **out)
 {
-    IdleStrategy *idle = NULL;
-    int rc = idle_strategy_backoff_create(100, 10, UINT64_C(1000000), &idle);
+    MmapqIdleStrategy *idle = NULL;
+    int rc = mmapq_idle_strategy_backoff_create(100, 10, UINT64_C(1000000), &idle);
     if (rc != 0) return rc;
-    return runtime_get_instance(
-        RUNTIME_ID_REGION_MAPPER,
+    return mmapq_runtime_get_instance(
+        MMAPQ_RUNTIME_ID_REGION_MAPPER,
         "region-mapper",
         idle,
-        RUNTIME_DEFAULT_CLOSE_TIMEOUT_NS,
+        MMAPQ_RUNTIME_DEFAULT_CLOSE_TIMEOUT_NS,
         out);
 }
 
-int runtime_metrics_processor(Runtime **out)
+int mmapq_runtime_metrics_processor(MmapqRuntime **out)
 {
-    IdleStrategy *idle = NULL;
-    int rc = idle_strategy_backoff_create(100, 100, UINT64_C(1000000), &idle);
+    MmapqIdleStrategy *idle = NULL;
+    int rc = mmapq_idle_strategy_backoff_create(100, 100, UINT64_C(1000000), &idle);
     if (rc != 0) return rc;
-    return runtime_get_instance(
-        RUNTIME_ID_METRICS_PROCESSOR,
+    return mmapq_runtime_get_instance(
+        MMAPQ_RUNTIME_ID_METRICS_PROCESSOR,
         "metrics-proc",
         idle,
-        RUNTIME_DEFAULT_CLOSE_TIMEOUT_NS,
+        MMAPQ_RUNTIME_DEFAULT_CLOSE_TIMEOUT_NS,
         out);
 }

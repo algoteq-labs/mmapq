@@ -1,13 +1,13 @@
-#ifndef INDEXED_BATCH_ARCHIVER_H
-#define INDEXED_BATCH_ARCHIVER_H
+#ifndef MMAPQ_INDEXED_BATCH_ARCHIVER_H
+#define MMAPQ_INDEXED_BATCH_ARCHIVER_H
 
 #include <stdint.h>
 #include "runtime.h"
 
 /**
- * IndexedBatchArchiver — manages archiving of entries in an indexed batch queue.
+ * MmapqIndexedBatchArchiver — manages archiving of entries in an indexed batch queue.
  *
- * Functionally identical to IndexedArchiver but operates on a batch queue
+ * Functionally identical to MmapqIndexedArchiver but operates on a batch queue
  * where each header entry points to a batch payload rather than a single
  * message. The key difference in the forward archiving path is how the
  * "next write offset" is calculated: for batches, the iterator must exhaust
@@ -24,10 +24,10 @@
  *
  * Thread-confined: not safe for concurrent access.
  *
- * Mirrors Java IIndexedBatchArchiver / IndexedBatchArchiver.
+ * Mirrors Java IIndexedBatchArchiver / MmapqIndexedBatchArchiver.
  */
 
-typedef struct IndexedBatchArchiver IndexedBatchArchiver;
+typedef struct MmapqIndexedBatchArchiver MmapqIndexedBatchArchiver;
 
 /* ── Factory ─────────────────────────────────────────────────────────────── */
 
@@ -40,19 +40,19 @@ typedef struct IndexedBatchArchiver IndexedBatchArchiver;
  * runtime:    background region-mapper runtime for header/payload access
  * Returns: a new archiver; never NULL (asserts on allocation failure)
  */
-int indexed_batch_archiver_create(
+int mmapq_indexed_batch_archiver_create(
     const char *directory,
     const char *queue_name,
     int         ring_size,
-    Runtime    *runtime,
-    IndexedBatchArchiver **out);
+    MmapqRuntime    *runtime,
+    MmapqIndexedBatchArchiver **out);
 
 /* ── Archiving ───────────────────────────────────────────────────────────── */
 
 /**
  * Return 1 if the queue is archivable, 0 otherwise.
  */
-int indexed_batch_archiver_archivable(IndexedBatchArchiver *a);
+int mmapq_indexed_batch_archiver_archivable(MmapqIndexedBatchArchiver *a);
 
 /**
  * Archive all batches up to @p index (exclusive).
@@ -81,22 +81,22 @@ int indexed_batch_archiver_archivable(IndexedBatchArchiver *a);
  * index: first unarchived batch index (all prior indices archived)
  * Returns: 0 on success, MMAPQ_EINVAL on invalid argument or non-archivable.
  */
-int indexed_batch_archiver_archive_up_to_index(IndexedBatchArchiver *a, int64_t index);
+int mmapq_indexed_batch_archiver_archive_up_to_index(MmapqIndexedBatchArchiver *a, int64_t index);
 
 /* ── Query ───────────────────────────────────────────────────────────────── */
 
 /**
  * Return the current start index (first unarchived batch).
  */
-int64_t indexed_batch_archiver_start_index(IndexedBatchArchiver *a);
+int64_t mmapq_indexed_batch_archiver_start_index(MmapqIndexedBatchArchiver *a);
 
 /**
  * Return the payload start offset for the given appender at start_index.
  *
  * Returns -1 if the appender ID is not used by this queue.
  */
-int indexed_batch_archiver_start_offset(
-    IndexedBatchArchiver *a, uint8_t appender_id, int64_t *out_offset);
+int mmapq_indexed_batch_archiver_start_offset(
+    MmapqIndexedBatchArchiver *a, uint8_t appender_id, int64_t *out_offset);
 
 /**
  * Populate @p paths_out with paths to files fully covered by the archive
@@ -110,8 +110,8 @@ int indexed_batch_archiver_start_offset(
  * max_paths: capacity of paths_out
  * Returns: number of paths written (may be less than max_paths)
  */
-int indexed_batch_archiver_archivable_files(
-    IndexedBatchArchiver *a,
+int mmapq_indexed_batch_archiver_archivable_files(
+    MmapqIndexedBatchArchiver *a,
     char                **paths_out,
     int                   max_paths);
 
@@ -120,6 +120,6 @@ int indexed_batch_archiver_archivable_files(
 /**
  * Close the archiver and release all associated resources.
  */
-void indexed_batch_archiver_close(IndexedBatchArchiver *a);
+void mmapq_indexed_batch_archiver_close(MmapqIndexedBatchArchiver *a);
 
-#endif /* INDEXED_BATCH_ARCHIVER_H */
+#endif /* MMAPQ_INDEXED_BATCH_ARCHIVER_H */

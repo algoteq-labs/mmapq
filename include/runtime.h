@@ -1,64 +1,64 @@
-#ifndef RUNTIME_H
-#define RUNTIME_H
+#ifndef MMAPQ_RUNTIME_H
+#define MMAPQ_RUNTIME_H
 
 #include <stdint.h>
 #include <stddef.h>
 
 /**
- * Runtime — a dedicated poll thread executing registered Executables.
+ * MmapqRuntime — a dedicated poll thread executing registered Executables.
  *
  * Mirrors Java IPCRuntime / IIPCRuntime exactly.
  *
- * A single Runtime thread iterates its list of Executables in a tight loop,
+ * A single MmapqRuntime thread iterates its list of Executables in a tight loop,
  * calling execute() on each in turn, accumulating work counts, and applying
- * an IdleStrategy at the end of each full iteration when no work was done.
+ * an MmapqIdleStrategy at the end of each full iteration when no work was done.
  *
  * Threading contract (identical to Java):
  *   - register()   may be called from any thread.
- *   - unregister() MUST be called from the Runtime thread only.
+ *   - unregister() MUST be called from the MmapqRuntime thread only.
  *     Cross-thread unregistration must be performed by registering a
  *     DeregisterExecutable that calls unregister() from within the poll loop.
  *     Enforced with MMAP_ASSERT.
  *
- * Executable list modification:
+ * MmapqExecutable list modification:
  *   The internal list is a copy-on-write array. Structural modifications
  *   (register/unregister) produce a new array. The poll loop always
  *   iterates the current snapshot — modifications are safe from within
- *   the Runtime thread and visible on the next iteration.
+ *   the MmapqRuntime thread and visible on the next iteration.
  *
  * Shutdown:
- *   close() signals the Runtime thread to stop, waits up to close_timeout_ns
+ *   close() signals the MmapqRuntime thread to stop, waits up to close_timeout_ns
  *   for it to drain, then calls close() on all remaining Executables.
  */
 
-/* ── Executable ──────────────────────────────────────────────────────────── */
+/* ── MmapqExecutable ──────────────────────────────────────────────────────────── */
 
 /**
- * Executable — a unit of work polled by the Runtime.
+ * MmapqExecutable — a unit of work polled by the MmapqRuntime.
  *
  * execute():
- *   Called once per Runtime iteration.
+ *   Called once per MmapqRuntime iteration.
  *   Returns work done (0 = idle, >0 = useful work performed).
- *   Must not block. Must not call unregister() on a different Executable.
+ *   Must not block. Must not call unregister() on a different MmapqExecutable.
  *   May call unregister(self) to deregister itself from within execute().
  *
  * close():
- *   Called when the Runtime is shutting down, or when execute() throws.
+ *   Called when the MmapqRuntime is shutting down, or when execute() throws.
  *   Must release all resources. Will not be called again after this.
- *   May be called from the Runtime thread or the closing thread.
+ *   May be called from the MmapqRuntime thread or the closing thread.
  *
  * ctx: opaque caller-supplied context pointer passed to both functions.
  */
-typedef struct Executable {
-    int  (*execute)(struct Executable *self);
-    void (*close)  (struct Executable *self);
+typedef struct MmapqExecutable {
+    int  (*execute)(struct MmapqExecutable *self);
+    void (*close)  (struct MmapqExecutable *self);
     void *ctx;
-} Executable;
+} MmapqExecutable;
 
-/* ── IdleStrategy ────────────────────────────────────────────────────────── */
+/* ── MmapqIdleStrategy ────────────────────────────────────────────────────────── */
 
 /**
- * IdleStrategy — applied at the end of each Runtime iteration when idle.
+ * MmapqIdleStrategy — applied at the end of each MmapqRuntime iteration when idle.
  *
  * idle():
  *   Called with work_done = total work from the last iteration.
@@ -68,11 +68,11 @@ typedef struct Executable {
  * close(): release any resources held by the strategy.
  * ctx:     opaque state for the strategy implementation.
  */
-typedef struct IdleStrategy {
-    void (*idle) (struct IdleStrategy *self, int work_done);
-    void (*close)(struct IdleStrategy *self);
+typedef struct MmapqIdleStrategy {
+    void (*idle) (struct MmapqIdleStrategy *self, int work_done);
+    void (*close)(struct MmapqIdleStrategy *self);
     void *ctx;
-} IdleStrategy;
+} MmapqIdleStrategy;
 
 /* Built-in idle strategies */
 
@@ -82,7 +82,7 @@ typedef struct IdleStrategy {
  * out: on success, set to the new idle strategy
  * Returns: 0 on success, or an MMAPQ_* error code
  */
-int idle_strategy_busy_spin_create(IdleStrategy **out);
+int mmapq_idle_strategy_busy_spin_create(MmapqIdleStrategy **out);
 
 /**
  * Yield — calls sched_yield() when idle.
@@ -90,7 +90,7 @@ int idle_strategy_busy_spin_create(IdleStrategy **out);
  * out: on success, set to the new idle strategy
  * Returns: 0 on success, or an MMAPQ_* error code
  */
-int idle_strategy_yield_create(IdleStrategy **out);
+int mmapq_idle_strategy_yield_create(MmapqIdleStrategy **out);
 
 /**
  * Sleep — calls nanosleep() with increasing duration when idle.
@@ -99,218 +99,218 @@ int idle_strategy_yield_create(IdleStrategy **out);
  * out:          on success, set to the new idle strategy
  * Returns: 0 on success, or an MMAPQ_* error code
  */
-int idle_strategy_sleep_create(uint64_t min_sleep_ns, uint64_t max_sleep_ns, IdleStrategy **out);
+int mmapq_idle_strategy_sleep_create(uint64_t min_sleep_ns, uint64_t max_sleep_ns, MmapqIdleStrategy **out);
 
 /**
  * Backoff — progressive backoff: spin → yield → sleep.
- * Mirrors Java IdleStrategy.BACKOFF behaviour.
+ * Mirrors Java MmapqIdleStrategy.BACKOFF behaviour.
  * spin_count:   iterations before switching to yield
  * yield_count:  yield iterations before switching to sleep
  * max_sleep_ns: maximum sleep duration
  * out:          on success, set to the new idle strategy
  * Returns: 0 on success, or an MMAPQ_* error code
  */
-int idle_strategy_backoff_create(
+int mmapq_idle_strategy_backoff_create(
     int      spin_count,
     int      yield_count,
     uint64_t max_sleep_ns,
-    IdleStrategy **out);
+    MmapqIdleStrategy **out);
 
-void idle_strategy_destroy(IdleStrategy *strategy);
+void mmapq_idle_strategy_destroy(MmapqIdleStrategy *strategy);
 
-/* ── Runtime ─────────────────────────────────────────────────────────────── */
+/* ── MmapqRuntime ─────────────────────────────────────────────────────────────── */
 
-typedef struct Runtime Runtime;
+typedef struct MmapqRuntime MmapqRuntime;
 
 /**
- * Create a new Runtime.
+ * Create a new MmapqRuntime.
  *
  * name:             thread name (appears in ps/top, max 15 chars on Linux)
- * idle:             idle strategy (Runtime takes ownership)
+ * idle:             idle strategy (MmapqRuntime takes ownership)
  * close_timeout_ns: how long close() waits for the thread to drain
- * on_close:         optional callback invoked after the Runtime thread stops
+ * on_close:         optional callback invoked after the MmapqRuntime thread stops
  *                   (may be NULL). Called from the thread calling close().
  *                   on_close_ctx: context passed to on_close.
  *
- * The Runtime thread starts immediately on creation.
+ * The MmapqRuntime thread starts immediately on creation.
  *
- * out: on success, set to the new Runtime (refcount 1); the caller owns
- *      one reference and must release it with runtime_destroy().
+ * out: on success, set to the new MmapqRuntime (refcount 1); the caller owns
+ *      one reference and must release it with mmapq_runtime_destroy().
  * Returns: 0 on success, or an MMAPQ_* error code
  */
-int runtime_create(
+int mmapq_runtime_create(
     const char   *name,
-    IdleStrategy *idle,
+    MmapqIdleStrategy *idle,
     uint64_t      close_timeout_ns,
-    void        (*on_close)(Runtime *rt, void *ctx),
+    void        (*on_close)(MmapqRuntime *rt, void *ctx),
     void         *on_close_ctx,
-    Runtime     **out);
+    MmapqRuntime     **out);
 
 /**
- * Register an Executable with the Runtime.
+ * Register an MmapqExecutable with the MmapqRuntime.
  *
  * May be called from any thread.
- * Returns 1 on success, 0 if the Runtime is already closed.
+ * Returns 1 on success, 0 if the MmapqRuntime is already closed.
  *
- * The Executable must remain valid until close() is called on it.
- * The Runtime does NOT take ownership of the Executable pointer —
- * the caller manages the Executable's lifetime.
+ * The MmapqExecutable must remain valid until close() is called on it.
+ * The MmapqRuntime does NOT take ownership of the MmapqExecutable pointer —
+ * the caller manages the MmapqExecutable's lifetime.
  */
-int runtime_register(Runtime *rt, Executable *exec);
+int mmapq_runtime_register(MmapqRuntime *rt, MmapqExecutable *exec);
 
 /**
- * Unregister an Executable from the Runtime.
+ * Unregister an MmapqExecutable from the MmapqRuntime.
  *
- * MUST be called from the Runtime thread only (MMAP_ASSERT enforced).
+ * MUST be called from the MmapqRuntime thread only (MMAP_ASSERT enforced).
  * Cross-thread unregistration: register a DeregisterExecutable instead.
  *
- * Returns 1 on success, 0 if not found or Runtime is closed.
+ * Returns 1 on success, 0 if not found or MmapqRuntime is closed.
  */
-int runtime_unregister(Runtime *rt, Executable *exec);
+int mmapq_runtime_unregister(MmapqRuntime *rt, MmapqExecutable *exec);
 
 /**
- * runtime_unregister_and_wait — safely unregister from any thread.
+ * mmapq_runtime_unregister_and_wait — safely unregister from any thread.
  *
  * May be called from any thread, including the calling thread.
  * Blocks until the runtime thread has finished executing the target
- * Executable for the last time and removed it from the poll list.
+ * MmapqExecutable for the last time and removed it from the poll list.
  * After this returns, the caller may safely free exec and its ctx.
  *
- * Implementation: registers a small helper Executable that performs the
+ * Implementation: registers a small helper MmapqExecutable that performs the
  * unregistration from the runtime thread (satisfying the runtime-thread-only
- * constraint of runtime_unregister), then signals completion via an atomic.
- * The calling thread spins with spin_hint until the signal is set.
+ * constraint of mmapq_runtime_unregister), then signals completion via an atomic.
+ * The calling thread spins with mmapq_spin_hint until the signal is set.
  *
  * This is the safe public API for cross-thread lifecycle management.
- * Prefer this over raw runtime_unregister() for any external caller.
+ * Prefer this over raw mmapq_runtime_unregister() for any external caller.
  *
  * Aborts if rt is closed or exec is not registered.
  */
-void runtime_unregister_and_wait(Runtime *rt, Executable *exec);
+void mmapq_runtime_unregister_and_wait(MmapqRuntime *rt, MmapqExecutable *exec);
 
 /**
- * Pin the background thread of this Runtime to a specific CPU core.
+ * Pin the background thread of this MmapqRuntime to a specific CPU core.
  *
- * May be called from any thread. If called before the Runtime thread
+ * May be called from any thread. If called before the MmapqRuntime thread
  * has started, the affinity will be applied as soon as it starts.
  *
  * Returns 0 on success, or an error code.
  */
-int runtime_set_affinity(Runtime *rt, int cpu_core);
+int mmapq_runtime_set_affinity(MmapqRuntime *rt, int cpu_core);
 
 /**
- * Returns 1 if the Runtime is closed, 0 otherwise.
+ * Returns 1 if the MmapqRuntime is closed, 0 otherwise.
  */
-int runtime_is_closed(const Runtime *rt);
+int mmapq_runtime_is_closed(const MmapqRuntime *rt);
 
 /**
- * Close the Runtime.
+ * Close the MmapqRuntime.
  *
- * Signals the Runtime thread to stop. Waits up to close_timeout_ns
+ * Signals the MmapqRuntime thread to stop. Waits up to close_timeout_ns
  * for it to finish. Calls close() on all remaining Executables.
  * Calls on_close callback if provided.
  *
  * Safe to call from any thread. Idempotent.
  */
-void runtime_close(Runtime *rt);
+void mmapq_runtime_close(MmapqRuntime *rt);
 
 /**
- * Clone a Runtime, incrementing its internal reference count.
- * The caller must call runtime_destroy() to release the reference.
+ * Clone a MmapqRuntime, incrementing its internal reference count.
+ * The caller must call mmapq_runtime_destroy() to release the reference.
  * Safe to call from any thread.
  * out: on success, set to the same runtime pointer (refcount incremented)
  * Returns: 0 on success, or an MMAPQ_* error code
  */
-int runtime_clone(Runtime *rt, Runtime **out);
+int mmapq_runtime_clone(MmapqRuntime *rt, MmapqRuntime **out);
 
 /**
- * Destroy the Runtime and free all memory.
- * Calls runtime_close() if not already closed.
- * If the Runtime was cloned, only decrements the reference count;
- * the underlying Runtime is freed when the last reference is released.
+ * Destroy the MmapqRuntime and free all memory.
+ * Calls mmapq_runtime_close() if not already closed.
+ * If the MmapqRuntime was cloned, only decrements the reference count;
+ * the underlying MmapqRuntime is freed when the last reference is released.
  * After destroy(), the pointer must not be used.
  */
-void runtime_destroy(Runtime *rt);
+void mmapq_runtime_destroy(MmapqRuntime *rt);
 
 /* ── DeregisterExecutable — cross-thread unregistration helper ───────────── */
 
 /**
- * Create a one-shot Executable that, when executed on the Runtime thread,
- * unregisters target from the Runtime and then unregisters itself.
+ * Create a one-shot MmapqExecutable that, when executed on the MmapqRuntime thread,
+ * unregisters target from the MmapqRuntime and then unregisters itself.
  *
  * This is the correct pattern for cross-thread unregistration:
  *
- *   Executable *dereg = deregister_executable_create(runtime, target);
- *   runtime_register(runtime, dereg);
- *   // On the next Runtime iteration, target and dereg are both removed.
+ *   MmapqExecutable *dereg = mmapq_deregister_executable_create(runtime, target);
+ *   mmapq_runtime_register(runtime, dereg);
+ *   // On the next MmapqRuntime iteration, target and dereg are both removed.
  *
  * The DeregisterExecutable frees itself after execution.
  *
  * out: on success, set to the new executable
  * Returns: 0 on success, or an MMAPQ_* error code
  */
-int deregister_executable_create(
-    Runtime *runtime, Executable *target, Executable **out);
+int mmapq_deregister_executable_create(
+    MmapqRuntime *runtime, MmapqExecutable *target, MmapqExecutable **out);
 
 /**
- * Like deregister_executable_create() but also frees ctx_to_free after
+ * Like mmapq_deregister_executable_create() but also frees ctx_to_free after
  * unregistration. Used when the target's owning struct must be freed only
  * after the runtime thread has stopped executing it.
  *
  * out: on success, set to the new executable
  * Returns: 0 on success, or an MMAPQ_* error code
  */
-int deregister_executable_create_with_free(
-    Runtime *runtime, Executable *target, void *ctx_to_free, Executable **out);
+int mmapq_deregister_executable_create_with_free(
+    MmapqRuntime *runtime, MmapqExecutable *target, void *ctx_to_free, MmapqExecutable **out);
 
-/* ── Default Runtime configuration ──────────────────────────────────────── */
-#define RUNTIME_DEFAULT_CLOSE_TIMEOUT_NS  (10ULL * 1000000000ULL)  /* 10 seconds */
+/* ── Default MmapqRuntime configuration ──────────────────────────────────────── */
+#define MMAPQ_RUNTIME_DEFAULT_CLOSE_TIMEOUT_NS  (10ULL * 1000000000ULL)  /* 10 seconds */
 
-/* ── Singleton Runtime registry ──────────────────────────────────────────── */
+/* ── Singleton MmapqRuntime registry ──────────────────────────────────────────── */
 
 /**
- * Well-known Runtime IDs — mirrors Java IPCRuntimes constants.
+ * Well-known MmapqRuntime IDs — mirrors Java IPCRuntimes constants.
  */
-#define RUNTIME_ID_REGION_MAPPER       0
-#define RUNTIME_ID_SHARED_MEM_NOTIFIER 1
-#define RUNTIME_ID_METRICS_PROCESSOR   2
+#define MMAPQ_RUNTIME_ID_REGION_MAPPER       0
+#define MMAPQ_RUNTIME_ID_SHARED_MEM_NOTIFIER 1
+#define MMAPQ_RUNTIME_ID_METRICS_PROCESSOR   2
 
 /**
- * Get or create a singleton Runtime by ID.
+ * Get or create a singleton MmapqRuntime by ID.
  *
- * If a Runtime with runtime_id already exists, returns it.
+ * If a MmapqRuntime with runtime_id already exists, returns it.
  * Otherwise creates a new one with the given name and idle strategy.
  *
- * When the Runtime is closed, it removes itself from the registry.
+ * When the MmapqRuntime is closed, it removes itself from the registry.
  * Thread-safe — uses a mutex for singleton creation.
  *
  * out: on success, set to the runtime (clone of the singleton; the caller
- *      owns one reference and must release it with runtime_destroy()).
+ *      owns one reference and must release it with mmapq_runtime_destroy()).
  *      If an existing singleton was found, the caller-supplied idle
  *      strategy is destroyed (never used).
  * Returns: 0 on success, or an MMAPQ_* error code
  */
-int runtime_get_instance(
+int mmapq_runtime_get_instance(
     int           runtime_id,
     const char   *name,
-    IdleStrategy *idle,
+    MmapqIdleStrategy *idle,
     uint64_t      close_timeout_ns,
-    Runtime     **out);
+    MmapqRuntime     **out);
 
 /**
- * Get the singleton region mapper Runtime.
+ * Get the singleton region mapper MmapqRuntime.
  * Creates it with backoff idle strategy if it does not exist.
  * out: on success, set to the region mapper runtime (caller-owned ref)
  * Returns: 0 on success, or an MMAPQ_* error code
  */
-int runtime_region_mapper(Runtime **out);
+int mmapq_runtime_region_mapper(MmapqRuntime **out);
 
 /**
- * Get the singleton metrics processor Runtime.
+ * Get the singleton metrics processor MmapqRuntime.
  * Creates it with backoff idle strategy if it does not exist.
  * out: on success, set to the metrics processor runtime (caller-owned ref)
  * Returns: 0 on success, or an MMAPQ_* error code
  */
-int runtime_metrics_processor(Runtime **out);
+int mmapq_runtime_metrics_processor(MmapqRuntime **out);
 
-#endif /* RUNTIME_H */
+#endif /* MMAPQ_RUNTIME_H */
