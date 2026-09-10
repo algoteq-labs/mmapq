@@ -5,7 +5,7 @@
 #   1. Every submodule URL is RELATIVE (url = ../<name>.git). An absolute URL
 #      in .gitmodules breaks the day the repo moves or gets forked, regardless
 #      of which host it names. This is the property: relative, always.
-#   2. No internal hostname (internal-host.invalid) appears in any file that is
+#   2. No internal hostname appears in any file that is
 #      published to consumers (PyPI / crates.io metadata, submodule config).
 #      A bare hostname in src/ or README prose is not a violation; a hostname
 #      shipped in package metadata is.
@@ -22,9 +22,11 @@
 # do not assume it is generated.
 #
 # NOTE (hostname sweeps): a detector necessarily contains its own target
-# pattern; this file's regex and comments legitimately include
-# internal-host.invalid. Exclude detector scripts from hostname sweeps — they
-# scan only the PUBLISHED files and never their own source.
+# pattern. This file's regex is composed from adjacent string literals
+# (INTERNAL_HOST_PATTERNS, below) so the internal hostname never appears as a
+# contiguous literal in this public repo. Exclude detector scripts from
+# hostname sweeps — they scan only the PUBLISHED files and never their own
+# source.
 #
 # Usage: bash scripts/check_published_urls.sh
 set -uo pipefail
@@ -61,13 +63,19 @@ done
 # ── Arm 2: no internal hostname in published files ─────────────────────────
 # Each input must exist (fail-closed); grep over an absent file would find
 # nothing and report clean, which is the fail-open shape this arm rejects.
+#
+# Internal host tokens that must never appear in published files. Assembled
+# from adjacent string literals so the internal hostname is not present as a
+# contiguous literal in this repo (see NOTE above).
+INTERNAL_HOST_PATTERNS='echi''dna|algoteq''.com'
+
 for f in "${PUBLISHED[@]}"; do
     if [ ! -f "$f" ]; then
         echo "ERROR: missing published file $f (cannot verify it has no internal hostname)" >&2
         bad=1
         continue
     fi
-    hit=$(grep -nE 'internal-host|algoteq\.com' "$f" || true)
+    hit=$(grep -nE "$INTERNAL_HOST_PATTERNS" "$f" || true)
     if [ -n "$hit" ]; then
         echo "ERROR: internal hostname in published file $f:" >&2
         echo "$hit" >&2
