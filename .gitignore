@@ -36,3 +36,6 @@ interop_producer
 interop_consumer
 clock_bench
 demo
+
+# Code graph (codeloom)
+.codeloom/

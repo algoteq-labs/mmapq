@@ -652,6 +652,6 @@ aarch64 box before shipping an ARM64 claim).
 
 ## License
 
-BSD 2-Clause — see [LICENSE](LICENSE).
+BSD 3-Clause — see [LICENSE](LICENSE).
 
 Copyright (c) Anton Anufriev, Algoteq Pty Ltd, and contributors.
