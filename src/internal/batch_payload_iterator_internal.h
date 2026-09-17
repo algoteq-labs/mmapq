@@ -30,6 +30,7 @@ struct MmapqBatchPayloadIterator {
     int64_t         next_message_position;
 
     int             exhausted;
+    int             last_error;
 };
 
 static inline int batch_iterator_has_current(const MmapqBatchPayloadIterator *it)

@@ -61,7 +61,8 @@ typedef enum {
     MMAPQ_BATCH_ENTRY_ARCHIVED,
 
     /**
-     * A mapping or I/O error occurred. The application should retry.
+     * A mapping, I/O, or corruption error occurred. Inspect last_error
+     * to distinguish a retryable timeout from invalid stored data.
      * Mirrors Java MmapqEntryStatus.ERROR.
      */
     MMAPQ_BATCH_ENTRY_ERROR

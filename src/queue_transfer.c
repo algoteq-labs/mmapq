@@ -625,6 +625,7 @@ int64_t mmapq_queue_transfer_copy_batch_to_normal(
     MmapqBatchReadingContext bctx;
     for (int64_t b = start; b <= end; b++) {
         mmapq_indexed_batch_reader_read(reader, b, &bctx);
+        if (bctx.status == MMAPQ_BATCH_ENTRY_ERROR) { appender_cache_cleanup(&ac); mmapq_indexed_queue_close(q); return mmapq_indexed_batch_reader_last_error(reader); }
         if (bctx.status != MMAPQ_BATCH_ENTRY_AVAILABLE) continue;
 
         uint16_t aid = bctx.appender_id;
@@ -652,6 +653,7 @@ int64_t mmapq_queue_transfer_copy_batch_to_normal(
             mmapq_indexed_appender_append(a, d, l);
             copied++;
         }
+        if (bctx.iterator->last_error != 0) { appender_cache_cleanup(&ac); mmapq_indexed_queue_close(q); return bctx.iterator->last_error; }
     }
 
     appender_cache_cleanup(&ac);

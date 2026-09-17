@@ -103,6 +103,7 @@ int64_t mmapq_batch_queue_transfer_export(
         MmapqBatchReadingContext bctx;
         for (int64_t b = start; b <= end; b++) {
             mmapq_indexed_batch_reader_read(reader, b, &bctx);
+            if (bctx.status == MMAPQ_BATCH_ENTRY_ERROR) { return mmapq_indexed_batch_reader_last_error(reader); }
             if (bctx.status != MMAPQ_BATCH_ENTRY_AVAILABLE) continue;
             int matched = 0;
             mmapq_batch_iterator_init(bctx.iterator, bctx.batch_offset,
@@ -116,6 +117,7 @@ int64_t mmapq_batch_queue_transfer_export(
                 int ex = exclude ? exclude(b, m_idx, m_cnt, d, l, ctx) : 0;
                 if (in && !ex) { matched = 1; break; }
             }
+            if (bctx.iterator->last_error != 0) { return bctx.iterator->last_error; }
             if (matched) batch_count++;
         }
     }
@@ -140,6 +142,7 @@ int64_t mmapq_batch_queue_transfer_export(
     int64_t written = 0;
     for (int64_t b = start; b <= end && written < batch_count; b++) {
         mmapq_indexed_batch_reader_read(reader, b, &bctx);
+        if (bctx.status == MMAPQ_BATCH_ENTRY_ERROR) { return mmapq_indexed_batch_reader_last_error(reader); }
         if (bctx.status != MMAPQ_BATCH_ENTRY_AVAILABLE) continue;
 
         /* Count matching messages in this batch */
@@ -158,6 +161,7 @@ int64_t mmapq_batch_queue_transfer_export(
                 int ex = exclude ? exclude(b, m_idx, m_cnt, d, l, ctx) : 0;
                 if (in && !ex) msg_matched++;
             }
+            if (bctx.iterator->last_error != 0) { return bctx.iterator->last_error; }
         }
         if (msg_matched == 0) continue;
 
@@ -186,6 +190,7 @@ int64_t mmapq_batch_queue_transfer_export(
                 }
             }
         }
+        if (bctx.iterator->last_error != 0) { return bctx.iterator->last_error; }
         written++;
     }
     return written;
@@ -224,6 +229,7 @@ int64_t mmapq_batch_queue_transfer_export_chunked(
     MmapqBatchReadingContext bctx;
     for (int64_t b = start; b <= end; b++) {
         mmapq_indexed_batch_reader_read(reader, b, &bctx);
+        if (bctx.status == MMAPQ_BATCH_ENTRY_ERROR) { return mmapq_indexed_batch_reader_last_error(reader); }
         if (bctx.status != MMAPQ_BATCH_ENTRY_AVAILABLE) continue;
 
         /* Count/size this batch */
@@ -248,6 +254,7 @@ int64_t mmapq_batch_queue_transfer_export_chunked(
                 }
             }
         }
+        if (bctx.iterator->last_error != 0) { return bctx.iterator->last_error; }
         if (msg_matched == 0) continue;
 
         if (chunk_cnt > 0 && chunk_bytes + batch_size > chunk_max) {
@@ -300,6 +307,7 @@ int64_t mmapq_batch_queue_transfer_export_chunked(
         /* Write batches in this chunk range */
         for (int64_t b = chunks[c].start_idx; b <= chunks[c].end_idx; b++) {
             mmapq_indexed_batch_reader_read(reader, b, &bctx);
+            if (bctx.status == MMAPQ_BATCH_ENTRY_ERROR) { fclose(cf); return mmapq_indexed_batch_reader_last_error(reader); }
             if (bctx.status != MMAPQ_BATCH_ENTRY_AVAILABLE) continue;
 
             int msg_matched = 0;
@@ -317,6 +325,7 @@ int64_t mmapq_batch_queue_transfer_export_chunked(
                     if (in && !ex) msg_matched++;
                 }
             }
+            if (bctx.iterator->last_error != 0) { fclose(cf); return bctx.iterator->last_error; }
             if (msg_matched == 0) continue;
 
             uint16_t batch_aid = bctx.appender_id;
@@ -341,6 +350,7 @@ int64_t mmapq_batch_queue_transfer_export_chunked(
                     }
                 }
             }
+            if (bctx.iterator->last_error != 0) { fclose(cf); return bctx.iterator->last_error; }
         }
         if (fclose(cf)) return -1;
 
@@ -605,6 +615,7 @@ int64_t mmapq_batch_queue_transfer_copy(
     MmapqBatchReadingContext bctx;
     for (int64_t b = start; b <= end; b++) {
         mmapq_indexed_batch_reader_read(reader, b, &bctx);
+        if (bctx.status == MMAPQ_BATCH_ENTRY_ERROR) { appender_cache_cleanup(&ac); mmapq_indexed_batch_queue_close(q); return mmapq_indexed_batch_reader_last_error(reader); }
         if (bctx.status != MMAPQ_BATCH_ENTRY_AVAILABLE) continue;
 
         uint16_t aid = bctx.appender_id;
@@ -634,6 +645,7 @@ int64_t mmapq_batch_queue_transfer_copy(
             mmapq_mutable_batch_append(mb, d, l);
             batch_has_msgs = 1;
         }
+        if (bctx.iterator->last_error != 0) { appender_cache_cleanup(&ac); mmapq_indexed_batch_queue_close(q); return bctx.iterator->last_error; }
 
         if (batch_has_msgs) {
             int64_t off = mmapq_mutable_batch_complete(mb);

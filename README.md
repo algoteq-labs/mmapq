@@ -5,9 +5,9 @@ daemon, no garbage collector. The queue is just files.**
 
 mmapq passes messages between processes on the same Linux machine through
 memory-mapped files, with sub-microsecond latency and allocation-free,
-syscall-free hot paths. Unlike a transport, the queue is durable state:
-every message has a stable index, any process can read at any index at any
-time, and a consumer that restarts resumes exactly where it stopped. Unlike
+syscall-free hot paths. The queue retains file-backed history:
+every message has a stable index, any process can read retained entries,
+and a consumer can resume from an index saved by its application. Unlike
 a log framework, it costs a `memcpy` and one atomic CAS to publish.
 
 What you get:
@@ -104,6 +104,18 @@ library you audit today is the library you run in five years.
 
 ## Quick start
 
+Create a writable directory on a persistent filesystem first:
+
+```bash
+mkdir -p ./data
+```
+
+`/dev/shm` is volatile and `/tmp` may be cleared on reboot; reserve those
+locations for disposable tests and benchmarks. A commit publishes an entry
+to readers, but does not flush it to stable storage. OS writeback determines
+when file-backed writes reach disk; power-loss durability is not guaranteed.
+Consumers must save their own progress and seek when reopening.
+
 ```c
 #include "runtime.h"
 #include "indexed_queue.h"
@@ -118,7 +130,7 @@ assert(rc == 0);
 
 /* Open or create a queue (separate write and read runtimes — same here) */
 MmapqIndexedQueue *q = NULL;
-rc = mmapq_indexed_queue_create_default("/tmp", "orders", rt, rt, &q);
+rc = mmapq_indexed_queue_create_default("./data", "orders", rt, rt, &q);
 assert(rc == 0);
 
 /* Append a message */
@@ -144,10 +156,15 @@ MmapqPollResult r = mmapq_indexed_poller_poll(p, my_handler, NULL);
 mmapq_indexed_appender_close(a);
 mmapq_indexed_poller_close(p);
 mmapq_indexed_queue_close(q);
+mmapq_runtime_destroy(rt);
 ```
 
 Save, compile with `make`, and run. See `examples/demo.c` for a complete
 producer/consumer.
+
+Public C symbols use `mmapq_*`, types use `Mmapq*`, and constants use
+`MMAPQ_*`. The `i` in `mmapqi_*` means internal: these functions belong to
+the implementation under `src/internal/`, not the installed public API.
 
 ---
 

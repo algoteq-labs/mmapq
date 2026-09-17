@@ -64,9 +64,14 @@ column are design decisions, not roadmap items.
 
 ## Consuming — readers (random access)
 
+Rust's current reader methods use shared borrows; they do not prevent a
+second operation from invalidating a live zero-copy message. Batch iterator
+slices must be copied before advancing. Borrowing and iterator API corrections
+are deferred to a separate release; see `polish-review.md`.
+
 | Feature | C | Rust | Python |
 |---|---|---|---|
-| Read at arbitrary index; read_first / read_last; appender_id per entry | ✓ | ✓ (`&mut`, one live message) | ✓ |
+| Read at arbitrary index; read_first / read_last; appender_id per entry | ✓ | ◐ shared borrows; see safety limitations above | ✓ |
 | Entry status (present / not yet / archived) | ✓ | ✓ | ✓ |
 | last_index / start_index | ✓ | ✓ | ✓ |
 | Batch reader | ✓ | ✓ | ✓ |

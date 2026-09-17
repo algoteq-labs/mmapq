@@ -93,7 +93,10 @@ int64_t mmapq_batch_iterator_probe_batch(MmapqBatchPayloadIterator *it, int64_t 
  * After a successful call, mmapq_batch_iterator_current_data_ffi() and
  * mmapq_batch_iterator_current_length_ffi() return valid values for the current message.
  *
- * Returns: 1 if advanced successfully; 0 if the batch is exhausted
+ * Returns: 1 if advanced successfully; 0 if exhausted or invalid data/mapping
+ * prevented advancement. A reader's last_error reports iteration failures;
+ * a poller reports them after its handler returns. Discard partially read
+ * batches on error.
  */
 int mmapq_batch_iterator_advance(MmapqBatchPayloadIterator *it);
 

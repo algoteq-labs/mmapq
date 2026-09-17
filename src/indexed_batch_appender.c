@@ -448,7 +448,7 @@ int32_t mmapq_mutable_batch_append_reserved(MmapqMutableBatch *b, int32_t length
 
 int32_t mmapq_mutable_batch_append_remaining_from(MmapqMutableBatch *b, MmapqBatchPayloadIterator *it)
 {
-    if (b == NULL) return MMAPQ_EINVAL;
+    if (b == NULL || it == NULL) return MMAPQ_EINVAL;
     MmapqIndexedBatchAppender *a = b->appender;
     int32_t region_sz = queue_meta_region_size(a->queue_meta);
     int32_t count = 0;
@@ -459,7 +459,7 @@ int32_t mmapq_mutable_batch_append_remaining_from(MmapqMutableBatch *b, MmapqBat
         if (rc < 0) return rc;
         count++;
     }
-    return count;
+    return it->last_error != 0 ? it->last_error : count;
 }
 
 int32_t mmapq_mutable_batch_message_count(const MmapqMutableBatch *b) { return b->message_count; }

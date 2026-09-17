@@ -132,7 +132,10 @@ BatchPollResult mmapq_indexed_batch_poller_poll(MmapqIndexedBatchPoller *p, Mmap
     MmapqBatchPayloadIterator *it = get_iterator(p, aid);
     if (it == NULL) { p->last_error = MMAPQ_ENOMEM; return MMAPQ_POLL_ERROR; }
     int32_t msg_count = mmapq_batch_iterator_read_message_count(it, pos);
-    if (msg_count <= 0) return MMAPQ_POLL_CORRUPT;
+    if (msg_count <= 0) {
+        p->last_error = msg_count < 0 ? msg_count : MMAPQ_ECORRUPT;
+        return p->last_error == MMAPQ_ECORRUPT ? MMAPQ_POLL_CORRUPT : MMAPQ_POLL_ERROR;
+    }
     mmapq_batch_iterator_init(it, pos, msg_count, 0);
 
     MmapqBatchReadingContext batch_ctx;
@@ -140,9 +143,15 @@ BatchPollResult mmapq_indexed_batch_poller_poll(MmapqIndexedBatchPoller *p, Mmap
     batch_ctx.status        = MMAPQ_BATCH_ENTRY_AVAILABLE;
     batch_ctx.batch_offset  = pos;
     batch_ctx.message_count = msg_count;
+    batch_ctx.appender_id   = aid;
+    memset(batch_ctx.reserved, 0, sizeof(batch_ctx.reserved));
     batch_ctx.iterator = it;
 
     MmapqNextMove move = handler(p->current_batch_index, &batch_ctx, ctx);
+    if (it->last_error != 0) {
+        p->last_error = it->last_error;
+        return it->last_error == MMAPQ_ECORRUPT ? MMAPQ_POLL_CORRUPT : MMAPQ_POLL_ERROR;
+    }
 
     switch (move) {
         case MMAPQ_NEXT_ADVANCE:

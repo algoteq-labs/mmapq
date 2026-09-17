@@ -30,7 +30,7 @@ The payload framing uses a dense `[int32 length][payload bytes...]` format.
 
 ### Rationale
 We deliberately avoided 8-byte message alignment (which would require a `[length][reserved]` 8-byte header and trailing padding).
-1.  **Binary Compatibility**: The current dense format is 100% compatible with the Java `tools4j/mmap` and `algoteq-ipc` implementations.
+1.  **Binary Compatibility**: Single-message queues are compatible with Algoteq's evolved Java implementation, not upstream `tools4j/mmap`. Java does not yet read mmapq batch queues.
 2.  **Memory Density**: No wasted padding bytes between small messages.
 
 ### The "C Rule" for Payloads
@@ -41,11 +41,11 @@ Because of the 4-byte length prefix, a message body starting at an 8-byte aligne
 
 **Correct Implementation Pattern:**
 ```c
-static MessageHandlerDirective my_handler(int64_t index, uint8_t id, const void *data, int32_t length, void *ctx) {
+static MmapqNextMove my_handler(int64_t index, uint8_t id, const void *data, int32_t length, void *ctx) {
     MyStruct m; // Stack-aligned
     memcpy(&m, data, sizeof(MyStruct)); // Optimized to unaligned-load by compiler
     printf("Seq: %ld\n", m.sequence);
-    return HANDLER_ADVANCE;
+    return MMAPQ_NEXT_ADVANCE;
 }
 ```
 
@@ -118,7 +118,7 @@ The `meta` file is the sole source of the configuration contract.
 | 8 | int64 | start_index | Current logical start (atomic access) |
 | 16 | int64 | max_file_size | Maximum size of a single rolled file |
 | 24 | uint8 | archivable | Flag for archiving support |
-| 25 | uint8 | fixed_size_8bytes | Optimization flag (ignored in C implementation) |
+| 25 | uint8 | queue_type | 0: single-message; 1: Java fixed-8 (refused by C); 2: batch |
 
 ### Engagement Rules
 *   **Appender (Authoritative)**: The only component permitted to create or initialize the `meta` file. If the file exists, the appender **must** adopt the on-disk parameters and ignore its own constructor arguments.

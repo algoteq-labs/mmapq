@@ -117,6 +117,7 @@ int mmapq_indexed_batch_reader_create(
 static void reader_fill_context(MmapqIndexedBatchReader *r, int64_t index, MmapqBatchReadingContext *ctx)
 {
     r->last_error = 0;
+    r->batch_iterator.last_error = 0;
     ctx->index         = index;
     ctx->batch_offset  = -1;
     ctx->message_count = 0;
@@ -159,6 +160,11 @@ static void reader_fill_context(MmapqIndexedBatchReader *r, int64_t index, Mmapq
     r->batch_iterator.payload_acc = payload_acc;
 
     int32_t message_count = mmapq_batch_iterator_read_message_count(&r->batch_iterator, payload_position);
+    if (message_count <= 0) {
+        r->last_error = message_count < 0 ? message_count : MMAPQ_ECORRUPT;
+        ctx->status = MMAPQ_BATCH_ENTRY_ERROR;
+        return;
+    }
 
     mmapq_batch_iterator_init(&r->batch_iterator, payload_position, message_count, 0);
     ctx->iterator = &r->batch_iterator;
@@ -267,7 +273,8 @@ MmapqBatchEntryStatus mmapq_indexed_batch_reader_entry_status(MmapqIndexedBatchR
 
 int mmapq_indexed_batch_reader_last_error(const MmapqIndexedBatchReader *r)
 {
-    return r == NULL ? 0 : r->last_error;
+    if (r == NULL) return 0;
+    return r->last_error != 0 ? r->last_error : r->batch_iterator.last_error;
 }
 
 /* ── Accessors ─────────────────────────────────────────────────────────────── */

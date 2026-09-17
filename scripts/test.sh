@@ -93,6 +93,7 @@ run_test() {
     fi
 
     rm -f "$bin"
+    echo "$OUT" | grep -E '^[0-9]+ Tests [0-9]+ Failures [0-9]+ Ignored'
     return 0
 }
 

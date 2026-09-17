@@ -761,9 +761,111 @@ static void test_batch_appender_id_255_succeeds(void)
     mmapq_indexed_batch_appender_close(a);
 }
 
+static MmapqNextMove capture_appender_id(int64_t index, MmapqBatchReadingContext *ctx, void *user)
+{
+    (void)index;
+    *(uint8_t *)user = ctx->appender_id;
+    return MMAPQ_NEXT_ADVANCE;
+}
+
+static void test_batch_poller_reports_appender_id(void)
+{
+    MmapqIndexedBatchAppender *appender = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender_with_id(q, 173, &appender));
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_batch_appender_append_and_commit(appender, "message", 7));
+    MmapqIndexedBatchPoller *poller = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_poller(q, &poller));
+    uint8_t appender_id = 0;
+    TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_ADVANCED, mmapq_indexed_batch_poller_poll(poller, capture_appender_id, &appender_id));
+    mmapq_indexed_batch_poller_close(poller);
+    mmapq_indexed_batch_appender_close(appender);
+    TEST_ASSERT_EQUAL_UINT8(173, appender_id);
+}
+
+static void test_batch_reader_rejects_zero_message_count(void)
+{
+    MmapqIndexedBatchAppender *appender = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender_with_id(q, 0, &appender));
+    MmapqMutableBatch *batch = mmapq_indexed_batch_appender_start_batch(appender);
+    TEST_ASSERT_NOT_NULL(batch);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(batch, "message", 7));
+    int64_t offset = mmapq_mutable_batch_complete(batch);
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_batch_appender_commit_batch(appender, offset));
+    mmapq_indexed_batch_appender_close(appender);
+    char path[512];
+    snprintf(path, sizeof(path), "%s/%s/payload_0_0", DIR, QUEUE);
+    int descriptor = open(path, O_WRONLY);
+    TEST_ASSERT_TRUE(descriptor >= 0);
+    int32_t count = 0;
+    TEST_ASSERT_EQUAL_INT(sizeof(count), pwrite(descriptor, &count, sizeof(count), offset));
+    close(descriptor);
+    MmapqIndexedBatchReader *reader = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_reader(q, &reader));
+    MmapqBatchReadingContext context = {0};
+    mmapq_indexed_batch_reader_read(reader, 0, &context);
+    int error = mmapq_indexed_batch_reader_last_error(reader);
+    mmapq_indexed_batch_reader_close(reader);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_BATCH_ENTRY_ERROR, context.status);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ECORRUPT, error);
+}
+
+static WrapResult timeout_wrap(RegionAccessor *accessor, int64_t position, Buffer *buffer)
+{
+    (void)accessor;
+    (void)position;
+    (void)buffer;
+    return WRAP_MAP_TIMED_OUT;
+}
+
+static void test_batch_message_count_propagates_mapping_failure(void)
+{
+    int32_t stale_count = 1;
+    RegionAccessor accessor = {.wrap = timeout_wrap};
+    MmapqBatchPayloadIterator iterator = {
+        .payload_acc = &accessor,
+        .payload_buf = {.data = (uint8_t *)&stale_count, .capacity = sizeof(stale_count)},
+    };
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ETIMEDOUT, mmapq_batch_iterator_read_message_count(&iterator, 0));
+}
+
+static void test_batch_iterator_rejects_invalid_lengths(void)
+{
+    const int32_t lengths[] = {0, INT32_MAX, INT32_MIN};
+    for (size_t index = 0; index < sizeof(lengths) / sizeof(lengths[0]); index++) {
+        int32_t payload[] = {1, lengths[index], 0, 0};
+        RegionAccessor accessor = {
+            .active_address = (uint8_t *)payload,
+            .active_base = 0,
+            .active_end = sizeof(payload),
+        };
+        MmapqBatchPayloadIterator iterator = {.payload_acc = &accessor};
+        mmapq_batch_iterator_init(&iterator, 0, 1, 0);
+        TEST_ASSERT_EQUAL_INT(0, mmapq_batch_iterator_advance(&iterator));
+        TEST_ASSERT_EQUAL_INT(0, mmapq_batch_iterator_has_current_ffi(&iterator));
+    }
+}
+
+static void test_batch_iterator_stops_on_mapping_failure(void)
+{
+    int32_t stale_payload[] = {3, 0};
+    RegionAccessor accessor = {.wrap = timeout_wrap};
+    MmapqBatchPayloadIterator iterator = {
+        .payload_acc = &accessor,
+        .payload_buf = {.data = (uint8_t *)stale_payload, .capacity = sizeof(stale_payload)},
+    };
+    mmapq_batch_iterator_init(&iterator, 0, 1, 0);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_batch_iterator_advance(&iterator));
+    TEST_ASSERT_EQUAL_INT(0, mmapq_batch_iterator_has_current_ffi(&iterator));
+}
+
 int main(void)
 {
     UNITY_BEGIN();
+    RUN_TEST(test_batch_iterator_rejects_invalid_lengths);
+    RUN_TEST(test_batch_iterator_stops_on_mapping_failure);
+    RUN_TEST(test_batch_poller_reports_appender_id);
+    RUN_TEST(test_batch_reader_rejects_zero_message_count);
+    RUN_TEST(test_batch_message_count_propagates_mapping_failure);
     RUN_TEST(test_batch_append_rejects_zero_length);
     RUN_TEST(test_batch_append_rejects_oversized_message);
     RUN_TEST(test_batch_poll_end_of_stream);
