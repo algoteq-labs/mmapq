@@ -224,3 +224,89 @@ No existing test was removed or weakened. The only approved scope deferral
 is source-breaking Rust safety corrections; the additional follow-up
 findings above remain open and are not represented as fixed. The broad
 review found these beyond the initial naming/documentation concerns.
+
+## Review-feedback follow-up
+
+The external review found a regression in the initial close-error fix:
+when export and `fclose` both failed, both wrappers returned the close error
+instead of the original export error. Both single-message and batch exports
+now always close their owned stream, preserve an original negative C result,
+and report a close failure only if export succeeded. No C implementation,
+on-disk format, reader signature, or hot-path ownership mechanism changed.
+
+Changed-file manifest for this follow-up:
+
+- `mmapq/doc/zero-copy-hardening-plan.md`
+- `mmapq/doc/polish-review.md`
+- `mmapq-rs/src/transfer/mod.rs`
+- `mmapq-rs/tests/export_errors.rs`
+- `mmapq-py/src/mmapq/transfer.py`
+- `mmapq-py/tests/test_safety.py`
+
+New regression evidence:
+
+- Rust `batch_export_preserves_corruption_when_close_also_fails` uses an
+  actual corrupted batch payload and `/dev/full`; it also checks corruption
+  with a normal output file. Before the fix, `cargo test --offline --test
+  export_errors -- --nocapture` exited 101: the new test received `Io`
+  instead of `Corrupt`, while the two existing close-failure tests passed.
+- Python `test_export_preserves_original_error_when_close_also_fails`
+  injects a negative export result after an actual small buffered export;
+  `/dev/full` supplies the real close failure. Both single and batch
+  subtests failed with `OSError` before the fix and pass afterward with
+  `QueueCorruptError`, also checking that close is called once.
+- Python `test_interrupted_batch_copy_destination_can_reopen_and_append`
+  corrupts the second message of the second source batch. It verifies the
+  committed prefix survives, the partial batch is invisible, the same
+  destination lane can be reopened, and a replacement batch commits at
+  index 1 and remains readable after another reopen. This passed without a
+  C change: it tests the existing appender/cache cleanup contract, not a
+  newly implemented rollback mechanism.
+
+Executed after correction:
+
+- `cargo test --offline --test export_errors`: 3 passed.
+- `cargo test --offline` and `cargo test --offline --release`: both pass;
+  per-binary counts are below, plus 1 passing doctest in each configuration.
+- `env -u PYTHONPATH PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
+  /tmp/mmapq-review-venv/bin/python -m pytest tests/test_safety.py -v`:
+  14 tests and 42 subtests passed. New runner lines (progress omitted):
+
+  ```text
+  tests/test_safety.py::TestSafety::test_export_preserves_original_error_when_close_also_fails PASSED
+  tests/test_safety.py::TestSafety::test_interrupted_batch_copy_destination_can_reopen_and_append PASSED
+  ```
+
+- The same environment with `python -m pytest -q`: 116 tests and 45
+  subtests passed, up from 114 tests. The existing mapper-exception fallback
+  test still emits one cffi unraisable-exception warning.
+- `bash scripts/test.sh`: all 19 C binaries pass in debug and exact-release
+  configurations; each binary's count matches the earlier C table in this
+  report. The new recovery fixture is exercised through the Python release
+  extension, not added to the C debug suite.
+- `bash scripts/check_mirrors.sh`: exit 0, all eight source/header/test/script
+  comparisons match. No vendored C or submodule-pointer edits were needed.
+- `bash scripts/check_doc_citations.sh` and `git diff --check` in all three
+  repositories: exit 0.
+
+| Rust test binary | Debug passed | Release passed |
+| --- | ---: | ---: |
+| lib | 33 | 33 |
+| archivable | 2 | 2 |
+| cross_process | 2 | 2 |
+| export_errors | 3 | 3 |
+| integration | 6 | 6 |
+| poll_overhead | 1 | 1 |
+| queue_type | 4 | 4 |
+| runtime_uaf | 2 | 2 |
+| transfer | 28 | 28 |
+
+The plan now explicitly covers the existing thread-confinement premise,
+shared-reference migration, proof obligations before relaxing `&mut`, and
+the C poller's already-implemented error/cursor invariant. Python's raw
+`read_view` lifetime problem remains explicitly unresolved, with a separate
+API decision required; callback/context-manager scoping alone is not a fix.
+The source-breaking Rust implementation remains deferred. No scope
+deviations, new runtime dependencies, commits, or releases were introduced;
+package builds, sanitizers, and latency benchmarks were not rerun for this
+follow-up.

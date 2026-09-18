@@ -80,6 +80,32 @@ accessors, including `entry_status`, `last_index`, and `start_index` in the
 initial conservative design. Pure accessors on an already-returned message,
 such as its index and appender ID, retain `&self`.
 
+The existing reader types are documented as thread-confined and contain raw
+pointers; neither implements `Send` or `Sync`. Verify this premise for both
+reader families and their views with compile-fail checks before changing
+signatures, and keep those checks afterward. Do not add unsafe thread-trait
+implementations or runtime locks to accommodate migration. Sharing a queue
+and creating an independent reader per thread is distinct from sharing one
+reader. Existing safe cross-thread sharing of these readers is not a
+supported contract to preserve; downstream unsafe sharing needs its own
+audit. Within one thread, callers currently using multiple shared references
+to a reader must instead arrange sequential exclusive borrows. If callers
+already use `RefCell`, their guard must remain alive for the entire use of a
+borrowed message; the library must not introduce its own dynamic borrow checks.
+
+Loosen a reader method back to `&self` only after a per-method C call-graph
+audit proves it cannot invalidate a live context or payload, reset/advance
+an iterator, or create incompatible aliases to Rust-owned fields. Include
+lazy initialization, cached metadata, error-state updates, and async mapping
+side effects in that audit. Internal C mutation alone does not rule out
+`&self`, but its isolation from every outstanding Rust reference must be
+demonstrated, not inferred from a metadata-looking name. If header and payload
+accessors are independent, document and test that independence. Require tests
+holding a live view across the candidate method in sync/async modes and at
+ring boundaries, alongside the lifetime audit; passing tests alone are not
+a soundness proof. Until those obligations are met, retain `&mut`. Relaxing
+a receiver later is separate from making the type thread-safe.
+
 Change all source-reader parameters in `QueueTransfer` and
 `BatchQueueTransfer` to `&mut IndexedReader` or `&mut IndexedBatchReader`.
 An export or copy must not bypass the exclusive borrow required by a read.
@@ -266,8 +292,13 @@ if let Some(error) = iteration_error {
 This sketch assumes the enclosing function returns `MmapError`. An error
 may also be returned by `poll` itself. Preserve the existing distinction
 between its corruption result and other error results; document both.
-Even if a handler swallows a cursor error and asks to advance, the C
-poller must inspect the iterator error and leave the queue cursor unchanged.
+The C poller already inspects the iterator error after the callback and
+returns before moving the queue cursor, even if the handler swallows the
+error and asks to advance (`mmapq_indexed_batch_poller_poll` in
+`src/indexed_batch_poller.c`). This is an invariant to preserve, not missing
+C functionality to implement. Add Rust wrapper tests exercising that case
+with the proposed lending cursor and verify that the same batch remains
+current after the failure.
 Already-executed application side effects are not automatically undone.
 
 `append_remaining_from_iter(&mut self, &mut BatchMessageIter)` remains a
@@ -398,6 +429,13 @@ buffered write does not imply a successful later caller-owned flush/close.
 Never close a caller-owned stream. For helpers that open their own files,
 check both write and close errors. Preserve the completed polish pass's
 Rust/Python close-error checks and `/dev/full` regressions.
+
+Preserve primary-error precedence in both wrappers: always close an owned
+stream, return an original export failure if present, and surface a close
+failure only when export itself succeeded. Test successful export/close,
+export failure alone, close failure alone, and simultaneous failures.
+The review follow-up corrects this ordering in the current polish pass;
+the separate hardening release must retain it.
 
 ### B3. Inject failures only in test binaries
 
@@ -564,6 +602,34 @@ Python:
 - Transfer failure tests, process-restart examples/tests, and `README.md`.
 - No rewrite of Python reads into a new zero-copy API; Rust is the zero-copy
   API workstream in this plan.
+
+### Explicitly deferred: Python borrowed-view lifetime safety
+
+`IndexedReader.read_view` currently exposes a raw `memoryview` into a C
+mapping. Its documented lifetime ends at the next read or close, but Python
+does not enforce that restriction. Closed-handle guards protect calls on
+the reader, not access through an already-returned view. Retaining the reader
+alone also cannot prevent its mapping ring from recycling a region. This
+remains an open memory-safety issue; the Rust borrowing changes do not fix it.
+
+Before a Python release claims safe zero-copy reads, make an explicit,
+separately approved compatibility decision: deprecate/remove this raw-view
+surface from the safe API, or design an owner-aware buffer/lifecycle mechanism
+that prevents invalidation while any exported alias survives. The latter
+needs its own performance and bounded-memory analysis; it is not assumed
+compatible with this plan's no-pinning/no-runtime-ownership constraints.
+Do not silently copy payloads or add view tracking to satisfy the claim.
+Python's ordinary `read` already returns owned bytes and remains distinct.
+
+An explicitly unsafe/manual-lifetime API can document caller obligations
+but is not a safety fix. Neither a callback nor a context manager alone
+prevents a caller from retaining a view or a derived slice. Any future
+enforced design must cover aliases, subsequent reads, close/finalization,
+region eviction, and concurrent use. For the current scope, preserve the
+borrowed-view warning, carry this limitation in release notes, and track
+the Python API decision separately rather than marking it resolved when
+workstream A completes. Do not test a known dangling view by dereferencing
+unmapped memory in the ordinary test process.
 
 Release/package manifests change only after compatibility decisions are
 settled. Do not create additional public convenience APIs to make the
