@@ -3,6 +3,7 @@
 const char *mmapq_strerror(int rc)
 {
     switch (rc) {
+    case MMAPQ_ECALLBACK: return "transfer callback aborted";
     case MMAPQ_ETIMEDOUT:  return "mapping timeout or I/O — transient, retry";
     case MMAPQ_EINVAL:     return "invalid argument (NULL, zero length, etc.)";
     case MMAPQ_ECLOSED:    return "operation on closed handle";

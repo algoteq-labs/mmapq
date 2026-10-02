@@ -1,0 +1,8 @@
+#include "transfer_faults.h"
+#define mmapq_indexed_appender_append fault_append
+#define mmapq_indexed_reader_read fault_read
+#define mmapq_indexed_reader_last_error fault_reader_error
+#define mmapq_indexed_batch_reader_read fault_batch_read
+#define mmapq_indexed_batch_reader_last_error fault_batch_reader_error
+#define mmapq_indexed_queue_create_appender_with_id fault_create
+#include "../src/queue_transfer.c"

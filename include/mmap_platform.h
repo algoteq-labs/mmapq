@@ -16,6 +16,7 @@
  *    -9   MMAPQ_ENOMEM      — internal allocation failure (back off, do not retry hot-loop)
  *   -10   MMAPQ_EIO         — I/O error (metadata file write failure, retry)
  *   -11   MMAPQ_ENOTREADY   — meta file exists but not yet fully initialised (transient, retry)
+ *   -12   MMAPQ_ECALLBACK   — appender-ID mapper returned MMAPQ_APPENDER_ID_ABORT; transfer stopped after cleanup
  */
 #define MMAPQ_ETIMEDOUT  (-1)   /* mapping timeout or I/O — transient, retry */
 #define MMAPQ_EINVAL     (-2)   /* invalid argument (NULL, zero length, etc.) */
@@ -28,6 +29,7 @@
 #define MMAPQ_ENOMEM     (-9)   /* internal allocation failure (calloc, strdup, etc.) — back off, do not retry hot-loop */
 #define MMAPQ_EIO        (-10)  /* I/O error — metadata file write failure, retry */
 #define MMAPQ_ENOTREADY  (-11)  /* meta file exists but not yet fully initialised — transient, retry */
+#define MMAPQ_ECALLBACK  (-12)  /* transfer aborted by appender-ID mapper callback */
 
 /* ── Error string ──────────────────────────────────────────────────────────── */
 

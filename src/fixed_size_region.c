@@ -63,12 +63,6 @@ static void fixed_close(RegionAccessor *self)
     }
 }
 
-static int32_t fixed_size(RegionAccessor *self)
-{
-    MMAP_ASSERT(self != NULL, "fixed_size: self is NULL");
-    return ((FixedSizeImpl *)self->impl)->size;
-}
-
 /* ── Factory ─────────────────────────────────────────────────────────────── */
 
 int mmapqi_fixed_size_region_create(
@@ -151,13 +145,14 @@ int mmapqi_fixed_size_region_create(
     acc->wrap           = fixed_wrap;
     acc->wrap_no_premap = fixed_wrap_no_premap;
     acc->close          = fixed_close;
-    acc->size           = fixed_size;
+    acc->region_size           = size;
     acc->impl           = impl;
 
     /* Initialize fast-path cache */
     acc->active_address = (uint8_t *)addr;
     acc->active_base    = 0;
-    acc->active_end     = size;
+    acc->fast_path_end  = size;
+    acc->mapped_capacity = size;
 
     *out = acc;
     return 0;

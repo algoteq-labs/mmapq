@@ -128,7 +128,8 @@ MmapqReadingContext *mmapq_indexed_reader_read_last(
 
 /**
  * mmapq_indexed_reader_last_index — highest committed index, or HEADER_NULL_INDEX (-1)
- * if queue is empty. Result is cached for efficient repeated calls.
+ * if queue is empty or discovery fails. Inspect last_error to distinguish
+ * failure from empty history. Result is cached for efficient repeated calls.
  */
 int64_t mmapq_indexed_reader_last_index(MmapqIndexedReader *r);
 
@@ -153,11 +154,10 @@ static inline int mmapq_indexed_reader_has_entry(MmapqIndexedReader *r, int64_t 
 /* ── Error accessor ────────────────────────────────────────────────────────── */
 
 /**
- * mmapq_indexed_reader_last_error — MMAPQ_* code from the most recent MMAPQ_ENTRY_ERROR.
+ * mmapq_indexed_reader_last_error — error from the most recent read or last_index.
  *
- * Returns 0 if the last read did not return MMAPQ_ENTRY_ERROR. The value is cleared
- * to 0 at the start of each read() call, so it always describes the most
- * recent call. Meaningful only immediately after a read that returned MMAPQ_ENTRY_ERROR.
+ * Zero means no error. Reads and last_index clear this value on entry;
+ * inspect it immediately after MMAPQ_ENTRY_ERROR or a last_index failure.
  */
 int mmapq_indexed_reader_last_error(const MmapqIndexedReader *r);
 

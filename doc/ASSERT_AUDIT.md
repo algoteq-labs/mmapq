@@ -1,6 +1,6 @@
 # ASSERT_AUDIT.md — MMAP_ASSERT Inventory
 
-**74 asserts across 16 src/*.c files.** Generated from source.
+**70 asserts across 16 src/*.c files.** Generated from source.
 Last verified: 2026-08-13 (Phase 14 — regenerated).
 
 ## Legend
@@ -14,10 +14,10 @@ Last verified: 2026-08-13 (Phase 14 — regenerated).
 
 | Disposition | Count |
 |---|---|
-| I (stays, re-verified) | 74 |
+| I (stays, re-verified) | 70 |
 | V (pending conversion) | 0 |
 | (converted from V in Phase 16e) | 2 |
-| **Total** | **74** |
+| **Total** | **70** |
 
 ## Per-file inventory
 
@@ -47,9 +47,9 @@ Lines 71-72, 110-112, 125. Internal dispatch null checks.
 
 Lines 46, 138-139, 186-188, 200. Internal dispatch null checks.
 
-### fixed_size_region.c — 4 (all I)
+### fixed_size_region.c — 3 (all I)
 
-Lines 28-29, 52, 68. Internal dispatch null checks.
+Lines 28-29, 52. Internal dispatch null checks.
 
 ### header_reader.c — 2 (all I)
 
@@ -65,7 +65,7 @@ Lines 37, 70. Internal dispatch null checks.
 
 | Line | Disposition | Verified |
 |---|---|---|
-| 203 unknown handler directive | I | Internal: MMAP_ASSERT(0) guards unreachable default in switch. |
+| 207 unknown handler directive | I | Internal: MMAP_ASSERT(0) guards unreachable default in switch. |
 
 ### indexed_reader.c — 1 (0 V)
 
@@ -83,21 +83,21 @@ Lines 57, 99, 112, 147-148, 159-160. Internal dispatch null checks.
 |---|---|---|
 | 58 long padding mismatch (capacity == skip) | I | Internal consistency check. |
 
-### region_async.c — 9 (all I)
+### region_async.c — 8 (all I)
 
-Lines 216, 297-298, 324, 364, 372, 385, 400, 410. Internal dispatch null checks.
+Lines 216, 297-298, 325, 367, 380, 395, 405. Internal dispatch null checks.
 
 ### region_ring.c — 2 (all I)
 
 Lines 19, 164. Internal dispatch null checks.
 
-### region_ring_accessor.c — 6 (all I)
+### region_ring_accessor.c — 5 (all I)
 
-Lines 66-67, 109-110, 131, 139. Internal dispatch null checks.
+Lines 66-67, 110-111, 133. Internal dispatch null checks.
 
-### region_sync.c — 8 (all I)
+### region_sync.c — 7 (all I)
 
-Lines 45, 82, 171-172, 178-179, 185, 193. Internal dispatch null checks.
+Lines 44, 81, 172-173, 179-180, 186. Internal dispatch null checks.
 
 ### runtime.c — 2 (all I)
 

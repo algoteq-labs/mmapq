@@ -1,5 +1,7 @@
 #include "unity.h"
 #include "internal/header_codec.h"
+#include "internal/header_reader.h"
+#include "mmap_platform.h"
 
 void setUp(void)    {}
 void tearDown(void) {}
@@ -162,9 +164,39 @@ void test_initial_payload_position(void)
 
 /* ── main ────────────────────────────────────────────────────────────────── */
 
+static WrapResult failing_header_wrap(RegionAccessor *accessor, int64_t position, Buffer *buffer)
+{
+    (void)accessor;
+    static const uint64_t committed = 64;
+    if (position != 0) return WRAP_MAP_TIMED_OUT;
+    buffer->data = (uint8_t *)&committed;
+    buffer->capacity = sizeof(committed);
+    return WRAP_SUCCESS;
+}
+
+static int64_t zero_start(void *context)
+{
+    (void)context;
+    return 0;
+}
+
+static void test_checked_header_search_preserves_mapping_failure(void)
+{
+    RegionAccessor accessor = {.wrap_no_premap = failing_header_wrap};
+    Buffer buffer = {0};
+    TEST_ASSERT_EQUAL_INT64(0, mmapqi_header_search_last_index(0, zero_start, NULL, &accessor, &buffer, "fixture"));
+    int error = 0;
+    TEST_ASSERT_EQUAL_INT64(HEADER_NULL_INDEX, mmapqi_header_search_last_index_checked(0, zero_start, NULL, &accessor, &buffer, "fixture", &error));
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ETIMEDOUT, error);
+    uint64_t header = 99;
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ETIMEDOUT, mmapqi_header_read_checked(&accessor, &buffer, 1, &header));
+    TEST_ASSERT_EQUAL_UINT64(HEADER_NULL, header);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
+    RUN_TEST(test_checked_header_search_preserves_mapping_failure);
 
     RUN_TEST(test_encode_decode_round_trip);
     RUN_TEST(test_encode_appender_id_zero);

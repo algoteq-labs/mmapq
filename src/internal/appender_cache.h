@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include "queue_transfer.h"
+#include "mmap_platform.h"
 
 /**
  * AppenderCache — generic lazy appender pool shared by import/copy functions.
@@ -56,58 +57,38 @@ typedef struct {
  *              appender is cached at the original @p mapped slot —
  *              its actual ID may differ from @p mapped) or
  *              MMAPQ_CONFLICT_ABORT (return error)
- * out_abort:   set to 1 when MMAPQ_CONFLICT_ABORT triggered and all cached
- *              appenders have been closed — caller must close the queue
- *              (via mmapq_indexed_queue_close or equivalent) and return
- *              MMAPQ_EIDCONFLICT immediately
+ * out_abort:   exact negative error on failure; caller retains cleanup ownership
  * Returns: the appender pointer, or NULL on error / abort
  */
 static inline void *appender_cache_get(
     AppenderCache *c, int32_t mapped, void *q,
     MmapqConflictBehavior on_conflict, int *out_abort)
 {
-    void *a;
+    void *appender = NULL;
     *out_abort = 0;
-
-    if (mapped == MMAPQ_APPENDER_ID_AUTO) {
-        if (!c->auto_appender) {
-            a = NULL;
-            if (c->create(q, &a) != 0) return NULL;
-            c->auto_appender = a;
-        }
-        return c->auto_appender;
-    }
-
-    if (mapped < 0 || mapped >= APPENDER_CACHE_SIZE) {
-        if (!c->auto_appender) {
-            a = NULL;
-            if (c->create(q, &a) != 0) return NULL;
-            c->auto_appender = a;
-        }
-        return c->auto_appender;
-    }
-
-    a = c->cache[mapped];
-    if (a) return a;
-
-    a = NULL;
-    if (c->create_with_id(q, (uint8_t)mapped, &a) == 0) {
-        c->cache[mapped] = a;
-        return a;
-    }
-
-    if (on_conflict == MMAPQ_CONFLICT_ABORT) {
-        for (int i = 0; i < APPENDER_CACHE_SIZE; i++)
-            if (c->cache[i]) c->close(c->cache[i]);
-        if (c->auto_appender) c->close(c->auto_appender);
-        *out_abort = 1;
+    if (mapped == MMAPQ_APPENDER_ID_ABORT) {
+        *out_abort = MMAPQ_ECALLBACK;
         return NULL;
     }
-
-    a = NULL;
-    if (c->create(q, &a) != 0) return NULL;
-    c->cache[mapped] = a;
-    return a;
+    if (mapped < 0 || mapped >= APPENDER_CACHE_SIZE) {
+        if (!c->auto_appender) {
+            *out_abort = c->create(q, &appender);
+            if (*out_abort != 0) return NULL;
+            c->auto_appender = appender;
+        }
+        return c->auto_appender;
+    }
+    appender = c->cache[mapped];
+    if (appender) return appender;
+    int result = c->create_with_id(q, (uint8_t)mapped, &appender);
+    if (result == MMAPQ_EIDCONFLICT && on_conflict == MMAPQ_CONFLICT_AUTO)
+        result = c->create(q, &appender);
+    if (result != 0) {
+        *out_abort = result;
+        return NULL;
+    }
+    c->cache[mapped] = appender;
+    return appender;
 }
 
 /**

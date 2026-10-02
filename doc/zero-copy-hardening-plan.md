@@ -1,10 +1,14 @@
 # Zero-copy safety, transfer correctness, and persistence contracts
 
-Status: implementation proposal, not implemented.
+Status: implementation present; release acceptance remains incomplete. See
+[implementation evidence and outstanding gates](hardening-implementation.md).
+The user approved implementation, including checked batch start and a distinct
+mapper-abort signal. Package versions remain unchanged until release.
 
 This plan addresses the three follow-up priorities from the ecosystem review.
 It is based on the current source, including the completed polish pass. It
-does not authorize publication or change any code. The Rust changes belong
+originally proposed changes rather than authorizing them. Implementation was
+subsequently authorized; publication is still not authorized. The Rust changes belong
 in a separate release because they intentionally reject previously accepted
 source code. Suggested Rust version: 0.2.0; choose C/Python versions from
 their actual compatibility changes rather than mechanically matching Rust.
@@ -568,8 +572,8 @@ to compile on the old unsound API. Do not bundle style-only rewrites.
 
 ## 6. Expected implementation file manifest
 
-This turn adds only this plan. The following are prospective implementation
-files; validate their exact scope before each review unit.
+The following is the original prospective manifest. The implementation report
+records the final manifest, necessary deviations, and executed verification.
 
 Rust:
 

@@ -183,3 +183,20 @@ assertion is belt-and-braces on top of this, not the primary defence.
 Copies of `mmapq/scripts/` under `mmapq-rs/c/scripts/` are submodule mirror
 artefacts and must not be run from there; the cross-repo path assumptions do
 not resolve. Run gates from the workspace root.
+## 8. Borrowed Mapping Lifetime and Capacity
+
+Each reader and poller owns its payload accessors. A yielded pointer remains
+valid until its accessor advances, repositions, or closes; callers must not
+retain it across those operations. Background premap requests exclude the
+current ring slot, and a mapped slot is not replaced without a new request.
+The Rust wrapper enforces this boundary through exclusive reader and lending
+cursor borrows, not runtime pins or reference counts.
+
+`RegionAccessor.fast_path_end` is the exclusive absolute fast-path boundary,
+which may be a premap trigger rather than the end of the mapping.
+`mapped_capacity` is the available mapped length from `active_base`. Never use
+the premap trigger as `Buffer.capacity`: valid payloads can cross that trigger
+without crossing a mapping boundary. The immutable 32-bit `region_size` and
+32-bit `mapped_capacity` replace the size callback slot, retaining a 64-bit
+`fast_path_end` and the 64-byte accessor layout on supported 64-bit targets.
+No mapping state transitions or atomic orderings change for this correction.

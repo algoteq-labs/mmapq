@@ -317,17 +317,28 @@ int mmapq_indexed_batch_appender_create_with_id(
 
 /* ── Batch Operations ────────────────────────────────────────────────────── */
 
+int mmapq_indexed_batch_appender_start_batch_checked(
+    MmapqIndexedBatchAppender *appender, MmapqMutableBatch **out)
+{
+    if (out == NULL) return MMAPQ_EINVAL;
+    *out = NULL;
+    if (appender == NULL) return MMAPQ_EINVAL;
+    if (appender->closed) return MMAPQ_ECLOSED;
+    int result = ensure_space_for_batch_header(appender);
+    if (result != 0) return result;
+    appender->current_batch.appender = appender;
+    appender->current_batch.batch_offset = appender->current_payload_position;
+    appender->current_batch.message_count = 0;
+    appender->current_payload_position += MMAPQ_BATCH_MSG_COUNT_SIZE;
+    *out = &appender->current_batch;
+    return 0;
+}
+
 MmapqMutableBatch *mmapq_indexed_batch_appender_start_batch(MmapqIndexedBatchAppender *a)
 {
-    if (a->closed) return NULL;
-    if (ensure_space_for_batch_header(a)) return NULL;
-
-    a->current_batch.appender      = a;
-    a->current_batch.batch_offset  = a->current_payload_position;
-    a->current_batch.message_count = 0;
-
-    a->current_payload_position += MMAPQ_BATCH_MSG_COUNT_SIZE;
-    return &a->current_batch;
+    MmapqMutableBatch *batch = NULL;
+    mmapq_indexed_batch_appender_start_batch_checked(a, &batch);
+    return batch;
 }
 
 int64_t mmapq_mutable_batch_complete(MmapqMutableBatch *b)

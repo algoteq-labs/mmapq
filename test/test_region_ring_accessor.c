@@ -173,9 +173,61 @@ void test_accessor_size_returns_region_size(void)
 
 /* ── main ────────────────────────────────────────────────────────────────── */
 
+static void test_accessor_fast_path_preserves_full_capacity(void)
+{
+    TEST_ASSERT_EQUAL_UINT64(64, sizeof(RegionAccessor));
+    Buffer buffer = {0};
+    TEST_ASSERT_EQUAL_INT(WRAP_SUCCESS, region_accessor_wrap(acc, 0, &buffer));
+    TEST_ASSERT_EQUAL_INT(WRAP_SUCCESS, region_accessor_wrap(acc, 100, &buffer));
+    TEST_ASSERT_EQUAL_INT(REGION_SIZE - 100, buffer.capacity);
+}
+
+static WrapResult reject_cached_wrap(RegionAccessor *self, int64_t position, Buffer *buffer)
+{
+    (void)self;
+    (void)position;
+    (void)buffer;
+    return WRAP_UNWRAPPED;
+}
+
+static void test_accessor_absolute_fast_path_bounds(void)
+{
+    uint8_t storage[128] = {0};
+    RegionAccessor cached = {
+        .wrap = reject_cached_wrap,
+        .wrap_no_premap = reject_cached_wrap,
+        .region_size = 256,
+        .mapped_capacity = sizeof(storage),
+        .active_address = storage,
+        .active_base = 4096,
+        .fast_path_end = 4160,
+    };
+    TEST_ASSERT_EQUAL_UINT64(64, sizeof(RegionAccessor));
+    TEST_ASSERT_EQUAL_UINT64(24, offsetof(RegionAccessor, region_size));
+    TEST_ASSERT_EQUAL_UINT64(28, offsetof(RegionAccessor, mapped_capacity));
+    TEST_ASSERT_EQUAL_UINT64(56, offsetof(RegionAccessor, fast_path_end));
+    TEST_ASSERT_EQUAL_INT(256, region_accessor_size(&cached));
+    for (int variant = 0; variant < 2; variant++) {
+        WrapResult (*wrap)(RegionAccessor *, int64_t, Buffer *) =
+            variant ? region_accessor_wrap_no_premap : region_accessor_wrap;
+        Buffer buffer = {0};
+        TEST_ASSERT_EQUAL_INT(WRAP_UNWRAPPED, wrap(&cached, 4095, &buffer));
+        TEST_ASSERT_EQUAL_INT(WRAP_SUCCESS, wrap(&cached, 4096, &buffer));
+        TEST_ASSERT_EQUAL_PTR(storage, buffer.data);
+        TEST_ASSERT_EQUAL_INT(128, buffer.capacity);
+        TEST_ASSERT_EQUAL_INT(WRAP_SUCCESS, wrap(&cached, 4159, &buffer));
+        TEST_ASSERT_EQUAL_PTR(storage + 63, buffer.data);
+        TEST_ASSERT_EQUAL_INT(65, buffer.capacity);
+        TEST_ASSERT_EQUAL_INT(WRAP_UNWRAPPED, wrap(&cached, 4160, &buffer));
+        TEST_ASSERT_EQUAL_INT(WRAP_UNWRAPPED, wrap(&cached, 4224, &buffer));
+    }
+}
+
 int main(void)
 {
     UNITY_BEGIN();
+    RUN_TEST(test_accessor_absolute_fast_path_bounds);
+    RUN_TEST(test_accessor_fast_path_preserves_full_capacity);
     RUN_TEST(test_accessor_wrap_position_zero);
     RUN_TEST(test_accessor_wrap_mid_region);
     RUN_TEST(test_accessor_wrap_at_region_end);

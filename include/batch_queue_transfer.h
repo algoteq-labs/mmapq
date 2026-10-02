@@ -5,6 +5,19 @@
  * BatchQueueTransfer — export, import, and copy a batch queue
  *                      to/from a portable batched stream format.
  *
+ * Failures return negative MMAPQ_* codes, never a partial success count.
+ * Transfers are not atomic: a committed destination prefix may remain,
+ * but a failed in-progress batch is not published. Caller-owned streams
+ * remain open; success excludes a later caller flush/close failure.
+ * Chunked exports own their files and check close.
+ *
+ * Exports do not snapshot the source or seek back to rewrite counts. Keep
+ * the exported range available and filters deterministic across passes.
+ * A mismatch between declared and written entry/message counts returns
+ * MMAPQ_ECORRUPT (an inconsistent export, not necessarily source corruption).
+ * On any export error, discard the output stream or all files from that
+ * chunked export attempt; partial output is not repaired or removed.
+ *
  * EXPORTED STREAM FORMAT (batched):
  *   [ExportMeta: 64 bytes; queue_type = QUEUE_TYPE_BATCH]
  *     schema_version, region_size, start_index, max_file_size,
@@ -85,6 +98,8 @@ typedef int (*MmapqBatchQueueFilterFn)(int64_t batch_index, int32_t msg_index,
  * When filters are active, a batch is included only if it contains at
  * least one matching message.  Only matching messages within the batch
  * are written to the stream.
+ * If the range clipped to the queue is empty, writes a zero-batch header
+ * and returns 0. A missing/uninitialised source still reports its read error.
  *
  * reader:          source batch queue reader
  * out:             output stream (FILE*)
@@ -94,7 +109,7 @@ typedef int (*MmapqBatchQueueFilterFn)(int64_t batch_index, int32_t msg_index,
  * include:         optional include filter (NULL = accept all)
  * exclude:         optional exclude filter (NULL = skip none)
  * ctx:             caller context passed to filter callbacks
- * Returns: number of batches written, or -1 on I/O error
+ * Returns: number of batches written, or a negative MMAPQ_* error code
  */
 int64_t mmapq_batch_queue_transfer_export(
     MmapqIndexedBatchReader *reader, FILE *out,
@@ -117,7 +132,7 @@ int64_t mmapq_batch_queue_transfer_export(
  * include:        optional include filter (NULL = accept all)
  * exclude:        optional exclude filter (NULL = skip none)
  * ctx:            caller context passed to filter callbacks
- * Returns: total batches exported across all chunks, or -1 on error
+ * Returns: total batches exported across all chunks, or a negative MMAPQ_* error code
  */
 int64_t mmapq_batch_queue_transfer_export_chunked(
     MmapqIndexedBatchReader *reader, const char *base_path,
@@ -153,7 +168,7 @@ int64_t mmapq_batch_queue_transfer_export_chunked(
  * mapper:           MmapqAppenderIdMapper callback (NULL = identity mapping)
  * mapper_ctx:       caller context passed to the mapper callback
  * on_conflict:      MMAPQ_CONFLICT_AUTO or MMAPQ_CONFLICT_ABORT
- * Returns: number of batches imported, or -1 on error
+ * Returns: number of batches imported, or a negative MMAPQ_* error code
  */
 int64_t mmapq_batch_queue_transfer_import(
     FILE *in, const char *directory, const char *queue_name,
@@ -183,7 +198,7 @@ int64_t mmapq_batch_queue_transfer_import(
  * mapper:           MmapqAppenderIdMapper callback (NULL = identity mapping)
  * mapper_ctx:       caller context passed to the mapper callback
  * on_conflict:      MMAPQ_CONFLICT_AUTO or MMAPQ_CONFLICT_ABORT
- * Returns: number of batches (and messages) imported, or -1 on error
+ * Returns: number of batches (and messages) imported, or a negative MMAPQ_* error code
  */
 int64_t mmapq_batch_queue_transfer_import_flat_stream(
     FILE *in, const char *directory, const char *queue_name,
@@ -220,7 +235,7 @@ int64_t mmapq_batch_queue_transfer_import_flat_stream(
  * mapper:          MmapqAppenderIdMapper callback (NULL = identity mapping)
  * mapper_ctx:      caller context passed to the mapper callback
  * on_conflict:     MMAPQ_CONFLICT_AUTO or MMAPQ_CONFLICT_ABORT
- * Returns: number of batches copied, or -1 on error
+ * Returns: number of batches copied, or a negative MMAPQ_* error code
  */
 int64_t mmapq_batch_queue_transfer_copy(
     MmapqIndexedBatchReader *reader,
@@ -259,7 +274,7 @@ int64_t mmapq_batch_queue_transfer_copy(
  * mapper:          MmapqAppenderIdMapper callback (NULL = identity mapping)
  * mapper_ctx:      caller context passed to the mapper callback
  * on_conflict:     MMAPQ_CONFLICT_AUTO or MMAPQ_CONFLICT_ABORT
- * Returns: number of batches (1 per entry) copied, or -1 on error
+ * Returns: number of batches (1 per entry) copied, or a negative MMAPQ_* error code
  */
 int64_t mmapq_batch_queue_transfer_copy_normal_to_batch(
     MmapqIndexedReader *reader,

@@ -170,10 +170,14 @@ MmapqPollResult mmapq_indexed_poller_poll(
     WrapResult r = region_accessor_wrap(payload_acc, payload_position, &p->payload_buf);
     if (r != WRAP_SUCCESS) { p->last_error = MMAPQ_ETIMEDOUT; return MMAPQ_POLL_ERROR; }
 
+    if (p->payload_buf.capacity <= PAYLOAD_LENGTH_SIZE) {
+        p->last_error = MMAPQ_ECORRUPT;
+        return MMAPQ_POLL_CORRUPT;
+    }
     int32_t length;
     memcpy(&length, p->payload_buf.data + PAYLOAD_LENGTH_OFFSET, sizeof(int32_t));
 
-    if (length <= 0) { p->last_error = MMAPQ_ECORRUPT; return MMAPQ_POLL_CORRUPT; }
+    if (length <= 0 || length > p->payload_buf.capacity - PAYLOAD_LENGTH_SIZE) { p->last_error = MMAPQ_ECORRUPT; return MMAPQ_POLL_CORRUPT; }
 
     const void *data = p->payload_buf.data + PAYLOAD_DATA_OFFSET;
 

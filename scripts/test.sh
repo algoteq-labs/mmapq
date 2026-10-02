@@ -25,6 +25,7 @@ TESTS=(
     test_payload_walk
     test_indexed_queue
     test_queue_transfer
+    test_transfer_failures
     test_indexed_archiver
     test_indexed_batch_queue
     test_indexed_batch_archiver
@@ -74,7 +75,13 @@ run_test() {
     local cflags="$3"
     local bin="/tmp/mmapq_${test}_${label}"
 
-    if ! gcc $cflags -Wno-missing-prototypes -Wno-strict-prototypes $SRCS "test/${test}.c" $UNITY -o "$bin" $LDFLAGS 2>&1; then
+    local sources="$SRCS"
+    if [ "$test" = test_transfer_failures ]; then
+        sources="${sources//src\/queue_transfer.c/}"
+        sources="${sources//src\/batch_queue_transfer.c/}"
+        sources="$sources test/transfer_fault_normal.c test/transfer_fault_batch.c"
+    fi
+    if ! gcc $cflags -Wno-missing-prototypes -Wno-strict-prototypes $sources "test/${test}.c" $UNITY -o "$bin" $LDFLAGS 2>&1; then
         echo "FAIL ($label): $test (compile error)"
         return 1
     fi
@@ -107,7 +114,7 @@ for TEST in "${TESTS[@]}"; do
     fi
 done
 
-# ── Release-flags validation (all 19 tests + gates under exact release flags) ──
+# ── Release-flags validation (all 20 tests + gates under exact release flags) ──
 echo ""
 echo "=== release-flags validation ==="
 CFLAGS_RELEASE="$(make -s print-cflags-release)"

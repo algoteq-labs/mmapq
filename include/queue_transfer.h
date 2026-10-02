@@ -5,6 +5,18 @@
  * QueueTransfer — export, import, and copy a single-message indexed queue
  *                 to/from a portable flat stream format.
  *
+ * Failures return negative MMAPQ_* codes, never a partial success count.
+ * Transfers are not atomic: a committed destination prefix may remain.
+ * Caller-owned streams are never closed; success excludes a later caller
+ * flush/close failure. Chunked exports own their files and check close.
+ *
+ * Exports do not snapshot the source or seek back to rewrite counts. Keep
+ * the exported range available and filters deterministic across passes.
+ * A mismatch between declared and written entry/message counts returns
+ * MMAPQ_ECORRUPT (an inconsistent export, not necessarily source corruption).
+ * On any export error, discard the output stream or all files from that
+ * chunked export attempt; partial output is not repaired or removed.
+ *
  * EXPORTED STREAM FORMAT (flat):
  *   [ExportMeta: 64 bytes]
  *     schema_version, region_size, start_index, max_file_size,
@@ -48,6 +60,7 @@ typedef struct MmapqIndexedBatchReader MmapqIndexedBatchReader;
 
 /** Return -1 to auto-assign the next available appender ID. */
 #define MMAPQ_APPENDER_ID_AUTO (-1)
+#define MMAPQ_APPENDER_ID_ABORT INT32_MIN
 
 /**
  * Map a source appender ID to a destination appender ID.
@@ -57,14 +70,15 @@ typedef struct MmapqIndexedBatchReader MmapqIndexedBatchReader;
  *
  * source_aid: appender ID from the source (export stream or reader)
  * ctx:        caller-supplied context (passed through from the API call)
- * Returns: a valid appender ID (0-255), or MMAPQ_APPENDER_ID_AUTO for auto-assign
+ * Returns: a valid appender ID (0-255), MMAPQ_APPENDER_ID_AUTO for auto-assign,
+ * or MMAPQ_APPENDER_ID_ABORT to stop with MMAPQ_ECALLBACK after cleanup.
  */
 typedef int32_t (*MmapqAppenderIdMapper)(uint16_t source_aid, void *ctx);
 
 /**
  * MmapqConflictBehavior — what to do when a mapped appender ID is already in use.
  *
- * MMAPQ_CONFLICT_AUTO:  fall back to auto-assign (create_appender) — always succeeds
+ * MMAPQ_CONFLICT_AUTO:  fall back to auto-assign only on ID conflict; other failures propagate
  * MMAPQ_CONFLICT_ABORT: return MMAPQ_EIDCONFLICT immediately
  */
 typedef enum {
@@ -77,7 +91,8 @@ typedef enum {
 /**
  * Filter callback for single-message queue entries.
  *
- * Called once per entry during export/import/copy.
+ * Export may call this repeatedly for each entry across counting and writing
+ * passes; return the same decision each time.
  * Return 1 to include the entry, 0 to skip it.
  *
  * index:    queue index of the entry
@@ -92,7 +107,8 @@ typedef int (*MmapqQueueFilterFn)(int64_t index, const void *data,
 /**
  * Filter callback for batch queue messages.
  *
- * Called once per message within a batch during batch queue export/import/copy.
+ * Batch export may call this repeatedly per message across counting and
+ * writing passes; return the same decision each time.
  * Return 1 to include the message, 0 to skip it.
  *
  * batch_index:  index of the batch containing this message
@@ -114,6 +130,8 @@ typedef int (*MmapqBatchQueueFilterFn)(int64_t batch_index, int32_t msg_index,
  *
  * Writes a 64-byte ExportMeta header followed by each matching entry in
  * [uint16 appender_id][int32 length][payload] framing.
+ * If the range clipped to the queue is empty, writes a zero-entry header
+ * and returns 0. A missing/uninitialised source still reports its read error.
  *
  * reader:          source queue reader
  * out:             output stream (FILE*, typically a file or stdout)
@@ -123,7 +141,7 @@ typedef int (*MmapqBatchQueueFilterFn)(int64_t batch_index, int32_t msg_index,
  * include:         optional include filter (NULL = accept all)
  * exclude:         optional exclude filter (NULL = skip none)
  * ctx:             caller context passed to filter callbacks
- * Returns: number of entries written, or -1 on I/O error
+ * Returns: number of entries written, or a negative MMAPQ_* error code
  */
 int64_t mmapq_queue_transfer_export(
     MmapqIndexedReader *reader, FILE *out,
@@ -150,7 +168,7 @@ int64_t mmapq_queue_transfer_export(
  * include:        optional include filter (NULL = accept all)
  * exclude:        optional exclude filter (NULL = skip none)
  * ctx:            caller context passed to filter callbacks
- * Returns: total entries exported across all chunks, or -1 on error
+ * Returns: total entries exported across all chunks, or a negative MMAPQ_* error code
  */
 int64_t mmapq_queue_transfer_export_chunked(
     MmapqIndexedReader *reader, const char *base_path,
@@ -186,7 +204,7 @@ int64_t mmapq_queue_transfer_export_chunked(
  * mapper_ctx:       caller context passed to the mapper callback
  * on_conflict:      MMAPQ_CONFLICT_AUTO (fall back to auto-assign) or
  *                   MMAPQ_CONFLICT_ABORT (return MMAPQ_EIDCONFLICT)
- * Returns: number of entries imported, or -1 on error
+ * Returns: number of entries imported, or a negative MMAPQ_* error code
  */
 int64_t mmapq_queue_transfer_import(
     FILE *in, const char *directory, const char *queue_name,
@@ -221,7 +239,7 @@ int64_t mmapq_queue_transfer_import(
  * mapper:           MmapqAppenderIdMapper callback (NULL = identity mapping)
  * mapper_ctx:       caller context passed to the mapper callback
  * on_conflict:      MMAPQ_CONFLICT_AUTO or MMAPQ_CONFLICT_ABORT
- * Returns: total number of individual messages imported, or -1 on error
+ * Returns: total number of individual messages imported, or a negative MMAPQ_* error code
  */
 int64_t mmapq_queue_transfer_import_batch_stream(
     FILE *in, const char *directory, const char *queue_name,
@@ -257,7 +275,7 @@ int64_t mmapq_queue_transfer_import_batch_stream(
  * mapper:          MmapqAppenderIdMapper callback (NULL = identity mapping)
  * mapper_ctx:      caller context passed to the mapper callback
  * on_conflict:     MMAPQ_CONFLICT_AUTO or MMAPQ_CONFLICT_ABORT
- * Returns: number of entries copied, or -1 on error
+ * Returns: number of entries copied, or a negative MMAPQ_* error code
  */
 int64_t mmapq_queue_transfer_copy(
     MmapqIndexedReader *reader,
@@ -297,7 +315,7 @@ int64_t mmapq_queue_transfer_copy(
  * mapper:          MmapqAppenderIdMapper callback (NULL = identity mapping)
  * mapper_ctx:      caller context passed to the mapper callback
  * on_conflict:     MMAPQ_CONFLICT_AUTO or MMAPQ_CONFLICT_ABORT
- * Returns: number of individual messages copied, or -1 on error
+ * Returns: number of individual messages copied, or a negative MMAPQ_* error code
  */
 int64_t mmapq_queue_transfer_copy_batch_to_normal(
     MmapqIndexedBatchReader *reader,

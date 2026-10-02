@@ -29,7 +29,6 @@ typedef struct {
 static WrapResult sync_wrap          (RegionAccessor *self, int64_t position, Buffer *buffer);
 static WrapResult sync_wrap_no_premap(RegionAccessor *self, int64_t position, Buffer *buffer);
 static void       sync_close         (RegionAccessor *self);
-static int32_t    sync_size          (RegionAccessor *self);
 static int        sync_map           (Region *self, int64_t position);
 static int        sync_unmap         (Region *self);
 
@@ -109,7 +108,8 @@ static WrapResult sync_do_wrap(RegionAccessor *self, int64_t position, Buffer *b
             /* Update fast-path cache */
             self->active_address = buffer->data;
             self->active_base    = position;
-            self->active_end     = position + buffer->capacity;
+            self->fast_path_end = position + buffer->capacity;
+            self->mapped_capacity = buffer->capacity;
 
             return WRAP_SUCCESS;
         }
@@ -139,7 +139,8 @@ static WrapResult sync_do_wrap(RegionAccessor *self, int64_t position, Buffer *b
                 /* Update fast-path cache */
                 self->active_address = buffer->data;
                 self->active_base    = position;
-                self->active_end     = position + buffer->capacity;
+                self->fast_path_end = position + buffer->capacity;
+                self->mapped_capacity = buffer->capacity;
 
                 return WRAP_SUCCESS;
             }
@@ -188,12 +189,6 @@ static void sync_close(RegionAccessor *self)
     sync_unmap(region);
 }
 
-static int32_t sync_size(RegionAccessor *self)
-{
-    MMAP_ASSERT(self != NULL, "sync_size: self is NULL");
-    return IMPL(self)->region_size;
-}
-
 /* ── Factory ─────────────────────────────────────────────────────────────── */
 
 int mmapqi_region_sync_create(
@@ -228,7 +223,7 @@ int mmapqi_region_sync_create(
     r->base.wrap           = sync_wrap;
     r->base.wrap_no_premap = sync_wrap_no_premap;
     r->base.close          = sync_close;
-    r->base.size           = sync_size;
+    r->base.region_size    = region_size;
     r->base.impl           = impl;
 
     /* Region vtable */

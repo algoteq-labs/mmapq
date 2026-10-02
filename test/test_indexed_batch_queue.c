@@ -836,7 +836,8 @@ static void test_batch_iterator_rejects_invalid_lengths(void)
         RegionAccessor accessor = {
             .active_address = (uint8_t *)payload,
             .active_base = 0,
-            .active_end = sizeof(payload),
+            .fast_path_end = sizeof(payload),
+            .mapped_capacity = sizeof(payload),
         };
         MmapqBatchPayloadIterator iterator = {.payload_acc = &accessor};
         mmapq_batch_iterator_init(&iterator, 0, 1, 0);
@@ -858,9 +859,83 @@ static void test_batch_iterator_stops_on_mapping_failure(void)
     TEST_ASSERT_EQUAL_INT(0, mmapq_batch_iterator_has_current_ffi(&iterator));
 }
 
+static void test_checked_batch_step(void)
+{
+    int32_t framed[] = {1, 4, 123};
+    RegionAccessor accessor = {.wrap = timeout_wrap};
+    MmapqBatchPayloadIterator iterator = {
+        .payload_acc = &accessor,
+    };
+    const void *data = framed;
+    int32_t length = 99;
+    TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL, mmapq_batch_iterator_next(NULL, &data, &length));
+    TEST_ASSERT_NULL(data);
+    TEST_ASSERT_EQUAL_INT(0, length);
+    accessor.active_address = (uint8_t *)framed;
+    accessor.active_base = 0;
+    accessor.fast_path_end = sizeof(framed);
+    accessor.mapped_capacity = sizeof(framed);
+    mmapq_batch_iterator_init(&iterator, 0, 1, 0);
+    TEST_ASSERT_EQUAL_INT(1, mmapq_batch_iterator_next(&iterator, &data, &length));
+    TEST_ASSERT_EQUAL_PTR(&framed[2], data);
+    TEST_ASSERT_EQUAL_INT(4, length);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_batch_iterator_next(&iterator, &data, &length));
+    TEST_ASSERT_NULL(data);
+    TEST_ASSERT_EQUAL_INT(0, length);
+    framed[1] = 0;
+    mmapq_batch_iterator_init(&iterator, 0, 1, 0);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ECORRUPT, mmapq_batch_iterator_next(&iterator, &data, &length));
+    framed[1] = 4;
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ECORRUPT, mmapq_batch_iterator_next(&iterator, &data, &length));
+    TEST_ASSERT_NULL(data);
+    TEST_ASSERT_EQUAL_INT(0, length);
+    accessor.fast_path_end = 0;
+    mmapq_batch_iterator_init(&iterator, 0, 1, 0);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ETIMEDOUT, mmapq_batch_iterator_next(&iterator, &data, &length));
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ETIMEDOUT, mmapq_batch_iterator_next(&iterator, &data, &length));
+    TEST_ASSERT_NULL(data);
+    TEST_ASSERT_EQUAL_INT(0, length);
+}
+
+static void test_checked_batch_step_skips_short_and_long_padding(void)
+{
+    unsigned char payload[65536];
+    memset(payload, 0x5a, sizeof(payload));
+    const int32_t remaining[] = {1, 2, 3, 4, 100};
+    MmapqIndexedBatchReader *reader = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_reader(q, &reader));
+    for (size_t index = 0; index < sizeof(remaining) / sizeof(remaining[0]); index++) {
+        MmapqIndexedBatchAppender *appender = NULL;
+        TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender_with_id(q, (uint8_t)index, &appender));
+        MmapqMutableBatch *batch = NULL;
+        TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(appender, &batch));
+        int32_t first_length = REGION_SZ - 64 - 4 - 4 - remaining[index];
+        TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(batch, payload, first_length));
+        TEST_ASSERT_EQUAL_INT(1, mmapq_mutable_batch_append(batch, payload, 256));
+        int64_t offset = mmapq_mutable_batch_complete(batch);
+        TEST_ASSERT_EQUAL_INT64((int64_t)index, mmapq_indexed_batch_appender_commit_batch(appender, offset));
+        MmapqBatchReadingContext context = {0};
+        mmapq_indexed_batch_reader_read(reader, (int64_t)index, &context);
+        TEST_ASSERT_EQUAL_INT(MMAPQ_BATCH_ENTRY_AVAILABLE, context.status);
+        const void *data = NULL;
+        int32_t length = 0;
+        TEST_ASSERT_EQUAL_INT(1, mmapq_batch_iterator_next(context.iterator, &data, &length));
+        TEST_ASSERT_EQUAL_INT(first_length, length);
+        TEST_ASSERT_EQUAL_MEMORY(payload, data, (size_t)length);
+        TEST_ASSERT_EQUAL_INT(1, mmapq_batch_iterator_next(context.iterator, &data, &length));
+        TEST_ASSERT_EQUAL_INT(256, length);
+        TEST_ASSERT_EQUAL_MEMORY(payload, data, (size_t)length);
+        TEST_ASSERT_EQUAL_INT(0, mmapq_batch_iterator_next(context.iterator, &data, &length));
+        mmapq_indexed_batch_appender_close(appender);
+    }
+    mmapq_indexed_batch_reader_close(reader);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
+    RUN_TEST(test_checked_batch_step);
+    RUN_TEST(test_checked_batch_step_skips_short_and_long_padding);
     RUN_TEST(test_batch_iterator_rejects_invalid_lengths);
     RUN_TEST(test_batch_iterator_stops_on_mapping_failure);
     RUN_TEST(test_batch_poller_reports_appender_id);

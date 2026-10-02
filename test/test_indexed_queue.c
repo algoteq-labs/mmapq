@@ -1293,10 +1293,46 @@ void test_strerror_unknown(void)
 
 /* ── main ────────────────────────────────────────────────────────────────── */
 
+static void test_read_and_poll_reject_payload_beyond_mapping(void)
+{
+    MmapqIndexedAppender *appender = NULL;
+    MmapqIndexedReader *reader = NULL;
+    MmapqIndexedPoller *poller = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(q, &appender));
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_appender_append(appender, "data", 4));
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_reader(q, &reader));
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_poller(q, &poller));
+    MmapqReadingContext context = {0};
+    mmapq_indexed_reader_read(reader, 0, &context);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ENTRY_AVAILABLE, context.status);
+    int64_t offset = context.msg_offset;
+    char path[512];
+    snprintf(path, sizeof(path), "%s/%s/payload_%u_0", DIR, QUEUE, (unsigned)context.appender_id);
+    int descriptor = open(path, O_WRONLY);
+    TEST_ASSERT_MESSAGE(descriptor >= 0, "open payload");
+    int32_t invalid_lengths[] = {REGION_SZ, INT32_MAX};
+    for (size_t index = 0; index < sizeof(invalid_lengths) / sizeof(invalid_lengths[0]); index++) {
+        TEST_ASSERT_EQUAL_INT64(sizeof(int32_t), pwrite(descriptor, &invalid_lengths[index], sizeof(int32_t), offset));
+        mmapq_indexed_reader_read(reader, 0, &context);
+        TEST_ASSERT_EQUAL_INT(MMAPQ_ENTRY_ERROR, context.status);
+        TEST_ASSERT_EQUAL_INT(MMAPQ_ECORRUPT, mmapq_indexed_reader_last_error(reader));
+        TEST_ASSERT_NULL(context.data);
+        PollCapture capture = {.directive = MMAPQ_NEXT_ADVANCE};
+        TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_CORRUPT, mmapq_indexed_poller_poll(poller, capture_handler, &capture));
+        TEST_ASSERT_EQUAL_INT(MMAPQ_ECORRUPT, mmapq_indexed_poller_last_error(poller));
+        TEST_ASSERT_EQUAL_INT(0, capture.call_count);
+    }
+    TEST_ASSERT_EQUAL_INT(0, close(descriptor));
+    mmapq_indexed_poller_close(poller);
+    mmapq_indexed_reader_close(reader);
+    mmapq_indexed_appender_close(appender);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
 
+    RUN_TEST(test_read_and_poll_reject_payload_beyond_mapping);
     RUN_TEST(test_append_and_poll_single_message);
     RUN_TEST(test_poll_end_of_stream_when_empty);
     RUN_TEST(test_poller_before_queue_retries);

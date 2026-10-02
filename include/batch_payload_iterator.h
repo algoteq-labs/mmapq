@@ -87,6 +87,10 @@ int64_t mmapq_batch_iterator_probe_batch(MmapqBatchPayloadIterator *it, int64_t 
 /**
  * Advance to the next message in the batch.
  *
+ * Boolean stepping API retained for compatibility and internal C callers.
+ * Unlike mmapq_batch_iterator_next(), this function returns 0 for both
+ * exhaustion and failure; it never returns a negative error code.
+ *
  * On the first call after mmapq_batch_iterator_init(), moves to message 0 (or
  * start_msg_index if non-zero). On subsequent calls, moves to the next message.
  *
@@ -99,6 +103,27 @@ int64_t mmapq_batch_iterator_probe_batch(MmapqBatchPayloadIterator *it, int64_t 
  * batches on error.
  */
 int mmapq_batch_iterator_advance(MmapqBatchPayloadIterator *it);
+
+/**
+ * Advance once and return 1 for a message, 0 for exhaustion, or an MMAPQ_*
+ * error. Errors remain sticky until reinitialisation. Outputs are cleared
+ * on exhaustion/error. A successful payload remains borrowed until another
+ * advance, reinitialisation, accessor reposition, or owner close.
+ *
+ * Checked alternative to mmapq_batch_iterator_advance(), intended for callers
+ * that need to distinguish exhaustion from failure directly, including FFI
+ * bindings. Uses the same advancement logic and supplies the borrowed data
+ * and length in one call, without payload copying or allocation. Do not call
+ * advance() first: this function itself advances to the next message.
+ * Test the return value explicitly: 1 is a message, 0 is exhaustion, and a
+ * negative value is an error, not a successful step.
+ *
+ * iterator: iterator owned by the reader or poller
+ * data:     required output pointer to borrowed payload bytes
+ * length:   required output pointer to positive payload length
+ */
+int mmapq_batch_iterator_next(MmapqBatchPayloadIterator *iterator,
+                             const void **data, int32_t *length);
 
 /**
  * Return 1 if the iterator is positioned on a valid message (advance() returned 1).

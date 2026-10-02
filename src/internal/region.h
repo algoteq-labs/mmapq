@@ -78,7 +78,7 @@ static inline void region_close(Region *r)
 
 static inline int32_t region_size(Region *r)
 {
-    return r->base.size(&r->base);
+    return region_accessor_size(&r->base);
 }
 
 /* ── Factory functions ───────────────────────────────────────────────────── */

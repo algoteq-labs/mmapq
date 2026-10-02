@@ -55,6 +55,13 @@ file governs conduct; that file governs design.
 
 ## Correctness rules (hard)
 
+- **Refactoring and optimization must not leave debris behind.** Redundant
+  blocks or braces, dead code, unused variables or helpers, and stale comments
+  left by a change are defects, even when behavior is correct and tests pass.
+  Review the resulting code, not just the edited lines, and remove leftovers
+  caused by the change before declaring it complete. This cleanup is part of
+  the task, not permission to refactor unrelated code.
+
 - **`MMAP_ASSERT` is for internal invariants only — never for validation.**
   It compiles to nothing under `-DNDEBUG`, which is how release builds ship.
   Anything checking caller input, on-disk data, file contents, allocation

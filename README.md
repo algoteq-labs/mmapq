@@ -638,12 +638,14 @@ and `REBASE` / `PRESERVE` start index mode.
 
 ## Documentation
 
-*   `doc/feature-matrix.md` — feature coverage across C, Rust, and Python, including compatibility scope
-*   `doc/event-sourcing-guide.md` — building sequenced command/event architectures on mmapq: batch commits as transactions, replay, recovery, replication
-*   `doc/header_layout_design.md` — full derivation of the vertical walk, worked example, and verification trace
-*   `doc/payload_alignment_design.md` — payload framing and alignment rationale
-*   `doc/maintainer_guide.md` — anti-pattern ledger, performance tuning baseline, thread affinity rules, metadata protocol
-*   `doc/queue-type-spec-for-implementation.md`, `doc/archivable-param-spec.md` — design records of the two post-extraction changes, retained as history
+*   [Persistence contract](doc/persistence-contract.md) — publication, process restart/replay, application checkpoints, and power-loss durability
+*   [Hardening implementation report](doc/hardening-implementation.md) — upcoming source-compatibility changes and their validation
+*   [Feature matrix](doc/feature-matrix.md) — feature coverage across C, Rust, and Python, including compatibility scope
+*   [Event-sourcing guide](doc/event-sourcing-guide.md) — building sequenced command/event architectures on mmapq: batch commits as transactions, replay, recovery, replication
+*   [Header layout design](doc/header_layout_design.md) — full derivation of the vertical walk, worked example, and verification trace
+*   [Payload alignment design](doc/payload_alignment_design.md) — payload framing and alignment rationale
+*   [Maintainer guide](doc/maintainer_guide.md) — anti-pattern ledger, performance tuning baseline, thread affinity rules, metadata protocol
+*   [Queue type specification](doc/queue-type-spec-for-implementation.md), [archivable parameter specification](doc/archivable-param-spec.md) — design records of the two post-extraction changes, retained as history
 
 ---
 

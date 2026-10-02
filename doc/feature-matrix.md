@@ -64,14 +64,15 @@ column are design decisions, not roadmap items.
 
 ## Consuming — readers (random access)
 
-Rust's current reader methods use shared borrows; they do not prevent a
-second operation from invalidating a live zero-copy message. Batch iterator
-slices must be copied before advancing. Borrowing and iterator API corrections
-are deferred to a separate release; see `polish-review.md`.
+Rust readers now require exclusive borrows. Batch cursors lend each payload
+until the next step; process it in place before advancing, without copying.
+The upcoming release intentionally breaks source compatibility. See
+`../mmapq-rs/doc/hardening-migration.md` and `hardening-implementation.md`.
+Python `read_view` remains manual-lifetime, not enforced-safe.
 
 | Feature | C | Rust | Python |
 |---|---|---|---|
-| Read at arbitrary index; read_first / read_last; appender_id per entry | ✓ | ◐ shared borrows; see safety limitations above | ✓ |
+| Read at arbitrary index; read_first / read_last; appender_id per entry | ✓ | ✓ `../mmapq-rs/src/reader.rs` (`read`); `../mmapq-rs/tests/borrowing.rs` (`borrowing_contracts`) | ✓ |
 | Entry status (present / not yet / archived) | ✓ | ✓ | ✓ |
 | last_index / start_index | ✓ | ✓ | ✓ |
 | Batch reader | ✓ | ✓ | ✓ |
@@ -103,12 +104,20 @@ are deferred to a separate release; see `polish-review.md`.
 |---|---|
 | Wire compatibility with Algoteq's Java implementation (tools4j-derived; NOT compatible with upstream tools4j — formats have diverged) | ✓ by construction, single-message queues; batch queues are C-ecosystem only |
 | Up to 256 concurrent appenders, lock-free atomic per-message commit | ✓ |
-| Distinct error codes: `ETIMEDOUT/EINVAL/ECLOSED/ECORRUPT/ESCHEMA/EEXIST/ENOENT/EIDCONFLICT/ENOMEM/EIO` mapped 1:1 — Rust `MmapError` variants, Python exception classes | ✓ |
+| Distinct error codes: `ETIMEDOUT/EINVAL/ECLOSED/ECORRUPT/ESCHEMA/EEXIST/ENOENT/EIDCONFLICT/ENOMEM/EIO/ENOTREADY/ECALLBACK` mapped 1:1 — Rust `MmapError` variants, Python exception classes | ✓ |
 | Factory functions return `int` (0 success, negative `MMAPQ_*` error code) with `**out` parameter instead of raw pointer | ✓ |
 | Corruption refused on open (`ECORRUPT`), never repaired; recreate from export | ✓ |
 | Validation survives release builds (`-DNDEBUG`); regression tests run under exact release flags | ✓ |
 | Multi-process safety: cross-process interop tests (Rust ↔ C echo servers) | ✓ |
 | Fixed-8-byte mode (Algoteq Java only): refused with diagnostic (not implemented) | ✓ documented |
+
+## Hardening APIs
+
+| Contract | Implementation | Executed regression |
+|---|---|---|
+| Checked batch step, success/exhaustion/error | `src/batch_payload_iterator.c` (`mmapq_batch_iterator_next`); `../mmapq-rs/src/batch/batch_iter.rs` (`next`) | `test/test_indexed_batch_queue.c` (`test_checked_batch_step`); `../mmapq-rs/tests/zero_copy.rs` |
+| Checked batch start preserves errors | `src/indexed_batch_appender.c` (`mmapq_indexed_batch_appender_start_batch_checked`) | `test/test_transfer_failures.c` (`test_copy_failure_matrix`, `test_import_failure_matrix`) |
+| Distinct mapper abort, `MMAPQ_ECALLBACK` | `include/queue_transfer.h`, `src/internal/appender_cache.h` | `../mmapq-rs/tests/mapper_panic.rs`; `../mmapq-py/tests/test_transfer_hardening.py` |
 
 ## Operator tooling (C repo)
 
@@ -125,15 +134,15 @@ are deferred to a separate release; see `polish-review.md`.
 
 | C header | Rust (ffi.rs) | Python (cdef) |
 |---|---|---|
-| `batch_payload_iterator.h` | 6/11 | 5/11 |
+| `batch_payload_iterator.h` | 7/12 | 5/12 |
 | `batch_queue_transfer.h` | 7/7 | 6/7 |
 | `indexed_appender.h` | 11/17 | 6/17 |
 | `indexed_archiver.h` | 6/11 | 7/11 |
-| `indexed_batch_appender.h` | 14/15 | 8/15 |
+| `indexed_batch_appender.h` | 15/16 | 8/16 |
 | `indexed_batch_archiver.h` | 4/8 | 6/8 |
 | `indexed_batch_poller.h` | 14/20 | 14/20 |
 | `indexed_batch_queue.h` | 12/12 | 12/12 |
-| `indexed_batch_reader.h` | 10/15 | 10/15 |
+| `indexed_batch_reader.h` | 10/14 | 10/14 |
 | `indexed_poller.h` | 11/18 | 11/18 |
 | `indexed_queue.h` | 16/20 | 13/20 |
 | `indexed_reader.h` | 9/13 | 9/13 |

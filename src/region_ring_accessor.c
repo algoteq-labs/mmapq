@@ -87,15 +87,16 @@ static WrapResult ring_accessor_wrap(RegionAccessor *self, int64_t position, Buf
             }
         }
 
+        self->mapped_capacity = buffer->capacity;
         /* Update fast-path cache */
         self->active_address = buffer->data;
         self->active_base    = position;
         if (impl->regions_to_map_ahead > 0 && impl->current_absolute_index != absolute_index) {
             /* Premap not yet fired for this region — fast path only up to trigger point */
-            self->active_end = (absolute_index << impl->shift_for_region_size) + impl->premap_trigger_offset;
+            self->fast_path_end = (absolute_index << impl->shift_for_region_size) + impl->premap_trigger_offset;
         } else {
             /* Premap already fired or not needed — fast path until end of region */
-            self->active_end = position + buffer->capacity;
+            self->fast_path_end = position + buffer->capacity;
         }
     }
 
@@ -119,7 +120,8 @@ static WrapResult ring_accessor_wrap_no_premap(RegionAccessor *self, int64_t pos
     if (result == WRAP_SUCCESS) {
         self->active_address = buffer->data;
         self->active_base    = position;
-        self->active_end     = position + buffer->capacity;
+        self->fast_path_end = position + buffer->capacity;
+        self->mapped_capacity = buffer->capacity;
     }
     return result;
 }
@@ -132,12 +134,6 @@ static void ring_accessor_close(RegionAccessor *self)
 
     RingAccessorImpl *impl = (RingAccessorImpl *)self->impl;
     region_ring_close(impl->ring);
-}
-
-static int32_t ring_accessor_size(RegionAccessor *self)
-{
-    MMAP_ASSERT(self != NULL, "ring_accessor_size: self is NULL");
-    return ((RingAccessorImpl *)self->impl)->region_size;
 }
 
 /* ── Factory ─────────────────────────────────────────────────────────────── */
@@ -183,7 +179,7 @@ int mmapqi_region_ring_accessor_create(
     acc->wrap           = ring_accessor_wrap;
     acc->wrap_no_premap = ring_accessor_wrap_no_premap;
     acc->close          = ring_accessor_close;
-    acc->size           = ring_accessor_size;
+    acc->region_size    = region_size;
     acc->impl           = impl;
 
     *out = acc;

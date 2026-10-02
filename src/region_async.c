@@ -309,7 +309,8 @@ static WrapResult async_wrap(RegionAccessor *self, int64_t position, Buffer *buf
         /* Update fast-path cache */
         self->active_address = buffer->data;
         self->active_base    = position;
-        self->active_end     = position + buffer->capacity;
+        self->fast_path_end = position + buffer->capacity;
+        self->mapped_capacity = buffer->capacity;
     }
     return r;
 }
@@ -357,12 +358,6 @@ static void async_close(RegionAccessor *self)
 
         mmapq_spin_hint();
     }
-}
-
-static int32_t async_size(RegionAccessor *self)
-{
-    MMAP_ASSERT(self != NULL, "async_size: self is NULL");
-    return ((AsyncRegionImpl *)self->impl)->region_size;
 }
 
 /* ── Region.map / Region.unmap ───────────────────────────────────────────── */
@@ -449,7 +444,7 @@ int mmapqi_region_async_create(
     r->base.wrap           = async_wrap;
     r->base.wrap_no_premap = async_wrap_no_premap;
     r->base.close          = async_close;
-    r->base.size           = async_size;
+    r->base.region_size    = region_size;
     r->base.impl           = impl;
 
     r->map   = async_map;

@@ -144,7 +144,12 @@ static void reader_fill_context(MmapqIndexedBatchReader *r, int64_t index, Mmapq
      * mmapq_batch_iterator_init for payload access — using it here would
      * corrupt the header read.
      */
-    uint64_t header = mmapqi_header_read(r->header_acc, &r->header_buf, index, r->queue_name);
+    uint64_t header;
+    r->last_error = mmapqi_header_read_checked(r->header_acc, &r->header_buf, index, &header);
+    if (r->last_error != 0) {
+        ctx->status = MMAPQ_BATCH_ENTRY_ERROR;
+        return;
+    }
     if (header == HEADER_NULL) {
         ctx->status = MMAPQ_BATCH_ENTRY_END_OF_STREAM;
         return;
@@ -219,7 +224,8 @@ MmapqBatchReadingContext *mmapq_indexed_batch_reader_read_last(
         ctx->batch_offset  = -1;
         ctx->message_count = 0;
         ctx->iterator      = NULL;
-        ctx->status        = MMAPQ_BATCH_ENTRY_END_OF_STREAM;
+        ctx->status = r->last_error != 0 && r->last_error != MMAPQ_ENOENT && r->last_error != MMAPQ_ENOTREADY
+            ? MMAPQ_BATCH_ENTRY_ERROR : MMAPQ_BATCH_ENTRY_END_OF_STREAM;
         return ctx;
     }
 
@@ -230,17 +236,19 @@ MmapqBatchReadingContext *mmapq_indexed_batch_reader_read_last(
 int64_t mmapq_indexed_batch_reader_last_index(MmapqIndexedBatchReader *r)
 {
     if (r == NULL)  return HEADER_NULL_INDEX;
-    if (r->closed)  return HEADER_NULL_INDEX;
+    r->last_error = 0;
+    if (r->closed) { r->last_error = MMAPQ_ECLOSED; return HEADER_NULL_INDEX; }
 
-    if (!reader_init(r)) return HEADER_NULL_INDEX;
+    if (!reader_init(r)) { r->last_error = r->init_result; return HEADER_NULL_INDEX; }
 
     int64_t from = r->cached_last_index == HEADER_NULL_INDEX
         ? queue_meta_start_index(r->queue_meta)
         : r->cached_last_index;
 
-    int64_t last = mmapqi_header_search_last_index(
+    int64_t last = mmapqi_header_search_last_index_checked(
         from, reader_start_index_fn, r,
-        r->header_acc, &r->header_buf, r->queue_name);
+        r->header_acc, &r->header_buf, r->queue_name, &r->last_error);
+    if (r->last_error != 0) return HEADER_NULL_INDEX;
 
     if (last != HEADER_NULL_INDEX) {
         r->cached_last_index = last;
@@ -281,7 +289,8 @@ int mmapq_indexed_batch_reader_last_error(const MmapqIndexedBatchReader *r)
 
 QueueMeta *mmapqi_indexed_batch_reader_queue_meta(MmapqIndexedBatchReader *r)
 {
-    if (!reader_init(r)) return NULL;
+    if (r == NULL) return NULL;
+    if (!reader_init(r)) { r->last_error = r->init_result; return NULL; }
     return r->queue_meta;
 }
 

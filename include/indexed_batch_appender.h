@@ -119,6 +119,16 @@ int mmapq_indexed_batch_appender_create_with_id(
 MmapqMutableBatch *mmapq_indexed_batch_appender_start_batch(MmapqIndexedBatchAppender *a);
 
 /**
+ * Start a batch, preserving the failure code. Clear the output on failure.
+ *
+ * appender: owner of the reusable mutable batch
+ * out:      required output pointer; batch is borrowed until complete/discard
+ * Returns: 0 on success, or an existing negative MMAPQ_* code.
+ */
+int mmapq_indexed_batch_appender_start_batch_checked(
+    MmapqIndexedBatchAppender *appender, MmapqMutableBatch **out);
+
+/**
  * Finalise the batch by writing the message count to the batch header.
  *
  * After calling this, no further appends may be made to the batch.

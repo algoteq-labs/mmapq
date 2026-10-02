@@ -122,6 +122,18 @@ int mmapq_batch_iterator_advance(MmapqBatchPayloadIterator *it)
     return 0;
 }
 
+int mmapq_batch_iterator_next(MmapqBatchPayloadIterator *iterator,
+                             const void **data, int32_t *length)
+{
+    if (data != NULL) *data = NULL;
+    if (length != NULL) *length = 0;
+    if (iterator == NULL || data == NULL || length == NULL) return MMAPQ_EINVAL;
+    if (!mmapq_batch_iterator_advance(iterator)) return iterator->last_error;
+    *data = batch_iterator_current_data(iterator);
+    *length = batch_iterator_current_length(iterator);
+    return 1;
+}
+
 void mmapq_batch_iterator_exhaust(MmapqBatchPayloadIterator *it)
 {
     while (mmapq_batch_iterator_advance(it));

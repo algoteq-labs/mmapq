@@ -73,6 +73,28 @@ uint64_t mmapqi_header_read_sequential(
     return HEADER_NULL;
 }
 
+int mmapqi_header_read_checked(
+    RegionAccessor *header_accessor, Buffer *buf, int64_t index, uint64_t *header)
+{
+    *header = HEADER_NULL;
+    WrapResult result = region_accessor_wrap_no_premap(header_accessor, header_position(index), buf);
+    if (result == WRAP_FILE_NOT_FOUND || result == WRAP_BEYOND_FILE_SIZE) return 0;
+    if (result == WRAP_MAP_TIMED_OUT) return MMAPQ_ETIMEDOUT;
+    if (result != WRAP_SUCCESS || buf->capacity < HEADER_SIZE) return MMAPQ_ECORRUPT;
+    /* Acquire pairs with the appender's publication CAS, as in the legacy reader. */
+    *header = atomic_load_explicit((const _Atomic uint64_t *)buf->data, memory_order_acquire);
+    return 0;
+}
+
+static int header_found_checked(
+    RegionAccessor *accessor, Buffer *buffer, int64_t index, const char *name, int *error)
+{
+    if (error == NULL) return header_found(accessor, buffer, index, name);
+    uint64_t header;
+    *error = mmapqi_header_read_checked(accessor, buffer, index, &header);
+    return header != HEADER_NULL;
+}
+
 /* ── mmapqi_header_search_last_index ────────────────────────────────────────────── */
 
 /*
@@ -87,19 +109,29 @@ uint64_t mmapqi_header_read_sequential(
  *      the probe point (archive hole) — if so, restart.
  */
 int64_t mmapqi_header_search_last_index(
+    int64_t from_index, StartIndexSupplier start_index_fn, void *start_index_ctx,
+    RegionAccessor *header_accessor, Buffer *buf, const char *queue_name)
+{
+    return mmapqi_header_search_last_index_checked(
+        from_index, start_index_fn, start_index_ctx, header_accessor, buf, queue_name, NULL);
+}
+
+int64_t mmapqi_header_search_last_index_checked(
     int64_t            from_index,
     StartIndexSupplier start_index_fn,
     void              *start_index_ctx,
     RegionAccessor    *header_accessor,
     Buffer            *buf,
-    const char        *queue_name)
+    const char        *queue_name, int *error)
 {
+    if (error != NULL) *error = 0;
     while (1) {
         int64_t current_start = start_index_fn(start_index_ctx);
         int64_t low = from_index > current_start ? from_index : current_start;
 
         /* ── verify low exists ──────────────────────────────────────────── */
-        if (!header_found(header_accessor, buf, low, queue_name)) {
+        if (!header_found_checked(header_accessor, buf, low, queue_name, error)) {
+            if (error != NULL && *error != 0) return HEADER_NULL_INDEX;
             /* Check if start_index has moved past low (archive hole) */
             if (low >= start_index_fn(start_index_ctx)) {
                 return HEADER_NULL_INDEX;  /* queue is empty */
@@ -116,7 +148,7 @@ int64_t mmapqi_header_search_last_index(
         int hole_detected = 0;
 
         while (1) {
-            if (header_found(header_accessor, buf, high, queue_name)) {
+            if (header_found_checked(header_accessor, buf, high, queue_name, error)) {
                 low = high;
                 /* Guard against overflow */
                 if (high > (INT64_MAX >> 1)) {
@@ -125,6 +157,7 @@ int64_t mmapqi_header_search_last_index(
                     high <<= 1;
                 }
             } else {
+                if (error != NULL && *error != 0) return HEADER_NULL_INDEX;
                 /* NULL at high — archive hole? */
                 if (high < start_index_fn(start_index_ctx)) {
                     hole_detected = 1;
@@ -140,9 +173,10 @@ int64_t mmapqi_header_search_last_index(
         /* ── binary search in [low, high] ───────────────────────────────── */
         while (low < high) {
             int64_t mid = (low + high + 1) >> 1;  /* round up to avoid infinite loop */
-            if (header_found(header_accessor, buf, mid, queue_name)) {
+            if (header_found_checked(header_accessor, buf, mid, queue_name, error)) {
                 low = mid;
             } else {
+                if (error != NULL && *error != 0) return HEADER_NULL_INDEX;
                 /* NULL at mid — archive hole? */
                 if (mid < start_index_fn(start_index_ctx)) {
                     hole_detected = 1;
