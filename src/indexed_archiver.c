@@ -195,10 +195,14 @@ int mmapq_indexed_archiver_archive_up_to_index(MmapqIndexedArchiver *a, int64_t 
                 if (wr != WRAP_SUCCESS)
                     return MMAPQ_ECORRUPT;
 
+                /* Headers must reference a complete message in this mapping.
+                 * A bogus length must not advance the deletion boundary. */
+                if (pay_buf.capacity < PAYLOAD_LENGTH_SIZE)
+                    return MMAPQ_ECORRUPT;
                 int32_t len;
                 memcpy(&len, pay_buf.data + PAYLOAD_LENGTH_OFFSET,
                        PAYLOAD_LENGTH_SIZE);
-                if (len <= 0)
+                if (len <= 0 || len > pay_buf.capacity - PAYLOAD_LENGTH_SIZE)
                     return MMAPQ_ECORRUPT;
 
                 next_offsets[aid] = pos + PAYLOAD_LENGTH_SIZE + len;

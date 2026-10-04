@@ -609,6 +609,14 @@ Python:
 
 ### Explicitly deferred: Python borrowed-view lifetime safety
 
+**Subsequent resolution:** the user approved enforced memoryview borrowing.
+`mmapq-py` now retains the reader through a read-only buffer exporter and rejects
+reads/index queries/close with `BufferError` while exports or aliases survive.
+The last buffer release ends the borrow; saved exporters cannot reopen an old
+snapshot. Tests cover aliases, buffer consumers, garbage collection, shutdown,
+and overlapping operations. See `../mmapq-py/docs/reader-borrowing.md`.
+The following records the original deferral and design constraints.
+
 `IndexedReader.read_view` currently exposes a raw `memoryview` into a C
 mapping. Its documented lifetime ends at the next read or close, but Python
 does not enforce that restriction. Closed-handle guards protect calls on

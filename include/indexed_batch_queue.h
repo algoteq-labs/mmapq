@@ -14,6 +14,9 @@
  * A batch queue stores ordered sequences of batches, each containing one or
  * more messages. It is the top-level object from which appenders, pollers,
  * and readers are created.
+ * The factory holds immutable creation preferences and runtime pointers, with
+ * no metadata mapping. Participant creation may run concurrently; close must
+ * not overlap any factory call.
  *
  * Separate runtimes may be specified for the write side (appender) and the
  * read side (pollers, readers), allowing independent background mapper threads

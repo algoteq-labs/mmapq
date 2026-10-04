@@ -11,8 +11,9 @@
 /**
  * MmapqIndexedQueue — top-level factory for an indexed message queue.
  *
- * An MmapqIndexedQueue owns the persistent configuration (QueueMeta, AppenderIdPool)
- * and creates appenders, pollers, and readers on demand.
+ * An MmapqIndexedQueue holds immutable creation preferences and runtime pointers,
+ * and creates independent participants on demand. Metadata mappings and appender
+ * ID allocation belong to the participants; the factory owns no queue mapping.
  *
  * FILE LAYOUT (all under "<directory>/<queue_name>/"):
  *   meta                    — queue configuration (QueueMeta)
@@ -30,7 +31,8 @@
  *   timeout_ns:         10 seconds
  *
  * THREAD MODEL:
- *   - MmapqIndexedQueue itself is not thread-safe (construction/destruction).
+ *   - Participant creation may run concurrently on a shared MmapqIndexedQueue.
+ *   - Close requires exclusive ownership; it must not overlap any factory call.
  *   - Each appender/poller/reader is thread-confined to its creating thread.
  *   - Multiple appenders, pollers, and readers may coexist in the same process.
  *   - The queue may also be accessed simultaneously from other processes
@@ -196,29 +198,12 @@ int mmapq_indexed_queue_create_reader(MmapqIndexedQueue *q, MmapqIndexedReader *
  */
 int mmapq_indexed_queue_create_archiver(MmapqIndexedQueue *q, MmapqIndexedArchiver **out);
 
-/* ── Metadata ─────────────────────────────────────────────────────────────── */
-
-/**
- * mmapq_indexed_queue_region_size — configured region size in bytes.
- */
-int32_t mmapq_indexed_queue_region_size(const MmapqIndexedQueue *q);
-
-/**
- * mmapq_indexed_queue_max_file_size — configured maximum file size in bytes.
- */
-int64_t mmapq_indexed_queue_max_file_size(const MmapqIndexedQueue *q);
-
-/**
- * mmapq_indexed_queue_start_index — current logical start index (set at creation; may be non-zero after PRESERVE import/copy).
- */
-int64_t mmapq_indexed_queue_start_index(const MmapqIndexedQueue *q);
-
 /* ── Lifecycle ───────────────────────────────────────────────────────────── */
 
 /**
  * mmapq_indexed_queue_close — close the queue and release all resources.
  *
- * Closes the QueueMeta and AppenderIdPool.
+ * Releases the factory configuration. Participant mappings are independently owned.
  * Does NOT close any appenders, pollers, or readers — those must be
  * closed by the caller first.
  *

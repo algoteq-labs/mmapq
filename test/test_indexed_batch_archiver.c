@@ -3,6 +3,7 @@
 #include "indexed_batch_appender.h"
 #include "indexed_batch_poller.h"
 #include "internal/queue_meta.h"
+#include "internal/header_codec.h"
 #include "runtime.h"
 
 #include <stdlib.h>
@@ -287,6 +288,77 @@ void test_batch_archive_forward_empty_queue(void)
     mmapq_indexed_batch_archiver_close(arch);
 }
 
+static void check_batch_archive_rejects_partial_scan(int undo)
+{
+    MmapqIndexedBatchAppender *a = create_archivable_batch_appender();
+    TEST_ASSERT_NOT_NULL(a);
+    uint8_t aid = mmapq_indexed_batch_appender_id(a);
+    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    TEST_ASSERT_NOT_NULL(b);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(b, "first", 5));
+    TEST_ASSERT_EQUAL_INT(1, mmapq_mutable_batch_append(b, "second", 6));
+    int64_t batch_offset = mmapq_mutable_batch_complete(b);
+    TEST_ASSERT_EQUAL_INT64(INITIAL_PAYLOAD_POSITION, batch_offset);
+    TEST_ASSERT_EQUAL_INT64(0,
+        mmapq_indexed_batch_appender_commit_batch(a, batch_offset));
+    TEST_ASSERT_EQUAL_INT64(1,
+        mmapq_indexed_batch_appender_append_and_commit(a, "tail", 4));
+    mmapq_indexed_batch_appender_close(a);
+
+    MmapqIndexedBatchArchiver *arch = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_batch_archiver_create(DIR, QUEUE, RING_SZ, rt, &arch));
+    if (undo) {
+        /* Establish a valid archive boundary before corrupting the batch
+         * that the undo operation must validate. */
+        TEST_ASSERT_EQUAL_INT(0,
+            mmapq_indexed_batch_archiver_archive_up_to_index(arch, 1));
+    }
+    int64_t before_index = mmapq_indexed_batch_archiver_start_index(arch);
+    TEST_ASSERT_EQUAL_INT64(undo ? 1 : 0, before_index);
+    int64_t before_offset;
+    TEST_ASSERT_EQUAL_INT(1,
+        mmapq_indexed_batch_archiver_start_offset(arch, aid, &before_offset));
+    mmapq_indexed_batch_archiver_close(arch);
+
+    /* Keep the count and first message valid. The iterator must make real
+     * progress, then fail on the second message instead of reaching the end. */
+    char path[512];
+    snprintf(path, sizeof(path), "%s/%s/payload_%u_0", DIR, QUEUE, (unsigned)aid);
+    FILE *f = fopen(path, "r+b");
+    TEST_ASSERT_NOT_NULL(f);
+    int64_t length_offset = batch_offset + MMAPQ_BATCH_MSG_COUNT_SIZE
+                          + PAYLOAD_LENGTH_SIZE + 5;
+    TEST_ASSERT_EQUAL_INT(0, fseek(f, (long)length_offset, SEEK_SET));
+    int32_t corrupt_length = 1073741824;
+    TEST_ASSERT_EQUAL_INT64(sizeof(corrupt_length),
+        fwrite(&corrupt_length, 1, sizeof(corrupt_length), f));
+    TEST_ASSERT_EQUAL_INT(0, fclose(f));
+
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_batch_archiver_create(DIR, QUEUE, RING_SZ, rt, &arch));
+    int rc = mmapq_indexed_batch_archiver_archive_up_to_index(arch, undo ? 0 : 1);
+    int64_t after_index = mmapq_indexed_batch_archiver_start_index(arch);
+    int64_t after_offset;
+    TEST_ASSERT_EQUAL_INT(1,
+        mmapq_indexed_batch_archiver_start_offset(arch, aid, &after_offset));
+    mmapq_indexed_batch_archiver_close(arch);
+
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ECORRUPT, rc);
+    TEST_ASSERT_EQUAL_INT64(before_index, after_index);
+    TEST_ASSERT_EQUAL_INT64(before_offset, after_offset);
+}
+
+void test_batch_archiver_forward_rejects_partial_scan(void)
+{
+    check_batch_archive_rejects_partial_scan(0);
+}
+
+void test_batch_archiver_undo_rejects_partial_scan(void)
+{
+    check_batch_archive_rejects_partial_scan(1);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -299,5 +371,7 @@ int main(void)
     RUN_TEST(test_batch_archiver_noop_when_index_equals_start);
     RUN_TEST(test_batch_archive_up_to_index_rejects_non_archivable);
     RUN_TEST(test_batch_archive_forward_empty_queue);
+    RUN_TEST(test_batch_archiver_forward_rejects_partial_scan);
+    RUN_TEST(test_batch_archiver_undo_rejects_partial_scan);
     return UNITY_END();
 }

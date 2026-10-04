@@ -193,11 +193,15 @@ int mmapq_indexed_batch_archiver_archive_up_to_index(MmapqIndexedBatchArchiver *
             MmapqBatchPayloadIterator *it = get_iterator(a, (uint8_t)aid);
             if (it == NULL) return MMAPQ_ENOMEM;
             int32_t msg_count = mmapq_batch_iterator_read_message_count(it, pos);
-            if (msg_count <= 0)
+            if (msg_count < 0) return msg_count;
+            if (msg_count == 0)
                 return MMAPQ_ECORRUPT;
 
             mmapq_batch_iterator_init(it, pos, msg_count, 0);
             mmapq_batch_iterator_exhaust(it);
+            /* Exhaustion also signals failure; a partial scan is not an
+             * archive boundary and must not reach the metadata updates. */
+            if (it->last_error != 0) return it->last_error;
             next_offsets[aid] = batch_iterator_next_payload_position(it);
         }
 
@@ -251,7 +255,8 @@ int mmapq_indexed_batch_archiver_archive_up_to_index(MmapqIndexedBatchArchiver *
             MmapqBatchPayloadIterator *it = get_iterator(a, aid);
             if (it == NULL) return MMAPQ_ENOMEM;
             int32_t msg_count = mmapq_batch_iterator_read_message_count(it, pos);
-            if (msg_count <= 0)
+            if (msg_count < 0) return msg_count;
+            if (msg_count == 0)
                 return MMAPQ_ECORRUPT;
             mmapq_batch_iterator_init(it, pos, msg_count, 0);
             /* Record the file containing the batch header itself */
@@ -262,6 +267,8 @@ int mmapq_indexed_batch_archiver_archive_up_to_index(MmapqIndexedBatchArchiver *
                 file_index_set_set(&pay_files[aid],
                                    (int)(msg_end / max_file_size));
             }
+            /* An incomplete file scan cannot validate an undo operation. */
+            if (it->last_error != 0) return it->last_error;
         }
 
         /* Validate all required header files exist */

@@ -27,9 +27,15 @@ column are design decisions, not roadmap items.
 | `archivable` creation parameter (default 0) | ✓ | ✓ `.archivable(bool)` | ✓ `archivable=False` kwarg |
 | Async region mapping via MmapqRuntime (background mapper) | ✓ | ✓ `MmapqRuntime` + singletons | ✓ `MmapqRuntime.region_mapper()` in `runtime.py`; `test_runtime_kept_alive_by_queue` in `test_queue.py` |
 | Custom runtime config (idle strategies, close timeout) | ✓ | ✓ | — |
-| Queue metadata accessors (region size, max file size, start index) | ✓ | ✓ | — |
+| Factory metadata accessors (region size, max file size, start index) | — removed | — removed | — |
 | queue_type discriminator validated on every open (normal/batch/fixed-8) | ✓ | ✓ (via C) | ✓ (via C) |
 | schema_version validated on every open | ✓ | ✓ (via C) | ✓ (via C) |
+
+Queue factories retain immutable creation preferences and runtime references;
+participants own metadata mappings. The normal queue's three metadata getters
+were removed to make shared factory calls independent of lazy metadata state.
+Use reader/poller start-index accessors for live state. Creation preferences
+must not be interpreted as an existing queue's authoritative disk geometry.
 
 ## Appending (single-message)
 
@@ -68,7 +74,12 @@ Rust readers now require exclusive borrows. Batch cursors lend each payload
 until the next step; process it in place before advancing, without copying.
 The upcoming release intentionally breaks source compatibility. See
 `../mmapq-rs/doc/hardening-migration.md` and `hardening-implementation.md`.
-Python `read_view` remains manual-lifetime, not enforced-safe.
+Python `IndexedReader.read_view` now enforces borrowing: read-only views retain
+the reader, and reads/index queries/close raise `BufferError` until all exports
+and aliases release. Implementation: `../mmapq-py/src/mmapq/reader.py`
+(`IndexedReader.read_view`) and `../mmapq-py/src/mmapq/_borrowed_buffer.c`.
+Regression: `../mmapq-py/tests/test_reader_borrowing.py`
+(`test_close_rejects_view_and_surviving_alias`).
 
 | Feature | C | Rust | Python |
 |---|---|---|---|
@@ -144,7 +155,7 @@ Python `read_view` remains manual-lifetime, not enforced-safe.
 | `indexed_batch_queue.h` | 12/12 | 12/12 |
 | `indexed_batch_reader.h` | 10/14 | 10/14 |
 | `indexed_poller.h` | 11/18 | 11/18 |
-| `indexed_queue.h` | 16/20 | 13/20 |
+| `indexed_queue.h` | 13/17 | 13/17 |
 | `indexed_reader.h` | 9/13 | 9/13 |
 | `mmap_platform.h` | 1/15 | 1/15 |
 | `mmapq.h` | 0/1 | 0/1 |

@@ -1,10 +1,7 @@
 #include "indexed_queue.h"
 #include "indexed_archiver.h"
-#include "internal/queue_meta.h"
-#include "internal/appender_id_pool.h"
 #include "internal/header_codec.h"
 #include "internal/region_ring_accessor.h"
-#include "internal/mmap_assert.h"
 #include "mmap_platform.h"
 
 #include <stdlib.h>
@@ -30,7 +27,6 @@ struct MmapqIndexedQueue {
     MmapqRuntime *write_runtime;
     MmapqRuntime *read_runtime;
 
-    QueueMeta *queue_meta;   /* Lazily opened RO meta */
     atomic_int closed;
 };
 
@@ -230,48 +226,12 @@ int mmapq_indexed_queue_create_archiver(MmapqIndexedQueue *q, MmapqIndexedArchiv
         q->directory, q->queue_name, q->ring_size, q->read_runtime, out);
 }
 
-/* ── Metadata ─────────────────────────────────────────────────────────────── */
-
-static void ensure_meta_open(MmapqIndexedQueue *q)
-{
-    if (q->queue_meta != NULL) return;
-    mmapqi_queue_meta_open_ro(q->directory, q->queue_name, QUEUE_TYPE_NORMAL, &q->queue_meta);
-}
-
-int32_t mmapq_indexed_queue_region_size(const MmapqIndexedQueue *q)
-{
-    if (q == NULL) return 0;
-    ensure_meta_open((MmapqIndexedQueue *)q);
-    return q->queue_meta ? queue_meta_region_size(q->queue_meta) : q->region_size;
-}
-
-int64_t mmapq_indexed_queue_max_file_size(const MmapqIndexedQueue *q)
-{
-    if (q == NULL) return 0;
-    ensure_meta_open((MmapqIndexedQueue *)q);
-    return q->queue_meta ? queue_meta_max_file_size(q->queue_meta) : q->max_file_size;
-}
-
-int64_t mmapq_indexed_queue_start_index(const MmapqIndexedQueue *q)
-{
-    if (q == NULL) return 0;
-    ensure_meta_open((MmapqIndexedQueue *)q);
-    return q->queue_meta ? queue_meta_start_index(q->queue_meta) : q->start_index;
-}
-
-/* ── mmapq_indexed_queue_close ─────────────────────────────────────────────────── */
-
-/* ── mmapq_indexed_queue_close ─────────────────────────────────────────────────── */
+/* ── Lifecycle ────────────────────────────────────────────────────────────── */
 
 void mmapq_indexed_queue_close(MmapqIndexedQueue *q)
 {
     if (q == NULL || atomic_load_explicit(&q->closed, memory_order_relaxed)) return;
     atomic_store_explicit(&q->closed, 1, memory_order_release);
-
-    if (q->queue_meta != NULL) {
-        mmapqi_queue_meta_close(q->queue_meta);
-        q->queue_meta = NULL;
-    }
 
     free(q->directory);
     free(q->queue_name);

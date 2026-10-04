@@ -24,6 +24,7 @@ TESTS=(
     test_queue_meta
     test_payload_walk
     test_indexed_queue
+    test_shared_queue
     test_queue_transfer
     test_transfer_failures
     test_indexed_archiver
@@ -114,7 +115,7 @@ for TEST in "${TESTS[@]}"; do
     fi
 done
 
-# ── Release-flags validation (all 20 tests + gates under exact release flags) ──
+# ── Release-flags validation (all 21 tests + gates under exact release flags) ──
 echo ""
 echo "=== release-flags validation ==="
 CFLAGS_RELEASE="$(make -s print-cflags-release)"

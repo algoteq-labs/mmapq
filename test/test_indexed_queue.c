@@ -786,8 +786,14 @@ void test_poller_automatically_discovers_region_size(void)
     TEST_ASSERT_EQUAL_INT(0, rc_q2);
     TEST_ASSERT_NOT_NULL(q2);
     
-    /* Verify metadata reported by q2 is correct (8MB) */
-    TEST_ASSERT_EQUAL_INT32(LARGE_REGION, mmapq_indexed_queue_region_size(q2));
+    /* Participants discover the persisted geometry despite the factory preferences. */
+    MmapqIndexedReader *reader = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_reader(q2, &reader));
+    QueueMeta *meta = mmapqi_indexed_reader_queue_meta(reader);
+    TEST_ASSERT_NOT_NULL(meta);
+    TEST_ASSERT_EQUAL_INT32(LARGE_REGION, queue_meta_region_size(meta));
+    TEST_ASSERT_EQUAL_INT64((int64_t)LARGE_REGION * 16, queue_meta_max_file_size(meta));
+    mmapq_indexed_reader_close(reader);
 
     /* Create poller from q2 and poll the message */
     MmapqIndexedPoller *p = NULL;

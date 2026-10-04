@@ -3,6 +3,7 @@
 #include "indexed_queue.h"
 #include "indexed_appender.h"
 #include "indexed_poller.h"
+#include "indexed_reader.h"
 #include "internal/queue_meta.h"
 #include "internal/appender_meta.h"
 #include "internal/header_codec.h"
@@ -373,6 +374,130 @@ void test_archive_forward_empty_queue(void)
     mmapq_indexed_archiver_close(arch);
 }
 
+static void overwrite_queue_bytes(const char *name, int64_t offset,
+                                  const void *data, size_t size)
+{
+    char path[512];
+    snprintf(path, sizeof(path), "%s/%s/%s", DIR, QUEUE, name);
+    FILE *f = fopen(path, "r+b");
+    TEST_ASSERT_NOT_NULL(f);
+    TEST_ASSERT_EQUAL_INT(0, fseek(f, (long)offset, SEEK_SET));
+    TEST_ASSERT_EQUAL_INT64(size, fwrite(data, 1, size, f));
+    TEST_ASSERT_EQUAL_INT(0, fclose(f));
+}
+
+static void check_archive_rejects_corrupt_payload(int32_t length,
+                                                 int short_prefix,
+                                                 int other_appender)
+{
+    MmapqIndexedAppender *a = create_archivable_appender();
+    TEST_ASSERT_NOT_NULL(a);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_appender_id(a));
+    if (other_appender) {
+        TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_appender_append(a, "valid", 5));
+        MmapqIndexedAppender *b = NULL;
+        TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_appender_create(DIR, QUEUE,
+            REGION_SZ, RING_SZ, MAX_FILE, TIMEOUT, 1, rt, 0, &b));
+        mmapq_indexed_appender_close(a);
+        a = b;
+        TEST_ASSERT_EQUAL_INT(1, mmapq_indexed_appender_id(a));
+    }
+    TEST_ASSERT_EQUAL_INT64(other_appender,
+        mmapq_indexed_appender_append(a, "first", 5));
+    TEST_ASSERT_EQUAL_INT64(other_appender + 1,
+        mmapq_indexed_appender_append(a, "second", 6));
+    mmapq_indexed_appender_close(a);
+
+    if (short_prefix) {
+        uint64_t header = header_encode((uint8_t)other_appender, REGION_SZ - 2);
+        overwrite_queue_bytes("header_0", header_position(other_appender),
+                              &header, sizeof(header));
+    } else {
+        overwrite_queue_bytes(other_appender ? "payload_1_0" : "payload_0_0",
+                              INITIAL_PAYLOAD_POSITION, &length, sizeof(length));
+    }
+
+    MmapqIndexedArchiver *arch = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_archiver_create(DIR, QUEUE, RING_SZ, rt, &arch));
+    int64_t before[2], after[2];
+    for (int id = 0; id <= other_appender; id++)
+        TEST_ASSERT_EQUAL_INT(1,
+            mmapq_indexed_archiver_start_offset(arch, (uint8_t)id, &before[id]));
+    int rc = mmapq_indexed_archiver_archive_up_to_index(arch, other_appender + 1);
+    int64_t start = mmapq_indexed_archiver_start_index(arch);
+    for (int id = 0; id <= other_appender; id++)
+        TEST_ASSERT_EQUAL_INT(1,
+            mmapq_indexed_archiver_start_offset(arch, (uint8_t)id, &after[id]));
+    char *paths[64];
+    int count = mmapq_indexed_archiver_archivable_files(arch, paths, 64);
+    for (int i = 0; i < count; i++) free(paths[i]);
+    mmapq_indexed_archiver_close(arch);
+
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ECORRUPT, rc);
+    TEST_ASSERT_EQUAL_INT64(0, start);
+    for (int id = 0; id <= other_appender; id++)
+        TEST_ASSERT_EQUAL_INT64(before[id], after[id]);
+    TEST_ASSERT_EQUAL_INT(0, count);
+
+    MmapqIndexedReader *reader = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_reader_create(DIR, QUEUE, RING_SZ, TIMEOUT, rt, &reader));
+    MmapqReadingContext ctx;
+    mmapq_indexed_reader_read(reader, other_appender + 1, &ctx);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ENTRY_AVAILABLE, ctx.status);
+    TEST_ASSERT_EQUAL_INT(6, ctx.length);
+    TEST_ASSERT_EQUAL_MEMORY("second", ctx.data, 6);
+    mmapq_indexed_reader_close(reader);
+}
+
+void test_archiver_rejects_oversized_payload_without_archiving_file(void)
+{
+    check_archive_rejects_corrupt_payload(1073741824, 0, 0);
+}
+
+void test_archiver_corruption_preserves_all_appender_offsets(void)
+{
+    check_archive_rejects_corrupt_payload(1073741824, 0, 1);
+}
+
+void test_archiver_rejects_payload_one_byte_past_region(void)
+{
+    check_archive_rejects_corrupt_payload(
+        REGION_SZ - INITIAL_PAYLOAD_POSITION - PAYLOAD_LENGTH_SIZE + 1, 0, 0);
+}
+
+void test_archiver_rejects_truncated_length_prefix(void)
+{
+    check_archive_rejects_corrupt_payload(0, 1, 0);
+}
+
+void test_archiver_accepts_payload_ending_at_region_boundary(void)
+{
+    MmapqIndexedAppender *a = create_archivable_appender();
+    TEST_ASSERT_NOT_NULL(a);
+    int32_t length = REGION_SZ - INITIAL_PAYLOAD_POSITION - PAYLOAD_LENGTH_SIZE;
+    char *payload = malloc((size_t)length);
+    TEST_ASSERT_NOT_NULL(payload);
+    memset(payload, 'x', (size_t)length);
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_appender_append(a, payload, length));
+    free(payload);
+    TEST_ASSERT_EQUAL_INT64(1, mmapq_indexed_appender_append(a, "second", 6));
+    mmapq_indexed_appender_close(a);
+
+    MmapqIndexedArchiver *arch = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_archiver_create(DIR, QUEUE, RING_SZ, rt, &arch));
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_archiver_archive_up_to_index(arch, 1));
+    TEST_ASSERT_EQUAL_INT64(1, mmapq_indexed_archiver_start_index(arch));
+    int64_t offset;
+    TEST_ASSERT_EQUAL_INT(1, mmapq_indexed_archiver_start_offset(arch, 0, &offset));
+    TEST_ASSERT_EQUAL_INT64(REGION_SZ, offset);
+    char *paths[64];
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_archiver_archivable_files(arch, paths, 64));
+    mmapq_indexed_archiver_close(arch);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -387,5 +512,10 @@ int main(void)
     RUN_TEST(test_default_not_archivable);
     RUN_TEST(test_archive_up_to_index_rejects_non_archivable);
     RUN_TEST(test_archive_forward_empty_queue);
+    RUN_TEST(test_archiver_rejects_oversized_payload_without_archiving_file);
+    RUN_TEST(test_archiver_corruption_preserves_all_appender_offsets);
+    RUN_TEST(test_archiver_rejects_payload_one_byte_past_region);
+    RUN_TEST(test_archiver_rejects_truncated_length_prefix);
+    RUN_TEST(test_archiver_accepts_payload_ending_at_region_boundary);
     return UNITY_END();
 }

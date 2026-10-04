@@ -2,10 +2,10 @@
 #include "indexed_batch_reader.h"
 #include "indexed_batch_archiver.h"
 #include "indexed_queue.h"
-#include "internal/queue_meta.h"
 #include "mmap_platform.h"
 #include "internal/mmap_assert.h"
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <errno.h>
@@ -23,7 +23,6 @@ struct MmapqIndexedBatchQueue {
     MmapqRuntime *write_runtime;
     MmapqRuntime *read_runtime;
 
-    QueueMeta *queue_meta;
     int        closed;
 };
 
@@ -175,7 +174,6 @@ void mmapq_indexed_batch_queue_close(MmapqIndexedBatchQueue *q)
 {
     if (!q || q->closed) return;
     q->closed = 1;
-    if (q->queue_meta) mmapqi_queue_meta_close(q->queue_meta);
     free(q->directory);
     free(q->queue_name);
     free(q);
