@@ -716,6 +716,41 @@ void test_uncommitted_iterator_finds_uncommitted(void)
     mmapq_indexed_appender_close(a);
 }
 
+/* ── C-03 regression: out-of-range iterator offsets must not double-free ──── */
+
+/* start_of_stream for a fresh appender is 64, so offset 0 violates the
+ * iterator contract (offsets must be >= start_of_stream or NOT_SET).
+ * Pre-fix, mmapqi_payload_iterator_init() freed the appender-owned iterator
+ * on the out-of-range offset and returned NULL, leaving a->payload_iter
+ * dangling: the second call ran init on freed memory and
+ * mmapq_indexed_appender_close() freed it again (SIGABRT / ASan
+ * double-free). Post-fix the factory rejects out-of-range offsets before
+ * touching the appender's iterator. */
+static void test_appender_iterator_out_of_range_offset_no_double_free(void)
+{
+    MmapqIndexedAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(q, &a));
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_appender_append(a, "data", 4));
+
+    TEST_ASSERT_NULL(mmapq_indexed_appender_iterator(a, 0, PAYLOAD_ITERATOR_NOT_SET));
+    /* The first NULL must not have freed the appender-owned iterator: a
+     * second identical call must return NULL without touching freed memory. */
+    TEST_ASSERT_NULL(mmapq_indexed_appender_iterator(a, 0, PAYLOAD_ITERATOR_NOT_SET));
+
+    /* The rejection must not be over-broad: a valid call creates the
+     * appender-owned iterator and finds the appended message. */
+    MmapqPayloadIterator *it =
+        mmapq_indexed_appender_iterator(a, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET);
+    TEST_ASSERT_NOT_NULL(it);
+    TEST_ASSERT_TRUE(mmapqi_payload_iterator_advance(it));
+    Buffer *buf = mmapqi_payload_iterator_current(it);
+    TEST_ASSERT_EQUAL_INT32(4, buf->capacity);
+    TEST_ASSERT_EQUAL_MEMORY("data", buf->data, 4);
+    TEST_ASSERT_FALSE(mmapqi_payload_iterator_advance(it));
+
+    mmapq_indexed_appender_close(a);
+}
+
 /* ── Reader entry_status ─────────────────────────────────────────────────── */
 
 void test_reader_entry_status(void)
@@ -1402,6 +1437,7 @@ int main(void)
     RUN_TEST(test_appender_recovers_position_after_close);
     RUN_TEST(test_uncommitted_append_and_commit);
     RUN_TEST(test_uncommitted_iterator_finds_uncommitted);
+    RUN_TEST(test_appender_iterator_out_of_range_offset_no_double_free);
     RUN_TEST(test_reader_entry_status);
     RUN_TEST(test_poller_exists);
     

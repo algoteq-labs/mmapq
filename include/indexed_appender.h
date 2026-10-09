@@ -169,8 +169,10 @@ int64_t mmapq_indexed_appender_commit(
  * start_offset: first offset to iterate from, or PAYLOAD_ITERATOR_NOT_SET.
  * end_offset:   last offset to iterate to (inclusive), or PAYLOAD_ITERATOR_NOT_SET.
  *
- * The returned MmapqPayloadIterator is owned by the caller and must be destroyed
- * with payload_iterator_destroy() when done.
+ * Returns the appender's internal MmapqPayloadIterator, or NULL if
+ * start_offset or end_offset is below the appender's start of stream. The
+ * iterator is owned by the appender and freed by mmapq_indexed_appender_close().
+ * Do not destroy it manually (there is no public payload_iterator_destroy).
  *
  * INVARIANT: The appending context must not be active while iterating.
  */

@@ -568,6 +568,15 @@ MmapqPayloadIterator *mmapq_indexed_appender_iterator(
 {
     if (a == NULL) return NULL;
 
+    /* Enforce the init contract (offsets >= start_of_stream or NOT_SET) at
+     * the boundary: init() frees the iterator on an out-of-range offset,
+     * which would leave the appender-owned payload_iter dangling and
+     * double-freed at close. Reject before creating or touching it. */
+    int64_t sos = appender_start_of_stream(a);
+    if ((start_offset != PAYLOAD_ITERATOR_NOT_SET && start_offset < sos) ||
+        (end_offset   != PAYLOAD_ITERATOR_NOT_SET && end_offset   < sos))
+        return NULL;
+
     if (a->payload_iter == NULL) {
         mmapqi_payload_iterator_create(
             a->queue_name,
