@@ -1334,6 +1334,45 @@ static void test_read_and_poll_reject_payload_beyond_mapping(void)
     mmapq_indexed_appender_close(appender);
 }
 
+static void test_poller_move_to_index_far_ahead_keeps_accessor_usable(void)
+{
+    MmapqIndexedAppender *a = NULL;
+    MmapqIndexedPoller *p = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(q, &a));
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_poller(q, &p));
+
+    for (int i = 0; i < 3; i++)
+        TEST_ASSERT_EQUAL_INT64(i, mmapq_indexed_appender_append(a, "xyz", 3));
+
+    /* Map region 0 and populate the accessor fast-path cache. */
+    TEST_ASSERT_EQUAL_INT(1, mmapq_indexed_poller_move_to_index(p, 2));
+
+    /* header_position(1<<40) hashes to region 0's ring slot: the slot remap
+     * drops region 0's mapping and then fails (beyond file). A failed wrap
+     * must invalidate the accessor fast-path cache; otherwise the next
+     * in-window access is served a pointer into the unmapped region. */
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_poller_move_to_index(p, 1LL << 40));
+
+    /* In-window probe: must re-wrap through the region layer, not read the
+     * stale fast-path cache. */
+    TEST_ASSERT_EQUAL_INT(1, mmapq_indexed_poller_move_to_index(p, 3));
+    TEST_ASSERT_EQUAL_INT64(3, mmapq_indexed_poller_current_index(p));
+
+    /* The accessor must still be usable: poll all three messages back. */
+    TEST_ASSERT_EQUAL_INT(1, mmapq_indexed_poller_move_to_index(p, 0));
+    PollCapture cap = { .directive = MMAPQ_NEXT_ADVANCE };
+    for (int i = 0; i < 3; i++) {
+        TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_ADVANCED, mmapq_indexed_poller_poll(p, capture_handler, &cap));
+        TEST_ASSERT_EQUAL_INT64(i, cap.index);
+        TEST_ASSERT_EQUAL_INT32(3, cap.length);
+        TEST_ASSERT_EQUAL_STRING("xyz", cap.data);
+    }
+    TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_END_OF_STREAM, mmapq_indexed_poller_poll(p, capture_handler, &cap));
+
+    mmapq_indexed_poller_close(p);
+    mmapq_indexed_appender_close(a);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -1352,6 +1391,7 @@ int main(void)
     RUN_TEST(test_poller_move_to_end);
     RUN_TEST(test_poller_move_to_start);
     RUN_TEST(test_poller_move_to_index);
+    RUN_TEST(test_poller_move_to_index_far_ahead_keeps_accessor_usable);
     RUN_TEST(test_poller_handler_stop);
     RUN_TEST(test_poller_handler_retreat);
     RUN_TEST(test_poller_retreat_at_start_stays);

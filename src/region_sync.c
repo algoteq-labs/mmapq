@@ -148,17 +148,21 @@ static WrapResult sync_do_wrap(RegionAccessor *self, int64_t position, Buffer *b
             if (addr == FILE_MAPPER_FILE_NOT_FOUND) {
                 if (++impl->file_not_found_counter >= impl->max_file_not_found_errors) {
                     impl->file_not_found_counter = 0;
+                    /* failure path may have unmapped the cached region */
+                    region_accessor_invalidate_fast_path(self);
                     return WRAP_FILE_NOT_FOUND;
                 }
             } else if (addr == FILE_MAPPER_BEYOND_FILE_SIZE) {
                 if (++impl->beyond_file_size_counter >= impl->max_beyond_file_size_errors) {
                     impl->beyond_file_size_counter = 0;
+                    region_accessor_invalidate_fast_path(self);
                     return WRAP_BEYOND_FILE_SIZE;
                 }
             }
         }
 
         if (mmapq_monotonic_nanos() - start_ns >= impl->timeout_ns) {
+            region_accessor_invalidate_fast_path(self);
             return WRAP_MAP_TIMED_OUT;
         }
         mmapq_spin_hint();

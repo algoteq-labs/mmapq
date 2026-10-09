@@ -98,6 +98,9 @@ static WrapResult ring_accessor_wrap(RegionAccessor *self, int64_t position, Buf
             /* Premap already fired or not needed — fast path until end of region */
             self->fast_path_end = position + buffer->capacity;
         }
+    } else {
+        /* The failed wrap may have unmapped the cached region (same-slot remap) */
+        region_accessor_invalidate_fast_path(self);
     }
 
     return result;
@@ -122,6 +125,9 @@ static WrapResult ring_accessor_wrap_no_premap(RegionAccessor *self, int64_t pos
         self->active_base    = position;
         self->fast_path_end = position + buffer->capacity;
         self->mapped_capacity = buffer->capacity;
+    } else {
+        /* The failed wrap may have unmapped the cached region (same-slot remap) */
+        region_accessor_invalidate_fast_path(self);
     }
     return result;
 }

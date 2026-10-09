@@ -311,6 +311,9 @@ static WrapResult async_wrap(RegionAccessor *self, int64_t position, Buffer *buf
         self->active_base    = position;
         self->fast_path_end = position + buffer->capacity;
         self->mapped_capacity = buffer->capacity;
+    } else {
+        /* The failed wrap may have unmapped the cached region (same-slot remap) */
+        region_accessor_invalidate_fast_path(self);
     }
     return r;
 }

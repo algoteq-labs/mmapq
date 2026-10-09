@@ -86,6 +86,20 @@ typedef struct RegionAccessor {
 
 /* ── Convenience wrappers ────────────────────────────────────────────────── */
 
+/*
+ * Invalidate the fast-path cache. Must be called on any failure path that may
+ * have unmapped the cached region (a same-slot remap drops the old mapping
+ * before the new one succeeds); a window left describing unmapped memory would
+ * be served by the fast path as if it were still mapped. Failures that cannot
+ * have dropped a mapping (e.g. the position < 0 early return) need not call it.
+ */
+static inline void region_accessor_invalidate_fast_path(RegionAccessor *acc)
+{
+    acc->active_address = NULL;
+    acc->active_base    = 0;
+    acc->fast_path_end  = 0;
+}
+
 static inline WrapResult region_accessor_wrap(
     RegionAccessor *acc,
     int64_t         position,
