@@ -249,8 +249,17 @@ RegionAccessor *mmapqi_queue_region_accessor_payload(QueueRegionAccessor *acc,
     MapMode mode = acc->read_only ? MAP_MODE_READ_ONLY : MAP_MODE_READ_WRITE;
 
     /*
-     * Note: header availability implies payload file exists and can be
-     * mapped without file-size checks (mirrors Java CHECK_FILE_SIZE_FALSE).
+     * No file-size check on the payload read path (mirrors Java
+     * CHECK_FILE_SIZE_FALSE). A committed header implies the writer has
+     * already extended the file and written the message — commit order is
+     * ftruncate → payload write → acq_rel header CAS. Checking the size
+     * here is both hot-path cost (fstat per frontier region map) and wrong
+     * where attribute visibility lags data: a committed, readable message
+     * would fail BEYOND_FILE_SIZE against a stale size. A corrupt header
+     * pointing past EOF is accepted risk (SIGBUS): queues are transient —
+     * recreate. Header accessors keep the check (literal 1 in create_ro
+     * above), where BEYOND_FILE_SIZE bounds re-wrap attempts on
+     * out-of-range seeks.
      */
     int check_file_size = acc->read_only ? 0 : 1;
     FileMapper *pay_mapper = NULL;

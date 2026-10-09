@@ -212,6 +212,16 @@ Exit code zero or the task is not done. Do not hand-eye it.
 - Recovery detects on-disk corruption (`MMAPQ_ESCHEMA`/`MMAPQ_ECORRUPT`
   refusal) but never repairs. Queues are transient; durable data lives in
   the export format. Do not add repair or migration logic.
+- The RO **payload** read path deliberately skips the file-size check
+  (`queue_region_accessor.c`: `check_file_size = 0` for read-only, Java
+  `CHECK_FILE_SIZE_FALSE` parity). A committed header implies the writer
+  has already extended the file and written the payload; file-size
+  visibility is not synchronous with the data on metadata-lagging
+  filesystems, so the check can reject valid, committed messages. A corrupt
+  header pointing past payload EOF is accepted risk (SIGBUS) — recreate the
+  queue. Header accessors keep the check. This was tried as a fix (audit
+  C-07) and rolled back; see doc/maintainer_guide.md §4 Anti-Pattern E.
+  Do not add the check.
 - Target platform is Linux x86-64/ARM64, little-endian, POSIX. Do not add
   Windows/macOS conditionals unless the task asks.
 
