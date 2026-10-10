@@ -147,7 +147,7 @@ Regression: `../mmapq-py/tests/test_reader_borrowing.py`
 |---|---|---|
 | `batch_payload_iterator.h` | 7/12 | 5/12 |
 | `batch_queue_transfer.h` | 7/7 | 6/7 |
-| `indexed_appender.h` | 11/17 | 6/17 |
+| `indexed_appender.h` | 11/16 | 6/16 |
 | `indexed_archiver.h` | 6/11 | 7/11 |
 | `indexed_batch_appender.h` | 15/16 | 8/16 |
 | `indexed_batch_archiver.h` | 4/8 | 6/8 |
