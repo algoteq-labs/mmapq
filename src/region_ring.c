@@ -30,6 +30,14 @@ static void sync_ring_close(RegionRing *self)
     file_mapper_close(impl->file_mapper);
 }
 
+/* Destroy count regions and the array itself (allocation-failure teardown).
+ * Regions only reference the mapper; destroying them never touches it. */
+static void destroy_regions(Region **regions, int count)
+{
+    for (int i = 0; i < count; i++) mmapqi_region_destroy(regions[i]);
+    free(regions);
+}
+
 int mmapqi_region_ring_sync_create(
     int         ring_size,
     int32_t     region_size,
@@ -45,8 +53,11 @@ int mmapqi_region_ring_sync_create(
     if (region_size <= 0) return MMAPQ_EINVAL;
     if ((region_size & (region_size - 1)) != 0) return MMAPQ_EINVAL;
 
+    /* Past validation the mapper is consumed on every path: owned by the
+     * ring on success, destroyed here on failure — the caller must never
+     * touch it after this call. */
     Region **regions = calloc((size_t)ring_size, sizeof(Region *));
-    if (regions == NULL) return MMAPQ_ENOMEM;
+    if (regions == NULL) { mmapqi_file_mapper_destroy(file_mapper); return MMAPQ_ENOMEM; }
 
     for (int i = 0; i < ring_size; i++) {
         int rc = mmapqi_region_sync_create(
@@ -57,18 +68,27 @@ int mmapqi_region_ring_sync_create(
             REGION_MAX_BEYOND_FILE_SIZE_ERRORS,
             &regions[i]);
         if (rc != 0) {
-            for (int j = 0; j < i; j++) mmapqi_region_destroy(regions[j]);
-            free(regions);
+            destroy_regions(regions, i);
+            mmapqi_file_mapper_destroy(file_mapper);
             return rc;
         }
     }
 
     SyncRingImpl *impl = calloc(1, sizeof(SyncRingImpl));
-    if (impl == NULL) { free(regions); return MMAPQ_ENOMEM; }
+    if (impl == NULL) {
+        destroy_regions(regions, ring_size);
+        mmapqi_file_mapper_destroy(file_mapper);
+        return MMAPQ_ENOMEM;
+    }
     impl->file_mapper = file_mapper;
 
     RegionRing *ring = calloc(1, sizeof(RegionRing));
-    if (ring == NULL) { free(impl); free(regions); return MMAPQ_ENOMEM; }
+    if (ring == NULL) {
+        free(impl);
+        destroy_regions(regions, ring_size);
+        mmapqi_file_mapper_destroy(file_mapper);
+        return MMAPQ_ENOMEM;
+    }
     ring->close     = sync_ring_close;
     ring->regions   = (Region **)regions;
     ring->ring_size = ring_size;
@@ -277,9 +297,17 @@ int mmapqi_region_ring_async_create(
     if (region_size <= 0) return MMAPQ_EINVAL;
     if ((region_size & (region_size - 1)) != 0) return MMAPQ_EINVAL;
 
-    /* Create regions */
+    /*
+     * Allocate everything first; register last. Registration is the
+     * publication point: nothing may fail after it, and everything the
+     * runtime thread can reach through mapping_impl — the regions array
+     * and its region objects — must be fully initialized before
+     * mmapq_runtime_register. Every failure path below also destroys the
+     * mapper (consumed on any failure past validation; caller must not
+     * touch it after this call).
+     */
     Region **regions = calloc((size_t)ring_size, sizeof(Region *));
-    if (regions == NULL) return MMAPQ_ENOMEM;
+    if (regions == NULL) { mmapqi_file_mapper_destroy(file_mapper); return MMAPQ_ENOMEM; }
 
     for (int i = 0; i < ring_size; i++) {
         int rc = mmapqi_region_async_create(
@@ -290,41 +318,56 @@ int mmapqi_region_ring_async_create(
             REGION_MAX_BEYOND_FILE_SIZE_ERRORS,
             &regions[i]);
         if (rc != 0) {
-            for (int j = 0; j < i; j++) mmapqi_region_destroy(regions[j]);
-            free(regions);
+            destroy_regions(regions, i);
+            mmapqi_file_mapper_destroy(file_mapper);
             return rc;
         }
     }
 
-    /* Create and register the AsyncMappingExecutable */
     AsyncMappingImpl *mapping_impl = calloc(1, sizeof(AsyncMappingImpl));
-    if (mapping_impl == NULL) { free(regions); return MMAPQ_ENOMEM; }
+    if (mapping_impl == NULL) {
+        destroy_regions(regions, ring_size);
+        mmapqi_file_mapper_destroy(file_mapper);
+        return MMAPQ_ENOMEM;
+    }
     mapping_impl->regions   = regions;
     mapping_impl->ring_size = ring_size;
     mapping_impl->exec.execute = async_mapping_execute;
     mapping_impl->exec.close   = async_mapping_close;
     mapping_impl->exec.ctx     = mapping_impl;
 
-    if (!mmapq_runtime_register(runtime, &mapping_impl->exec)) {
-        free(mapping_impl);
-        return MMAPQ_ETIMEDOUT;
-    }
-
-    /* Create async ring impl */
     AsyncRingImpl *impl = calloc(1, sizeof(AsyncRingImpl));
-    if (impl == NULL) { free(mapping_impl); return MMAPQ_ENOMEM; }
+    if (impl == NULL) {
+        free(mapping_impl);
+        destroy_regions(regions, ring_size);
+        mmapqi_file_mapper_destroy(file_mapper);
+        return MMAPQ_ENOMEM;
+    }
     impl->file_mapper   = file_mapper;
     impl->runtime       = runtime;
     impl->mapping_impl  = mapping_impl;
     atomic_store(&impl->closed, 0);
 
     RegionRing *ring = calloc(1, sizeof(RegionRing));
-    if (ring == NULL) { free(mapping_impl); free(impl); free(regions); return MMAPQ_ENOMEM; }
+    if (ring == NULL) {
+        free(impl); free(mapping_impl);
+        destroy_regions(regions, ring_size);
+        mmapqi_file_mapper_destroy(file_mapper);
+        return MMAPQ_ENOMEM;
+    }
     ring->close     = async_ring_close;
     ring->regions   = regions;
     ring->ring_size = ring_size;
     ring->is_async  = 1;
     ring->impl      = impl;
+
+    /* The one failure possible after all allocations: tear down everything. */
+    if (!mmapq_runtime_register(runtime, &mapping_impl->exec)) {
+        free(impl); free(ring); free(mapping_impl);
+        destroy_regions(regions, ring_size);
+        mmapqi_file_mapper_destroy(file_mapper);
+        return MMAPQ_ETIMEDOUT;
+    }
 
     *out = ring;
     return 0;
@@ -343,7 +386,9 @@ void mmapqi_region_ring_destroy(RegionRing *ring)
      *
      * Ownership rule: FileMapper ownership is transferred to RegionRing
      * at region_ring_*_create(). The caller must not close or destroy
-     * the FileMapper after passing it to RegionRing.
+     * the FileMapper after passing it to RegionRing — on success the ring
+     * owns it, and on any create failure past argument validation the
+     * create has already destroyed it. Consumption is total.
      */
     region_ring_close(ring);
 

@@ -16,7 +16,6 @@ static const int      RING_SIZE     = 4;
 static const uint64_t TIMEOUT_NS    = 2000000000ULL;
 
 static MmapqRuntime         *rt  = NULL;
-static FileMapper      *fm  = NULL;
 static RegionAccessor  *acc = NULL;
 
 static void cleanup_files(void)
@@ -35,6 +34,7 @@ void setUp(void)
     TEST_ASSERT_EQUAL_INT(0, rc_rt);
     TEST_ASSERT_NOT_NULL(rt);
 
+    FileMapper *fm = NULL;
     int fmerr = mmapqi_file_mapper_rolled_create(
         FILE_PREFIX, MAX_FILE_SIZE, REGION_SIZE,
         mmapqi_file_init_zeros, NULL, MAP_MODE_READ_WRITE,
@@ -43,6 +43,9 @@ void setUp(void)
     TEST_ASSERT_NOT_NULL(fm);
 
     RegionRing *ring = NULL;
+    /* region_ring_*_create consumes fm on success AND on failure
+     * (region_ring.c ownership rule) — deliberately a setUp local,
+     * unreachable from tearDown */
     int rerr = mmapqi_region_ring_async_create(
         RING_SIZE, REGION_SIZE, fm, TIMEOUT_NS, rt, &ring);
     TEST_ASSERT_EQUAL_INT(0, rerr);
@@ -59,8 +62,7 @@ void setUp(void)
 
 void tearDown(void)
 {
-    if (acc) { mmapqi_region_ring_accessor_destroy(acc); acc = NULL; fm = NULL; }
-    else if (fm) { file_mapper_close(fm); mmapqi_file_mapper_destroy(fm); fm = NULL; }
+    if (acc) { mmapqi_region_ring_accessor_destroy(acc); acc = NULL; }
     cleanup_files();
     /* Note: mmapq_runtime_region_mapper() is a singleton — don't destroy it */
 }

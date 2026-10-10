@@ -34,9 +34,10 @@ static void payload_file_path(const char *directory, const char *queue_name,
  * make_ring_accessor — wrap mapper in a RegionRing + RegionAccessor.
  *
  * Ownership: on success the ring owns the mapper. On ANY failure the mapper
- * has been destroyed — by this function after a ring-creation failure, or by
- * the ring's destroy after an accessor-creation failure — and the caller
- * must not close, destroy, or otherwise touch it.
+ * has been destroyed — by the ring create, which consumes the mapper on its
+ * own failure paths (region_ring.c ownership rule), or by the ring's
+ * destroy after an accessor-creation failure — and the caller must not
+ * close, destroy, or otherwise touch it.
  */
 static int make_ring_accessor(
     FileMapper *mapper,
@@ -58,7 +59,7 @@ static int make_ring_accessor(
     } else {
         rc = mmapqi_region_ring_async_create(ring_size, region_size, mapper, timeout_ns, runtime, &ring);
     }
-    if (rc != 0) { mmapqi_file_mapper_destroy(mapper); return rc; }
+    if (rc != 0) return rc;   /* create consumed the mapper on failure */
 
     rc = mmapqi_region_ring_accessor_create(
         ring, region_size, regions_to_map_ahead, premap_ratio, out);
