@@ -85,7 +85,8 @@ static int write_padding_if_needed(MmapqIndexedBatchAppender *a, int32_t length)
     return 0;
 }
 
-static int64_t skip_to_end_of_stream(MmapqIndexedBatchAppender *a, int64_t offset)
+static int skip_to_end_of_stream(MmapqIndexedBatchAppender *a, int64_t offset,
+                                 int64_t *out_end)
 {
     int64_t end_of_stream = offset;
     while (1) {
@@ -94,9 +95,15 @@ static int64_t skip_to_end_of_stream(MmapqIndexedBatchAppender *a, int64_t offse
 
         mmapq_batch_iterator_init(&a->batch_iterator, batch_off, -1, 0);
         mmapq_batch_iterator_exhaust(&a->batch_iterator);
+        /* A partial scan is not an end of stream. Accepting it would place
+         * the append position inside committed data (short) or past it in
+         * unreachable space (long). Matches indexed_batch_archiver.c and
+         * indexed_appender.c, both of which refuse here. */
+        if (a->batch_iterator.last_error != 0) return a->batch_iterator.last_error;
         end_of_stream = a->batch_iterator.next_message_position;
     }
-    return end_of_stream;
+    *out_end = end_of_stream;
+    return 0;
 }
 
 static int64_t appender_start_index_from_meta(void *ctx)
@@ -130,7 +137,9 @@ static int initialise_append_position(MmapqIndexedBatchAppender *a, int64_t star
         }
 
         if (committed_payload_pos != -1) {
-            a->current_payload_position = skip_to_end_of_stream(a, committed_payload_pos);
+            int rc_scan = skip_to_end_of_stream(a, committed_payload_pos,
+                                                &a->current_payload_position);
+            if (rc_scan != 0) return rc_scan;
         } else {
             a->current_payload_position = appender_meta_start_offset(a->appender_meta);
         }

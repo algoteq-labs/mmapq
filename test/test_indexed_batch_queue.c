@@ -705,6 +705,166 @@ static void test_batch_poll_detects_corrupt_payload(void)
     cleanup();
 }
 
+/* ── Batch recovery truncation (A6) ─────────────────────────────────────────
+ * A corrupt message length inside the last committed batch truncates the
+ * recovery scan (skip_to_end_of_stream). Recovery must refuse: accepting a
+ * partial scan places the append position inside committed data (short
+ * truncation — overwrite) or past end of stream in unreachable space (long
+ * truncation). Mirrors the last_error refusal in indexed_batch_archiver.c
+ * and the ECORRUPT refusal in single-message indexed_appender.c. */
+
+static int64_t rec_msg_offsets[8];
+static int     rec_n_msgs;
+
+static MmapqNextMove rec_collect_handler(int64_t bi, MmapqBatchReadingContext *ctx, void *user)
+{
+    (void)bi; (void)user;
+    const void *d;
+    int32_t l;
+    rec_n_msgs = 0;
+    while (mmapq_batch_iterator_next(ctx->iterator, &d, &l) == 1 && rec_n_msgs < 8)
+        rec_msg_offsets[rec_n_msgs++] = ctx->iterator->current_msg_offset;
+    return MMAPQ_NEXT_ADVANCE;
+}
+
+/* Appends two committed batches of three 13-byte messages; the second batch
+ * starts at offset 119 (start-of-stream 64 + 4-byte count + 3*(4+13)). */
+static void rec_append_two_batches(MmapqIndexedBatchAppender *a)
+{
+    int64_t off = -1;
+    for (int64_t b = 0; b < 2; b++) {
+        MmapqMutableBatch *mb = mmapq_indexed_batch_appender_start_batch(a);
+        TEST_ASSERT_NOT_NULL(mb);
+        for (int i = 0; i < 3; i++) {
+            char buf[32];
+            snprintf(buf, sizeof(buf), "b%lld-m%d-padding", (long long)b, i);
+            TEST_ASSERT_EQUAL_INT(i, mmapq_mutable_batch_append(mb, buf, (int32_t)strlen(buf)));
+        }
+        off = mmapq_mutable_batch_complete(mb);
+        TEST_ASSERT_EQUAL_INT64(64 + 55 * b, off);
+        TEST_ASSERT_EQUAL_INT64(b, mmapq_indexed_batch_appender_commit_batch(a, off));
+    }
+}
+
+/* Corrupts the length prefix of message 1 of the last committed batch with
+ * `bogus`, then asserts that recovery (a fresh appender) refuses the
+ * truncated scan with MMAPQ_ECORRUPT and produces no appender. */
+static void rec_assert_recovery_refused(const char *suffix, int32_t bogus)
+{
+    char qname[64];
+    snprintf(qname, sizeof(qname), "%s_%s", QUEUE, suffix);
+    char cmd[512];
+    snprintf(cmd, sizeof(cmd), "rm -rf %s/%s", DIR, qname);
+    int rc = system(cmd); (void)rc;
+
+    MmapqIndexedBatchQueue *tq = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create(
+        DIR, qname, REGION_SZ, RING_SZ, 1, MAX_FILE, 0, TIMEOUT, 0, rt, rt, &tq));
+    TEST_ASSERT_NOT_NULL(tq);
+
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(tq, &a));
+    TEST_ASSERT_NOT_NULL(a);
+    rec_append_two_batches(a);
+
+    /* Learn the length-prefix offset of message 1 of the last committed batch. */
+    MmapqIndexedBatchPoller *p = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_poller(tq, &p));
+    TEST_ASSERT_NOT_NULL(p);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_ADVANCED, mmapq_indexed_batch_poller_poll(p, rec_collect_handler, NULL));
+    TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_ADVANCED, mmapq_indexed_batch_poller_poll(p, rec_collect_handler, NULL));
+    mmapq_indexed_batch_poller_close(p);
+    TEST_ASSERT_EQUAL_INT(3, rec_n_msgs);
+    const int64_t inject_off = rec_msg_offsets[1];
+    TEST_ASSERT_EQUAL_INT64(140, inject_off);
+
+    mmapq_indexed_batch_appender_close(a);
+
+    char path[512];
+    snprintf(path, sizeof(path), "%s/%s/payload_0_0", DIR, qname);
+    int fd = open(path, O_WRONLY);
+    TEST_ASSERT_MESSAGE(fd >= 0, "failed to open batch payload file");
+    TEST_ASSERT_EQUAL_INT(sizeof(bogus), pwrite(fd, &bogus, sizeof(bogus), inject_off));
+    close(fd);
+
+    MmapqIndexedBatchAppender *a2 = NULL;
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ECORRUPT, mmapq_indexed_batch_queue_create_appender(tq, &a2));
+    TEST_ASSERT_NULL(a2);
+
+    mmapq_indexed_batch_queue_close(tq);
+}
+
+static void test_batch_recovery_refuses_short_truncated_scan(void)
+{
+    /* Negative non-padding length: the scan stops 34 bytes inside the last
+     * committed batch; accepting it would overwrite committed data. */
+    rec_assert_recovery_refused("rec_short", (int32_t)0x80000010);
+}
+
+static void test_batch_recovery_refuses_long_truncated_scan(void)
+{
+    /* Large positive length: the scan walks 3417 bytes past end of stream;
+     * accepting it would strand everything appended after recovery. */
+    rec_assert_recovery_refused("rec_long", (int32_t)0x7FFFFFF0);
+}
+
+/* Completes one more batch after the two-batch fixture; returns its offset. */
+static int64_t rec_complete_third_batch(MmapqIndexedBatchAppender *a)
+{
+    MmapqMutableBatch *mb = mmapq_indexed_batch_appender_start_batch(a);
+    TEST_ASSERT_NOT_NULL(mb);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(mb, "AFTER-RECOVERY", 14));
+    int64_t off = mmapq_mutable_batch_complete(mb);
+    TEST_ASSERT_GREATER_OR_EQUAL_INT64(0, off);
+    return off;
+}
+
+static void test_batch_recovery_clean_tree_unaffected(void)
+{
+    /* The control offset comes from a clean run inside the test — a
+     * never-closed appender's third batch — not a hard-coded constant, so a
+     * framing change voids neither side of the comparison. */
+    char qname[64];
+    char cmd[512];
+
+    snprintf(qname, sizeof(qname), "%s_rec_clean_ctrl", QUEUE);
+    snprintf(cmd, sizeof(cmd), "rm -rf %s/%s", DIR, qname);
+    int rc = system(cmd); (void)rc;
+    MmapqIndexedBatchQueue *tq = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create(
+        DIR, qname, REGION_SZ, RING_SZ, 1, MAX_FILE, 0, TIMEOUT, 0, rt, rt, &tq));
+    TEST_ASSERT_NOT_NULL(tq);
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(tq, &a));
+    TEST_ASSERT_NOT_NULL(a);
+    rec_append_two_batches(a);
+    const int64_t control_off = rec_complete_third_batch(a);
+    mmapq_indexed_batch_appender_close(a);
+    mmapq_indexed_batch_queue_close(tq);
+
+    snprintf(qname, sizeof(qname), "%s_rec_clean_rec", QUEUE);
+    snprintf(cmd, sizeof(cmd), "rm -rf %s/%s", DIR, qname);
+    rc = system(cmd); (void)rc;
+    tq = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create(
+        DIR, qname, REGION_SZ, RING_SZ, 1, MAX_FILE, 0, TIMEOUT, 0, rt, rt, &tq));
+    TEST_ASSERT_NOT_NULL(tq);
+    a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(tq, &a));
+    TEST_ASSERT_NOT_NULL(a);
+    rec_append_two_batches(a);
+    mmapq_indexed_batch_appender_close(a);
+
+    MmapqIndexedBatchAppender *a2 = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(tq, &a2));
+    TEST_ASSERT_NOT_NULL(a2);
+    const int64_t recovered_off = rec_complete_third_batch(a2);
+    mmapq_indexed_batch_appender_close(a2);
+    mmapq_indexed_batch_queue_close(tq);
+
+    TEST_ASSERT_EQUAL_INT64(control_off, recovered_off);
+}
+
 /* ── Stale appender catch-up ─────────────────────────────────────────────── */
 
 static void test_batch_stale_appender_catch_up(void)
@@ -959,6 +1119,9 @@ int main(void)
     RUN_TEST(test_open_batch_as_normal_refused);
     RUN_TEST(test_batch_roundtrip_type_stamped);
     RUN_TEST(test_batch_poll_detects_corrupt_payload);
+    RUN_TEST(test_batch_recovery_refuses_short_truncated_scan);
+    RUN_TEST(test_batch_recovery_refuses_long_truncated_scan);
+    RUN_TEST(test_batch_recovery_clean_tree_unaffected);
     RUN_TEST(test_batch_stale_appender_catch_up);
     RUN_TEST(test_batch_appender_id_255_succeeds);
     return UNITY_END();
