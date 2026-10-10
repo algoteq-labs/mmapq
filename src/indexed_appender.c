@@ -572,10 +572,8 @@ MmapqPayloadIterator *mmapq_indexed_appender_iterator(
 {
     if (a == NULL) return NULL;
 
-    /* Enforce the init contract (offsets >= start_of_stream or NOT_SET) at
-     * the boundary: init() frees the iterator on an out-of-range offset,
-     * which would leave the appender-owned payload_iter dangling and
-     * double-freed at close. Reject before creating or touching it. */
+    /* Reject out-of-range caller offsets at the boundary, before the
+     * appender-owned iterator is created or touched. */
     int64_t sos = appender_start_of_stream(a);
     if ((start_offset != PAYLOAD_ITERATOR_NOT_SET && start_offset < sos) ||
         (end_offset   != PAYLOAD_ITERATOR_NOT_SET && end_offset   < sos))
@@ -592,7 +590,9 @@ MmapqPayloadIterator *mmapq_indexed_appender_iterator(
             &a->payload_iter);
     }
 
-    return mmapqi_payload_iterator_init(a->payload_iter, start_offset, end_offset);
+    if (mmapqi_payload_iterator_init(a->payload_iter, start_offset, end_offset) != 0)
+        return NULL;
+    return a->payload_iter;
 }
 
 MmapqUncommittedPayloadIterator *mmapq_indexed_appender_uncommitted_iterator(
@@ -626,7 +626,9 @@ MmapqUncommittedPayloadIterator *mmapq_indexed_appender_uncommitted_iterator(
             &a->uncommitted_iter);
     }
 
-    return mmapqi_uncommitted_iterator_init(a->uncommitted_iter, start_offset, end_offset);
+    if (mmapqi_uncommitted_iterator_init(a->uncommitted_iter, start_offset, end_offset) != 0)
+        return NULL;
+    return a->uncommitted_iter;
 }
 
 /* ── Metadata ─────────────────────────────────────────────────────────────── */

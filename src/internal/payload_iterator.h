@@ -96,13 +96,12 @@ int mmapqi_payload_iterator_create(
  *
  * After init, call advance() to position at the first message.
  *
- * Returns the iterator (same pointer) for chaining.
- *
- * CONTRACT:
- *   start_offset must be >= start_of_stream_offset() or NOT_SET.
- *   end_offset must be >= start_of_stream_offset() or NOT_SET.
+ * Returns 0 on success, MMAPQ_EINVAL if it is NULL or an explicit offset
+ * is below start_of_stream_offset(). On failure the iterator is left
+ * unchanged and remains owned by the caller — init never frees it and
+ * never takes ownership of it.
  */
-MmapqPayloadIterator *mmapqi_payload_iterator_init(
+int mmapqi_payload_iterator_init(
     MmapqPayloadIterator *it,
     int64_t          start_offset,
     int64_t          end_offset);
@@ -143,9 +142,10 @@ Buffer *mmapqi_payload_iterator_current(MmapqPayloadIterator *it);
  * mmapqi_payload_iterator_rewind — reset to the state after the last init() call.
  *
  * Allows re-traversal of the same range without re-initialising.
- * Aborts if not yet initialised.
+ *
+ * Returns 0 on success, MMAPQ_EINVAL if it is NULL or not yet initialised.
  */
-MmapqPayloadIterator *mmapqi_payload_iterator_rewind(MmapqPayloadIterator *it);
+int mmapqi_payload_iterator_rewind(MmapqPayloadIterator *it);
 
 /**
  * mmapqi_payload_iterator_destroy — free a MmapqPayloadIterator.

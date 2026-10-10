@@ -49,28 +49,26 @@ int mmapqi_payload_iterator_create(
 
 /* ── mmapqi_payload_iterator_init ───────────────────────────────────────────────── */
 
-MmapqPayloadIterator *mmapqi_payload_iterator_init(
+int mmapqi_payload_iterator_init(
     MmapqPayloadIterator *it,
     int64_t          start_offset,
     int64_t          end_offset)
 {
-    MMAP_ASSERT(it != NULL, "mmapqi_payload_iterator_init: it is NULL");
+    if (it == NULL) return MMAPQ_EINVAL;
 
     int64_t start_of_stream = it->start_of_stream_offset(it->stream_ctx);
 
-    /* Resolve start_offset */
-    if (start_offset == PAYLOAD_ITERATOR_NOT_SET) {
-        it->start_offset = start_of_stream;
-    } else {
-        if (start_offset < start_of_stream) { free(it); return NULL; }
-        it->start_offset = start_offset;
-    }
+    /* Validate before mutating: on failure the iterator is left unchanged
+     * and remains owned by the caller. */
+    int64_t effective_start = (start_offset == PAYLOAD_ITERATOR_NOT_SET)
+        ? start_of_stream
+        : start_offset;
+    if (effective_start < start_of_stream) return MMAPQ_EINVAL;
+    if (end_offset != PAYLOAD_ITERATOR_NOT_SET &&
+        end_offset < start_of_stream) return MMAPQ_EINVAL;
 
-    /* Validate end_offset */
-    if (end_offset != PAYLOAD_ITERATOR_NOT_SET) {
-        if (end_offset < start_of_stream) { free(it); return NULL; }
-    }
-    it->end_offset = end_offset;
+    it->start_offset = effective_start;
+    it->end_offset   = end_offset;
 
     /* Capture end-of-stream snapshot for fix_end_of_stream mode */
     it->end_of_stream_at_init = it->end_of_stream_offset(it->stream_ctx);
@@ -80,7 +78,7 @@ MmapqPayloadIterator *mmapqi_payload_iterator_init(
     it->current_message_offset = PAYLOAD_ITERATOR_NOT_SET;
     it->current_message_length = (int32_t)PAYLOAD_ITERATOR_NOT_SET;
 
-    return it;
+    return 0;
 }
 
 /* ── Effective end of stream ─────────────────────────────────────────────── */
@@ -154,17 +152,16 @@ Buffer *mmapqi_payload_iterator_current(MmapqPayloadIterator *it)
 
 /* ── mmapqi_payload_iterator_rewind ─────────────────────────────────────────────── */
 
-MmapqPayloadIterator *mmapqi_payload_iterator_rewind(MmapqPayloadIterator *it)
+int mmapqi_payload_iterator_rewind(MmapqPayloadIterator *it)
 {
-    MMAP_ASSERT(it != NULL, "mmapqi_payload_iterator_rewind: it is NULL");
-    MMAP_ASSERT(it->start_offset != PAYLOAD_ITERATOR_NOT_SET,
-        "mmapqi_payload_iterator_rewind: iterator not yet initialised");
+    if (it == NULL) return MMAPQ_EINVAL;
+    if (it->start_offset == PAYLOAD_ITERATOR_NOT_SET) return MMAPQ_EINVAL;
 
     it->next_probing_offset    = it->start_offset;
     it->current_message_offset = PAYLOAD_ITERATOR_NOT_SET;
     it->current_message_length = (int32_t)PAYLOAD_ITERATOR_NOT_SET;
 
-    return it;
+    return 0;
 }
 
 /* ── mmapqi_payload_iterator_destroy ────────────────────────────────────────────── */

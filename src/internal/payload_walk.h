@@ -43,6 +43,9 @@
  * Returns:
  *   > 0  : message payload length (bytes, excluding 4-byte length prefix)
  *   == 0 : end of stream at probing_offset
+ *   -1   : error — corrupt on-disk length/padding or region mapping failure.
+ *          A transient mapping timeout is NOT distinguished from corruption
+ *          at this layer (both collapse to -1).
  */
 int32_t mmapqi_payload_walk_advance(
     const char     *queue_name,

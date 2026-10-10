@@ -1,8 +1,9 @@
 # ASSERT_AUDIT.md — MMAP_ASSERT Inventory
 
-**69 asserts across 15 src/*.c files.** Generated from source.
-Last verified: 2026-10-10 (A4/C-04 — removed the payload_walk.c:58 assert,
-converted to a runtime check; payload_walk.c now has zero asserts).
+**64 asserts across 15 src/*.c files.** Generated from source.
+Last verified: 2026-10-10 (A5/CAND-22 — payload/uncommitted iterator init
+and rewind converted to `int` return codes; five asserts became
+MMAPQ_EINVAL returns).
 
 ## Legend
 
@@ -15,10 +16,10 @@ converted to a runtime check; payload_walk.c now has zero asserts).
 
 | Disposition | Count |
 |---|---|
-| I (stays, re-verified) | 69 |
+| I (stays, re-verified) | 64 |
 | V (pending conversion) | 0 |
 | (converted from V in Phase 16e) | 2 |
-| **Total** | **69** |
+| **Total** | **64** |
 
 ## Per-file inventory
 
@@ -74,9 +75,11 @@ Lines 37, 70. Internal dispatch null checks.
 |---|---|---|
 | 163 length > 0 (on-disk) | (converted, Phase 16e) | Now a runtime check: sets MMAPQ_ENTRY_ERROR with last_error=MMAPQ_ECORRUPT. |
 
-### payload_iterator.c — 7 (all I)
+### payload_iterator.c — 4 (all I)
 
-Lines 57, 99, 112, 147-148, 159-160. Internal dispatch null checks.
+Lines 97, 110, 145-146. Internal dispatch null checks. (A5/CAND-22: init
+and rewind gained `int` return channels; their NULL/not-initialised checks
+became MMAPQ_EINVAL returns.)
 
 ### region_async.c — 8 (all I)
 
@@ -98,9 +101,10 @@ Lines 44, 81, 176-177, 183-184, 190. Internal dispatch null checks.
 
 Lines 501, 757. Internal dispatch null checks.
 
-### uncommitted_payload_iterator.c — 7 (all I)
+### uncommitted_payload_iterator.c — 5 (all I)
 
-Lines 30, 269, 312, 326, 345, 361, 369. Internal dispatch null checks.
+Lines 30, 348, 362, 381, 397. Internal dispatch null checks. (A5/CAND-22:
+init and rewind NULL checks became MMAPQ_EINVAL returns.)
 
 ## Pending V-class conversions
 

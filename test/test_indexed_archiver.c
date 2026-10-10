@@ -7,6 +7,8 @@
 #include "internal/queue_meta.h"
 #include "internal/appender_meta.h"
 #include "internal/header_codec.h"
+#include "internal/payload_iterator.h"
+#include "internal/uncommitted_payload_iterator.h"
 #include "runtime.h"
 
 #include <stdlib.h>
@@ -498,6 +500,189 @@ void test_archiver_accepts_payload_ending_at_region_boundary(void)
     mmapq_indexed_archiver_close(arch);
 }
 
+/* ── A5 / CAND-22 regression: archiving + uncommitted iterator ─────────────
+ *
+ * archive_up_to_index() advances appender_meta_start_offset past entries
+ * whose HEADERS remain readable (only fully-covered header files are
+ * deleted). scan_committed_ranges() walks headers from index 0 and re-inits
+ * the appender-owned inner iterator with each committed header's payload
+ * position. An archived entry's offset is below start_of_stream; pre-fix,
+ * mmapqi_payload_iterator_init() free()d the appender-owned iterator on such
+ * an offset and the next line advanced the freed object (ASan
+ * heap-use-after-free at payload_iterator.c has_next; SIGSEGV under
+ * -O2 -DNDEBUG), and mmapq_indexed_appender_close() double-freed it.
+ *
+ * Geometry: 4 × 4-byte messages at payload offsets 64, 72, 80, 88;
+ * archiving 2 advances start_offset to exactly 80.
+ */
+
+void test_uncommitted_iterator_after_archive_no_use_after_free(void)
+{
+    MmapqIndexedAppender *a = create_archivable_appender();
+    TEST_ASSERT_NOT_NULL(a);
+
+    for (int i = 0; i < 4; i++) {
+        char buf[16];
+        snprintf(buf, sizeof buf, "msg%d", i);
+        TEST_ASSERT_EQUAL_INT64(i,
+            mmapq_indexed_appender_append(a, buf, (int32_t)strlen(buf)));
+    }
+
+    MmapqIndexedArchiver *arch = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_archiver_create(DIR, QUEUE, RING_SZ, rt, &arch));
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_archiver_archive_up_to_index(arch, 2));
+
+    /* start_offset must actually have advanced, or the test proves nothing. */
+    int64_t sos = -1;
+    TEST_ASSERT_EQUAL_INT(1,
+        mmapq_indexed_archiver_start_offset(arch, 0, &sos));
+    TEST_ASSERT_EQUAL_INT64(80, sos);
+    mmapq_indexed_archiver_close(arch);
+
+    /* Pre-fix this reads freed memory inside scan_committed_ranges. */
+    MmapqUncommittedPayloadIterator *it =
+        mmapq_indexed_appender_uncommitted_iterator(
+            a, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET);
+    TEST_ASSERT_NOT_NULL(it);
+    /* All four messages are committed: nothing uncommitted remains. */
+    TEST_ASSERT_FALSE(mmapqi_uncommitted_iterator_advance(it));
+
+    /* A second call must not compound the damage. */
+    it = mmapq_indexed_appender_uncommitted_iterator(
+        a, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET);
+    TEST_ASSERT_NOT_NULL(it);
+    TEST_ASSERT_FALSE(mmapqi_uncommitted_iterator_advance(it));
+
+    /* Pre-fix this double-frees uncommitted_inner. */
+    mmapq_indexed_appender_close(a);
+}
+
+/* Second route to the same defect: rewind() re-enters init() with the stored
+ * offsets and re-runs the scan against the advanced start_offset. A guard at
+ * the factory cannot reach this path — the offending offset comes from the
+ * header stream, not from the caller's arguments. Pins rewind as a supported
+ * operation after archiving (behavioural contract). */
+void test_uncommitted_iterator_rewind_after_archive(void)
+{
+    MmapqIndexedAppender *a = create_archivable_appender();
+    TEST_ASSERT_NOT_NULL(a);
+
+    for (int i = 0; i < 4; i++) {
+        char buf[16];
+        snprintf(buf, sizeof buf, "msg%d", i);
+        TEST_ASSERT_EQUAL_INT64(i,
+            mmapq_indexed_appender_append(a, buf, (int32_t)strlen(buf)));
+    }
+
+    MmapqUncommittedPayloadIterator *u =
+        mmapq_indexed_appender_uncommitted_iterator(
+            a, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET);
+    TEST_ASSERT_NOT_NULL(u);
+
+    MmapqIndexedArchiver *arch = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_archiver_create(DIR, QUEUE, RING_SZ, rt, &arch));
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_archiver_archive_up_to_index(arch, 2));
+    mmapq_indexed_archiver_close(arch);
+
+    /* Pre-fix this re-runs the scan and reads freed memory. Post-fix the
+     * re-scan succeeds against the advanced start_offset. */
+    TEST_ASSERT_EQUAL_INT(0, mmapqi_uncommitted_iterator_rewind(u));
+    TEST_ASSERT_FALSE(mmapqi_uncommitted_iterator_advance(u));
+
+    mmapq_indexed_appender_close(a);
+}
+
+/* The archived-entry skip must not be over-broad: an uncommitted message
+ * appended after archiving must still be found exactly once. */
+void test_uncommitted_iterator_skips_archived_entries(void)
+{
+    MmapqIndexedAppender *a = create_archivable_appender();
+    TEST_ASSERT_NOT_NULL(a);
+
+    for (int i = 0; i < 4; i++) {
+        char buf[16];
+        snprintf(buf, sizeof buf, "msg%d", i);
+        TEST_ASSERT_EQUAL_INT64(i,
+            mmapq_indexed_appender_append(a, buf, (int32_t)strlen(buf)));
+    }
+
+    MmapqIndexedArchiver *arch = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_archiver_create(DIR, QUEUE, RING_SZ, rt, &arch));
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_archiver_archive_up_to_index(arch, 2));
+    mmapq_indexed_archiver_close(arch);
+
+    /* One uncommitted message after the committed, partly-archived prefix. */
+    TEST_ASSERT_EQUAL_INT64(96,
+        mmapq_indexed_appender_append_uncommitted(a, "late", 4));
+
+    MmapqUncommittedPayloadIterator *it =
+        mmapq_indexed_appender_uncommitted_iterator(
+            a, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET);
+    TEST_ASSERT_NOT_NULL(it);
+
+    int found = 0;
+    while (mmapqi_uncommitted_iterator_advance(it)) {
+        found++;
+        Buffer *buf = mmapqi_uncommitted_iterator_current(it);
+        TEST_ASSERT_EQUAL_INT32(4, buf->capacity);
+        TEST_ASSERT_EQUAL_MEMORY("late", buf->data, 4);
+    }
+    TEST_ASSERT_EQUAL_INT(1, found);
+
+    mmapq_indexed_appender_close(a);
+}
+
+/* Ownership pin — the acceptance gate for the A5 contract fix. Route pins
+ * pass on a skip-only partial fix; this one fails on it. Rejection must
+ * return MMAPQ_EINVAL AND leave the caller-owned iterator usable: a valid
+ * re-init afterwards is the discriminating line (a free-on-reject init
+ * turns the re-init into a use-after-free). */
+void test_payload_iterator_init_rejects_out_of_range(void)
+{
+    MmapqIndexedAppender *a = create_archivable_appender();
+    TEST_ASSERT_NOT_NULL(a);
+
+    for (int i = 0; i < 4; i++) {
+        char buf[16];
+        snprintf(buf, sizeof buf, "msg%d", i);
+        TEST_ASSERT_EQUAL_INT64(i,
+            mmapq_indexed_appender_append(a, buf, (int32_t)strlen(buf)));
+    }
+
+    MmapqIndexedArchiver *arch = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_archiver_create(DIR, QUEUE, RING_SZ, rt, &arch));
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_archiver_archive_up_to_index(arch, 2));
+    mmapq_indexed_archiver_close(arch);
+
+    MmapqPayloadIterator *it = mmapq_indexed_appender_iterator(
+        a, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET);
+    TEST_ASSERT_NOT_NULL(it);
+
+    /* start_of_stream is now 80; offset 64 is archived. Reject. */
+    TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL,
+        mmapqi_payload_iterator_init(it, 64, PAYLOAD_ITERATOR_NOT_SET));
+
+    /* The iterator was NOT freed: a valid re-init succeeds and walks the
+     * first unarchived message. */
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapqi_payload_iterator_init(
+            it, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET));
+    TEST_ASSERT_TRUE(mmapqi_payload_iterator_advance(it));
+    Buffer *buf = mmapqi_payload_iterator_current(it);
+    TEST_ASSERT_EQUAL_INT32(4, buf->capacity);
+    TEST_ASSERT_EQUAL_MEMORY("msg2", buf->data, 4);
+
+    mmapq_indexed_appender_close(a);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -517,5 +702,9 @@ int main(void)
     RUN_TEST(test_archiver_rejects_payload_one_byte_past_region);
     RUN_TEST(test_archiver_rejects_truncated_length_prefix);
     RUN_TEST(test_archiver_accepts_payload_ending_at_region_boundary);
+    RUN_TEST(test_uncommitted_iterator_after_archive_no_use_after_free);
+    RUN_TEST(test_uncommitted_iterator_rewind_after_archive);
+    RUN_TEST(test_uncommitted_iterator_skips_archived_entries);
+    RUN_TEST(test_payload_iterator_init_rejects_out_of_range);
     return UNITY_END();
 }

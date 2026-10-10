@@ -122,11 +122,15 @@ int mmapqi_uncommitted_iterator_create(
  * Performs the full header scan at each call. Rewind is equivalent to
  * calling init() again with the same parameters.
  *
- * Returns the iterator (same pointer), or NULL if the header scan was
- * truncated (mapping timeout or offset mismatch at the committed header).
- * Callers must check for NULL before advancing.
+ * Returns 0 on success; MMAPQ_EINVAL if it is NULL or an explicit offset
+ * is below start_of_stream_offset(); MMAPQ_ECORRUPT if the header scan was
+ * truncated (offset mismatch at a committed header, or mapping failure —
+ * the walk layer does not distinguish transient timeout from corruption;
+ * see the TODO in uncommitted_payload_iterator.c). On failure the iterator
+ * is left uninitialised; the caller-owned inner iterator is never freed
+ * and remains valid.
  */
-MmapqUncommittedPayloadIterator *mmapqi_uncommitted_iterator_init(
+int mmapqi_uncommitted_iterator_init(
     MmapqUncommittedPayloadIterator *it,
     int64_t                     start_offset,
     int64_t                     end_offset);
@@ -159,9 +163,10 @@ Buffer *mmapqi_uncommitted_iterator_current(MmapqUncommittedPayloadIterator *it)
 /**
  * mmapqi_uncommitted_iterator_rewind — re-init with same parameters.
  *
- * Returns NULL if not yet initialised, or if the header scan fails.
+ * Returns 0 on success; MMAPQ_EINVAL if it is NULL or not yet initialised;
+ * otherwise the result of the re-run init().
  */
-MmapqUncommittedPayloadIterator *mmapqi_uncommitted_iterator_rewind(MmapqUncommittedPayloadIterator *it);
+int mmapqi_uncommitted_iterator_rewind(MmapqUncommittedPayloadIterator *it);
 
 /**
  * mmapqi_uncommitted_iterator_destroy — free the iterator and its range array.
