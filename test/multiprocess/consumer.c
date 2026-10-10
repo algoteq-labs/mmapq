@@ -169,6 +169,20 @@ int main(int argc, char *argv[])
         MmapqPollResult r = mmapq_indexed_poller_poll(p, verify_handler, &state);
         if (r == MMAPQ_POLL_END_OF_STREAM) {
             mmapq_spin_hint();
+        } else if (r != MMAPQ_POLL_ADVANCED) {
+            /* Allow-list: only ADVANCED and END_OF_STREAM are legitimate here
+             * (handler only returns ADVANCE; queue is archivable=0). Anything
+             * else — including a status added later — fails fast instead of
+             * spinning to the deadline and masquerading as a receive timeout. */
+            if (r == MMAPQ_POLL_ERROR) {
+                fprintf(stderr, "consumer: poll result %d — last error %d\n",
+                        r, mmapq_indexed_poller_last_error(p));
+            } else {
+                fprintf(stderr, "consumer: unexpected poll result %d\n", r);
+            }
+            mmapq_indexed_poller_close(p);
+            mmapq_indexed_queue_close(q);
+            return 1;
         }
     }
 

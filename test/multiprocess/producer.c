@@ -85,7 +85,13 @@ int main(int argc, char *argv[])
     for (int64_t i = 0; i < count; i++) {
         msg.sequence = i;
         msg.checksum = checksum_of(i);
-        mmapq_indexed_appender_append(a, &msg, sizeof(msg));
+        int64_t rc = mmapq_indexed_appender_append(a, &msg, sizeof(msg));
+        if (rc < 0) {
+            fprintf(stderr, "producer: append failed at sequence %ld — rc %ld\n", i, rc);
+            mmapq_indexed_appender_close(a);
+            mmapq_indexed_queue_close(q);
+            return 1;
+        }
     }
 
     fprintf(stderr, "producer: done — wrote %ld messages, last index %ld\n",

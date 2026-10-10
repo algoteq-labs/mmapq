@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # test_multiprocess.sh — multiprocess queue correctness test
 #
-# Compiles producer and consumer, then runs three scenarios:
+# Compiles producer and consumer, then runs four scenarios:
 #   1. Producer starts first, consumer reads after
 #   2. Consumer starts first, producer writes second (consumer waits)
-#   3. Two concurrent appenders, one consumer (interleaved messages)
+#   3. Concurrent producer and consumer (interleaved messages)
+#   4. Two concurrent producers, one consumer
 #
 # Usage: ./test/multiprocess/test_multiprocess.sh [--keep-binaries]
 
@@ -12,7 +13,7 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 QUEUE_DIR="/tmp/mmap_multiprocess_test"
-CFLAGS="-std=gnu11 -O2 -D_GNU_SOURCE -I include"
+CFLAGS="-std=gnu11 -O2 -D_GNU_SOURCE -I include -I src -I src/internal"
 SRCS="$(ls src/*.c)"
 LDFLAGS="-pthread -lm"
 
@@ -56,12 +57,16 @@ test_producer_first() {
 
     local count=10000
     local timeout_ms=10000
+    local prod_rc=0 cons_rc=0
 
     # Producer runs to completion
-    "$PRODUCER" "$QUEUE_DIR" q "$count" 2>&1 | sed 's/^/    /'
+    "$PRODUCER" "$QUEUE_DIR" q "$count" 2>&1 | sed 's/^/    /' || prod_rc=$?
 
     # Consumer reads all messages
-    "$CONSUMER" "$QUEUE_DIR" q "$count" "$timeout_ms" 2>&1 | sed 's/^/    /'
+    "$CONSUMER" "$QUEUE_DIR" q "$count" "$timeout_ms" 2>&1 | sed 's/^/    /' || cons_rc=$?
+
+    echo "    exit codes: producer=$prod_rc consumer=$cons_rc"
+    return $((prod_rc || cons_rc))
 }
 
 run_test "producer_first_consumer_after" test_producer_first
@@ -74,6 +79,7 @@ test_consumer_first() {
 
     local count=10000
     local timeout_ms=15000
+    local prod_rc=0 cons_rc=0
 
     # Consumer starts first — will wait for messages
     "$CONSUMER" "$QUEUE_DIR" q "$count" "$timeout_ms" 2>&1 | sed 's/^/    /' &
@@ -83,10 +89,13 @@ test_consumer_first() {
     sleep 0.1
 
     # Producer writes
-    "$PRODUCER" "$QUEUE_DIR" q "$count" 2>&1 | sed 's/^/    /'
+    "$PRODUCER" "$QUEUE_DIR" q "$count" 2>&1 | sed 's/^/    /' || prod_rc=$?
 
     # Wait for consumer
-    wait "$CONSUMER_PID"
+    wait "$CONSUMER_PID" || cons_rc=$?
+
+    echo "    exit codes: producer=$prod_rc consumer=$cons_rc"
+    return $((prod_rc || cons_rc))
 }
 
 run_test "consumer_first_producer_after" test_consumer_first
@@ -99,6 +108,7 @@ test_concurrent() {
 
     local count=50000
     local timeout_ms=30000
+    local prod_rc=0 cons_rc=0
 
     # Start consumer in background
     "$CONSUMER" "$QUEUE_DIR" q "$count" "$timeout_ms" 2>&1 | sed 's/^/    /' &
@@ -108,8 +118,11 @@ test_concurrent() {
     "$PRODUCER" "$QUEUE_DIR" q "$count" 2>&1 | sed 's/^/    /' &
     PRODUCER_PID=$!
 
-    wait "$PRODUCER_PID"
-    wait "$CONSUMER_PID"
+    wait "$PRODUCER_PID" || prod_rc=$?
+    wait "$CONSUMER_PID" || cons_rc=$?
+
+    echo "    exit codes: producer=$prod_rc consumer=$cons_rc"
+    return $((prod_rc || cons_rc))
 }
 
 run_test "concurrent_producer_and_consumer" test_concurrent
@@ -127,6 +140,7 @@ test_two_producers() {
     local count_each=10000
     local total=$((count_each * 2))
     local timeout_ms=30000
+    local p1_rc=0 p2_rc=0 cons_rc=0
 
     # Start consumer expecting total messages
     "$CONSUMER" "$QUEUE_DIR" q "$total" "$timeout_ms" 2>&1 | sed 's/^/    /' &
@@ -138,9 +152,12 @@ test_two_producers() {
     "$PRODUCER" "$QUEUE_DIR" q "$count_each" 1 2>&1 | sed 's/^/    /' &
     P2=$!
 
-    wait "$P1"
-    wait "$P2"
-    wait "$CONSUMER_PID"
+    wait "$P1" || p1_rc=$?
+    wait "$P2" || p2_rc=$?
+    wait "$CONSUMER_PID" || cons_rc=$?
+
+    echo "    exit codes: producer0=$p1_rc producer1=$p2_rc consumer=$cons_rc"
+    return $((p1_rc || p2_rc || cons_rc))
 }
 
 run_test "two_producers_one_consumer" test_two_producers
