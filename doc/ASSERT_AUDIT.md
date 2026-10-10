@@ -83,11 +83,11 @@ became MMAPQ_EINVAL returns.)
 
 ### region_async.c — 8 (all I)
 
-Lines 216, 297-298, 328, 370, 383, 398, 408. Internal dispatch null checks.
+Lines 216, 297-298, 328, 373, 386, 401, 411. Internal dispatch null checks.
 
 ### region_ring.c — 2 (all I)
 
-Lines 19, 164. Internal dispatch null checks.
+Lines 20, 166. Internal dispatch null checks.
 
 ### region_ring_accessor.c — 5 (all I)
 
@@ -99,7 +99,7 @@ Lines 44, 81, 176-177, 183-184, 190. Internal dispatch null checks.
 
 ### runtime.c — 2 (all I)
 
-Lines 501, 757. Internal dispatch null checks.
+Lines 505, 838. Internal dispatch null checks.
 
 ### uncommitted_payload_iterator.c — 5 (all I)
 

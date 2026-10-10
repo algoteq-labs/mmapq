@@ -356,6 +356,9 @@ static void async_close(RegionAccessor *self)
          * is safe: close() is called after the ring is deregistered from the
          * runtime (region_ring_close waits for deregistration), so the mapper
          * thread is guaranteed not to call process_request() concurrently.
+         * (If the runtime thread was detached after a join timeout, the ring
+         * skips region_close entirely instead — see mapper_detached in
+         * region_ring.c — so the guarantee holds by omission there.)
          */
         mmapqi_region_async_process_request((Region *)self);
 

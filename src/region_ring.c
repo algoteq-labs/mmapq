@@ -1,4 +1,5 @@
 #include "internal/region_ring.h"
+#include "internal/runtime_internal.h"
 #include "runtime.h"
 #include "internal/mmap_assert.h"
 #include "mmap_platform.h"
@@ -122,6 +123,7 @@ typedef struct {
     MmapqRuntime          *runtime;
     AsyncMappingImpl *mapping_impl;
     atomic_int        closed;
+    int               mapper_detached;  /* set/read on the closing thread only */
 } AsyncRingImpl;
 
 /**
@@ -215,17 +217,31 @@ static void async_ring_close(RegionRing *self)
         }
         /* Mapper thread has confirmed it is done. mapping_impl is freed by
          * waiting_deregister_execute via target_ctx_to_free. */
+    } else if (mmapqi_runtime_thread_detached(impl->runtime)) {
+        /*
+         * The runtime is closed AND its thread was detached after a join
+         * timeout (C-02): the mapper thread may still be live, managing
+         * our regions through mapping_impl. Freeing mapping_impl or
+         * closing the regions/file mapper (Steps 2-3) would race it.
+         * Leak instead: skip Steps 2-3, and mmapqi_region_ring_destroy
+         * skips the region and file-mapper teardown on this path.
+         * Bounded leak on a degenerate path; the thread exits once its
+         * executable returns, or at process exit.
+         */
+        impl->mapper_detached = 1;
+        return;
     } else {
         /*
          * The runtime is already closed (register's only failure mode with
          * non-NULL arguments), so the dereg executable will never run and
          * waiting on it would spin forever (audit C-01). Reached
-         * sequentially, this means mmapq_runtime_close() has returned, which
-         * joins the runtime thread after its shutdown drain has already run
-         * async_mapping_close() on our mapping executable: no mapper can be
-         * running and the regions are already UNMANAGED, so Steps 2-3 below
-         * are exactly as safe as on the normal path. Free mapping_impl here,
-         * mirroring waiting_deregister_execute's target_ctx_to_free cleanup.
+         * sequentially with a JOINED runtime thread, this means
+         * mmapq_runtime_close() has returned after joining it, and the
+         * shutdown drain has already run async_mapping_close() on our
+         * mapping executable: no mapper can be running and the regions are
+         * already UNMANAGED, so Steps 2-3 below are exactly as safe as on
+         * the normal path. Free mapping_impl here, mirroring
+         * waiting_deregister_execute's target_ctx_to_free cleanup.
          * Closing the runtime concurrently with a participant from another
          * thread remains a contract violation.
          */
@@ -331,6 +347,23 @@ void mmapqi_region_ring_destroy(RegionRing *ring)
      */
     region_ring_close(ring);
 
+    if (ring->is_async
+        && ((AsyncRingImpl *)ring->impl)->mapper_detached) {
+        /*
+         * The runtime thread was detached before this ring closed
+         * (async_ring_close above): it may still be managing the regions
+         * through the leaked mapping_impl, and each region reaches the
+         * file mapper. Leak the regions, the regions array, and the file
+         * mapper with it — freeing them would be a use-after-free on the
+         * live thread. Only impl/ring itself are safe to free; nothing
+         * the detached thread can reach points at them.
+         */
+        free(ring->impl);
+        ring->impl = NULL;
+        free(ring);
+        return;
+    }
+
     for (int i = 0; i < ring->ring_size; i++) {
         if (ring->regions[i] != NULL) {
             mmapqi_region_destroy(ring->regions[i]);
@@ -345,7 +378,9 @@ void mmapqi_region_ring_destroy(RegionRing *ring)
         /*
          * mapping_impl was freed by region_ring_close — by the
          * deregistration executable on the runtime thread, or directly if
-         * the runtime was already closed.
+         * the runtime was already closed with its thread joined. (If the
+         * thread was detached instead, the mapper_detached early return
+         * above leaked it along with the regions.)
          * file_mapper is fully owned by this ring — destroy it now.
          */
         if (impl->file_mapper != NULL) {

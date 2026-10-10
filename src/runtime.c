@@ -298,6 +298,10 @@ struct MmapqRuntime {
     pthread_mutex_t close_mutex;
     pthread_cond_t  close_cond;
     atomic_int      thread_done;
+    /* Set (release) by close() before pthread_detach; read (acquire) by
+     * destroy() and mmapqi_runtime_thread_detached(). Acquire/release pairs
+     * the closing thread's teardown decisions with later readers. */
+    atomic_int      thread_detached;
 
     /*
      * free_list: atomic singly-linked list of ExecLists to free.
@@ -574,6 +578,12 @@ int mmapq_runtime_is_closed(const MmapqRuntime *rt)
     return atomic_load(&rt->closed);
 }
 
+int mmapqi_runtime_thread_detached(const MmapqRuntime *rt)
+{
+    if (rt == NULL) return 0;
+    return atomic_load_explicit(&rt->thread_detached, memory_order_acquire);
+}
+
 void mmapq_runtime_close(MmapqRuntime *rt)
 {
     if (rt == NULL) return;
@@ -602,7 +612,65 @@ void mmapq_runtime_close(MmapqRuntime *rt)
     }
     pthread_mutex_unlock(&rt->close_mutex);
 
-    pthread_join(rt->thread, NULL);
+    /*
+     * Join with the remaining budget from the same deadline: a wedged or
+     * slow executable (execute() has not returned) leaves the thread
+     * unjoinable, and an unconditional join would hang close() forever
+     * (audit C-02). On timeout the thread is detached and leaked by
+     * design — close() returning lets the caller finish teardown, the
+     * thread exits once its executable returns or at process exit, and
+     * destroy() leaks the runtime rather than freeing state the detached
+     * thread can still reach
+     * (thread_detached; destroy's close is also a no-op via the closed
+     * CAS above, so it never rejoins).
+     */
+    {
+        /*
+         * pthread_timedjoin_np has no clock selection and always uses
+         * CLOCK_REALTIME, while deadline is CLOCK_MONOTONIC (the condvar
+         * above is created with pthread_condattr_setclock). Convert the
+         * remaining budget rather than handing the monotonic deadline to
+         * a realtime call — that would be far in the past and time out
+         * instantly, detaching healthy threads.
+         */
+        uint64_t now = mmapq_monotonic_nanos();
+        int joined = 0;
+        if (atomic_load(&rt->thread_done)) {
+            /* The drain finished while we were waiting: the thread only
+             * unlocks close_mutex and returns from here, so this join is
+             * bounded regardless of the remaining budget. Skipping it on
+             * an exhausted deadline would detach an already-finished
+             * thread and leak the runtime in a healthy process. */
+            pthread_join(rt->thread, NULL);
+            joined = 1;
+        } else if (now < deadline) {
+            uint64_t remaining = deadline - now;
+            struct timespec rt_now;
+            if (clock_gettime(CLOCK_REALTIME, &rt_now) == 0) {
+                uint64_t target = (uint64_t)rt_now.tv_sec * UINT64_C(1000000000)
+                                + (uint64_t)rt_now.tv_nsec + remaining;
+                struct timespec ts = {
+                    .tv_sec  = (time_t)(target / UINT64_C(1000000000)),
+                    .tv_nsec = (long)  (target % UINT64_C(1000000000)),
+                };
+                joined = (pthread_timedjoin_np(rt->thread, NULL, &ts) == 0);
+            }
+            /* clock_gettime failure: joined stays 0 — detach below rather
+             * than compute a garbage abstime (instant timeout would detach
+             * a healthy thread; far-future would hang the join). */
+        }
+        if (!joined) {
+            atomic_store_explicit(&rt->thread_detached, 1, memory_order_release);
+            if (now >= deadline) {
+                fprintf(stderr, "mmapq_runtime_close: close budget exhausted before joining thread '%s'; detaching (thread leaked)\n",
+                        rt->name);
+            } else {
+                fprintf(stderr, "mmapq_runtime_close: timeout joining thread '%s'; detaching (thread leaked)\n",
+                        rt->name);
+            }
+            pthread_detach(rt->thread);
+        }
+    }
 
     if (rt->on_close != NULL) {
         rt->on_close(rt, rt->on_close_ctx);
@@ -626,6 +694,19 @@ void mmapq_runtime_destroy(MmapqRuntime *rt)
         return;  /* other references still alive */
     }
     mmapq_runtime_close(rt);
+
+    if (atomic_load_explicit(&rt->thread_detached, memory_order_acquire)) {
+        /*
+         * The runtime thread was detached in close() after a join timeout
+         * (C-02) and may still be running — an executable can be slow
+         * rather than infinitely wedged. It references rt, the exec lists,
+         * the idle strategy and the mutexes; freeing them here would be a
+         * use-after-free. Leak the whole runtime instead: bounded, once
+         * per detached close, on an already-degenerate path. The thread
+         * exits once its executable returns, or at process exit.
+         */
+        return;
+    }
 
     ExecList *list = atomic_load(&rt->exec_list);
     exec_list_free(list);

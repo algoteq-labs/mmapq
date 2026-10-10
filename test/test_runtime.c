@@ -5,6 +5,10 @@
 #include <unistd.h>
 #include <stdatomic.h>
 #include <stdlib.h>
+#include <signal.h>
+#include <sched.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 
 static MmapqRuntime *rt = NULL;
 
@@ -292,6 +296,152 @@ void test_runtime_double_acquire(void)
     mmapq_runtime_destroy(rt3);
 }
 
+/* ── C-02: close with a wedged executable ───────────────────────────────────── */
+
+#ifndef __SANITIZE_THREAD__
+/* Excluded under TSan: the region-mapper singleton (acquired by
+ * test_runtime_double_acquire) keeps its thread alive for the process
+ * lifetime, so the forks below are multi-threaded and TSan kills any
+ * child that starts a thread afterwards (die_after_fork). The fix's close
+ * path is still TSan-exercised by every other test's runtime teardown. */
+
+typedef struct {
+    atomic_int        entered;  /* set once the runtime thread is inside execute */
+    atomic_int        release;  /* 0 = keep spinning (slow), or spin forever (wedged) */
+    atomic_int        closed;   /* set by the drain's close() on the resumed thread */
+    MmapqExecutable   exec;
+} WedgedExec;
+
+static int wedged_execute(MmapqExecutable *self)
+{
+    WedgedExec *we = (WedgedExec *)self->ctx;
+    atomic_store_explicit(&we->entered, 1, memory_order_release);
+    for (;;) sched_yield();   /* never returns, never observes closed */
+    /* unreachable; keeps -Wreturn-type quiet */
+    return 0;
+}
+
+static int slow_execute(MmapqExecutable *self)
+{
+    WedgedExec *we = (WedgedExec *)self->ctx;
+    atomic_store_explicit(&we->entered, 1, memory_order_release);
+    while (!atomic_load_explicit(&we->release, memory_order_acquire))
+        sched_yield();
+    return 1;
+}
+
+static void wedged_close(MmapqExecutable *self)
+{
+    WedgedExec *we = (WedgedExec *)self->ctx;
+    atomic_store_explicit(&we->closed, 1, memory_order_release);
+}
+
+/* Register `exec` on a fresh child-local runtime with a 200 ms close
+ * timeout and wait until the runtime thread is observably inside
+ * execute() (bounded — without the handshake a slow machine could let
+ * close() win the race and the test would pass vacuously). */
+static MmapqRuntime *child_runtime_with_wedged_exec(const char *name,
+                                                    int (*fn)(MmapqExecutable *),
+                                                    WedgedExec *we)
+{
+    MmapqIdleStrategy *idle = NULL;
+    if (mmapq_idle_strategy_busy_spin_create(&idle) != 0) _exit(2);
+
+    MmapqRuntime *crt = NULL;
+    if (mmapq_runtime_create(name, idle, 200000000ULL, NULL, NULL, &crt) != 0)
+        _exit(2);
+
+    atomic_store(&we->entered, 0);
+    atomic_store(&we->release, 0);
+    atomic_store(&we->closed,  0);
+    we->exec.execute = fn;
+    we->exec.close   = wedged_close;
+    we->exec.ctx     = we;
+    if (mmapq_runtime_register(crt, &we->exec) != 1) _exit(2);
+
+    for (int i = 0; i < 5000; i++) {
+        if (atomic_load_explicit(&we->entered, memory_order_acquire)) return crt;
+        usleep(1000);
+    }
+    _exit(2);   /* thread never entered execute(): setup environment broken */
+}
+
+/* Child body: runtimes are per-process after fork, so the child builds its
+ * own runtime, wedges its thread in an execute() that never returns, then
+ * closes. Pre-fix (C-02) the close hangs in pthread_join. Exit codes:
+ * 0 = close returned; 2 = a setup step failed. */
+static void child_close_with_wedged_executable(void)
+{
+    static WedgedExec we;
+    MmapqRuntime *crt = child_runtime_with_wedged_exec("wedged-rt", wedged_execute, &we);
+
+    mmapq_runtime_close(crt);   /* pre-fix: never returns */
+    _exit(0);                   /* the detached wedged thread dies with the process */
+}
+
+/* Child body: close detaches the thread (200 ms budget vs a slow
+ * executable), destroy() runs, then the thread is released to resume.
+ * Without the thread_detached destroy guard the resumed thread touches
+ * the freed runtime (ASan: heap-use-after-free); with it destroy leaks
+ * the runtime intact. Exit codes: 0 = survived; 2 = setup failed. */
+static void child_destroy_after_detach(void)
+{
+    static WedgedExec we;
+    MmapqRuntime *crt = child_runtime_with_wedged_exec("slow-rt", slow_execute, &we);
+
+    mmapq_runtime_close(crt);    /* budget exhausts; thread detached */
+    mmapq_runtime_destroy(crt);  /* guarded: leaks crt; unguarded: frees it */
+
+    atomic_store_explicit(&we.release, 1, memory_order_release);
+    /* Wait for the resumed thread to reach the drain's close() — every
+     * use of rt the UAF pin targets happens before that point, and waiting
+     * (instead of a bare sleep + _exit) lets a sanitizer report complete
+     * before the process dies. */
+    for (int i = 0; i < 5000; i++) {
+        if (atomic_load_explicit(&we.closed, memory_order_acquire)) break;
+        usleep(1000);
+    }
+    usleep(100000);              /* drain tail (thread_done/close_mutex) */
+    _exit(0);
+}
+
+/* Parent watchdog: the pre-fix behavior is a HANG or a child crash, so an
+ * assertion in the child would never fire — kill the child after 10 s
+ * instead and require a clean exit 0. */
+static void assert_child_exits_zero(pid_t pid)
+{
+    int status = 0;
+    int reaped = 0;
+    for (int i = 0; i < 100; i++) {
+        if (waitpid(pid, &status, WNOHANG) == pid) { reaped = 1; break; }
+        usleep(100000);
+    }
+    if (!reaped) {
+        kill(pid, SIGKILL);
+        waitpid(pid, &status, 0);
+        TEST_FAIL_MESSAGE("child hung: close with a wedged/slow executable did not return in 10 s");
+    }
+    TEST_ASSERT(WIFEXITED(status));
+    TEST_ASSERT_EQUAL_INT(0, WEXITSTATUS(status));
+}
+
+void test_runtime_close_with_wedged_executable_returns(void)
+{
+    pid_t pid = fork();
+    TEST_ASSERT(pid >= 0);
+    if (pid == 0) child_close_with_wedged_executable();
+    assert_child_exits_zero(pid);
+}
+
+void test_runtime_destroy_after_detach_no_uaf(void)
+{
+    pid_t pid = fork();
+    TEST_ASSERT(pid >= 0);
+    if (pid == 0) child_destroy_after_detach();
+    assert_child_exits_zero(pid);
+}
+#endif /* __SANITIZE_THREAD__ */
+
 /* ── main ────────────────────────────────────────────────────────────────── */
 
 int main(void)
@@ -310,5 +460,9 @@ int main(void)
     RUN_TEST(test_deregister_executable);
     RUN_TEST(test_unregister_and_wait_safe_free);
     RUN_TEST(test_runtime_double_acquire);
+#ifndef __SANITIZE_THREAD__
+    RUN_TEST(test_runtime_close_with_wedged_executable_returns);
+    RUN_TEST(test_runtime_destroy_after_detach_no_uaf);
+#endif
     return UNITY_END();
 }

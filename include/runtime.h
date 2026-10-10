@@ -29,6 +29,14 @@
  * Shutdown:
  *   close() signals the MmapqRuntime thread to stop, waits up to close_timeout_ns
  *   for it to drain, then calls close() on all remaining Executables.
+ *   If the thread has not stopped by the deadline (a wedged or slow
+ *   executable), close() detaches it and returns: the thread is leaked by
+ *   design and exits once its executable returns, or at process exit. On
+ *   that path Executable close()
+ *   callbacks may run AFTER close() returns — or never — so executable
+ *   owners must not free state the runtime thread can still reach.
+ *   destroy() after such a detach deliberately leaks the runtime rather
+ *   than freeing it.
  */
 
 /* ── MmapqExecutable ──────────────────────────────────────────────────────────── */
@@ -210,6 +218,12 @@ int mmapq_runtime_is_closed(const MmapqRuntime *rt);
  * for it to finish. Calls close() on all remaining Executables.
  * Calls on_close callback if provided.
  *
+ * If the thread has not stopped within close_timeout_ns (a wedged or slow
+ * executable), it is detached and leaked — it exits once its executable
+ * returns, or at process exit — and Executable close() callbacks are then
+ * not guaranteed to have run when close() returns. destroy() after such
+ * a detach leaks the runtime instead of freeing it.
+ *
  * Safe to call from any thread. Idempotent.
  */
 void mmapq_runtime_close(MmapqRuntime *rt);
@@ -228,6 +242,9 @@ int mmapq_runtime_clone(MmapqRuntime *rt, MmapqRuntime **out);
  * Calls mmapq_runtime_close() if not already closed.
  * If the MmapqRuntime was cloned, only decrements the reference count;
  * the underlying MmapqRuntime is freed when the last reference is released.
+ * If close() detached the thread (join timeout), destroy deliberately
+ * leaks the runtime instead of freeing it — the detached thread can
+ * still reach it.
  * After destroy(), the pointer must not be used.
  */
 void mmapq_runtime_destroy(MmapqRuntime *rt);
