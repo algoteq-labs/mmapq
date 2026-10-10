@@ -15,6 +15,7 @@
 #include <time.h>
 
 #include <fcntl.h>
+#include <pthread.h>
 #include <unistd.h>
 #include <string.h>
 #include <stdio.h>
@@ -1477,6 +1478,243 @@ static void test_poller_move_to_index_far_ahead_keeps_accessor_usable(void)
     mmapq_indexed_appender_close(a);
 }
 
+/* ── C-08 regression: concurrent appenders on small-region geometry ────────
+ *
+ * In-suite pin for C-08 (stale RegionAccessor fast-path cache after a failed
+ * remap, fixed in A1). Until D9 the only coverage was the cross-process
+ * script audit/stress/run_c08_concurrent.sh (5/5 SIGSEGV pre-fix at 20000
+ * messages, 0/5 at 8000). Geometry and payload pattern replicate that repro
+ * (audit/interop/c_interop.c race_size/race_fill/race_handler): 64 KiB
+ * regions, 4-slot ring, 256 KiB max file, 25000 variable-size messages per
+ * lane. Participants are created inside their lane thread per
+ * indexed_queue.h:34-36 (concurrent creation on a shared queue is allowed;
+ * each appender stays on its own thread). The sync variant passes NULL
+ * runtimes, matching the original repro exactly.
+ *
+ * Measured under mutation (A1's invalidation reverted), this geometry: sync
+ * variant SIGSEGV 5/5, async variant 0/5 — with a runtime serializing
+ * mapping, async wraps essentially never fail, so the async variant is
+ * concurrency coverage, not the C-08 pin. Two lanes measured weaker (sync
+ * 3/5); lane-skew variants measured counterproductive (0/5: the pauses let
+ * one lane finish while the other slept, removing wrap contention). The pin
+ * depends on sustained wrap contention between lanes — do not reduce
+ * C08_COUNT or C08_LANES and do not add sleeps. Below ~20000 messages per
+ * lane the lagging appender never falls MAX_LINEAR_ATTEMPTS_BEFORE_SEARCH
+ * (100) headers behind, so the failed-remap path is not exercised. */
+
+#define C08_REGION   65536
+#define C08_RING     4
+#define C08_MAXFILE  262144
+#define C08_LANES    4
+#define C08_COUNT    25000
+/* 10 s, matching the repro: mapping waits under TSan can exceed the 5 s
+ * suite default. */
+#define C08_TIMEOUT_NS 10000000000ULL
+
+static const char *QUEUE_C08 = "mmap_test_iq_c08";
+
+static void cleanup_c08(void)
+{
+    char cmd[512];
+    snprintf(cmd, sizeof(cmd), "rm -rf %s/%s", DIR, QUEUE_C08);
+    if (system(cmd) != 0) { /* best-effort cleanup */ }
+}
+
+static int32_t c08_size(int w, int64_t seq)
+{
+    return 16 + (int32_t)(((seq * 13 + w * 7) % 300));
+}
+
+static void c08_fill(int w, int64_t seq, unsigned char *buf, int32_t size)
+{
+    uint64_t s = (uint64_t)seq;
+    uint32_t wid = (uint32_t)w;
+    uint32_t sz = (uint32_t)size;
+    memcpy(buf, &s, 8);
+    memcpy(buf + 8, &wid, 4);
+    memcpy(buf + 12, &sz, 4);
+    for (int32_t j = 16; j < size; j++) {
+        buf[j] = (unsigned char)((seq * 131 + (int64_t)w * 17 + (int64_t)j * 29) & 0xff);
+    }
+}
+
+typedef struct {
+    MmapqIndexedQueue *queue;
+    int      writer;
+    int      ok;          /* 1 when all C08_COUNT appends succeeded */
+    int64_t  failed_seq;  /* -1 when no append failed */
+    int64_t  append_rc;
+} C08Lane;
+
+/* Worker: no Unity assertions here (Unity longjmp is not thread-safe);
+ * the lane records its outcome and the main thread asserts. */
+static void *c08_append_lane(void *arg)
+{
+    C08Lane *lane = (C08Lane *)arg;
+    lane->ok = 0;
+    lane->failed_seq = -1;
+    lane->append_rc = 0;
+    MmapqIndexedAppender *a = NULL;
+    int rc = mmapq_indexed_queue_create_appender_with_id(lane->queue, (uint8_t)lane->writer, &a);
+    if (rc != 0 || a == NULL) { lane->append_rc = rc; return NULL; }
+    unsigned char buf[320];
+    for (int64_t seq = 0; seq < C08_COUNT; seq++) {
+        int32_t size = c08_size(lane->writer, seq);
+        c08_fill(lane->writer, seq, buf, size);
+        int64_t rc_a = mmapq_indexed_appender_append(a, buf, size);
+        if (rc_a < 0) { lane->append_rc = rc_a; lane->failed_seq = seq; break; }
+    }
+    mmapq_indexed_appender_close(a);
+    lane->ok = (lane->failed_seq < 0);
+    return NULL;
+}
+
+typedef struct {
+    unsigned char *seen;   /* C08_LANES * C08_COUNT bytes */
+    int64_t        seen_total;
+    int            bad;         /* 0 ok, else first-failure reason code */
+    uint8_t        bad_writer;  /* diagnostics for the first failure — a */
+    int64_t        bad_seq;     /* probabilistic test may not give a second */
+    int32_t        bad_length;  /* chance to see why */
+} C08Verify;
+
+/* reason codes: 1 appender_id range, 2 payload writer != appender_id,
+ * 3 seq out of range, 4 size mismatch, 5 content mismatch, 6 duplicate */
+static MmapqNextMove c08_verify_fail(C08Verify *v, int reason, uint8_t writer,
+                                     int64_t seq, int32_t length)
+{
+    if (!v->bad) {
+        v->bad = reason;
+        v->bad_writer = writer;
+        v->bad_seq = seq;
+        v->bad_length = length;
+    }
+    return MMAPQ_NEXT_STOP;
+}
+
+static MmapqNextMove c08_verify_handler(int64_t index, uint8_t appender_id,
+                                        const void *data, int32_t length, void *ctx)
+{
+    (void)index;
+    C08Verify *v = (C08Verify *)ctx;
+    if (appender_id >= C08_LANES)
+        return c08_verify_fail(v, 1, appender_id, -1, length);
+    const unsigned char *b = (const unsigned char *)data;
+    int64_t seq;
+    uint32_t wid, sz;
+    memcpy(&seq, b, 8);
+    memcpy(&wid, b + 8, 4);
+    memcpy(&sz, b + 12, 4);
+    if ((int)wid != (int)appender_id)
+        return c08_verify_fail(v, 2, appender_id, -1, length);
+    if (seq < 0 || seq >= C08_COUNT)
+        return c08_verify_fail(v, 3, appender_id, seq, length);
+    int32_t esize = c08_size((int)wid, seq);
+    if (length != esize || (int32_t)sz != esize)
+        return c08_verify_fail(v, 4, appender_id, seq, length);
+    unsigned char expect[320];
+    c08_fill((int)wid, seq, expect, esize);
+    if (memcmp(data, expect, (size_t)esize) != 0)
+        return c08_verify_fail(v, 5, appender_id, seq, length);
+    int64_t slot = (int64_t)wid * C08_COUNT + seq;
+    if (v->seen[slot])
+        return c08_verify_fail(v, 6, appender_id, seq, length);
+    v->seen[slot] = 1;
+    v->seen_total++;
+    return MMAPQ_NEXT_ADVANCE;
+}
+
+static void c08_run_concurrent(MmapqRuntime *write_rt, MmapqRuntime *read_rt)
+{
+    cleanup_c08();
+    MmapqIndexedQueue *cq = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create(DIR, QUEUE_C08,
+        C08_REGION, C08_RING, 1, C08_MAXFILE, 0, C08_TIMEOUT_NS, 0,
+        write_rt, read_rt, &cq));
+    TEST_ASSERT_NOT_NULL(cq);
+
+    C08Lane lanes[C08_LANES];
+    pthread_t threads[C08_LANES];
+    for (int w = 0; w < C08_LANES; w++) {
+        lanes[w].queue = cq;
+        lanes[w].writer = w;
+        /* If a later pthread_create fails, Unity's assert longjmps while
+         * earlier lanes are still running — accepted: the test is already
+         * a fatal failure in that case. */
+        TEST_ASSERT_EQUAL_INT(0, pthread_create(&threads[w], NULL, c08_append_lane, &lanes[w]));
+    }
+    for (int w = 0; w < C08_LANES; w++) {
+        TEST_ASSERT_EQUAL_INT(0, pthread_join(threads[w], NULL));
+    }
+    for (int w = 0; w < C08_LANES; w++) {
+        char msg[96];
+        snprintf(msg, sizeof(msg), "lane %d: append failed rc=%lld at seq=%lld",
+                 w, (long long)lanes[w].append_rc, (long long)lanes[w].failed_seq);
+        TEST_ASSERT_TRUE_MESSAGE(lanes[w].ok, msg);
+    }
+
+    MmapqIndexedPoller *p = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_poller(cq, &p));
+    TEST_ASSERT_NOT_NULL(p);
+    C08Verify v;
+    v.seen = calloc(C08_LANES * C08_COUNT, 1);
+    TEST_ASSERT_NOT_NULL(v.seen);
+    v.seen_total = 0;
+    v.bad = 0;
+    v.bad_writer = 0;
+    v.bad_seq = -1;
+    v.bad_length = 0;
+    /* CAND-17: a mapping timeout on the poller's header read is reported as
+     * MMAPQ_POLL_END_OF_STREAM, indistinguishable from "no message yet".
+     * Under TSan one slow mapping would otherwise end this loop early and
+     * look like lost messages. Retry END_OF_STREAM until a bounded deadline;
+     * do not remove the retry while CAND-17 is open. */
+    struct timespec ts;
+    TEST_ASSERT_EQUAL_INT(0, clock_gettime(CLOCK_MONOTONIC, &ts));
+    int64_t deadline_ns = (int64_t)ts.tv_sec * 1000000000LL + ts.tv_nsec
+                          + 2 * (int64_t)C08_TIMEOUT_NS;
+    while (v.seen_total < (int64_t)(C08_LANES * C08_COUNT)) {
+        MmapqPollResult r = mmapq_indexed_poller_poll(p, c08_verify_handler, &v);
+        if (r == MMAPQ_POLL_ADVANCED) continue;
+        if (r == MMAPQ_POLL_END_OF_STREAM) {
+            TEST_ASSERT_EQUAL_INT(0, clock_gettime(CLOCK_MONOTONIC, &ts));
+            int64_t now_ns = (int64_t)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+            if (now_ns < deadline_ns) continue;
+        }
+        break;
+    }
+    if (v.bad) {
+        char msg[160];
+        snprintf(msg, sizeof(msg),
+                 "verify failed: reason=%d writer=%u seq=%lld length=%d",
+                 v.bad, (unsigned)v.bad_writer,
+                 (long long)v.bad_seq, (int)v.bad_length);
+        TEST_FAIL_MESSAGE(msg);
+    }
+    TEST_ASSERT_EQUAL_INT64((int64_t)(C08_LANES * C08_COUNT), v.seen_total);
+    free(v.seen);
+    mmapq_indexed_poller_close(p);
+    mmapq_indexed_queue_close(cq);
+    cleanup_c08();
+}
+
+void test_two_appenders_small_region_concurrent_commit(void)
+{
+    /* region_mapper is a process-lifetime singleton (runtime.h): caller-owned
+     * refs are never closed in this suite (see setUp). Closing it here would
+     * destroy the shared runtime mid-suite — the unregister/detach paths leak
+     * by design (B2) and later tests would re-create what they already hold. */
+    MmapqRuntime *rt2 = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_runtime_region_mapper(&rt2));
+    TEST_ASSERT_NOT_NULL(rt2);
+    c08_run_concurrent(rt2, rt2);
+}
+
+void test_two_appenders_small_region_concurrent_commit_sync(void)
+{
+    c08_run_concurrent(NULL, NULL);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -1504,6 +1742,8 @@ int main(void)
 
     RUN_TEST(test_multiple_appenders_interleaved);
     RUN_TEST(test_stale_appender_catch_up);
+    RUN_TEST(test_two_appenders_small_region_concurrent_commit);
+    RUN_TEST(test_two_appenders_small_region_concurrent_commit_sync);
     RUN_TEST(test_large_message_sequence_crossing_regions);
     RUN_TEST(test_appender_recovers_position_after_close);
     RUN_TEST(test_uncommitted_append_and_commit);
