@@ -198,21 +198,7 @@ static void async_ring_close(RegionRing *self)
     wait_impl.self_exec.close   = waiting_deregister_close;
     wait_impl.self_exec.ctx     = &wait_impl;
 
-    /*
-     * TODO(13d-ii): the mmapq_runtime_register() return is unchecked. If the
-     * runtime is already closed it returns 0, the dereg executable is never
-     * processed, and the wait below can never be satisfied — an unbounded
-     * spin. Handling that safely requires propagating failure out of
-     * async_ring_close (a non-void return) so region_ring_destroy can skip
-     * closing regions under a possibly-still-active mapper thread; a bare
-     * skip of the wait here would instead close them in region_ring_destroy
-     * and risk a use-after-free. That signature change is API-adjacent and
-     * needs a decision — it is 13d-ii, not made here. In the normal lifecycle
-     * the ring is closed before the runtime, so registration succeeds.
-     */
-    (void)mmapq_runtime_register(impl->runtime, &wait_impl.self_exec);
-
-    {
+    if (mmapq_runtime_register(impl->runtime, &wait_impl.self_exec)) {
         uint64_t spins = 0;
         while (!atomic_load_explicit(&wait_impl.done, memory_order_acquire)) {
             mmapq_spin_hint();
@@ -227,9 +213,24 @@ static void async_ring_close(RegionRing *self)
                 sched_yield();
             }
         }
+        /* Mapper thread has confirmed it is done. mapping_impl is freed by
+         * waiting_deregister_execute via target_ctx_to_free. */
+    } else {
+        /*
+         * The runtime is already closed (register's only failure mode with
+         * non-NULL arguments), so the dereg executable will never run and
+         * waiting on it would spin forever (audit C-01). Reached
+         * sequentially, this means mmapq_runtime_close() has returned, which
+         * joins the runtime thread after its shutdown drain has already run
+         * async_mapping_close() on our mapping executable: no mapper can be
+         * running and the regions are already UNMANAGED, so Steps 2-3 below
+         * are exactly as safe as on the normal path. Free mapping_impl here,
+         * mirroring waiting_deregister_execute's target_ctx_to_free cleanup.
+         * Closing the runtime concurrently with a participant from another
+         * thread remains a contract violation.
+         */
+        free(impl->mapping_impl);
     }
-    /* Mapper thread has confirmed it is done. mapping_impl is freed by
-     * waiting_deregister_execute via target_ctx_to_free. */
     impl->mapping_impl = NULL;
 
     /* Step 2: close regions — mapper thread is gone, self-drive is safe */
@@ -342,8 +343,9 @@ void mmapqi_region_ring_destroy(RegionRing *ring)
     if (ring->is_async) {
         AsyncRingImpl *impl = (AsyncRingImpl *)ring->impl;
         /*
-         * mapping_impl is freed by the DeregisterExecutable on the runtime
-         * thread after unregistration (already done by region_ring_close).
+         * mapping_impl was freed by region_ring_close — by the
+         * deregistration executable on the runtime thread, or directly if
+         * the runtime was already closed.
          * file_mapper is fully owned by this ring — destroy it now.
          */
         if (impl->file_mapper != NULL) {
