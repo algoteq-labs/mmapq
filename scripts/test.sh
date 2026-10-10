@@ -30,6 +30,7 @@ TESTS=(
     test_indexed_archiver
     test_indexed_batch_queue
     test_indexed_batch_archiver
+    test_alloc_faults
 )
 
 CFLAGS="-std=gnu11 -g -O0 -D_GNU_SOURCE -I include -I src"
@@ -82,7 +83,12 @@ run_test() {
         sources="${sources//src\/batch_queue_transfer.c/}"
         sources="$sources test/transfer_fault_normal.c test/transfer_fault_batch.c"
     fi
-    if ! gcc $cflags -Wno-missing-prototypes -Wno-strict-prototypes $sources "test/${test}.c" $UNITY -o "$bin" $LDFLAGS 2>&1; then
+    # Fault-injection tests route every calloc through __wrap_calloc.
+    local extra_ldflags=""
+    if [ "$test" = test_alloc_faults ]; then
+        extra_ldflags="-Wl,--wrap=calloc"
+    fi
+    if ! gcc $cflags -Wno-missing-prototypes -Wno-strict-prototypes $sources "test/${test}.c" $UNITY -o "$bin" $LDFLAGS $extra_ldflags 2>&1; then
         echo "FAIL ($label): $test (compile error)"
         return 1
     fi

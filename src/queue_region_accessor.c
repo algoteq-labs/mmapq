@@ -30,6 +30,14 @@ static void payload_file_path(const char *directory, const char *queue_name,
 
 /* ── Create a RegionRingAccessor ─────────────────────────────────────────── */
 
+/*
+ * make_ring_accessor — wrap mapper in a RegionRing + RegionAccessor.
+ *
+ * Ownership: on success the ring owns the mapper. On ANY failure the mapper
+ * has been destroyed — by this function after a ring-creation failure, or by
+ * the ring's destroy after an accessor-creation failure — and the caller
+ * must not close, destroy, or otherwise touch it.
+ */
 static int make_ring_accessor(
     FileMapper *mapper,
     int32_t     region_size,
@@ -50,7 +58,7 @@ static int make_ring_accessor(
     } else {
         rc = mmapqi_region_ring_async_create(ring_size, region_size, mapper, timeout_ns, runtime, &ring);
     }
-    if (rc != 0) return rc;
+    if (rc != 0) { mmapqi_file_mapper_destroy(mapper); return rc; }
 
     rc = mmapqi_region_ring_accessor_create(
         ring, region_size, regions_to_map_ahead, premap_ratio, out);
@@ -136,7 +144,7 @@ int mmapqi_queue_region_accessor_create_rw(
                                      QUEUE_RW_PREMAP_RATIO,
                                      timeout_ns, runtime, &acc->header);
         if (rc != 0) {
-            file_mapper_close(hdr_mapper);
+            /* hdr_mapper destroyed by make_ring_accessor — do not touch */
             free(acc->queue_name); free(acc->directory); free(acc);
             return rc;
         }
@@ -166,6 +174,8 @@ int mmapqi_queue_region_accessor_create_rw(
                                      timeout_ns, runtime,
                                      &acc->payload[appender_id].accessor);
         if (rc != 0) {
+            /* pay_mapper destroyed by make_ring_accessor; close(acc) cannot
+             * see it (occupied still 0) and must not */
             mmapqi_queue_region_accessor_close(acc);
             return rc;
         }
@@ -219,7 +229,7 @@ int mmapqi_queue_region_accessor_create_ro(
                                      QUEUE_RO_PREMAP_RATIO,
                                      timeout_ns, runtime, &acc->header);
         if (rc != 0) {
-            file_mapper_close(hdr_mapper);
+            /* hdr_mapper destroyed by make_ring_accessor — do not touch */
             free(acc->queue_name); free(acc->directory); free(acc);
             return rc;
         }
@@ -275,6 +285,7 @@ RegionAccessor *mmapqi_queue_region_accessor_payload(QueueRegionAccessor *acc,
         ? QUEUE_RO_PREMAP_RATIO
         : QUEUE_RW_PREMAP_RATIO;
 
+    /* on failure make_ring_accessor has destroyed pay_mapper — do not touch */
     if (make_ring_accessor(
             pay_mapper, acc->region_size, acc->ring_size,
             acc->regions_to_map_ahead, premap_ratio,

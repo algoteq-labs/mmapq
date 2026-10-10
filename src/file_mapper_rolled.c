@@ -274,10 +274,10 @@ int mmapqi_file_mapper_rolled_create(
     impl->insert_tick      = 0;
 
     impl->cache = calloc((size_t)max_cache_size, sizeof(FileCacheEntry));
-    if (impl->cache == NULL) { free(impl); return MMAPQ_ENOMEM; }
+    if (impl->cache == NULL) { free(impl->file_prefix); free(impl); return MMAPQ_ENOMEM; }
 
     FileMapper *fm = calloc(1, sizeof(FileMapper));
-    if (fm == NULL) { free(impl->cache); free(impl); return MMAPQ_ENOMEM; }
+    if (fm == NULL) { free(impl->file_prefix); free(impl->cache); free(impl); return MMAPQ_ENOMEM; }
 
     fm->map   = rolled_map;
     fm->unmap = rolled_unmap;
