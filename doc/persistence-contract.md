@@ -9,6 +9,11 @@ They do not provide power-loss-durable commit acknowledgments.
   explicitly resume at the desired index; the library persists no consumer
   position. If a checkpoint precedes the archived start index, the consumer
   must detect the unavailable history and apply its own recovery policy.
+- Recovery refuses to create an appender when the end-of-stream scan
+  encounters corruption (`MMAPQ_ECORRUPT`) or a transient mapping timeout
+  (`MMAPQ_ETIMEDOUT` — retryable); a refused start never recovers to a
+  position inside or past the committed stream. Corrupt queues are
+  recreated, not repaired.
 - Process termination with the operating system still running is distinct
   from kernel failure or power loss. The coordinated Python restart tests
   cover acknowledged committed data, invisible uncommitted tails, and
