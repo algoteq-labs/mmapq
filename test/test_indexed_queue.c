@@ -1369,6 +1369,75 @@ static void test_read_and_poll_reject_payload_beyond_mapping(void)
     mmapq_indexed_appender_close(appender);
 }
 
+/* ── C-04 regression: corrupt on-disk length must not hang the reopen walk ── */
+
+static void test_appender_open_rejects_corrupt_length(void)
+{
+    /*
+     * C-04 (first-walk path): corrupt a committed message's length prefix so it
+     * overruns the mapped region capacity. On reopen, initialise_append_position's
+     * first payload walk reads it. Pre-fix the walk had no bound; the bogus offset
+     * fell beyond the current file, and the follow-on walk faulted reading a mapped
+     * region past EOF (SIGBUS). Post-fix the bounded walk returns -1 and the
+     * appender create fails with MMAPQ_ECORRUPT.
+     * Fail-first observed standalone: SIGBUS (exit 135).
+     */
+    MmapqIndexedAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(q, &a));
+    uint8_t id = mmapq_indexed_appender_id(a);
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_appender_append(a, "data", 4));
+    mmapq_indexed_appender_close(a);
+
+    char path[512];
+    snprintf(path, sizeof(path), "%s/%s/payload_%u_0", DIR, QUEUE, (unsigned)id);
+    int fd = open(path, O_WRONLY);
+    TEST_ASSERT_MESSAGE(fd >= 0, "open payload");
+    int32_t bogus = REGION_SZ * 8;   /* beyond capacity, jumps past the small file */
+    TEST_ASSERT_EQUAL_INT64((int64_t)sizeof(int32_t),
+        (int64_t)pwrite(fd, &bogus, sizeof(int32_t), INITIAL_PAYLOAD_POSITION));
+    TEST_ASSERT_EQUAL_INT(0, close(fd));
+
+    MmapqIndexedAppender *a2 = NULL;
+    int rc = mmapq_indexed_appender_create_with_id(
+        DIR, QUEUE, REGION_SZ, RING_SZ, MAX_FILE, TIMEOUT_NS, 0, rt, id, 0, &a2);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ECORRUPT, rc);
+    TEST_ASSERT_NULL(a2);
+}
+
+static void test_appender_open_rejects_corrupt_uncommitted_tail(void)
+{
+    /*
+     * C-04 (tail-loop path): leave the committed message's length intact and plant
+     * a corrupt length just past it — an uncommitted tail. On reopen the first walk
+     * past the committed message succeeds and the tail walk reads the corrupt length.
+     * Pre-fix the follow-on walk faulted reading a mapped region past EOF (SIGBUS);
+     * post-fix the bounded walk / next_len < 0 guard returns MMAPQ_ECORRUPT.
+     * Fail-first observed standalone: SIGBUS (exit 135).
+     */
+    MmapqIndexedAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(q, &a));
+    uint8_t id = mmapq_indexed_appender_id(a);
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_appender_append(a, "data", 4));
+    mmapq_indexed_appender_close(a);
+
+    /* Position just past message 0: INITIAL_PAYLOAD_POSITION + 4 (length) + 4 (payload) */
+    int64_t tail = INITIAL_PAYLOAD_POSITION + PAYLOAD_LENGTH_SIZE + 4;
+    char path[512];
+    snprintf(path, sizeof(path), "%s/%s/payload_%u_0", DIR, QUEUE, (unsigned)id);
+    int fd = open(path, O_WRONLY);
+    TEST_ASSERT_MESSAGE(fd >= 0, "open payload");
+    int32_t bogus = REGION_SZ * 8;
+    TEST_ASSERT_EQUAL_INT64((int64_t)sizeof(int32_t),
+        (int64_t)pwrite(fd, &bogus, sizeof(int32_t), tail));
+    TEST_ASSERT_EQUAL_INT(0, close(fd));
+
+    MmapqIndexedAppender *a2 = NULL;
+    int rc = mmapq_indexed_appender_create_with_id(
+        DIR, QUEUE, REGION_SZ, RING_SZ, MAX_FILE, TIMEOUT_NS, 0, rt, id, 0, &a2);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ECORRUPT, rc);
+    TEST_ASSERT_NULL(a2);
+}
+
 static void test_poller_move_to_index_far_ahead_keeps_accessor_usable(void)
 {
     MmapqIndexedAppender *a = NULL;
@@ -1413,6 +1482,8 @@ int main(void)
     UNITY_BEGIN();
 
     RUN_TEST(test_read_and_poll_reject_payload_beyond_mapping);
+    RUN_TEST(test_appender_open_rejects_corrupt_length);
+    RUN_TEST(test_appender_open_rejects_corrupt_uncommitted_tail);
     RUN_TEST(test_append_and_poll_single_message);
     RUN_TEST(test_poll_end_of_stream_when_empty);
     RUN_TEST(test_poller_before_queue_retries);

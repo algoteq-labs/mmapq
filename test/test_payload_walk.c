@@ -142,43 +142,81 @@ void test_advance_multiple_messages(void)
 void test_advance_long_padding(void)
 {
     /*
-     * Simulate a message that was going to overflow a region:
-     * Appender wrote long padding at some offset, then continued
-     * at the next region.
+     * Appender-style long padding (indexed_appender.c write_padding_if_needed):
+     * when the remaining region capacity is > PAYLOAD_LENGTH_SIZE but too small
+     * for the next message, the appender writes a negative length field of
+     * (PAYLOAD_LENGTH_SIZE - capacity) and continues at the next region boundary.
      *
-     * We put long padding at INITIAL_PAYLOAD_POSITION with capacity=100,
-     * so skip = 100 bytes. Then a real message follows.
+     * Place the padding at region offset REGION_SIZE-100 (= 3996), so the
+     * remaining capacity there is exactly 100 and the skip lands on the next
+     * region boundary (absolute offset REGION_SIZE = 4096), where the real
+     * message begins. This is the advance-through-padding path; the helpers
+     * are exercised only indirectly, through the walk's observable result.
+     */
+    const int64_t pad_pos = REGION_SIZE - 100;   /* 3996 */
+    Buffer buf = {0};
+
+    /* Real message at the start of region 1 (absolute offset REGION_SIZE). */
+    TEST_ASSERT_EQUAL_INT(WRAP_SUCCESS, region_accessor_wrap(acc, REGION_SIZE, &buf));
+    write_msg(buf.data, 0, "after_padding");   /* length 13 at 4096, bytes at 4100 */
+
+    /* Long padding record at pad_pos (remaining capacity 100). */
+    TEST_ASSERT_EQUAL_INT(WRAP_SUCCESS, region_accessor_wrap(acc, pad_pos, &buf));
+    write_long_padding(buf.data, 0, 100);       /* writes PAYLOAD_LENGTH_SIZE - 100 = -96 */
+
+    int64_t probing = pad_pos;
+    int64_t msg_off = -1;
+    int32_t len = mmapqi_payload_walk_advance("test", &probing, &msg_off, acc, &buf);
+
+    /* The walk skips the 100-byte padding and lands exactly on the message. */
+    TEST_ASSERT_EQUAL_INT32((int32_t)strlen("after_padding"), len);
+    TEST_ASSERT_EQUAL_INT64(REGION_SIZE, msg_off);
+    TEST_ASSERT_EQUAL_INT64(REGION_SIZE + PAYLOAD_LENGTH_SIZE + (int32_t)strlen("after_padding"), probing);
+
+    /* Next advance reads the zero length just past the message = end of stream. */
+    len = mmapqi_payload_walk_advance("test", &probing, &msg_off, acc, &buf);
+    TEST_ASSERT_EQUAL_INT32(0, len);
+}
+
+void test_payload_walk_rejects_length_beyond_capacity(void)
+{
+    /*
+     * C-04: a corrupt on-disk length larger than the mapped region capacity
+     * must be rejected (-1), not trusted. Pre-fix the walk had no bound and
+     * returned the bogus length, publishing a message_buf that overruns the
+     * region mapping (audit repro C-04: OOB read once a consumer reads the
+     * declared capacity). A bare walk call returns the bogus length pre-fix —
+     * the fail-first here is the equality failure, not a crash.
      */
     Buffer buf = {0};
-    region_accessor_wrap(acc, INITIAL_PAYLOAD_POSITION, &buf);
-
-    int32_t fake_capacity = 100;
-    write_long_padding(buf.data, 0, fake_capacity);
-    /* Real message at INITIAL_PAYLOAD_POSITION + fake_capacity */
-    write_msg(buf.data, fake_capacity, "after_padding");
+    TEST_ASSERT_EQUAL_INT(WRAP_SUCCESS, region_accessor_wrap(acc, INITIAL_PAYLOAD_POSITION, &buf));
+    int32_t bogus = REGION_SIZE * 8;   /* far beyond capacity (REGION_SIZE - 64) */
+    memcpy(buf.data + PAYLOAD_LENGTH_OFFSET, &bogus, sizeof(int32_t));
 
     int64_t probing = INITIAL_PAYLOAD_POSITION;
     int64_t msg_off = -1;
+    int32_t len = mmapqi_payload_walk_advance("test", &probing, &msg_off, acc, &buf);
+    TEST_ASSERT_EQUAL_INT32(-1, len);
+}
 
+void test_payload_walk_rejects_int32_min_length(void)
+{
     /*
-     * payload_walk checks capacity of the mapped region, but our accessor
-     * returns capacity = REGION_SIZE - (position % REGION_SIZE).
-     * For this test we must ensure the walk sees capacity == fake_capacity
-     * at the padding position.
-     *
-     * We can achieve this by placing the padding at REGION_SIZE - fake_capacity
-     * within the region so the remaining capacity is exactly fake_capacity.
+     * C-04: a corrupt length of INT32_MIN takes the long-padding branch; the
+     * skip computation must not negate INT32_MIN in int32 (signed-overflow UB).
+     * The runtime capacity check rejects it (-1). Pre-fix: UB in
+     * payload_long_padding_skip, then MMAP_ASSERT(capacity == skip) aborts
+     * (SIGABRT) in debug builds.
      */
-    int64_t pad_pos = INITIAL_PAYLOAD_POSITION + (REGION_SIZE - fake_capacity - (int32_t)(INITIAL_PAYLOAD_POSITION % REGION_SIZE));
+    Buffer buf = {0};
+    TEST_ASSERT_EQUAL_INT(WRAP_SUCCESS, region_accessor_wrap(acc, INITIAL_PAYLOAD_POSITION, &buf));
+    int32_t bogus = INT32_MIN;
+    memcpy(buf.data + PAYLOAD_LENGTH_OFFSET, &bogus, sizeof(int32_t));
 
-    /* Simpler: test that long padding flag is detected correctly */
-    int32_t neg_len = PAYLOAD_LENGTH_SIZE - fake_capacity;
-    TEST_ASSERT_TRUE(payload_is_long_padding(neg_len));
-    TEST_ASSERT_EQUAL_INT32(fake_capacity, payload_long_padding_skip(neg_len));
-    (void)pad_pos;
-    (void)msg_off;
-    (void)probing;
-    (void)buf;
+    int64_t probing = INITIAL_PAYLOAD_POSITION;
+    int64_t msg_off = -1;
+    int32_t len = mmapqi_payload_walk_advance("test", &probing, &msg_off, acc, &buf);
+    TEST_ASSERT_EQUAL_INT32(-1, len);
 }
 
 void test_probing_offset_advances_correctly(void)
@@ -203,6 +241,8 @@ int main(void)
     RUN_TEST(test_advance_end_of_stream_returns_zero);
     RUN_TEST(test_advance_multiple_messages);
     RUN_TEST(test_advance_long_padding);
+    RUN_TEST(test_payload_walk_rejects_length_beyond_capacity);
+    RUN_TEST(test_payload_walk_rejects_int32_min_length);
     RUN_TEST(test_probing_offset_advances_correctly);
     return UNITY_END();
 }

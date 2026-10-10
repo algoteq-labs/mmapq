@@ -201,20 +201,11 @@ static inline int payload_is_short_padding(int32_t capacity)
  *
  * NOTE: The Java implementation writes (PAYLOAD_LENGTH_SIZE - capacity) as the negative
  * length, so abs(length) + PAYLOAD_LENGTH_SIZE = original capacity.
- * In C: long_padding_skip = -length + PAYLOAD_LENGTH_SIZE
+ * In C: the walk skips by -length + PAYLOAD_LENGTH_SIZE (see payload_walk.c).
  */
 static inline int payload_is_long_padding(int32_t length)
 {
     return length < 0;
-}
-
-/**
- * payload_long_padding_skip — number of bytes to skip past long padding.
- */
-static inline int32_t payload_long_padding_skip(int32_t length)
-{
-    MMAP_ASSERT(length < 0, "payload_long_padding_skip: length must be negative");
-    return -length + PAYLOAD_LENGTH_SIZE;
 }
 
 #endif /* HEADER_CODEC_H */

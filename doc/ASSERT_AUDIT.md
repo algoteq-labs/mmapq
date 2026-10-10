@@ -1,7 +1,8 @@
 # ASSERT_AUDIT.md — MMAP_ASSERT Inventory
 
-**70 asserts across 16 src/*.c files.** Generated from source.
-Last verified: 2026-08-13 (Phase 14 — regenerated).
+**69 asserts across 15 src/*.c files.** Generated from source.
+Last verified: 2026-10-10 (A4/C-04 — removed the payload_walk.c:58 assert,
+converted to a runtime check; payload_walk.c now has zero asserts).
 
 ## Legend
 
@@ -14,10 +15,10 @@ Last verified: 2026-08-13 (Phase 14 — regenerated).
 
 | Disposition | Count |
 |---|---|
-| I (stays, re-verified) | 70 |
+| I (stays, re-verified) | 69 |
 | V (pending conversion) | 0 |
 | (converted from V in Phase 16e) | 2 |
-| **Total** | **70** |
+| **Total** | **69** |
 
 ## Per-file inventory
 
@@ -77,15 +78,9 @@ Lines 37, 70. Internal dispatch null checks.
 
 Lines 57, 99, 112, 147-148, 159-160. Internal dispatch null checks.
 
-### payload_walk.c — 1 (1 I)
-
-| Line | Disposition | Verified |
-|---|---|---|
-| 58 long padding mismatch (capacity == skip) | I | Internal consistency check. |
-
 ### region_async.c — 8 (all I)
 
-Lines 216, 297-298, 325, 367, 380, 395, 405. Internal dispatch null checks.
+Lines 216, 297-298, 328, 370, 383, 398, 408. Internal dispatch null checks.
 
 ### region_ring.c — 2 (all I)
 
@@ -93,11 +88,11 @@ Lines 19, 164. Internal dispatch null checks.
 
 ### region_ring_accessor.c — 5 (all I)
 
-Lines 66-67, 110-111, 133. Internal dispatch null checks.
+Lines 66-67, 113-114, 139. Internal dispatch null checks.
 
 ### region_sync.c — 7 (all I)
 
-Lines 44, 81, 172-173, 179-180, 186. Internal dispatch null checks.
+Lines 44, 81, 176-177, 183-184, 190. Internal dispatch null checks.
 
 ### runtime.c — 2 (all I)
 
@@ -120,6 +115,6 @@ Lines 30, 269, 312, 326, 345, 361, 369. Internal dispatch null checks.
 `indexed_batch_poller.c`, `indexed_batch_reader.c`,
 `indexed_batch_archiver.c`, `indexed_archiver.c`,
 `indexed_queue.c`, `queue_meta.c`, `appender_meta.c`,
-`queue_region_accessor.c`, `file_initialiser.c`,
+`payload_walk.c`, `queue_region_accessor.c`, `file_initialiser.c`,
 `queue_latency_probe.c`, `batch_queue_latency_probe.c`,
 `queue_transfer.c`, `batch_queue_transfer.c`, `queue_files.c`

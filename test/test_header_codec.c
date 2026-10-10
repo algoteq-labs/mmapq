@@ -148,13 +148,6 @@ void test_long_padding_positive_not_long(void)
     TEST_ASSERT_FALSE(payload_is_long_padding(1));
 }
 
-void test_long_padding_skip_value(void)
-{
-    /* skip = -length + PAYLOAD_LENGTH_SIZE */
-    TEST_ASSERT_EQUAL_INT32(PAYLOAD_LENGTH_SIZE + 10, payload_long_padding_skip(-10));
-    TEST_ASSERT_EQUAL_INT32(PAYLOAD_LENGTH_SIZE + 60, payload_long_padding_skip(-60));
-}
-
 /* ── constants ───────────────────────────────────────────────────────────── */
 
 void test_initial_payload_position(void)
@@ -220,7 +213,6 @@ int main(void)
     RUN_TEST(test_long_padding_negative_length);
     RUN_TEST(test_long_padding_zero_not_long);
     RUN_TEST(test_long_padding_positive_not_long);
-    RUN_TEST(test_long_padding_skip_value);
 
     RUN_TEST(test_initial_payload_position);
 

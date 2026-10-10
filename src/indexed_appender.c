@@ -297,6 +297,10 @@ static int initialise_append_position(MmapqIndexedAppender *a, int64_t start_ind
                                                           &next_msg_off,
                                                           ro_payload, ro_buf);
                 if (next_len == 0) break;
+                /* A walk error leaves probing unadvanced; without this the loop
+                 * would spin forever on a corrupt tail. Matches the first walk's
+                 * len <= 0 mapping at MMAPQ_ECORRUPT above. */
+                if (next_len < 0) return MMAPQ_ECORRUPT;
                 probing = next_probing;
             }
 

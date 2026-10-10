@@ -25,7 +25,7 @@ int32_t mmapqi_payload_walk_advance(
     Buffer         *payload_buf)
 {
     int64_t position = *probing_offset;
-    (void)queue_name;  /* carried for diagnostics; used in MMAP_ASSERT messages */
+    (void)queue_name;  /* carried for diagnostics; currently unused */
 
     /* ── Map current position ────────────────────────────────────────────── */
     WrapResult r = region_accessor_wrap(payload_accessor, position, payload_buf);
@@ -53,11 +53,13 @@ int32_t mmapqi_payload_walk_advance(
 
     /* ── Long padding: negative length field ─────────────────────────────── */
     if (payload_is_long_padding(length)) {
-        int32_t skip = payload_long_padding_skip(length);
-
-        MMAP_ASSERT(payload_buf->capacity == skip,
-            "mmapqi_payload_walk_advance: long padding size mismatch — "
-            "payload stream is corrupt");
+        /* Skip = -length + PAYLOAD_LENGTH_SIZE, computed in int64_t so the
+         * negation of INT32_MIN is defined. The appender writes padding whose
+         * skip equals the remaining region capacity (write_padding_if_needed),
+         * so a mismatch means the on-disk length is corrupt — a runtime check,
+         * not an assert, because the value is on-disk data (see AGENTS.md). */
+        int64_t skip = -(int64_t)length + PAYLOAD_LENGTH_SIZE;
+        if ((int64_t)payload_buf->capacity != skip) return -1;
 
         position += skip;
         *message_offset_out = position;
@@ -78,7 +80,12 @@ int32_t mmapqi_payload_walk_advance(
     }
 
     /* ── Valid message ───────────────────────────────────────────────────── */
-    if (length <= 0) return -1;
+    /* Bound the on-disk length against the mapped region capacity: the message
+     * occupies PAYLOAD_LENGTH_SIZE + length bytes, so length may not exceed
+     * capacity - PAYLOAD_LENGTH_SIZE. Runtime check — length is on-disk data. */
+    if (length <= 0 ||
+        (int64_t)length > (int64_t)payload_buf->capacity - PAYLOAD_LENGTH_SIZE)
+        return -1;
 
     *message_offset_out = position;
     *probing_offset     = position + PAYLOAD_LENGTH_SIZE + length;
