@@ -76,6 +76,10 @@ static inline void export_meta_encode(const ExportMeta *m, uint8_t *out)
     memcpy(out + EXPORT_META_TOTAL_ENTRIES_OFF,  &m->total_entries,  EXPORT_META_TOTAL_ENTRIES_SIZE);
     out[EXPORT_META_ARCHIVABLE_OFF] = m->archivable;
     out[EXPORT_META_QUEUE_TYPE_OFF] = m->queue_type;
+    /* Reserved bytes are zeroed explicitly (not copied from m->reserved) so the
+       output does not depend on callers having run export_meta_init; decoders
+       ignore reserved, so streams written before this fix remain importable. */
+    memset(out + EXPORT_META_PAYLOAD_START, 0, EXPORT_META_PAYLOAD_SIZE);
 }
 
 /**

@@ -12,6 +12,7 @@
 #include "runtime.h"
 #include "mmap_platform.h"
 #include "internal/batch_payload_iterator_internal.h"
+#include "internal/export_meta.h"
 
 #include <unistd.h>
 #include <string.h>
@@ -2241,6 +2242,237 @@ void test_import_mapper_invalid_id_falls_back_to_auto(void)
     unlink(fpath);
 }
 
+/* ── C-09: export stream header reserved bytes ─────────────────────────────
+ * The 30 reserved bytes (offsets 34-63) of the 64-byte ExportMeta header must
+ * be zero on the wire.  The primary pin is the direct encoder unit test; the
+ * fmemopen tests are integration coverage whose pre-fix failure depends on
+ * stack-frame geometry (recorded, not counted as fail-first evidence).  The
+ * byte-identity checks pin export determinism only — identical garbage would
+ * pass them on buggy code.  The import pins guard backward compatibility:
+ * streams written before the fix carry garbage reserved bytes and must stay
+ * importable (the decoder ignores reserved; import must never validate it). */
+
+/* Direct unit pin on the encoder — deterministic in both build configs. */
+void test_export_meta_encode_zeroes_reserved(void)
+{
+    ExportMeta meta;
+    export_meta_init(&meta);
+    meta.schema_version = 1;
+    meta.region_size    = 4096;
+    meta.start_index    = 7;
+    meta.max_file_size  = 4096LL * 64;
+    meta.total_entries  = 3;
+    meta.archivable     = 0;
+    meta.queue_type     = 0;
+
+    uint8_t buf[EXPORT_META_SIZE];
+    memset(buf, 0xAA, sizeof(buf));
+    export_meta_encode(&meta, buf);
+    for (int i = EXPORT_META_PAYLOAD_START; i < EXPORT_META_SIZE; i++)
+        TEST_ASSERT_EQUAL_UINT8(0, buf[i]);
+}
+
+static volatile uint8_t dirty_sink;
+
+/* Fill 4 KiB of stack with 0xAA so a subsequent uninitialized stack buffer
+ * likely lands on dirtied bytes.  noinline + the volatile sink read defeat
+ * dead-store elimination under -O3. */
+__attribute__((noinline)) static void dirty_stack_4k(void)
+{
+    uint8_t buf[4096];
+    memset(buf, 0xAA, sizeof(buf));
+    for (size_t i = 0; i < sizeof(buf); i += 512)
+        dirty_sink = buf[i];
+}
+
+static void assert_header_reserved_zero(const char *buf)
+{
+    for (int i = EXPORT_META_PAYLOAD_START; i < EXPORT_META_SIZE; i++)
+        TEST_ASSERT_EQUAL_UINT8(0, (uint8_t)buf[i]);
+}
+
+void test_export_stream_header_reserved_bytes_zero(void)
+{
+    const char *msgs[] = {"r1", "r2"};
+    MmapqIndexedQueue *src = create_queue(QUEUE, msgs, 2, 0);
+    MmapqIndexedReader *reader = NULL;
+    int rc_reader = mmapq_indexed_queue_create_reader(src, &reader);
+    TEST_ASSERT_EQUAL_INT(0, rc_reader);
+    TEST_ASSERT_NOT_NULL(reader);
+
+    /* header + 2 entries of (uint16 appender_id + int32 length + 3 bytes) */
+    const size_t stream_len = EXPORT_META_SIZE + 2 * (sizeof(uint16_t) + sizeof(int32_t) + 3);
+    static char buf1[4096], buf2[4096];
+    memset(buf1, 0, sizeof(buf1));
+    memset(buf2, 0, sizeof(buf2));
+
+    dirty_stack_4k();
+    FILE *out = fmemopen(buf1, sizeof(buf1), "wb");
+    TEST_ASSERT_NOT_NULL(out);
+    int64_t n = mmapq_queue_transfer_export(reader, out, 0, 1, MMAPQ_QUEUE_TRANSFER_REBASE,
+                                            NULL, NULL, NULL);
+    fclose(out);
+    TEST_ASSERT_EQUAL_INT64(2, n);
+    assert_header_reserved_zero(buf1);
+
+    dirty_stack_4k();
+    out = fmemopen(buf2, sizeof(buf2), "wb");
+    TEST_ASSERT_NOT_NULL(out);
+    n = mmapq_queue_transfer_export(reader, out, 0, 1, MMAPQ_QUEUE_TRANSFER_REBASE,
+                                    NULL, NULL, NULL);
+    fclose(out);
+    TEST_ASSERT_EQUAL_INT64(2, n);
+    TEST_ASSERT_EQUAL_INT(0, memcmp(buf1, buf2, stream_len));
+
+    mmapq_indexed_reader_close(reader);
+    mmapq_indexed_queue_close(src);
+}
+
+void test_batch_export_stream_header_reserved_bytes_zero(void)
+{
+    const char *batches[][3] = {{"b1", "b2", NULL}};
+    int sizes[] = {2};
+    MmapqIndexedBatchQueue *src = create_batch_queue(BQ_QUEUE, batches, sizes, 1);
+    MmapqIndexedBatchReader *reader = NULL;
+    int rc_reader = mmapq_indexed_batch_queue_create_reader(src, &reader);
+    TEST_ASSERT_EQUAL_INT(0, rc_reader);
+    TEST_ASSERT_NOT_NULL(reader);
+
+    /* header + (uint16 appender_id + int32 count) + 2 x (int32 length + 3 bytes) */
+    const size_t stream_len = EXPORT_META_SIZE + sizeof(uint16_t) + sizeof(int32_t)
+                            + 2 * (sizeof(int32_t) + 3);
+    static char buf1[4096], buf2[4096];
+    memset(buf1, 0, sizeof(buf1));
+    memset(buf2, 0, sizeof(buf2));
+
+    dirty_stack_4k();
+    FILE *out = fmemopen(buf1, sizeof(buf1), "wb");
+    TEST_ASSERT_NOT_NULL(out);
+    int64_t n = mmapq_batch_queue_transfer_export(reader, out, 0, 0, MMAPQ_BATCH_QUEUE_TRANSFER_REBASE,
+                                                  NULL, NULL, NULL);
+    fclose(out);
+    TEST_ASSERT_EQUAL_INT64(1, n);
+    assert_header_reserved_zero(buf1);
+
+    dirty_stack_4k();
+    out = fmemopen(buf2, sizeof(buf2), "wb");
+    TEST_ASSERT_NOT_NULL(out);
+    n = mmapq_batch_queue_transfer_export(reader, out, 0, 0, MMAPQ_BATCH_QUEUE_TRANSFER_REBASE,
+                                          NULL, NULL, NULL);
+    fclose(out);
+    TEST_ASSERT_EQUAL_INT64(1, n);
+    TEST_ASSERT_EQUAL_INT(0, memcmp(buf1, buf2, stream_len));
+
+    mmapq_indexed_batch_reader_close(reader);
+    mmapq_indexed_batch_queue_close(src);
+}
+
+void test_import_accepts_nonzero_reserved_bytes(void)
+{
+    const char *msgs[] = {"c1", "c2", "c3"};
+    MmapqIndexedQueue *src = create_queue(QUEUE, msgs, 3, 0);
+    MmapqIndexedReader *reader = NULL;
+    int rc_reader = mmapq_indexed_queue_create_reader(src, &reader);
+    TEST_ASSERT_EQUAL_INT(0, rc_reader);
+    TEST_ASSERT_NOT_NULL(reader);
+
+    static char buf[4096];
+    memset(buf, 0, sizeof(buf));
+    FILE *out = fmemopen(buf, sizeof(buf), "wb");
+    TEST_ASSERT_NOT_NULL(out);
+    int64_t n = mmapq_queue_transfer_export(reader, out, 0, 2, MMAPQ_QUEUE_TRANSFER_REBASE,
+                                            NULL, NULL, NULL);
+    fclose(out);
+    TEST_ASSERT_EQUAL_INT64(3, n);
+    mmapq_indexed_reader_close(reader);
+    mmapq_indexed_queue_close(src);
+
+    /* Simulate a stream written by a pre-fix library: garbage in reserved. */
+    memset(buf + EXPORT_META_PAYLOAD_START, 0xAA, EXPORT_META_PAYLOAD_SIZE);
+
+    cleanup_queue(COPY_Q);
+    FILE *in = fmemopen(buf, sizeof(buf), "rb");
+    TEST_ASSERT_NOT_NULL(in);
+    int64_t imported = mmapq_queue_transfer_import(in, TEST_DIR, COPY_Q, MMAPQ_QUEUE_TRANSFER_REBASE,
+                                                   rt, rt, 0, NULL, NULL, MMAPQ_CONFLICT_AUTO);
+    fclose(in);
+    TEST_ASSERT_EQUAL_INT64(3, imported);
+
+    char loaded[10][100];
+    int cnt = load_messages(COPY_Q, loaded, 10);
+    TEST_ASSERT_EQUAL_INT(3, cnt);
+    TEST_ASSERT_EQUAL_STRING("c1", loaded[0]);
+    TEST_ASSERT_EQUAL_STRING("c2", loaded[1]);
+    TEST_ASSERT_EQUAL_STRING("c3", loaded[2]);
+}
+
+void test_batch_import_accepts_nonzero_reserved_bytes(void)
+{
+    const char *batches[][3] = {{"x1", "x2", NULL}};
+    int sizes[] = {2};
+    MmapqIndexedBatchQueue *src = create_batch_queue(BQ_QUEUE, batches, sizes, 1);
+    MmapqIndexedBatchReader *reader = NULL;
+    int rc_reader = mmapq_indexed_batch_queue_create_reader(src, &reader);
+    TEST_ASSERT_EQUAL_INT(0, rc_reader);
+    TEST_ASSERT_NOT_NULL(reader);
+
+    static char buf[4096];
+    memset(buf, 0, sizeof(buf));
+    FILE *out = fmemopen(buf, sizeof(buf), "wb");
+    TEST_ASSERT_NOT_NULL(out);
+    int64_t n = mmapq_batch_queue_transfer_export(reader, out, 0, 0, MMAPQ_BATCH_QUEUE_TRANSFER_REBASE,
+                                                  NULL, NULL, NULL);
+    fclose(out);
+    TEST_ASSERT_EQUAL_INT64(1, n);
+    mmapq_indexed_batch_reader_close(reader);
+    mmapq_indexed_batch_queue_close(src);
+
+    /* Simulate a stream written by a pre-fix library: garbage in reserved. */
+    memset(buf + EXPORT_META_PAYLOAD_START, 0xAA, EXPORT_META_PAYLOAD_SIZE);
+
+    cleanup_queue(BQ_COPY);
+    FILE *in = fmemopen(buf, sizeof(buf), "rb");
+    TEST_ASSERT_NOT_NULL(in);
+    int64_t imported = mmapq_batch_queue_transfer_import(in, TEST_DIR, BQ_COPY,
+                                                         MMAPQ_BATCH_QUEUE_TRANSFER_REBASE,
+                                                         rt, rt, 0, NULL, NULL, MMAPQ_CONFLICT_AUTO);
+    fclose(in);
+    TEST_ASSERT_EQUAL_INT64(1, imported);
+    verify_batch_index_space(BQ_COPY, 0, 0);
+
+    /* Read back the imported payloads, not just the index space: reserved-byte
+       garbage must not disturb the batch stream parse. */
+    MmapqIndexedBatchQueue *vq = NULL;
+    int rc_vq = mmapq_indexed_batch_queue_create(TEST_DIR, BQ_COPY, 4096, 16, 1, 4096LL * 64,
+                                                 0, 5000000000ULL, 0, rt, rt, &vq);
+    TEST_ASSERT_EQUAL_INT(0, rc_vq);
+    TEST_ASSERT_NOT_NULL(vq);
+    MmapqIndexedBatchReader *vr = NULL;
+    int rc_vr = mmapq_indexed_batch_queue_create_reader(vq, &vr);
+    TEST_ASSERT_EQUAL_INT(0, rc_vr);
+    TEST_ASSERT_NOT_NULL(vr);
+    MmapqBatchReadingContext vctx = {0};
+    mmapq_indexed_batch_reader_read(vr, 0, &vctx);
+    TEST_ASSERT_EQUAL(MMAPQ_BATCH_ENTRY_AVAILABLE, vctx.status);
+    TEST_ASSERT_EQUAL_INT(2, vctx.message_count);
+    mmapq_batch_iterator_init(vctx.iterator, vctx.batch_offset, vctx.message_count, 0);
+    const char *expected[] = {"x1", "x2"};
+    char msgbuf[100];
+    int seen = 0;
+    while (mmapq_batch_iterator_advance(vctx.iterator)) {
+        TEST_ASSERT_LESS_THAN(2, seen);
+        int32_t l = batch_iterator_current_length(vctx.iterator);
+        memcpy(msgbuf, batch_iterator_current_data(vctx.iterator), (size_t)l);
+        msgbuf[l - 1] = '\0';
+        TEST_ASSERT_EQUAL_STRING(expected[seen], msgbuf);
+        seen++;
+    }
+    TEST_ASSERT_EQUAL_INT(2, seen);
+    TEST_ASSERT_EQUAL_INT(0, vctx.iterator->last_error);
+    mmapq_indexed_batch_reader_close(vr);
+    mmapq_indexed_batch_queue_close(vq);
+}
+
 /* ── Main ────────────────────────────────────────────────────────────────── */
 
 int main(void)
@@ -2325,6 +2557,13 @@ int main(void)
     RUN_TEST(test_import_auto_on_conflict);
     RUN_TEST(test_import_abort_on_conflict);
     RUN_TEST(test_import_mapper_invalid_id_falls_back_to_auto);
+
+    /* C-09 — export header reserved bytes (5) */
+    RUN_TEST(test_export_meta_encode_zeroes_reserved);
+    RUN_TEST(test_export_stream_header_reserved_bytes_zero);
+    RUN_TEST(test_batch_export_stream_header_reserved_bytes_zero);
+    RUN_TEST(test_import_accepts_nonzero_reserved_bytes);
+    RUN_TEST(test_batch_import_accepts_nonzero_reserved_bytes);
 
     return UNITY_END();
 }
