@@ -1698,19 +1698,21 @@ static void c08_run_concurrent(MmapqRuntime *write_rt, MmapqRuntime *read_rt)
     cleanup_c08();
 }
 
-void test_two_appenders_small_region_concurrent_commit(void)
+void test_concurrent_appenders_small_region_commit(void)
 {
-    /* region_mapper is a process-lifetime singleton (runtime.h): caller-owned
-     * refs are never closed in this suite (see setUp). Closing it here would
-     * destroy the shared runtime mid-suite — the unregister/detach paths leak
-     * by design (B2) and later tests would re-create what they already hold. */
+    /* region_mapper returns a clone of the process-lifetime singleton; the
+     * caller owns one reference and releases it with destroy (refcount--,
+     * runtime.h:243-244,304-305) — never close, which would shut the shared
+     * runtime down mid-suite. setUp's per-test reference is likewise never
+     * released (filed as D11; not this task). */
     MmapqRuntime *rt2 = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapq_runtime_region_mapper(&rt2));
     TEST_ASSERT_NOT_NULL(rt2);
     c08_run_concurrent(rt2, rt2);
+    mmapq_runtime_destroy(rt2);
 }
 
-void test_two_appenders_small_region_concurrent_commit_sync(void)
+void test_concurrent_appenders_small_region_commit_sync(void)
 {
     c08_run_concurrent(NULL, NULL);
 }
@@ -1742,8 +1744,8 @@ int main(void)
 
     RUN_TEST(test_multiple_appenders_interleaved);
     RUN_TEST(test_stale_appender_catch_up);
-    RUN_TEST(test_two_appenders_small_region_concurrent_commit);
-    RUN_TEST(test_two_appenders_small_region_concurrent_commit_sync);
+    RUN_TEST(test_concurrent_appenders_small_region_commit);
+    RUN_TEST(test_concurrent_appenders_small_region_commit_sync);
     RUN_TEST(test_large_message_sequence_crossing_regions);
     RUN_TEST(test_appender_recovers_position_after_close);
     RUN_TEST(test_uncommitted_append_and_commit);
