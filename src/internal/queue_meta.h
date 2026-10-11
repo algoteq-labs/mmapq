@@ -24,7 +24,11 @@
  *   26 : padding to 64 bytes
  *
  * schema_version and queue_type are validated on every open; mismatch
- * refuses with MMAPQ_ESCHEMA.
+ * refuses with MMAPQ_ESCHEMA. Geometry is validated too: region_size must
+ * be positive and a power of two, max_file_size positive and a multiple of
+ * region_size; impossible values read from disk refuse with MMAPQ_ECORRUPT.
+ * A file that exists but is shorter than QUEUE_META_ENCODED_LENGTH refuses
+ * with MMAPQ_ENOTREADY (incomplete, not corrupt).
  *
  * start_index:
  *   Always QUEUE_META_INITIAL_START_INDEX (0) for non-archivable queues.

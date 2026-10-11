@@ -380,10 +380,11 @@ void test_async_ring_ring_calloc_fail_no_uaf(void)
 void test_reader_open_corrupt_meta_region_size_no_leak(void)
 {
     /* A corrupt meta region_size (positive, divides max_file_size, but not a
-     * power of two) passes meta_validate and rolled_create, then EINVALs at
-     * ring creation — reached from disk via the reader's lazy open
-     * (indexed_reader.c reader_init). Pre-fix the header mapper chain leaked
-     * on every open attempt (LSan: 4 allocations). */
+     * power of two) is rejected by meta_validate with MMAPQ_ECORRUPT at the
+     * reader's lazy meta open (indexed_reader.c reader_init) — D2 moved the
+     * rejection earlier; pre-D2 it passed meta_validate and EINVALed at ring
+     * creation, leaking the header mapper chain on every open attempt
+     * (LSan: 4 allocations). */
     char cmd[256];
     snprintf(cmd, sizeof(cmd), "rm -rf %s/q && mkdir -p %s", DIR, DIR);
     if (system(cmd) != 0) { /* best-effort */ }
@@ -420,7 +421,7 @@ void test_reader_open_corrupt_meta_region_size_no_leak(void)
     memset(&ctx, 0, sizeof(ctx));
     mmapq_indexed_reader_read(r, 0, &ctx);
     TEST_ASSERT_EQUAL_INT(MMAPQ_ENTRY_ERROR, ctx.status);
-    TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL, mmapq_indexed_reader_last_error(r));
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ECORRUPT, mmapq_indexed_reader_last_error(r));
     mmapq_indexed_reader_close(r);
 
     if (system(cmd) != 0) { /* best-effort */ }

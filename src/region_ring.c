@@ -50,8 +50,8 @@ int mmapqi_region_ring_sync_create(
     if (file_mapper == NULL) return MMAPQ_EINVAL;
     /* A non-NULL mapper is consumed on every path: owned by the ring on
      * success, destroyed here on failure — the caller must never touch it
-     * after this call. Reachable from disk: a corrupt meta region_size
-     * passes meta_validate and rolled_create and EINVALs here. */
+     * after this call. Caller-error only: a corrupt meta region_size is
+     * rejected by meta_validate with MMAPQ_ECORRUPT before reaching here. */
     if (ring_size <= 0) { mmapqi_file_mapper_destroy(file_mapper); return MMAPQ_EINVAL; }
     if ((ring_size & (ring_size - 1)) != 0) { mmapqi_file_mapper_destroy(file_mapper); return MMAPQ_EINVAL; }
     if (region_size <= 0) { mmapqi_file_mapper_destroy(file_mapper); return MMAPQ_EINVAL; }

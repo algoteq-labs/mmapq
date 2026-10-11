@@ -84,6 +84,22 @@ static int meta_validate(const QueueMeta *m, uint8_t expected_type,
     if ((uint8_t)m->queue_type != expected_type) {
         return MMAPQ_ESCHEMA;
     }
+    /* Geometry from disk: impossible values mean a corrupt file (ECORRUPT),
+     * distinct from a merely incomplete one (ENOTREADY, size guard in the
+     * open paths) — the remedies differ. Both region_size checks precede the
+     * % so a zero region_size cannot divide. */
+    if (m->region_size <= 0) {
+        return MMAPQ_ECORRUPT;
+    }
+    if ((m->region_size & (m->region_size - 1)) != 0) {
+        return MMAPQ_ECORRUPT;
+    }
+    if (m->max_file_size <= 0) {
+        return MMAPQ_ECORRUPT;
+    }
+    if (m->max_file_size % m->region_size != 0) {
+        return MMAPQ_ECORRUPT;
+    }
     return 0;
 }
 
@@ -104,10 +120,27 @@ int mmapqi_queue_meta_open_rw(
     if (directory  == NULL) return MMAPQ_EINVAL;
     if (queue_name == NULL) return MMAPQ_EINVAL;
     if (region_size <= 0) return MMAPQ_EINVAL;
+    if ((region_size & (region_size - 1)) != 0) return MMAPQ_EINVAL;
     if (max_file_size <= 0) return MMAPQ_EINVAL;
+    if (max_file_size % region_size != 0) return MMAPQ_EINVAL;
 
     char path[4096];
     meta_file_path(directory, queue_name, path, sizeof(path));
+
+    /* Size guard, parity with the RO open. A 1–63 byte meta cannot come
+     * from a crashed create — the creator ftruncates to the full encoded
+     * length under the flock before writing anything, so a crash leaves
+     * 0 or 64 bytes — it is outside damage. ENOTREADY (not ECORRUPT) for
+     * parity with the RO path's exists-but-incomplete semantics; the
+     * remedy is recreating the queue either way.
+     * st_size == 0 proceeds: fixed_size_region_create runs the initialiser
+     * on empty files. */
+    struct stat st;
+    if (stat(path, &st) != 0) {
+        if (errno != ENOENT) return MMAPQ_ETIMEDOUT;
+    } else if (st.st_size > 0 && st.st_size < QUEUE_META_ENCODED_LENGTH) {
+        return MMAPQ_ENOTREADY;
+    }
 
     MetaInitCtx ctx = {
         .start_index  = start_index,
@@ -138,10 +171,11 @@ int mmapqi_queue_meta_open_rw(
     m->base   = buf.data;
     meta_cache_fields(m);
 
-    if (meta_validate(m, queue_type, directory, queue_name) != 0) {
+    int vrc = meta_validate(m, queue_type, directory, queue_name);
+    if (vrc != 0) {
         mmapqi_fixed_size_region_destroy(region);
         free(m);
-        return MMAPQ_ESCHEMA;
+        return vrc;
     }
 
     *out = m;
@@ -174,6 +208,10 @@ int mmapqi_queue_meta_open_ro(
     }
 
     RegionAccessor *region = NULL;
+    /* The non-NULL initialiser is load-bearing: it makes
+     * fixed_size_region_create take the creator's flock(LOCK_EX), so this
+     * open waits for any in-progress initialisation and never maps a
+     * partially written meta. Do not "simplify" it to NULL. */
     int fsrerr = mmapqi_fixed_size_region_create(
         path,
         QUEUE_META_ENCODED_LENGTH,
@@ -202,11 +240,12 @@ int mmapqi_queue_meta_open_ro(
     m->base   = buf.data;
     meta_cache_fields(m);
 
-    if (meta_validate(m, expected_type, directory, queue_name) != 0) {
+    int vrc = meta_validate(m, expected_type, directory, queue_name);
+    if (vrc != 0) {
         region_accessor_close(region);
         mmapqi_fixed_size_region_destroy(region);
         free(m);
-        return MMAPQ_ESCHEMA;
+        return vrc;
     }
 
     *out = m;
