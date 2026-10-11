@@ -9,6 +9,7 @@
 #include "internal/header_codec.h"
 #include "internal/payload_iterator.h"
 #include "internal/uncommitted_payload_iterator.h"
+#include "internal/queue_files.h"
 #include "runtime.h"
 
 #include <stdlib.h>
@@ -683,6 +684,163 @@ void test_payload_iterator_init_rejects_out_of_range(void)
     mmapq_indexed_appender_close(a);
 }
 
+/* CAND-28 (owner review, 2nd round): the set records ANY window of
+ * FILE_INDEX_SET_MAX consecutive file numbers, whatever order they arrive
+ * in — resequenced commits make payload file order non-monotonic. set()
+ * returns 1 when stored, 0 when the window genuinely exceeds the span;
+ * first()/next() return absolute indices. The previous silent drop (and
+ * the intermediate absolute indexing) let a backward undo skip or refuse
+ * existence validation for files >= 4096. */
+void test_file_index_set_overflow_returns_zero(void)
+{
+    FileIndexSet s;
+
+    /* Ascending window: stores until the span exceeds FILE_INDEX_SET_MAX */
+    file_index_set_clear(&s);
+    TEST_ASSERT_EQUAL_INT(1, file_index_set_set(&s, 10000));
+    TEST_ASSERT_EQUAL_INT(1, file_index_set_set(&s, 10001));
+    TEST_ASSERT_EQUAL_INT(0, file_index_set_set(&s, 10000 + FILE_INDEX_SET_MAX));
+    TEST_ASSERT_EQUAL_INT(1, file_index_set_test(&s, 10000));
+    TEST_ASSERT_EQUAL_INT(1, file_index_set_test(&s, 10001));
+    TEST_ASSERT_EQUAL_INT64(10000, mmapqi_file_index_set_first(&s));
+    TEST_ASSERT_EQUAL_INT64(10001, mmapqi_file_index_set_next(&s, 10000));
+    TEST_ASSERT_EQUAL_INT64(-1, mmapqi_file_index_set_next(&s, 10001));
+
+    /* Out-of-order recording: the set rebases downward when the widened
+     * window still fits (10000..10001), and first() tracks the new base */
+    file_index_set_clear(&s);
+    TEST_ASSERT_EQUAL_INT(1, file_index_set_set(&s, 10001));
+    TEST_ASSERT_EQUAL_INT(1, file_index_set_set(&s, 10000));
+    TEST_ASSERT_EQUAL_INT64(10000, mmapqi_file_index_set_first(&s));
+    TEST_ASSERT_EQUAL_INT(1, file_index_set_test(&s, 10000));
+    TEST_ASSERT_EQUAL_INT(1, file_index_set_test(&s, 10001));
+    TEST_ASSERT_EQUAL_INT(0, file_index_set_set(&s, 14096)); /* 10000..14096 = 4097 files */
+
+    /* Downward rebase refused when the window genuinely exceeds the span */
+    file_index_set_clear(&s);
+    TEST_ASSERT_EQUAL_INT(1, file_index_set_set(&s, 10001));
+    TEST_ASSERT_EQUAL_INT(0, file_index_set_set(&s, 5905));  /* 5905..10001 = 4097 files */
+}
+
+/* CAND-28 owner-review pin: a one-index undo whose file numbers are >=
+ * FILE_INDEX_SET_MAX must succeed — the FileIndexSet records a SPAN
+ * relative to the first file in the undo range, so a narrow undo high in
+ * the file numbering is servable. With 4 KiB files (512 headers each),
+ * index 2^21 sits in header file 4096; the absolute-indexed set refused
+ * this undo with EINVAL (owner probe: the same undo returned 0 on the D3
+ * tree). */
+void test_archiver_undo_one_index_at_header_file_4096(void)
+{
+    const int64_t S = (int64_t)512 * 4096;  /* first index of header file 4096 */
+
+    char dir_path[512];
+    snprintf(dir_path, sizeof(dir_path), "%s/%s", DIR, QUEUE);
+    mkdir(dir_path, 0775);
+    QueueMeta *m = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapqi_queue_meta_open_rw(DIR, QUEUE, 0,
+        4096, 4096, /* archivable= */ 1, QUEUE_TYPE_NORMAL, &m));
+    TEST_ASSERT_NOT_NULL(m);
+    mmapqi_queue_meta_close(m);
+
+    MmapqIndexedAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_appender_create(DIR, QUEUE,
+        4096, 4, 4096, TIMEOUT, 0, rt, 0, &a));
+    TEST_ASSERT_NOT_NULL(a);
+    for (int64_t i = 0; i < S + 2; i++)
+        TEST_ASSERT_EQUAL_INT64(i, mmapq_indexed_appender_append(a, "u", 1));
+    mmapq_indexed_appender_close(a);
+
+    MmapqIndexedArchiver *arch = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_archiver_create(DIR, QUEUE, 4, rt, &arch));
+    TEST_ASSERT_NOT_NULL(arch);
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_archiver_archive_up_to_index(arch, S + 2));
+    TEST_ASSERT_EQUAL_INT64(S + 2, mmapq_indexed_archiver_start_index(arch));
+
+    /* One-index undo at header file 4096 — absolute-indexed set: EINVAL. */
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_archiver_archive_up_to_index(arch, S + 1));
+    TEST_ASSERT_EQUAL_INT64(S + 1, mmapq_indexed_archiver_start_index(arch));
+    mmapq_indexed_archiver_close(arch);
+}
+
+/* CAND-28 owner-review pin (2nd round): append_uncommitted + commit is the
+ * documented UDP-resequencing flow and commit() has no ordering check, so
+ * per-appender payload positions do NOT ascend with index. A narrow undo
+ * must still succeed: the FileIndexSet records any window of
+ * FILE_INDEX_SET_MAX consecutive file numbers regardless of arrival order.
+ * Region = file = 4 KiB: A (4000 B) fills payload file 0 to offset 4068,
+ * so B (100 B) rolls to file 1. Commit B -> idx 0, then A -> idx 1;
+ * forward(2), undo(0): the payload set records file 1 first, then file 0
+ * below the base. Owner probe: 0 on the D3 tree and the first CAND-28
+ * tree; ECORRUPT on the relative-base tree without downward rebase.
+ * (No batch twin: the batch appender owns a single in-flight batch per
+ * appender, so it cannot commit offsets out of order.) */
+void test_archiver_undo_with_resequenced_commits(void)
+{
+    char dir_path[512];
+    snprintf(dir_path, sizeof(dir_path), "%s/%s", DIR, QUEUE);
+    mkdir(dir_path, 0775);
+    QueueMeta *m = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapqi_queue_meta_open_rw(DIR, QUEUE, 0,
+        4096, 4096, /* archivable= */ 1, QUEUE_TYPE_NORMAL, &m));
+    TEST_ASSERT_NOT_NULL(m);
+    mmapqi_queue_meta_close(m);
+
+    MmapqIndexedAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_appender_create(DIR, QUEUE,
+        4096, 4, 4096, TIMEOUT, 0, rt, 0, &a));
+    TEST_ASSERT_NOT_NULL(a);
+
+    char payload_a[4000];
+    memset(payload_a, 'A', sizeof(payload_a));
+    char payload_b[100];
+    memset(payload_b, 'B', sizeof(payload_b));
+
+    int64_t off_a = mmapq_indexed_appender_append_uncommitted(
+        a, payload_a, (int32_t)sizeof(payload_a));
+    TEST_ASSERT_EQUAL_INT64(INITIAL_PAYLOAD_POSITION, off_a);
+    int64_t off_b = mmapq_indexed_appender_append_uncommitted(
+        a, payload_b, (int32_t)sizeof(payload_b));
+    TEST_ASSERT_EQUAL_INT64(4096, off_b);  /* rolled to payload file 1 */
+
+    /* Resequenced commit: B first, then A */
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_appender_commit(a, off_b));
+    TEST_ASSERT_EQUAL_INT64(1, mmapq_indexed_appender_commit(a, off_a));
+    mmapq_indexed_appender_close(a);
+
+    MmapqIndexedArchiver *arch = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_archiver_create(DIR, QUEUE, 4, rt, &arch));
+    TEST_ASSERT_NOT_NULL(arch);
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_archiver_archive_up_to_index(arch, 2));
+    TEST_ASSERT_EQUAL_INT64(2, mmapq_indexed_archiver_start_index(arch));
+
+    /* Undo over both entries — payload file order is 1 then 0 */
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_archiver_archive_up_to_index(arch, 0));
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_archiver_start_index(arch));
+    mmapq_indexed_archiver_close(arch);
+
+    /* Both entries read back correctly */
+    MmapqIndexedReader *r = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_reader_create(DIR, QUEUE, 4, TIMEOUT, NULL, &r));
+    TEST_ASSERT_NOT_NULL(r);
+    MmapqReadingContext ctx = {0};
+    mmapq_indexed_reader_read(r, 0, &ctx);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ENTRY_AVAILABLE, ctx.status);
+    TEST_ASSERT_EQUAL_INT((int)sizeof(payload_b), ctx.length);
+    TEST_ASSERT_EQUAL_MEMORY(payload_b, ctx.data, sizeof(payload_b));
+    mmapq_indexed_reader_read(r, 1, &ctx);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ENTRY_AVAILABLE, ctx.status);
+    TEST_ASSERT_EQUAL_INT((int)sizeof(payload_a), ctx.length);
+    TEST_ASSERT_EQUAL_MEMORY(payload_a, ctx.data, sizeof(payload_a));
+    mmapq_indexed_reader_close(r);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -706,5 +864,8 @@ int main(void)
     RUN_TEST(test_uncommitted_iterator_rewind_after_archive);
     RUN_TEST(test_uncommitted_iterator_skips_archived_entries);
     RUN_TEST(test_payload_iterator_init_rejects_out_of_range);
+    RUN_TEST(test_file_index_set_overflow_returns_zero);
+    RUN_TEST(test_archiver_undo_one_index_at_header_file_4096);
+    RUN_TEST(test_archiver_undo_with_resequenced_commits);
     return UNITY_END();
 }

@@ -243,7 +243,15 @@ int mmapq_indexed_batch_archiver_archive_up_to_index(MmapqIndexedBatchArchiver *
             if (hdr == HEADER_NULL)
                 return MMAPQ_EINVAL;
 
-            file_index_set_set(&hdr_files, (int)(i / headers_in_file));
+            /* The set records any window of FILE_INDEX_SET_MAX consecutive
+             * file numbers, whatever order they arrive in — payload file
+             * order is not contractually monotonic. A 0 means the undo
+             * genuinely spans more than FILE_INDEX_SET_MAX files — refuse
+             * the undo as posed with EINVAL, not ECORRUPT: the data is
+             * fine, the request is unservable. Remedy: undo in steps
+             * spanning < FILE_INDEX_SET_MAX files each. */
+            if (!file_index_set_set(&hdr_files, i / headers_in_file))
+                return MMAPQ_EINVAL;
 
             uint8_t aid = header_appender_id(hdr);
             int64_t pos = header_payload_position(hdr);
@@ -260,23 +268,25 @@ int mmapq_indexed_batch_archiver_archive_up_to_index(MmapqIndexedBatchArchiver *
                 return MMAPQ_ECORRUPT;
             mmapq_batch_iterator_init(it, pos, msg_count, 0);
             /* Record the file containing the batch header itself */
-            file_index_set_set(&pay_files[aid], (int)(pos / max_file_size));
+            if (!file_index_set_set(&pay_files[aid], pos / max_file_size))
+                return MMAPQ_EINVAL;  /* payload span too wide — undo in smaller steps */
             /* Record files spanned by each message's end offset */
             while (mmapq_batch_iterator_advance(it)) {
                 int64_t msg_end = batch_iterator_next_payload_position(it);
-                file_index_set_set(&pay_files[aid],
-                                   (int)(msg_end / max_file_size));
+                if (!file_index_set_set(&pay_files[aid],
+                                        msg_end / max_file_size))
+                    return MMAPQ_EINVAL;  /* payload span too wide — undo in smaller steps */
             }
             /* An incomplete file scan cannot validate an undo operation. */
             if (it->last_error != 0) return it->last_error;
         }
 
         /* Validate all required header files exist */
-        for (int fi = mmapqi_file_index_set_first(&hdr_files); fi >= 0;
+        for (int64_t fi = mmapqi_file_index_set_first(&hdr_files); fi >= 0;
              fi = mmapqi_file_index_set_next(&hdr_files, fi)) {
             char path[4096];
-            snprintf(path, sizeof(path), "%s/%s/header_%d",
-                     a->directory, a->queue_name, fi);
+            snprintf(path, sizeof(path), "%s/%s/header_%ld",
+                     a->directory, a->queue_name, (long)fi);
             if (!mmapqi_queue_file_exists(path))
                 return MMAPQ_ECORRUPT;
         }
@@ -286,11 +296,11 @@ int mmapq_indexed_batch_archiver_archive_up_to_index(MmapqIndexedBatchArchiver *
             if (first_positions[aid] == OFFSET_NOT_SET) continue;
             if (first_positions[aid] < INITIAL_PAYLOAD_POSITION)
                 return MMAPQ_ECORRUPT;
-            for (int fi = mmapqi_file_index_set_first(&pay_files[aid]); fi >= 0;
+            for (int64_t fi = mmapqi_file_index_set_first(&pay_files[aid]); fi >= 0;
                  fi = mmapqi_file_index_set_next(&pay_files[aid], fi)) {
                 char path[4096];
-                snprintf(path, sizeof(path), "%s/%s/payload_%d_%d",
-                         a->directory, a->queue_name, aid, fi);
+                snprintf(path, sizeof(path), "%s/%s/payload_%d_%ld",
+                         a->directory, a->queue_name, aid, (long)fi);
                 if (!mmapqi_queue_file_exists(path))
                     return MMAPQ_ECORRUPT;
             }
@@ -365,11 +375,11 @@ int mmapq_indexed_batch_archiver_archivable_files(
     int     count = 0;
 
     /* Fully covered header files */
-    int full_header_files = (int)((start - 1) / headers_in_file);
-    for (int i = 0; i < full_header_files && count < max_paths; i++) {
+    int64_t full_header_files = (start - 1) / headers_in_file;
+    for (int64_t i = 0; i < full_header_files && count < max_paths; i++) {
         char path[4096];
-        snprintf(path, sizeof(path), "%s/%s/header_%d",
-                 a->directory, a->queue_name, i);
+        snprintf(path, sizeof(path), "%s/%s/header_%ld",
+                 a->directory, a->queue_name, (long)i);
         /* Caller must free each returned string */
         if (mmapqi_queue_file_exists(path)) {
             paths_out[count] = strdup(path);
@@ -389,11 +399,11 @@ int mmapq_indexed_batch_archiver_archivable_files(
         AppenderMeta *am = get_appender_meta(a, ids[k]);
         if (!am) continue;
         int64_t start_off    = appender_meta_start_offset(am);
-        int     full_payload = (int)(start_off / max_file_size);
-        for (int fi = 0; fi < full_payload && count < max_paths; fi++) {
+        int64_t full_payload = start_off / max_file_size;
+        for (int64_t fi = 0; fi < full_payload && count < max_paths; fi++) {
             char path[4096];
-            snprintf(path, sizeof(path), "%s/%s/payload_%u_%d",
-                     a->directory, a->queue_name, (unsigned)ids[k], fi);
+            snprintf(path, sizeof(path), "%s/%s/payload_%u_%ld",
+                     a->directory, a->queue_name, (unsigned)ids[k], (long)fi);
             if (mmapqi_queue_file_exists(path)) {
                 paths_out[count] = strdup(path);
                 if (paths_out[count] == NULL) {

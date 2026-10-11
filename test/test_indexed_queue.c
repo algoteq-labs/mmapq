@@ -1927,19 +1927,18 @@ void test_reader_refuses_queue_with_negative_disk_start_index(void)
 }
 
 /* Search-clamp pin: at start_index = MAX the exponential probe must not
- * read beyond MAX (such reads alias via the rolled mapper's int file_index
- * truncation, CAND-28) and move_to_end must land at MAX + 1 exactly.
- * Unpatched (observed via probe): move_to_end parks at 2^57 - 2^51 — a
- * phantom "last index" found in aliased header_0 slots.
+ * read beyond MAX (such reads aliased via the rolled mapper's int file_index
+ * truncation, CAND-28 — now fixed) and move_to_end must land at MAX + 1
+ * exactly. Unpatched (observed via probe): move_to_end parks at
+ * 2^57 - 2^51 — a phantom "last index" found in aliased header_0 slots.
  *
  * Geometry note (owner review correction): at 64 KiB regions / 4 MiB files,
  * position(MAX) = 2^59 - 8 gives file_index 2^37 - 1, which the rolled
- * mapper's int truncation turns into -1 — index MAX actually lives in a
- * 4 MiB file named header_-1, not a ~2^59-byte sparse file, and this pin
- * currently passes through that truncation path (write and read truncate
- * identically). When CAND-28 widens file_index to int64_t, this test
- * becomes its regression pin: MAX then really lives at offset 2^59 - 8 in
- * a sparse header_137438953471. */
+ * mapper's int truncation used to turn into -1 — pre-CAND-28, index MAX
+ * actually lived in a 4 MiB file named header_-1 (write and read truncated
+ * identically). Since CAND-28 widened file_index to int64_t, this test is
+ * its regression pin: MAX now really lives at offset 2^59 - 8 in a sparse
+ * header_137438953471. */
 void test_move_to_end_at_max_index(void)
 {
     char qdir[256];
@@ -1979,6 +1978,45 @@ void test_move_to_end_at_max_index(void)
     mmapq_indexed_appender_close(a);
     mmapq_indexed_queue_close(q2);
     if (system(qdir) != 0) { /* best-effort */ }
+}
+
+/* CAND-28 pin: index 2^47 is legal (<= MAX) and never written. Header
+ * position 2^50 / MAX_FILE 2^18 = file_index exactly 2^32, which the rolled
+ * mapper's int file_index truncated to 0 — aliasing header_0 and serving
+ * index 0/1's payloads for a never-written index. Pre-fix (owner-observed):
+ * AVAILABLE "d3-msg-0" / AVAILABLE "d3-msg-1" / exists == 1 /
+ * move_to_index == 1. */
+void test_read_no_alias_at_file_index_2pow32(void)
+{
+    const int64_t c28 = (int64_t)1 << 47;
+
+    MmapqIndexedAppender *a = NULL;
+    d3_append_two(&a);
+
+    MmapqIndexedReader *r = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_reader(q, &r));
+    TEST_ASSERT_NOT_NULL(r);
+    MmapqIndexedPoller *p = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_poller(q, &p));
+    TEST_ASSERT_NOT_NULL(p);
+
+    MmapqReadingContext ctx = {0};
+    mmapq_indexed_reader_read(r, c28, &ctx);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ENTRY_END_OF_STREAM, ctx.status);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_reader_last_error(r));
+
+    mmapq_indexed_reader_read(r, c28 + 1, &ctx);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ENTRY_END_OF_STREAM, ctx.status);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_reader_last_error(r));
+
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_poller_exists(p, c28));
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_poller_move_to_index(p, c28 + 1));
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ENTRY_END_OF_STREAM,
+        mmapq_indexed_reader_entry_status(r, c28));
+
+    mmapq_indexed_poller_close(p);
+    mmapq_indexed_reader_close(r);
+    mmapq_indexed_appender_close(a);
 }
 
 int main(void)
@@ -2049,6 +2087,7 @@ int main(void)
     RUN_TEST(test_reader_refuses_queue_with_absurd_disk_start_index);
     RUN_TEST(test_reader_refuses_queue_with_negative_disk_start_index);
     RUN_TEST(test_move_to_end_at_max_index);
+    RUN_TEST(test_read_no_alias_at_file_index_2pow32);
 
     return UNITY_END();
 }

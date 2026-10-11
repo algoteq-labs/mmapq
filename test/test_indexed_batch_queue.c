@@ -1212,6 +1212,38 @@ void test_batch_queue_create_start_index_boundary(void)
     if (system(qdir) != 0) { /* best-effort */ }
 }
 
+/* CAND-28 pin, batch surface: index 2^51 is legal (<= MAX) and never
+ * written. Header position 2^54 / MAX_FILE 2^22 = file_index exactly 2^32,
+ * which the rolled mapper's int file_index truncated to 0 — aliasing
+ * header_0 and serving batch 0's payload for a never-written index.
+ * Pre-fix: AVAILABLE / exists == 1 / move_to_index == 1. */
+void test_batch_read_no_alias_at_file_index_2pow32(void)
+{
+    const int64_t c28 = (int64_t)1 << 51;
+
+    MmapqIndexedBatchAppender *a = NULL;
+    d3_commit_one_batch(&a);
+
+    MmapqIndexedBatchReader *r = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_reader(q, &r));
+    TEST_ASSERT_NOT_NULL(r);
+    MmapqIndexedBatchPoller *p = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_poller(q, &p));
+    TEST_ASSERT_NOT_NULL(p);
+
+    MmapqBatchReadingContext ctx = {0};
+    mmapq_indexed_batch_reader_read(r, c28, &ctx);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_BATCH_ENTRY_END_OF_STREAM, ctx.status);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_reader_last_error(r));
+
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_poller_exists(p, c28));
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_poller_move_to_index(p, c28 + 1));
+
+    mmapq_indexed_batch_poller_close(p);
+    mmapq_indexed_batch_reader_close(r);
+    mmapq_indexed_batch_appender_close(a);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -1248,5 +1280,6 @@ int main(void)
     RUN_TEST(test_batch_poller_rejects_absurd_index);
     RUN_TEST(test_batch_reader_rejects_absurd_index);
     RUN_TEST(test_batch_queue_create_start_index_boundary);
+    RUN_TEST(test_batch_read_no_alias_at_file_index_2pow32);
     return UNITY_END();
 }

@@ -23,6 +23,9 @@ static void cleanup_files(void)
         snprintf(path, sizeof(path), "%s_%d", FILE_PREFIX, i);
         unlink(path);
     }
+    /* CAND-28 pin: the file_index 2^32 file lives outside the loop range */
+    snprintf(path, sizeof(path), "%s_%ld", FILE_PREFIX, (long)((int64_t)1 << 32));
+    unlink(path);
 }
 
 void setUp(void)
@@ -115,6 +118,39 @@ void test_rolled_close_is_idempotent(void)
     file_mapper_close(fm_rw);
 }
 
+void test_mapper_rolled_file_index_not_truncated(void)
+{
+    /* CAND-28: position 2^32 * MAX_FILE_SIZE gives file_index exactly 2^32.
+     * The rolled mapper's int file_index truncated it to 0, aliasing
+     * <prefix>_0. The map must create the true-named file and leave file 0
+     * undisturbed. Pre-fix: the true-named file does not exist. */
+    const int64_t hi_pos = ((int64_t)1 << 32) * MAX_FILE_SIZE;
+
+    uintptr_t hi = file_mapper_map(fm_rw, hi_pos, REGION_SIZE);
+    TEST_ASSERT_NOT_EQUAL(FILE_MAPPER_NULL_ADDRESS, hi);
+    *(int32_t *)hi = 0x11111111;
+    file_mapper_unmap(fm_rw, hi, hi_pos, REGION_SIZE);
+
+    uintptr_t lo = file_mapper_map(fm_rw, 0, REGION_SIZE);
+    TEST_ASSERT_NOT_EQUAL(FILE_MAPPER_NULL_ADDRESS, lo);
+    *(int32_t *)lo = 0x22222222;
+    file_mapper_unmap(fm_rw, lo, 0, REGION_SIZE);
+
+    char path[256];
+    snprintf(path, sizeof(path), "%s_%ld", FILE_PREFIX, (long)((int64_t)1 << 32));
+    struct stat st;
+    TEST_ASSERT_EQUAL_INT(0, stat(path, &st));
+
+    snprintf(path, sizeof(path), "%s_0", FILE_PREFIX);
+    int fd = open(path, O_RDONLY);
+    TEST_ASSERT_GREATER_OR_EQUAL(0, fd);
+    int32_t marker = 0;
+    TEST_ASSERT_EQUAL_INT((int)sizeof(marker),
+        (int)read(fd, &marker, sizeof(marker)));
+    TEST_ASSERT_EQUAL_INT(0, close(fd));
+    TEST_ASSERT_EQUAL_INT32(0x22222222, marker);
+}
+
 /* ── main ────────────────────────────────────────────────────────────────── */
 
 int main(void)
@@ -125,5 +161,6 @@ int main(void)
     RUN_TEST(test_rolled_missing_ro_file_returns_file_not_found);
     RUN_TEST(test_rolled_ref_count_prevents_premature_eviction);
     RUN_TEST(test_rolled_close_is_idempotent);
+    RUN_TEST(test_mapper_rolled_file_index_not_truncated);
     return UNITY_END();
 }

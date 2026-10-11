@@ -39,32 +39,35 @@ int mmapqi_queue_files_get_appender_ids(
 
 /* ── FileIndexSet iteration ───────────────────────────────────────────────── */
 
-int mmapqi_file_index_set_first(const FileIndexSet *s)
+int64_t mmapqi_file_index_set_first(const FileIndexSet *s)
 {
+    if (!s->has_base) return -1;
     for (int w = 0; w < FILE_INDEX_SET_WORDS; w++) {
         if (s->bits[w]) {
             int bit = __builtin_ctz(s->bits[w]);
-            return w * 32 + bit;
+            return s->base + w * 32 + bit;
         }
     }
     return -1;
 }
 
-int mmapqi_file_index_set_next(const FileIndexSet *s, int after)
+int64_t mmapqi_file_index_set_next(const FileIndexSet *s, int64_t after)
 {
-    if (after < 0 || after >= FILE_INDEX_SET_MAX - 1) return -1;
-    int start = after + 1;
-    int w = start >> 5;
-    int b = start & 31;
+    if (!s->has_base) return -1;
+    int64_t start = after - s->base + 1;
+    if (start < 0) start = 0;
+    if (start >= FILE_INDEX_SET_MAX) return -1;
+    int w = (int)(start >> 5);
+    int b = (int)(start & 31);
 
     /* Check remaining bits in the current word */
     uint32_t mask = s->bits[w] >> b;
-    if (mask) return w * 32 + b + __builtin_ctz(mask);
+    if (mask) return s->base + w * 32 + b + __builtin_ctz(mask);
 
     /* Check subsequent words */
     for (w++; w < FILE_INDEX_SET_WORDS; w++) {
         if (s->bits[w])
-            return w * 32 + __builtin_ctz(s->bits[w]);
+            return s->base + w * 32 + __builtin_ctz(s->bits[w]);
     }
     return -1;
 }

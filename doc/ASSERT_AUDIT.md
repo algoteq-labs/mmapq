@@ -37,7 +37,7 @@ when register learned to return 0 on allocation failure).
 
 ### file_mapper_rolled.c — 10 (all I)
 
-Lines 81, 152-153, 157, 179-181, 189, 195, 225.
+Lines 86, 157-158, 162, 184-186, 194, 200, 230.
 Internal: null checks on self/entry, invariant checks on
 oldest_idx/ref_count/length coherence. No caller-controlled values.
 

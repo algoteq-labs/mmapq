@@ -7,10 +7,15 @@
 #include <stdio.h>
 #include <stdint.h>
 
+/* Rolled file names are built with "%ld" and (long) casts on the int64_t
+ * file_index — correct only where long is 64 bits (the supported targets
+ * are Linux x86-64/ARM64, LP64). */
+_Static_assert(sizeof(long) == 8, "rolled file naming assumes LP64 (64-bit long)");
+
 /* ── File cache entry ────────────────────────────────────────────────────── */
 
 typedef struct {
-    int          file_index;   /* which rolled file this entry covers    */
+    int64_t      file_index;   /* which rolled file this entry covers    */
     FileMapper  *mapper;       /* the underlying single-file mapper       */
     int          ref_count;    /* number of currently open regions        */
     uint64_t     insert_order; /* monotonically increasing insertion tick */
@@ -41,14 +46,14 @@ static void      rolled_close(FileMapper *self);
 
 /* ── File name construction ──────────────────────────────────────────────── */
 
-static void build_file_name(const char *prefix, int file_index, char *out, size_t out_size)
+static void build_file_name(const char *prefix, int64_t file_index, char *out, size_t out_size)
 {
-    snprintf(out, out_size, "%s_%d", prefix, file_index);
+    snprintf(out, out_size, "%s_%ld", prefix, (long)file_index);
 }
 
 /* ── Cache helpers ───────────────────────────────────────────────────────── */
 
-static FileCacheEntry *cache_find(RolledImpl *impl, int file_index)
+static FileCacheEntry *cache_find(RolledImpl *impl, int64_t file_index)
 {
     for (int i = 0; i < impl->cache_count; i++) {
         if (impl->cache[i].file_index == file_index) {
@@ -98,7 +103,7 @@ static void cache_evict_oldest(RolledImpl *impl)
  * Get or open a FileMapper for the given file_index.
  * If the cache is full, evicts the oldest zero-ref entry first.
  */
-static FileCacheEntry *cache_get_or_open(RolledImpl *impl, int file_index)
+static FileCacheEntry *cache_get_or_open(RolledImpl *impl, int64_t file_index)
 {
     FileCacheEntry *entry = cache_find(impl, file_index);
     if (entry != NULL) {
@@ -157,7 +162,7 @@ static uintptr_t rolled_map(FileMapper *self, int64_t position, int32_t length)
     MMAP_ASSERT(length == impl->region_size,
         "rolled_map: length must equal region_size");
 
-    int     file_index        = (int)(position / impl->max_file_size);
+    int64_t file_index        = position / impl->max_file_size;
     int64_t position_in_file  = position % impl->max_file_size;
 
     FileCacheEntry *entry = cache_get_or_open(impl, file_index);
@@ -182,7 +187,7 @@ static void rolled_unmap(FileMapper *self, uintptr_t address,
 
     RolledImpl *impl = (RolledImpl *)self->impl;
 
-    int     file_index       = (int)(position / impl->max_file_size);
+    int64_t file_index       = position / impl->max_file_size;
     int64_t position_in_file = position % impl->max_file_size;
 
     FileCacheEntry *entry = cache_find(impl, file_index);
