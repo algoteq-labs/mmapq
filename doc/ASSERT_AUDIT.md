@@ -55,7 +55,7 @@ Lines 28-29, 52. Internal dispatch null checks.
 
 ### header_reader.c — 2 (all I)
 
-Lines 37, 70. Internal dispatch null checks.
+Lines 38, 71. Internal dispatch null checks.
 
 ### indexed_appender.c — 1 (V→I, Phase 6a)
 

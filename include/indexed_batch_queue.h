@@ -45,7 +45,8 @@ typedef struct MmapqIndexedBatchQueue MmapqIndexedBatchQueue;
  * ring_size:          number of simultaneously mapped regions
  * regions_to_map_ahead: number of regions to pre-map in the background (0 = sync mode)
  * max_file_size:      maximum size of a single rolled payload file
- * start_index:        initial batch index (typically 0)
+ * start_index:        initial batch index (typically 0; must be in
+ *                     [0, 2^56 - 1])
  * timeout_ns:         region-mapping timeout in nanoseconds
  * archivable:         1 to create archivable queue (0 = default, not archivable)
  * write_runtime:      background mapper runtime for the appender side

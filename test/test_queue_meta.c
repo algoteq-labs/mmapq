@@ -306,6 +306,61 @@ void test_open_ro_waits_for_creator_lock(void)
     close(fd);
 }
 
+/* ── D3: meta_validate start_index bounds ────────────────────────────────── */
+
+/* An on-disk start_index beyond MMAPQI_MAX_INDEX is corruption: at such
+ * indices header positions alias already-written slots (index 2^61 maps to
+ * position 0). Pre-fix this opened rc=0 and reads aliased index 0's data. */
+void test_open_ro_corrupt_start_index_above_max(void)
+{
+    create_valid_meta();
+    int64_t bad = (int64_t)1 << 61;
+    pwrite_meta_field(&bad, sizeof(bad), QUEUE_META_START_INDEX_OFFSET);
+    assert_ro_open_rc(MMAPQ_ECORRUPT);
+}
+
+/* A negative on-disk start_index is corruption the same way. */
+void test_open_ro_corrupt_start_index_negative(void)
+{
+    create_valid_meta();
+    int64_t bad = -4096;
+    pwrite_meta_field(&bad, sizeof(bad), QUEUE_META_START_INDEX_OFFSET);
+    assert_ro_open_rc(MMAPQ_ECORRUPT);
+}
+
+/* Pin that open_rw propagates meta_validate's start_index return code
+ * (the checks are shared code; pinned once, mirroring D2 pin 6). */
+void test_open_rw_corrupt_start_index_above_max(void)
+{
+    create_valid_meta();
+    int64_t bad = (int64_t)1 << 61;
+    pwrite_meta_field(&bad, sizeof(bad), QUEUE_META_START_INDEX_OFFSET);
+
+    QueueMeta *m = NULL;
+    int rc = mmapqi_queue_meta_open_rw(
+        DIR, QUEUE, 0, 4096, D2_MAX_FILE, 0, QUEUE_TYPE_NORMAL, &m);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ECORRUPT, rc);
+    TEST_ASSERT_NULL(m);
+}
+
+/* Boundary control: the largest legal start_index still opens, both paths.
+ * D3_MAX_INDEX literal must match MMAPQI_MAX_INDEX in header_codec.h. */
+#define D3_MAX_INDEX (((int64_t)1 << 56) - 1)
+void test_open_start_index_max_boundary_control(void)
+{
+    QueueMeta *m = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapqi_queue_meta_open_rw(
+        DIR, QUEUE, D3_MAX_INDEX, 4096, D2_MAX_FILE, 0, QUEUE_TYPE_NORMAL, &m));
+    TEST_ASSERT_NOT_NULL(m);
+    mmapqi_queue_meta_close(m);
+
+    QueueMeta *ro = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapqi_queue_meta_open_ro(DIR, QUEUE, QUEUE_TYPE_NORMAL, &ro));
+    TEST_ASSERT_NOT_NULL(ro);
+    TEST_ASSERT_EQUAL_INT64(D3_MAX_INDEX, queue_meta_start_index(ro));
+    mmapqi_queue_meta_close(ro);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -328,5 +383,9 @@ int main(void)
     RUN_TEST(test_open_rw_caller_max_file_size_not_multiple_eINVAL);
     RUN_TEST(test_open_valid_geometry_control);
     RUN_TEST(test_open_ro_waits_for_creator_lock);
+    RUN_TEST(test_open_ro_corrupt_start_index_above_max);
+    RUN_TEST(test_open_ro_corrupt_start_index_negative);
+    RUN_TEST(test_open_rw_corrupt_start_index_above_max);
+    RUN_TEST(test_open_start_index_max_boundary_control);
     return UNITY_END();
 }

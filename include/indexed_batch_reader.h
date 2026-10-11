@@ -61,8 +61,9 @@ typedef enum {
     MMAPQ_BATCH_ENTRY_ARCHIVED,
 
     /**
-     * A mapping, I/O, or corruption error occurred. Inspect last_error
-     * to distinguish a retryable timeout from invalid stored data.
+     * A mapping, I/O, corruption, or invalid-argument error occurred.
+     * Inspect last_error to distinguish a retryable timeout from invalid
+     * stored data or an invalid index (MMAPQ_EINVAL).
      * Mirrors Java MmapqEntryStatus.ERROR.
      */
     MMAPQ_BATCH_ENTRY_ERROR
@@ -138,10 +139,12 @@ int mmapq_indexed_batch_reader_create(
  * If the batch is not available, ctx->status indicates why:
  *   MMAPQ_BATCH_ENTRY_END_OF_STREAM — index beyond the last committed batch
  *   MMAPQ_BATCH_ENTRY_ARCHIVED      — index below start_index()
- *   MMAPQ_BATCH_ENTRY_ERROR         — mapping timeout or I/O failure
+ *   MMAPQ_BATCH_ENTRY_ERROR         — mapping timeout, I/O failure, or
+ *                                     invalid index (last_error == MMAPQ_EINVAL)
  *
  * r:     the reader
- * index: zero-based batch index to read (must be >= 0)
+ * index: zero-based batch index to read (must be in [0, 2^56 - 1]; beyond
+ *        2^56 - 1 indices would alias already-written slots)
  * ctx:   caller-owned context to populate; returned for convenience
  * Returns: @p ctx (same pointer passed in)
  */
@@ -205,7 +208,9 @@ int64_t mmapq_indexed_batch_reader_start_index(MmapqIndexedBatchReader *r);
  * Equivalent to reading the header entry at @p index without loading payload.
  *
  * r:     the reader
- * index: zero-based batch index to check
+ * index: zero-based batch index to check; above 2^56 - 1 returns
+ *        MMAPQ_BATCH_ENTRY_ERROR with last_error == MMAPQ_EINVAL (such
+ *        indices would alias already-written slots); has_entry inherits 0
  * Returns: MMAPQ_BATCH_ENTRY_AVAILABLE, MMAPQ_BATCH_ENTRY_END_OF_STREAM, or MMAPQ_BATCH_ENTRY_ARCHIVED
  */
 MmapqBatchEntryStatus mmapq_indexed_batch_reader_entry_status(MmapqIndexedBatchReader *r, int64_t index);

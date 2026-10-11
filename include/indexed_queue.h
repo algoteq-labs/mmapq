@@ -86,7 +86,8 @@ typedef struct MmapqIndexedQueue MmapqIndexedQueue;
  * ring_size:          regions in the ring (power of two, typically 4)
  * regions_to_map_ahead: premap count (typically 1)
  * max_file_size:      preferred maximum file size (used ONLY if creating new)
- * start_index:        initial start index (used ONLY if creating new)
+ * start_index:        initial start index (used ONLY if creating new;
+ *                     must be in [0, 2^56 - 1])
  * timeout_ns:         mapping timeout in nanoseconds
  * archivable:        1 to create the queue archivable (archiver may advance
  *                    start_index; readers pay an acquire load). Applies at

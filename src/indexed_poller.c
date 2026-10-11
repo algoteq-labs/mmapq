@@ -215,7 +215,7 @@ int mmapq_indexed_poller_move_to_index(MmapqIndexedPoller *p, int64_t index)
 {
     if (p == NULL)   return 0;
     if (p->closed)   return 0;
-    if (index < 0)   return 0;
+    if (!header_index_in_range(index)) return 0;
 
     if (!poller_init(p)) {
         if (index == 0) { p->current_index = 0; return 1; }
@@ -306,6 +306,7 @@ int64_t mmapq_indexed_poller_start_index(MmapqIndexedPoller *p)
 int mmapq_indexed_poller_exists(MmapqIndexedPoller *p, int64_t index)
 {
     if (p == NULL) return 0;
+    if (!header_index_in_range(index)) return 0;
     if (!poller_init(p)) return 0;
     if (index < queue_meta_start_index(p->queue_meta)) return 0;
     return header_found(p->header_acc, &p->header_buf, index, p->queue_name);

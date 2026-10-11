@@ -1717,6 +1717,270 @@ void test_concurrent_appenders_small_region_commit_sync(void)
     c08_run_concurrent(NULL, NULL);
 }
 
+/* ── D3 (CAND-16): absurd indices alias already-written slots ────────────── */
+
+/* D3_MAX_INDEX literal must match MMAPQI_MAX_INDEX in header_codec.h. */
+#define D3_MAX_INDEX   (((int64_t)1 << 56) - 1)
+#define D3_ALIAS_INDEX ((int64_t)1 << 61)   /* position wraps to 0: index 0's slot */
+
+static void d3_append_two(MmapqIndexedAppender **out)
+{
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(q, out));
+    TEST_ASSERT_NOT_NULL(*out);
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_appender_append(*out, "d3-msg-0", 8));
+    TEST_ASSERT_EQUAL_INT64(1, mmapq_indexed_appender_append(*out, "d3-msg-1", 8));
+}
+
+void test_poller_rejects_absurd_index(void)
+{
+    MmapqIndexedAppender *a = NULL;
+    d3_append_two(&a);
+
+    MmapqIndexedPoller *p = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_poller(q, &p));
+    TEST_ASSERT_NOT_NULL(p);
+
+    /* Unpatched: all three return 1 — 2^61 aliases index 0's slot and
+     * 2^61+1 aliases index 1's. */
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_poller_move_to_index(p, D3_ALIAS_INDEX));
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_poller_exists(p, D3_ALIAS_INDEX));
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_poller_move_to_index(p, D3_ALIAS_INDEX + 1));
+
+    /* Rejection must not have moved the poller: the next poll yields index 0. */
+    PollCapture c = { .directive = MMAPQ_NEXT_ADVANCE };
+    TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_ADVANCED, mmapq_indexed_poller_poll(p, capture_handler, &c));
+    TEST_ASSERT_EQUAL_INT64(0, c.index);
+    TEST_ASSERT_EQUAL_INT(8, c.length);
+    TEST_ASSERT_EQUAL_STRING("d3-msg-0", c.data);
+
+    mmapq_indexed_poller_close(p);
+    mmapq_indexed_appender_close(a);
+}
+
+void test_reader_rejects_absurd_index(void)
+{
+    MmapqIndexedAppender *a = NULL;
+    d3_append_two(&a);
+
+    MmapqIndexedReader *r = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_reader(q, &r));
+    TEST_ASSERT_NOT_NULL(r);
+
+    /* Unpatched: AVAILABLE with index 0's payload ('d3-msg-0'). */
+    MmapqReadingContext ctx = {0};
+    mmapq_indexed_reader_read(r, D3_ALIAS_INDEX, &ctx);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ENTRY_ERROR, ctx.status);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL, mmapq_indexed_reader_last_error(r));
+
+    /* Unpatched: AVAILABLE. */
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ENTRY_ERROR,
+        mmapq_indexed_reader_entry_status(r, D3_ALIAS_INDEX));
+    TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL, mmapq_indexed_reader_last_error(r));
+
+    /* has_entry inherits entry_status's rejection. */
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_reader_has_entry(r, D3_ALIAS_INDEX));
+
+    mmapq_indexed_reader_close(r);
+    mmapq_indexed_appender_close(a);
+}
+
+void test_reader_absurd_index_not_collapse_to_timeout(void)
+{
+    /* Anti-collapse pin: indices in [2^60, 2^61) wrap to negative positions,
+     * which the ring accessor reports as WRAP_MAP_TIMED_OUT — a retry-later
+     * code for a caller error. Unpatched: ENTRY_ERROR with ETIMEDOUT. */
+    MmapqIndexedAppender *a = NULL;
+    d3_append_two(&a);
+
+    MmapqIndexedReader *r = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_reader(q, &r));
+    TEST_ASSERT_NOT_NULL(r);
+
+    MmapqReadingContext ctx = {0};
+    mmapq_indexed_reader_read(r, ((int64_t)1 << 60) + 5, &ctx);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ENTRY_ERROR, ctx.status);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL, mmapq_indexed_reader_last_error(r));
+
+    mmapq_indexed_reader_close(r);
+    mmapq_indexed_appender_close(a);
+}
+
+void test_reader_index_boundary(void)
+{
+    /* The boundary is observable only through the reader (at pollers and
+     * archivers MAX+1 already fails on unpatched code). Unpatched, at this
+     * geometry (MAX_FILE = 2^18) read(MAX+1) returns AVAILABLE: position
+     * 2^59 / 2^18 = 2^41 truncates to 0 in the rolled mapper's int
+     * file_index (file_mapper_rolled.c:160, filed as CAND-28) and aliases
+     * header_0. */
+    MmapqIndexedAppender *a = NULL;
+    d3_append_two(&a);
+
+    MmapqIndexedReader *r = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_reader(q, &r));
+    TEST_ASSERT_NOT_NULL(r);
+
+    /* entry_status boundary first, on the fresh reader (last_error still 0):
+     * entry_status uses its own inline > MAX check (negative indices must
+     * keep falling through to ARCHIVED), so the shared-helper pins do not
+     * cover it — owner review found this boundary survived bound mutations
+     * to MAX+4096 and to 2^60. Unpatched, entry_status(MAX+1) is AVAILABLE
+     * via the same truncation alias. */
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ENTRY_END_OF_STREAM,
+        mmapq_indexed_reader_entry_status(r, D3_MAX_INDEX));
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_reader_last_error(r));
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ENTRY_ERROR,
+        mmapq_indexed_reader_entry_status(r, D3_MAX_INDEX + 1));
+    TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL, mmapq_indexed_reader_last_error(r));
+
+    MmapqReadingContext ctx = {0};
+    mmapq_indexed_reader_read(r, D3_MAX_INDEX, &ctx);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ENTRY_END_OF_STREAM, ctx.status);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_reader_last_error(r));
+
+    mmapq_indexed_reader_read(r, D3_MAX_INDEX + 1, &ctx);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ENTRY_ERROR, ctx.status);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL, mmapq_indexed_reader_last_error(r));
+
+    mmapq_indexed_reader_close(r);
+    mmapq_indexed_appender_close(a);
+}
+
+void test_queue_create_start_index_boundary(void)
+{
+    char qdir[256];
+
+    MmapqIndexedQueue *q2 = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create(
+        DIR, "mmap_test_iq_d3max", REGION_SZ, RING_SZ, 1, MAX_FILE,
+        D3_MAX_INDEX, TIMEOUT_NS, 0, rt, rt, &q2));
+    TEST_ASSERT_NOT_NULL(q2);
+    mmapq_indexed_queue_close(q2);
+    snprintf(qdir, sizeof(qdir), "rm -rf %s/%s", DIR, "mmap_test_iq_d3max");
+    if (system(qdir) != 0) { /* best-effort */ }
+
+    MmapqIndexedQueue *q3 = NULL;
+    TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL, mmapq_indexed_queue_create(
+        DIR, "mmap_test_iq_d3over", REGION_SZ, RING_SZ, 1, MAX_FILE,
+        D3_MAX_INDEX + 1, TIMEOUT_NS, 0, rt, rt, &q3));
+    TEST_ASSERT_NULL(q3);
+    snprintf(qdir, sizeof(qdir), "rm -rf %s/%s", DIR, "mmap_test_iq_d3over");
+    if (system(qdir) != 0) { /* best-effort */ }
+}
+
+/* On-disk variant of the aliasing (owner-observed: start_index = 2^61
+ * reopens rc=0, read_first returns index 0's data labelled 2^61). Post-fix
+ * meta_validate refuses at the lazy open. */
+void test_reader_refuses_queue_with_absurd_disk_start_index(void)
+{
+    MmapqIndexedAppender *a = NULL;
+    d3_append_two(&a);
+    mmapq_indexed_appender_close(a);
+
+    char path[512];
+    snprintf(path, sizeof(path), "%s/%s/meta", DIR, QUEUE);
+    int fd = open(path, O_WRONLY);
+    TEST_ASSERT_MESSAGE(fd >= 0, "open meta");
+    int64_t bad = D3_ALIAS_INDEX;
+    TEST_ASSERT_EQUAL_INT64((int64_t)sizeof(bad),
+        (int64_t)pwrite(fd, &bad, sizeof(bad), QUEUE_META_START_INDEX_OFFSET));
+    TEST_ASSERT_EQUAL_INT(0, close(fd));
+
+    MmapqIndexedReader *r = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_reader_create(DIR, QUEUE, 4, TIMEOUT_NS, NULL, &r));
+    TEST_ASSERT_NOT_NULL(r);
+    MmapqReadingContext ctx = {0};
+    mmapq_indexed_reader_read_first(r, &ctx);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ENTRY_ERROR, ctx.status);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ECORRUPT, mmapq_indexed_reader_last_error(r));
+    mmapq_indexed_reader_close(r);
+}
+
+/* Negative on-disk start_index. Pre-fix failure mode recorded: in the debug
+ * config the follow-on read aborts inside header_position's
+ * MMAP_ASSERT(index >= 0) — a process abort, not a clean assertion failure
+ * (under NDEBUG it returns END_OF_STREAM). The pin asserts the refusal at
+ * the lazy open, before any read reaches header_position. */
+void test_reader_refuses_queue_with_negative_disk_start_index(void)
+{
+    MmapqIndexedAppender *a = NULL;
+    d3_append_two(&a);
+    mmapq_indexed_appender_close(a);
+
+    char path[512];
+    snprintf(path, sizeof(path), "%s/%s/meta", DIR, QUEUE);
+    int fd = open(path, O_WRONLY);
+    TEST_ASSERT_MESSAGE(fd >= 0, "open meta");
+    int64_t bad = -4096;
+    TEST_ASSERT_EQUAL_INT64((int64_t)sizeof(bad),
+        (int64_t)pwrite(fd, &bad, sizeof(bad), QUEUE_META_START_INDEX_OFFSET));
+    TEST_ASSERT_EQUAL_INT(0, close(fd));
+
+    MmapqIndexedReader *r = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_reader_create(DIR, QUEUE, 4, TIMEOUT_NS, NULL, &r));
+    TEST_ASSERT_NOT_NULL(r);
+    MmapqReadingContext ctx = {0};
+    mmapq_indexed_reader_read_first(r, &ctx);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ENTRY_ERROR, ctx.status);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ECORRUPT, mmapq_indexed_reader_last_error(r));
+    mmapq_indexed_reader_close(r);
+}
+
+/* Search-clamp pin: at start_index = MAX the exponential probe must not
+ * read beyond MAX (such reads alias via the rolled mapper's int file_index
+ * truncation, CAND-28) and move_to_end must land at MAX + 1 exactly.
+ * Unpatched (observed via probe): move_to_end parks at 2^57 - 2^51 — a
+ * phantom "last index" found in aliased header_0 slots.
+ *
+ * Geometry note (owner review correction): at 64 KiB regions / 4 MiB files,
+ * position(MAX) = 2^59 - 8 gives file_index 2^37 - 1, which the rolled
+ * mapper's int truncation turns into -1 — index MAX actually lives in a
+ * 4 MiB file named header_-1, not a ~2^59-byte sparse file, and this pin
+ * currently passes through that truncation path (write and read truncate
+ * identically). When CAND-28 widens file_index to int64_t, this test
+ * becomes its regression pin: MAX then really lives at offset 2^59 - 8 in
+ * a sparse header_137438953471. */
+void test_move_to_end_at_max_index(void)
+{
+    char qdir[256];
+    snprintf(qdir, sizeof(qdir), "rm -rf %s/%s", DIR, "mmap_test_iq_d3me");
+    if (system(qdir) != 0) { /* best-effort */ }
+
+    MmapqIndexedQueue *q2 = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create(
+        DIR, "mmap_test_iq_d3me", 65536, 16, 1, 65536LL * 64,
+        D3_MAX_INDEX, TIMEOUT_NS, 0, rt, rt, &q2));
+    TEST_ASSERT_NOT_NULL(q2);
+
+    MmapqIndexedAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(q2, &a));
+    TEST_ASSERT_NOT_NULL(a);
+    TEST_ASSERT_EQUAL_INT64(D3_MAX_INDEX,
+        mmapq_indexed_appender_append(a, "d3-at-max", 9));
+
+    MmapqIndexedPoller *p = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_poller(q2, &p));
+    TEST_ASSERT_NOT_NULL(p);
+    TEST_ASSERT_EQUAL_INT(1, mmapq_indexed_poller_move_to_end(p));
+    TEST_ASSERT_EQUAL_INT64(D3_MAX_INDEX + 1, mmapq_indexed_poller_current_index(p));
+
+    MmapqIndexedReader *r = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_reader(q2, &r));
+    TEST_ASSERT_NOT_NULL(r);
+    MmapqReadingContext ctx = {0};
+    mmapq_indexed_reader_read(r, D3_MAX_INDEX, &ctx);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ENTRY_AVAILABLE, ctx.status);
+    TEST_ASSERT_EQUAL_INT64(D3_MAX_INDEX, ctx.index);
+    TEST_ASSERT_EQUAL_INT(9, ctx.length);
+    TEST_ASSERT_EQUAL_MEMORY("d3-at-max", ctx.data, 9);
+
+    mmapq_indexed_reader_close(r);
+    mmapq_indexed_poller_close(p);
+    mmapq_indexed_appender_close(a);
+    mmapq_indexed_queue_close(q2);
+    if (system(qdir) != 0) { /* best-effort */ }
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -1776,6 +2040,15 @@ int main(void)
 
     RUN_TEST(test_strerror_all_codes);
     RUN_TEST(test_strerror_unknown);
+
+    RUN_TEST(test_poller_rejects_absurd_index);
+    RUN_TEST(test_reader_rejects_absurd_index);
+    RUN_TEST(test_reader_absurd_index_not_collapse_to_timeout);
+    RUN_TEST(test_reader_index_boundary);
+    RUN_TEST(test_queue_create_start_index_boundary);
+    RUN_TEST(test_reader_refuses_queue_with_absurd_disk_start_index);
+    RUN_TEST(test_reader_refuses_queue_with_negative_disk_start_index);
+    RUN_TEST(test_move_to_end_at_max_index);
 
     return UNITY_END();
 }

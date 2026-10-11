@@ -1,4 +1,5 @@
 #include "internal/header_reader.h"
+#include "internal/header_codec.h"
 #include "internal/mmap_assert.h"
 #include "mmap_platform.h"
 
@@ -148,6 +149,16 @@ int64_t mmapqi_header_search_last_index_checked(
         int hole_detected = 0;
 
         while (1) {
+            /* Never probe beyond the legal domain: entry points reject
+             * indices > MMAPQI_MAX_INDEX, and reading there can alias a
+             * valid slot (CAND-28 rolled-mapper truncation) — a phantom
+             * "found" would park the caller at a bogus index. Treat the
+             * first such probe as NULL and cap the binary search so its
+             * mids stay <= MAX. */
+            if (high > MMAPQI_MAX_INDEX) {
+                high = MMAPQI_MAX_INDEX + 1;
+                break;
+            }
             if (header_found_checked(header_accessor, buf, high, queue_name, error)) {
                 low = high;
                 /* Guard against overflow */
@@ -173,7 +184,9 @@ int64_t mmapqi_header_search_last_index_checked(
         /* ── binary search in [low, high] ───────────────────────────────── */
         while (low < high) {
             int64_t mid = (low + high + 1) >> 1;  /* round up to avoid infinite loop */
-            if (header_found_checked(header_accessor, buf, mid, queue_name, error)) {
+            /* mid > MAX is possible when high was capped at MAX+1: treat as
+             * NULL without reading (a read there can alias — see above). */
+            if (mid <= MMAPQI_MAX_INDEX && header_found_checked(header_accessor, buf, mid, queue_name, error)) {
                 low = mid;
             } else {
                 if (error != NULL && *error != 0) return HEADER_NULL_INDEX;

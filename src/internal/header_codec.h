@@ -132,6 +132,44 @@ static inline int64_t header_payload_position(uint64_t header)
     return (int64_t)(header & HEADER_PAYLOAD_MASK);
 }
 
+/* ── Maximum valid index ─────────────────────────────────────────────────── */
+
+/*
+ * MMAPQI_MAX_INDEX — largest valid queue index: 2^56 - 1.
+ *
+ * Derivation: header_position(index) is 8*P(index) with P a bijection that
+ * permutes within each 4096-entry block, so position < (index + 4096)*8.
+ * At MAX the position is < (2^56 + 4096)*8 < 2^59 + 2^15, leaving headroom
+ * for every downstream computation to stay defined for any legal geometry:
+ *   - position + capacity (region_async.c fast_path_end,
+ *     region_ring_accessor.c fast_path_end): capacity <= region_size <= 2^30,
+ *     sum < 2^59 + 2^30;
+ *   - (absolute_index + regions_to_map_ahead) << shift (region_ring_accessor.c
+ *     premap): < 2^59 + 2^15 + 2^31*2^30 = 2^59 + 2^61 < 2^63.
+ * region_size <= 2^30 is enforced (int32_t, positive, power of two:
+ * indexed_queue.c:83-84, indexed_batch_queue.c:60-61, queue_meta.c:91-96);
+ * regions_to_map_ahead is unchecked but is an int, so < 2^31
+ * (indexed_queue.c:101, queue_region_accessor.c:98).
+ *
+ * The value matches the 56-bit payload-position field so the docs carry one
+ * number. Beyond MAX the position wraps mod 2^64 and can land on a valid,
+ * already-written slot (index 2^61 -> position 0): every public entry point
+ * taking an index or a start_index must reject via header_index_in_range,
+ * and meta_validate refuses an out-of-range on-disk start_index.
+ *
+ * Scope of the guarantee: within [0, MAX], header_position itself is
+ * alias-free — but the rolled mapper's `int file_index` truncation
+ * (file_mapper_rolled.c) can still alias legal indices at small geometries
+ * until CAND-28 lands. The bound below is the header-position bound, not a
+ * whole-path aliasing guarantee.
+ */
+#define MMAPQI_MAX_INDEX (((int64_t)1 << 56) - 1)
+
+static inline int header_index_in_range(int64_t index)
+{
+    return index >= 0 && index <= MMAPQI_MAX_INDEX;
+}
+
 /* ── Header layout — position of header entry in header file ─────────────── */
 
 /**
@@ -142,22 +180,26 @@ static inline int64_t header_payload_position(uint64_t header)
  * Transposing from horizontal walk to vertical walk to eliminate false sharing:
  * using modulo for sector_index (fast stride) and division for word_index (slow shift).
  *
- * INVARIANT: index >= 0
+ * INVARIANT: 0 <= index <= MMAPQI_MAX_INDEX. The computation is done in
+ * uint64_t so a violating index yields a defined (wrapped) position rather
+ * than signed-shift UB — but a wrapped position can alias a valid,
+ * already-written slot, so the INVARIANT is enforced at every public entry
+ * point, not here.
  */
 static inline int64_t header_position(int64_t index)
 {
     MMAP_ASSERT(index >= 0, "header_position: index must be >= 0");
-    const int64_t block          = index >> HEADER_BLOCK_SIZE_BITS;
-    const int64_t index_in_block = index & HEADER_BLOCK_MASK;
+    const uint64_t block          = (uint64_t)index >> HEADER_BLOCK_SIZE_BITS;
+    const uint64_t index_in_block = (uint64_t)index & HEADER_BLOCK_MASK;
 
-    /* Logical transposition: sector_index changes every step, providing 
+    /* Logical transposition: sector_index changes every step, providing
      * a 512-byte stride across different cache lines. */
-    const int64_t sector_index = index_in_block & HEADER_SECTOR_MASK; /* index % 64 */
-    const int64_t word_index   = index_in_block >> HEADER_SECTOR_SIZE_BITS; /* index / 64 */
+    const uint64_t sector_index = index_in_block & HEADER_SECTOR_MASK; /* index % 64 */
+    const uint64_t word_index   = index_in_block >> HEADER_SECTOR_SIZE_BITS; /* index / 64 */
 
-    return ((block << HEADER_BLOCK_SIZE_BITS) + 
-            (sector_index << HEADER_SECTOR_SIZE_BITS) + 
-            word_index) << HEADER_LENGTH_BITS;
+    return (int64_t)(((block << HEADER_BLOCK_SIZE_BITS) +
+            (sector_index << HEADER_SECTOR_SIZE_BITS) +
+            word_index) << HEADER_LENGTH_BITS);
 }
 
 /**

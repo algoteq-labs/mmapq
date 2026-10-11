@@ -40,7 +40,7 @@ typedef enum {
     MMAPQ_ENTRY_AVAILABLE,     /* entry exists and is readable                    */
     MMAPQ_ENTRY_END_OF_STREAM, /* entry not yet written (index beyond last)       */
     MMAPQ_ENTRY_ARCHIVED,      /* entry was archived (index below startIndex)     */
-    MMAPQ_ENTRY_ERROR,         /* mapping timeout or I/O failure                   */
+    MMAPQ_ENTRY_ERROR,         /* mapping timeout, I/O failure, or invalid argument  */
 } MmapqEntryStatus;
 
 /* ── MmapqReadingContext ──────────────────────────────────────────────────────── */
@@ -101,6 +101,10 @@ int mmapq_indexed_reader_create(
  * take ownership — the caller allocates and owns the MmapqReadingContext.
  *
  * On mapping timeout, ctx->status is set to MMAPQ_ENTRY_ERROR.
+ *
+ * index must be in [0, 2^56 - 1]; outside that range ctx->status is
+ * MMAPQ_ENTRY_ERROR with last_error == MMAPQ_EINVAL (indices beyond
+ * 2^56 - 1 would alias already-written slots).
  */
 MmapqReadingContext *mmapq_indexed_reader_read(
     MmapqIndexedReader  *r,
@@ -140,6 +144,10 @@ int64_t mmapq_indexed_reader_start_index(MmapqIndexedReader *r);
 
 /**
  * mmapq_indexed_reader_entry_status — check availability of entry at index.
+ *
+ * index above 2^56 - 1 returns MMAPQ_ENTRY_ERROR with last_error ==
+ * MMAPQ_EINVAL (such indices would alias already-written slots);
+ * has_entry inherits this as 0.
  */
 MmapqEntryStatus mmapq_indexed_reader_entry_status(MmapqIndexedReader *r, int64_t index);
 

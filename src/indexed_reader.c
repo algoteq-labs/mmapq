@@ -192,7 +192,7 @@ MmapqReadingContext *mmapq_indexed_reader_read(
     if (r == NULL)    return NULL;
     if (ctx == NULL)  return NULL;
     if (r->closed)    { r->last_error = MMAPQ_ECLOSED; ctx->status = MMAPQ_ENTRY_ERROR; return ctx; }
-    if (index < 0)    { r->last_error = MMAPQ_EINVAL; ctx->status = MMAPQ_ENTRY_ERROR; return ctx; }
+    if (!header_index_in_range(index)) { r->last_error = MMAPQ_EINVAL; ctx->status = MMAPQ_ENTRY_ERROR; return ctx; }
 
     reader_fill_context(r, index, ctx);
     return ctx;
@@ -276,6 +276,10 @@ MmapqEntryStatus mmapq_indexed_reader_entry_status(MmapqIndexedReader *r, int64_
     if (r->closed)  return MMAPQ_ENTRY_ERROR;
 
     if (!reader_init(r)) return (r->init_result == MMAPQ_ENOENT || r->init_result == MMAPQ_ENOTREADY) ? MMAPQ_ENTRY_END_OF_STREAM : MMAPQ_ENTRY_ERROR;
+    /* Only the upper bound is rejected; a negative index keeps the legacy
+     * fall-through to ARCHIVED below. Above MMAPQI_MAX_INDEX the header
+     * position would alias an already-written slot. */
+    if (index > MMAPQI_MAX_INDEX) { r->last_error = MMAPQ_EINVAL; return MMAPQ_ENTRY_ERROR; }
     if (index < queue_meta_start_index(r->queue_meta)) return MMAPQ_ENTRY_ARCHIVED;
 
     return header_found(r->header_acc, &r->header_buf, index, r->queue_name)

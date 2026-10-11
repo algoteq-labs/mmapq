@@ -78,7 +78,8 @@ int mmapq_indexed_batch_archiver_archivable(MmapqIndexedBatchArchiver *a);
  * No-op if index == current start_index.
  *
  * a:     the archiver
- * index: first unarchived batch index (all prior indices archived)
+ * index: first unarchived batch index (all prior indices archived);
+ *        must be in [0, 2^56 - 1]
  * Returns: 0 on success, MMAPQ_EINVAL on invalid argument or non-archivable.
  */
 int mmapq_indexed_batch_archiver_archive_up_to_index(MmapqIndexedBatchArchiver *a, int64_t index);

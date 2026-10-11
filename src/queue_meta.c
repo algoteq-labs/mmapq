@@ -1,4 +1,5 @@
 #include "internal/queue_meta.h"
+#include "internal/header_codec.h"
 #include "internal/mmap_assert.h"
 #include "mmap_platform.h"
 #include "internal/file_initialiser.h"
@@ -98,6 +99,12 @@ static int meta_validate(const QueueMeta *m, uint8_t expected_type,
         return MMAPQ_ECORRUPT;
     }
     if (m->max_file_size % m->region_size != 0) {
+        return MMAPQ_ECORRUPT;
+    }
+    /* start_index out of range is corruption the same way: beyond
+     * MMAPQI_MAX_INDEX header positions alias already-written slots;
+     * a negative start_index trips header_position's index >= 0 assert. */
+    if (m->start_index < 0 || m->start_index > MMAPQI_MAX_INDEX) {
         return MMAPQ_ECORRUPT;
     }
     return 0;

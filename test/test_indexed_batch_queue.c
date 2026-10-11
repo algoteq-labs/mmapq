@@ -1091,6 +1091,127 @@ static void test_checked_batch_step_skips_short_and_long_padding(void)
     mmapq_indexed_batch_reader_close(reader);
 }
 
+/* ── D3 (CAND-16): absurd batch indices alias already-written slots ──────── */
+
+/* D3_MAX_INDEX literal must match MMAPQI_MAX_INDEX in header_codec.h. */
+#define D3_MAX_INDEX   (((int64_t)1 << 56) - 1)
+#define D3_ALIAS_INDEX ((int64_t)1 << 61)   /* position wraps to 0: batch 0's slot */
+
+static void d3_commit_one_batch(MmapqIndexedBatchAppender **out)
+{
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, out));
+    TEST_ASSERT_NOT_NULL(*out);
+    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(*out);
+    mmapq_mutable_batch_append(b, "d3-batch0", 9);
+    TEST_ASSERT_EQUAL_INT64(0,
+        mmapq_indexed_batch_appender_commit_batch(*out, mmapq_mutable_batch_complete(b)));
+}
+
+void test_batch_poller_rejects_absurd_index(void)
+{
+    MmapqIndexedBatchAppender *a = NULL;
+    d3_commit_one_batch(&a);
+
+    MmapqIndexedBatchPoller *p = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_poller(q, &p));
+    TEST_ASSERT_NOT_NULL(p);
+
+    /* Unpatched: all three return 1 — 2^61 aliases batch 0's slot and
+     * 2^61+1 aliases batch 1's. */
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_poller_move_to_index(p, D3_ALIAS_INDEX));
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_poller_exists(p, D3_ALIAS_INDEX));
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_poller_move_to_index(p, D3_ALIAS_INDEX + 1));
+
+    /* Rejection must not have moved the poller: the next poll yields batch 0. */
+    BatchPollCapture cap = { .directive = MMAPQ_NEXT_ADVANCE };
+    TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_ADVANCED, mmapq_indexed_batch_poller_poll(p, capture_handler, &cap));
+    TEST_ASSERT_EQUAL_INT64(0, cap.captured_batch_index);
+    TEST_ASSERT_EQUAL_STRING("d3-batch0", cap.captured_first_msg);
+
+    mmapq_indexed_batch_poller_close(p);
+    mmapq_indexed_batch_appender_close(a);
+}
+
+void test_batch_reader_rejects_absurd_index(void)
+{
+    MmapqIndexedBatchAppender *a = NULL;
+    d3_commit_one_batch(&a);
+
+    MmapqIndexedBatchReader *r = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_reader(q, &r));
+    TEST_ASSERT_NOT_NULL(r);
+
+    /* entry_status boundary first, on the fresh reader (last_error still 0):
+     * entry_status uses its own inline > MAX check (negative indices must
+     * keep falling through to ARCHIVED), so the shared-helper pins do not
+     * cover it — owner review found this boundary survived a bound mutation
+     * to MAX+4096. Unpatched, entry_status(MAX+1) is AVAILABLE via the
+     * rolled-mapper truncation alias (CAND-28). */
+    TEST_ASSERT_EQUAL_INT(MMAPQ_BATCH_ENTRY_END_OF_STREAM,
+        mmapq_indexed_batch_reader_entry_status(r, D3_MAX_INDEX));
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_reader_last_error(r));
+    TEST_ASSERT_EQUAL_INT(MMAPQ_BATCH_ENTRY_ERROR,
+        mmapq_indexed_batch_reader_entry_status(r, D3_MAX_INDEX + 1));
+    TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL, mmapq_indexed_batch_reader_last_error(r));
+
+    /* Unpatched: AVAILABLE with batch 0's payload. */
+    MmapqBatchReadingContext ctx = {0};
+    mmapq_indexed_batch_reader_read(r, D3_ALIAS_INDEX, &ctx);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_BATCH_ENTRY_ERROR, ctx.status);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL, mmapq_indexed_batch_reader_last_error(r));
+
+    /* Unpatched: AVAILABLE. */
+    TEST_ASSERT_EQUAL_INT(MMAPQ_BATCH_ENTRY_ERROR,
+        mmapq_indexed_batch_reader_entry_status(r, D3_ALIAS_INDEX));
+    TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL, mmapq_indexed_batch_reader_last_error(r));
+
+    /* has_entry inherits entry_status's rejection. */
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_reader_has_entry(r, D3_ALIAS_INDEX));
+
+    /* Anti-collapse pin, batch surface: indices in [2^60, 2^61) wrap to
+     * negative positions reported as WRAP_MAP_TIMED_OUT. Unpatched:
+     * BATCH_ENTRY_ERROR with ETIMEDOUT. */
+    mmapq_indexed_batch_reader_read(r, ((int64_t)1 << 60) + 5, &ctx);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_BATCH_ENTRY_ERROR, ctx.status);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL, mmapq_indexed_batch_reader_last_error(r));
+
+    /* Boundary, observable through the reader. Unpatched, at this geometry
+     * read(MAX+1) aliases header_0 via the rolled mapper's int file_index
+     * truncation (CAND-28) and returns AVAILABLE. */
+    mmapq_indexed_batch_reader_read(r, D3_MAX_INDEX, &ctx);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_BATCH_ENTRY_END_OF_STREAM, ctx.status);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_reader_last_error(r));
+
+    mmapq_indexed_batch_reader_read(r, D3_MAX_INDEX + 1, &ctx);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_BATCH_ENTRY_ERROR, ctx.status);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL, mmapq_indexed_batch_reader_last_error(r));
+
+    mmapq_indexed_batch_reader_close(r);
+    mmapq_indexed_batch_appender_close(a);
+}
+
+void test_batch_queue_create_start_index_boundary(void)
+{
+    char qdir[256];
+
+    MmapqIndexedBatchQueue *q2 = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create(
+        DIR, "mmap_test_ibq_d3max", REGION_SZ, RING_SZ, 1, MAX_FILE,
+        D3_MAX_INDEX, TIMEOUT, 0, rt, rt, &q2));
+    TEST_ASSERT_NOT_NULL(q2);
+    mmapq_indexed_batch_queue_close(q2);
+    snprintf(qdir, sizeof(qdir), "rm -rf %s/%s", DIR, "mmap_test_ibq_d3max");
+    if (system(qdir) != 0) { /* best-effort */ }
+
+    MmapqIndexedBatchQueue *q3 = NULL;
+    TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL, mmapq_indexed_batch_queue_create(
+        DIR, "mmap_test_ibq_d3over", REGION_SZ, RING_SZ, 1, MAX_FILE,
+        D3_MAX_INDEX + 1, TIMEOUT, 0, rt, rt, &q3));
+    TEST_ASSERT_NULL(q3);
+    snprintf(qdir, sizeof(qdir), "rm -rf %s/%s", DIR, "mmap_test_ibq_d3over");
+    if (system(qdir) != 0) { /* best-effort */ }
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -1124,5 +1245,8 @@ int main(void)
     RUN_TEST(test_batch_recovery_clean_tree_unaffected);
     RUN_TEST(test_batch_stale_appender_catch_up);
     RUN_TEST(test_batch_appender_id_255_succeeds);
+    RUN_TEST(test_batch_poller_rejects_absurd_index);
+    RUN_TEST(test_batch_reader_rejects_absurd_index);
+    RUN_TEST(test_batch_queue_create_start_index_boundary);
     return UNITY_END();
 }

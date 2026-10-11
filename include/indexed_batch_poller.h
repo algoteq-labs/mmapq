@@ -122,7 +122,8 @@ BatchPollResult mmapq_indexed_batch_poller_poll(
  * Move the cursor to a specific batch index.
  *
  * Returns 1 if the index is valid (>= start_index and not too far ahead).
- * Returns 0 if the index is archived or unreachable.
+ * Returns 0 if the index is archived, unreachable, or outside
+ * [0, 2^56 - 1] (indices beyond 2^56 - 1 would alias already-written slots).
  */
 int mmapq_indexed_batch_poller_move_to_index(MmapqIndexedBatchPoller *p, int64_t batch_index);
 
@@ -170,7 +171,8 @@ int64_t mmapq_indexed_batch_poller_start_index(MmapqIndexedBatchPoller *p);
 /**
  * Return 1 if a committed batch exists at @p batch_index, 0 otherwise.
  *
- * Does not alter the poller's cursor.
+ * batch_index outside [0, 2^56 - 1] returns 0 (such indices would alias
+ * already-written slots). Does not alter the poller's cursor.
  */
 int mmapq_indexed_batch_poller_exists(MmapqIndexedBatchPoller *p, int64_t batch_index);
 

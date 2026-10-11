@@ -4,6 +4,7 @@
 #include "indexed_queue.h"
 #include "mmap_platform.h"
 #include "internal/mmap_assert.h"
+#include "internal/header_codec.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -64,7 +65,7 @@ int mmapq_indexed_batch_queue_create(
     if (ring_size < mmapq_min_ring_size(region_size)) return MMAPQ_EINVAL;
     if (max_file_size <= 0) return MMAPQ_EINVAL;
     if (max_file_size % region_size != 0) return MMAPQ_EINVAL;
-    if (start_index < 0) return MMAPQ_EINVAL;
+    if (!header_index_in_range(start_index)) return MMAPQ_EINVAL;
 
     MmapqIndexedBatchQueue *q = calloc(1, sizeof(MmapqIndexedBatchQueue));
     if (q == NULL) return MMAPQ_ENOMEM;

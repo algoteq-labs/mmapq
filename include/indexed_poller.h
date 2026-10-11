@@ -120,7 +120,8 @@ MmapqPollResult mmapq_indexed_poller_poll(
  * Returns 1 if successful:
  *   - index >= startIndex, AND
  *   - index <= lastIndex + 1 (one past end is valid — will wait for message)
- * Returns 0 if index is archived (< startIndex) or too far ahead.
+ * Returns 0 if index is archived (< startIndex), too far ahead, or outside
+ * [0, 2^56 - 1] (indices beyond 2^56 - 1 would alias already-written slots).
  *
  * Aborts on mapping timeout (MMAP_ASSERT).
  */
@@ -165,6 +166,9 @@ int64_t mmapq_indexed_poller_start_index(MmapqIndexedPoller *p);
 
 /**
  * mmapq_indexed_poller_exists — returns 1 if a committed entry exists at index.
+ *
+ * index outside [0, 2^56 - 1] returns 0 (such indices would alias
+ * already-written slots).
  */
 int mmapq_indexed_poller_exists(MmapqIndexedPoller *p, int64_t index);
 

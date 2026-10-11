@@ -144,7 +144,7 @@ int mmapq_indexed_archiver_archivable(MmapqIndexedArchiver *a)
 
 int mmapq_indexed_archiver_archive_up_to_index(MmapqIndexedArchiver *a, int64_t index)
 {
-    if (a == NULL || index < 0) return MMAPQ_EINVAL;
+    if (a == NULL || !header_index_in_range(index)) return MMAPQ_EINVAL;
 
     QueueMeta *rom = ro_init(a);
     if (rom == NULL || !queue_meta_archivable(rom)) return MMAPQ_EINVAL;

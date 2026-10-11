@@ -179,6 +179,7 @@ static int64_t poller_start_index_fn(void *ctx) { return mmapq_indexed_batch_pol
 
 int mmapq_indexed_batch_poller_move_to_index(MmapqIndexedBatchPoller *p, int64_t index)
 {
+    if (!header_index_in_range(index)) return 0;
     if (!poller_init(p)) {
         if (index == 0) { p->current_batch_index = 0; return 1; }
         return 0;
@@ -227,6 +228,7 @@ int64_t mmapq_indexed_batch_poller_start_index(MmapqIndexedBatchPoller *p) { if 
 
 int mmapq_indexed_batch_poller_exists(MmapqIndexedBatchPoller *p, int64_t batch_index)
 {
+    if (!header_index_in_range(batch_index)) return 0;
     if (!poller_init(p)) return 0;
     if (batch_index < queue_meta_start_index(p->queue_meta)) return 0;
     return header_found(p->header_acc, &p->header_buf, batch_index, p->queue_name) ? 1 : 0;
