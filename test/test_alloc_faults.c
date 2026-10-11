@@ -659,6 +659,33 @@ void test_unregister_and_wait_alloc_fail_retries(void)
     mmapq_runtime_destroy(rt);
 }
 
+/* ── D1d: consumption is total even on caller-error EINVAL ───────────────── */
+
+void test_ring_create_caller_error_eINVAL_consumes_mapper(void)
+{
+    /* out == NULL (sync) and runtime == NULL (async) are unreachable from
+     * in-tree callers, but the contract says the mapper is consumed on ANY
+     * failure — these pin the literal reading. */
+    FileMapper *fm1 = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapqi_file_mapper_rolled_create(
+        DIR "/h1", MAX_FILE, REGION_SIZE,
+        mmapqi_file_init_none, NULL, MAP_MODE_READ_ONLY, 6, 1, &fm1));
+    int rc1 = mmapqi_region_ring_sync_create(RING_SIZE, REGION_SIZE, fm1,
+                                             TIMEOUT_NS, NULL);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL, rc1);
+
+    FileMapper *fm2 = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapqi_file_mapper_rolled_create(
+        DIR "/h2", MAX_FILE, REGION_SIZE,
+        mmapqi_file_init_none, NULL, MAP_MODE_READ_ONLY, 6, 1, &fm2));
+    RegionRing *ring = NULL;
+    int rc2 = mmapqi_region_ring_async_create(RING_SIZE, REGION_SIZE, fm2,
+                                              TIMEOUT_NS, NULL, &ring);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL, rc2);
+    TEST_ASSERT_NULL(ring);
+    /* fm1/fm2 destroyed by the creates — LSan verifies */
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -687,5 +714,6 @@ int main(void)
     RUN_TEST(test_loop_unregister_alloc_fail_noops_slot);
     RUN_TEST(test_waiting_deregister_alloc_fail_close_completes);
     RUN_TEST(test_unregister_and_wait_alloc_fail_retries);
+    RUN_TEST(test_ring_create_caller_error_eINVAL_consumes_mapper);
     return UNITY_END();
 }

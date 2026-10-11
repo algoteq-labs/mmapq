@@ -45,7 +45,7 @@ int mmapqi_region_ring_sync_create(
     uint64_t    timeout_ns,
     RegionRing **out)
 {
-    if (out == NULL) return MMAPQ_EINVAL;
+    if (out == NULL) { mmapqi_file_mapper_destroy(file_mapper); return MMAPQ_EINVAL; }
     *out = NULL;
     if (file_mapper == NULL) return MMAPQ_EINVAL;
     /* A non-NULL mapper is consumed on every path: owned by the ring on
@@ -289,10 +289,10 @@ int mmapqi_region_ring_async_create(
     MmapqRuntime    *runtime,
     RegionRing **out)
 {
-    if (out == NULL) return MMAPQ_EINVAL;
+    if (out == NULL) { mmapqi_file_mapper_destroy(file_mapper); return MMAPQ_EINVAL; }
     *out = NULL;
     if (file_mapper == NULL) return MMAPQ_EINVAL;
-    if (runtime     == NULL) return MMAPQ_EINVAL;
+    if (runtime     == NULL) { mmapqi_file_mapper_destroy(file_mapper); return MMAPQ_EINVAL; }
     /* Consumed on every path, as in sync_create. */
     if (ring_size <= 0) { mmapqi_file_mapper_destroy(file_mapper); return MMAPQ_EINVAL; }
     if ((ring_size & (ring_size - 1)) != 0) { mmapqi_file_mapper_destroy(file_mapper); return MMAPQ_EINVAL; }
