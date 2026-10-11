@@ -33,10 +33,9 @@
  *   3/3 runs):
  *                           #1 regions array     #2-9 region impl+struct pairs
  *                           #10 mapping_impl     #11-13 register internals
- *                               (ExecList node + items + free-list node;
- *                               their failures are silently swallowed by
- *                               unchecked exec_list_add/push_to_free —
- *                               filed separately, CAND-26)
+ *                               (ExecList node + items + free-list node —
+ *                               CAND-26 made register/unregister propagate
+ *                               these; pins below)
  *                           #14 AsyncRingImpl (size 32)   #15 RegionRing (32)
  * The post-registration pins use a size-32 predicate (impl = 1st match, ring =
  * 2nd), stable across D1b's register-last reorder which renumbers ordinals:
@@ -427,6 +426,239 @@ void test_reader_open_corrupt_meta_region_size_no_leak(void)
     if (system(cmd) != 0) { /* best-effort */ }
 }
 
+/* ── CAND-26: register/unregister propagate allocation failure ───────────── */
+
+typedef struct {
+    MmapqExecutable  exec;
+    MmapqRuntime    *rt;             /* unregister pins only */
+    MmapqExecutable *target;         /* unregister pins only */
+    long             fail_ordinal;   /* unregister pins only */
+    _Atomic long     exec_count;
+    _Atomic int      unreg_rc;
+    _Atomic int      unreg_done;
+    _Atomic int      close_called;
+    _Atomic int      go;             /* unreg_execute gate */
+} ProbeExec;
+
+static int probe_execute(MmapqExecutable *self)
+{
+    ProbeExec *p = (ProbeExec *)self->ctx;
+    atomic_fetch_add(&p->exec_count, 1);
+    return 0;
+}
+
+static void probe_close(MmapqExecutable *self)
+{
+    ProbeExec *p = (ProbeExec *)self->ctx;
+    atomic_store(&p->close_called, 1);
+}
+
+static void probe_init(ProbeExec *p)
+{
+    memset(p, 0, sizeof(*p));
+    p->exec.execute = probe_execute;
+    p->exec.close   = probe_close;
+    p->exec.ctx     = p;
+    p->unreg_rc     = -2;
+}
+
+static void spin_until_count(ProbeExec *p, long target)
+{
+    uint64_t deadline = mmapq_monotonic_nanos() + 2000000000ULL;
+    while (atomic_load(&p->exec_count) < target
+           && mmapq_monotonic_nanos() < deadline) mmapq_spin_hint();
+}
+
+static void spin_until_done(ProbeExec *p)
+{
+    uint64_t deadline = mmapq_monotonic_nanos() + 2000000000ULL;
+    while (!atomic_load(&p->unreg_done)
+           && mmapq_monotonic_nanos() < deadline) mmapq_spin_hint();
+}
+
+static void register_pin(long ordinal)
+{
+    /* Any calloc failure inside register must return 0 with the installed
+     * list untouched. Pre-fix: node/items failure returned 1 with the whole
+     * list dropped (or crashed: items memcpy through NULL); free-node
+     * failure returned 1 and freed the old list from under the thread. */
+    MmapqRuntime *rt = new_runtime();
+    ProbeExec p1; probe_init(&p1);
+    TEST_ASSERT_EQUAL_INT(1, mmapq_runtime_register(rt, &p1.exec));
+    spin_until_count(&p1, 1);
+    TEST_ASSERT_TRUE(atomic_load(&p1.exec_count) >= 1);
+
+    ProbeExec p2; probe_init(&p2);
+    arm(ordinal);
+    int rc = mmapq_runtime_register(rt, &p2.exec);
+    disarm();
+    TEST_ASSERT_EQUAL_INT(0, rc);
+
+    /* the old list is intact: p1 keeps executing; p2 never ran */
+    long n = atomic_load(&p1.exec_count);
+    spin_until_count(&p1, n + 1);
+    TEST_ASSERT_TRUE(atomic_load(&p1.exec_count) > n);
+    TEST_ASSERT_EQUAL(0, atomic_load(&p2.exec_count));
+
+    mmapq_runtime_close(rt);
+    mmapq_runtime_destroy(rt);
+}
+
+void test_register_node_calloc_fail_returns_zero(void)      { register_pin(1); }
+void test_register_items_calloc_fail_returns_zero(void)     { register_pin(2); }
+void test_register_freenode_calloc_fail_returns_zero(void)  { register_pin(3); }
+
+/* Runs ON the runtime thread (the unregister contract) and unregisters the
+ * target with the fault armed. Gated on `go` so the main thread can first
+ * place a trailing probe behind u in the list (see unregister_pin). */
+static int unreg_execute(MmapqExecutable *self)
+{
+    ProbeExec *p = (ProbeExec *)self->ctx;
+    if (!atomic_load(&p->go) || atomic_load(&p->unreg_done)) return 0;
+    arm(p->fail_ordinal);
+    int rc = mmapq_runtime_unregister(p->rt, p->target);
+    disarm();
+    atomic_store(&p->unreg_rc, rc);
+    atomic_store(&p->unreg_done, 1);
+    return 0;
+}
+
+static void assert_count_frozen(ProbeExec *p)
+{
+    long n = atomic_load(&p->exec_count);
+    struct timespec ts = { .tv_sec = 0, .tv_nsec = 100000000 };  /* 100 ms */
+    nanosleep(&ts, NULL);
+    TEST_ASSERT_EQUAL(n, atomic_load(&p->exec_count));
+}
+
+static void unregister_pin(long ordinal)
+{
+    /* unregister never fails (CAND-26): on allocation failure it replaces
+     * the target's slot with the no-op executable in place and returns 1 —
+     * callers' assumptions hold, nothing upstream changes.
+     * p4 trails u in the list and u is gated on `go` until p4 has executed:
+     * the iteration that fires u then continues into p4's slot, so the
+     * pre-fix free-node fallback (freeing the list mid-iteration) is always
+     * dereferenced — without the trailing probe this pin was flaky pre-fix
+     * (pass or crash, timing-dependent). */
+    MmapqRuntime *rt = new_runtime();
+    ProbeExec p1; probe_init(&p1);
+    TEST_ASSERT_EQUAL_INT(1, mmapq_runtime_register(rt, &p1.exec));
+    spin_until_count(&p1, 1);
+    TEST_ASSERT_TRUE(atomic_load(&p1.exec_count) >= 1);
+
+    ProbeExec u; probe_init(&u);
+    u.exec.execute = unreg_execute;
+    u.rt = rt; u.target = &p1.exec; u.fail_ordinal = ordinal;
+    TEST_ASSERT_EQUAL_INT(1, mmapq_runtime_register(rt, &u.exec));
+
+    ProbeExec p4; probe_init(&p4);
+    TEST_ASSERT_EQUAL_INT(1, mmapq_runtime_register(rt, &p4.exec));
+    spin_until_count(&p4, 1);
+    TEST_ASSERT_TRUE(atomic_load(&p4.exec_count) >= 1);
+    atomic_store(&u.go, 1);
+
+    spin_until_done(&u);
+    TEST_ASSERT_EQUAL_INT(1, atomic_load(&u.unreg_done));
+    TEST_ASSERT_EQUAL_INT(1, atomic_load(&u.unreg_rc));   /* never fails */
+
+    /* the target's slot was no-op'd: p1's count freezes; p4 keeps running */
+    assert_count_frozen(&p1);
+    long n4 = atomic_load(&p4.exec_count);
+    spin_until_count(&p4, n4 + 1);
+    TEST_ASSERT_TRUE(atomic_load(&p4.exec_count) > n4);
+
+    mmapq_runtime_close(rt);
+    mmapq_runtime_destroy(rt);
+}
+
+void test_unregister_node_calloc_fail_noops_slot(void)      { unregister_pin(1); }
+void test_unregister_items_calloc_fail_noops_slot(void)     { unregister_pin(2); }
+void test_unregister_freenode_calloc_fail_noops_slot(void)  { unregister_pin(3); }
+
+/* ── CAND-26: one pin per unregister call site ───────────────────────────── */
+
+/* Loop site (runtime.c work<0 path): the thread closes the executable, then
+ * unregisters it — with the allocation fault armed. */
+static int dying_execute(MmapqExecutable *self)
+{
+    ProbeExec *p = (ProbeExec *)self->ctx;
+    atomic_fetch_add(&p->exec_count, 1);
+    arm(1);   /* the unregister's remove-node calloc fails */
+    return -1;
+}
+
+void test_loop_unregister_alloc_fail_noops_slot(void)
+{
+    MmapqRuntime *rt = new_runtime();
+    ProbeExec d; probe_init(&d);
+    d.exec.execute = dying_execute;   /* close via probe_close (flag) */
+    TEST_ASSERT_EQUAL_INT(1, mmapq_runtime_register(rt, &d.exec));
+
+    uint64_t deadline = mmapq_monotonic_nanos() + 2000000000ULL;
+    while (!atomic_load(&d.close_called)
+           && mmapq_monotonic_nanos() < deadline) mmapq_spin_hint();
+    disarm();
+    TEST_ASSERT_EQUAL_INT(1, atomic_load(&d.close_called));
+
+    /* the failed unregister no-op'd the slot: a still-registered (and
+     * re-executing) closed executable is the failure mode — count must
+     * freeze. (Without this the pin passed vacuously on a fallback
+     * mutation — close() is called before the unregister it guards.) */
+    assert_count_frozen(&d);
+
+    /* the failed unregister fell back to the in-place no-op: the runtime
+     * closes cleanly (no hang, no crash, no leak) */
+    mmapq_runtime_close(rt);
+    mmapq_runtime_destroy(rt);
+}
+
+/* waiting_deregister site (region_ring.c): async ring close registers a
+ * deregistration executable that unregisters the mapping exec and itself. */
+void test_waiting_deregister_alloc_fail_close_completes(void)
+{
+    MmapqRuntime *rt = new_runtime();
+    FileMapper *fm = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapqi_file_mapper_rolled_create(
+        DIR "/payload_9", MAX_FILE, REGION_SIZE,
+        mmapqi_file_init_none, NULL, MAP_MODE_READ_WRITE, 6, 1, &fm));
+    RegionRing *ring = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapqi_region_ring_async_create(
+        RING_SIZE, REGION_SIZE, fm, TIMEOUT_NS, rt, &ring));
+    TEST_ASSERT_NOT_NULL(ring);
+
+    /* close path: the main thread registers wait_impl (3 callocs: ExecList
+     * node, items, FreeNode); the runtime thread's first unregister (the
+     * mapping exec) follows — fail its remove-node calloc (#4) */
+    arm(4);
+    mmapqi_region_ring_destroy(ring);   /* must complete, not hang */
+    disarm();
+
+    mmapq_runtime_close(rt);
+    mmapq_runtime_destroy(rt);
+}
+
+/* unregister_and_wait site (runtime.c): the helper's registration failure is
+ * transient — the function retries until it succeeds (or the runtime closes).
+ * One injected failure → one retry → completion. */
+void test_unregister_and_wait_alloc_fail_retries(void)
+{
+    MmapqRuntime *rt = new_runtime();
+    ProbeExec p1; probe_init(&p1);
+    TEST_ASSERT_EQUAL_INT(1, mmapq_runtime_register(rt, &p1.exec));
+    spin_until_count(&p1, 1);
+
+    arm(1);   /* helper register's ExecList node calloc fails once */
+    mmapq_runtime_unregister_and_wait(rt, &p1.exec);
+    disarm();
+
+    /* returned (no hang) and p1 is unregistered: count frozen */
+    assert_count_frozen(&p1);
+
+    mmapq_runtime_close(rt);
+    mmapq_runtime_destroy(rt);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -446,5 +678,14 @@ int main(void)
     RUN_TEST(test_async_ring_impl_calloc_fail_no_uaf);
     RUN_TEST(test_async_ring_ring_calloc_fail_no_uaf);
     RUN_TEST(test_reader_open_corrupt_meta_region_size_no_leak);
+    RUN_TEST(test_register_node_calloc_fail_returns_zero);
+    RUN_TEST(test_register_items_calloc_fail_returns_zero);
+    RUN_TEST(test_register_freenode_calloc_fail_returns_zero);
+    RUN_TEST(test_unregister_node_calloc_fail_noops_slot);
+    RUN_TEST(test_unregister_items_calloc_fail_noops_slot);
+    RUN_TEST(test_unregister_freenode_calloc_fail_noops_slot);
+    RUN_TEST(test_loop_unregister_alloc_fail_noops_slot);
+    RUN_TEST(test_waiting_deregister_alloc_fail_close_completes);
+    RUN_TEST(test_unregister_and_wait_alloc_fail_retries);
     return UNITY_END();
 }

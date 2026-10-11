@@ -1,9 +1,9 @@
 # ASSERT_AUDIT.md — MMAP_ASSERT Inventory
 
-**64 asserts across 15 src/*.c files.** Generated from source.
-Last verified: 2026-10-10 (A5/CAND-22 — payload/uncommitted iterator init
-and rewind converted to `int` return codes; five asserts became
-MMAPQ_EINVAL returns).
+**63 asserts across 15 src/*.c files.** Generated from source.
+Last verified: 2026-10-11 (CAND-26 — `mmapq_runtime_unregister_and_wait`'s
+assert on the helper-register result became a real `if (!ok) return;`
+when register learned to return 0 on allocation failure).
 
 ## Legend
 
@@ -16,10 +16,10 @@ MMAPQ_EINVAL returns).
 
 | Disposition | Count |
 |---|---|
-| I (stays, re-verified) | 64 |
+| I (stays, re-verified) | 63 |
 | V (pending conversion) | 0 |
 | (converted from V in Phase 16e) | 2 |
-| **Total** | **64** |
+| **Total** | **63** |
 
 ## Per-file inventory
 
@@ -97,9 +97,12 @@ Lines 66-67, 113-114, 139. Internal dispatch null checks.
 
 Lines 44, 81, 176-177, 183-184, 190. Internal dispatch null checks.
 
-### runtime.c — 2 (all I)
+### runtime.c — 1 (all I)
 
-Lines 505, 838. Internal dispatch null checks.
+Lines 547. Internal threading-contract check. (CAND-26: the
+unregister_and_wait helper-registration assert became a retry loop —
+allocation failure is transient and the function's contract leaves no
+room for giving up.)
 
 ### uncommitted_payload_iterator.c — 5 (all I)
 

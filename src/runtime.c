@@ -217,11 +217,35 @@ typedef struct ExecList {
     int          capacity;
 } ExecList;
 
+/* ── No-op executable (unregister allocation-failure fallback) ───────────────
+ *
+ * unregister() must not fail: its callers close or free the unregistered
+ * executable unconditionally, so a failed unregister would leave a dead
+ * executable runnable (use-after-free on the next iteration). When the
+ * copy-on-write rebuild fails to allocate, unregister instead overwrites the
+ * target's slot in the CURRENT list with &noop_executable and returns
+ * success. Editing in place is safe because:
+ *   - unregister only ever runs on the runtime thread (the invariant at the
+ *     iteration loop), which is also the only thread that reads the list
+ *     contents — no cross-thread race on the slot write; and
+ *   - the slot write happens under register_mutex, which register() holds
+ *     while copying the list — no concurrent copy can miss or double-apply
+ *     the replacement; and
+ *   - the list length never changes, so an in-progress iteration's index
+ *     stays in bounds.
+ * The next successful register/unregister rebuilds the list and filters the
+ * no-op slots out (see exec_list_add/exec_list_remove), so they do not
+ * accumulate. */
+static int  noop_execute(MmapqExecutable *self) { (void)self; return 0; }
+static void noop_close(MmapqExecutable *self)   { (void)self; }
+static MmapqExecutable noop_executable = { noop_execute, noop_close, NULL };
+
 static ExecList *exec_list_create(int capacity)
 {
     ExecList *list = calloc(1, sizeof(ExecList));
     if (list == NULL) return NULL;
     list->items    = calloc((size_t)capacity, sizeof(MmapqExecutable *));
+    if (list->items == NULL) { free(list); return NULL; }
     list->count    = 0;
     list->capacity = capacity;
     return list;
@@ -233,10 +257,17 @@ static ExecList *exec_list_add(ExecList *old, MmapqExecutable *exec)
     ExecList *next = calloc(1, sizeof(ExecList));
     if (next == NULL) return NULL;
     next->items    = calloc((size_t)new_cap, sizeof(MmapqExecutable *));
-    next->count    = old->count + 1;
+    if (next->items == NULL) { free(next); return NULL; }
     next->capacity = new_cap;
-    memcpy(next->items, old->items, (size_t)old->count * sizeof(MmapqExecutable *));
-    next->items[old->count] = exec;
+    /* Copy skipping no-op slots (unregister's allocation-failure fallback),
+     * so they are garbage-collected on the next successful rebuild. */
+    next->count    = 0;
+    for (int i = 0; i < old->count; i++) {
+        if (old->items[i] != &noop_executable) {
+            next->items[next->count++] = old->items[i];
+        }
+    }
+    next->items[next->count++] = exec;
     return next;
 }
 
@@ -245,10 +276,11 @@ static ExecList *exec_list_remove(ExecList *old, MmapqExecutable *exec)
     ExecList *next = calloc(1, sizeof(ExecList));
     if (next == NULL) return NULL;
     next->items    = calloc((size_t)old->capacity, sizeof(MmapqExecutable *));
+    if (next->items == NULL) { free(next); return NULL; }
     next->count    = 0;
     next->capacity = old->capacity;
     for (int i = 0; i < old->count; i++) {
-        if (old->items[i] != exec) {
+        if (old->items[i] != exec && old->items[i] != &noop_executable) {
             next->items[next->count++] = old->items[i];
         }
     }
@@ -317,11 +349,13 @@ struct MmapqRuntime {
 
 /* ── Deferred free helpers ───────────────────────────────────────────────── */
 
-static void push_to_free(MmapqRuntime *rt, ExecList *old)
+/* Callers allocate the FreeNode BEFORE swapping the list, so an allocation
+ * failure can fail the operation cleanly with the old list still installed.
+ * Freeing old inline is not an option on the register path: the runtime
+ * thread may still be iterating it. */
+static void push_node_to_free(MmapqRuntime *rt, FreeNode *node, ExecList *old)
 {
-    if (old == NULL) return;
-    FreeNode *node = calloc(1, sizeof(FreeNode));
-    if (node == NULL) { exec_list_free(old); return; }
+    if (old == NULL) { free(node); return; }
     node->list = old;
     FreeNode *head;
     do {
@@ -441,6 +475,7 @@ int mmapq_runtime_create(
     atomic_store(&rt->free_list, NULL);
 
     ExecList *initial = exec_list_create(8);
+    if (initial == NULL) { free(rt); return MMAPQ_ENOMEM; }
     atomic_store_explicit(&rt->exec_list, initial, memory_order_relaxed);
 
     pthread_mutex_init(&rt->register_mutex, NULL);
@@ -482,6 +517,13 @@ int mmapq_runtime_register(MmapqRuntime *rt, MmapqExecutable *exec)
 
     ExecList *old  = atomic_load_explicit(&rt->exec_list, memory_order_acquire);
     ExecList *next = exec_list_add(old, exec);
+    if (next == NULL) { pthread_mutex_unlock(&rt->register_mutex); return 0; }
+    FreeNode *node = calloc(1, sizeof(FreeNode));
+    if (node == NULL) {
+        exec_list_free(next);
+        pthread_mutex_unlock(&rt->register_mutex);
+        return 0;
+    }
     atomic_store_explicit(&rt->exec_list, next, memory_order_release);
 
     /*
@@ -489,7 +531,7 @@ int mmapq_runtime_register(MmapqRuntime *rt, MmapqExecutable *exec)
      * free_list at the top of each iteration, after finishing the previous
      * iteration, guaranteeing old is no longer being iterated when freed.
      */
-    push_to_free(rt, old);
+    push_node_to_free(rt, node, old);
 
     pthread_mutex_unlock(&rt->register_mutex);
     return 1;
@@ -514,6 +556,22 @@ int mmapq_runtime_unregister(MmapqRuntime *rt, MmapqExecutable *exec)
 
     ExecList *old  = atomic_load_explicit(&rt->exec_list, memory_order_acquire);
     ExecList *next = exec_list_remove(old, exec);
+    FreeNode *node = (next != NULL) ? calloc(1, sizeof(FreeNode)) : NULL;
+    if (next == NULL || node == NULL) {
+        /* Never fail (see noop_executable): callers close or free the target
+         * unconditionally, so a failed unregister would make a dead
+         * executable runnable. Fall back to replacing the slot in place. */
+        exec_list_free(next);   /* NULL-safe */
+        free(node);             /* NULL-safe */
+        for (int i = 0; i < old->count; i++) {
+            if (old->items[i] == exec) {
+                old->items[i] = &noop_executable;
+                break;
+            }
+        }
+        pthread_mutex_unlock(&rt->register_mutex);
+        return 1;
+    }
     atomic_store_explicit(&rt->exec_list, next, memory_order_release);
 
     /*
@@ -522,7 +580,7 @@ int mmapq_runtime_unregister(MmapqRuntime *rt, MmapqExecutable *exec)
      * longer being iterated. The runtime thread drains free_list at the
      * top of its next outer iteration.
      */
-    push_to_free(rt, old);
+    push_node_to_free(rt, node, old);
 
     pthread_mutex_unlock(&rt->register_mutex);
     return 1;
@@ -832,10 +890,18 @@ void mmapq_runtime_unregister_and_wait(MmapqRuntime *rt, MmapqExecutable *exec)
     impl.self_exec.close      = unregister_wait_close;
     impl.self_exec.ctx        = &impl;
 
-    /* Register the helper — it will run on the runtime thread */
-    int ok = mmapq_runtime_register(rt, &impl.self_exec);
-    (void)ok;
-    MMAP_ASSERT(ok, "mmapq_runtime_unregister_and_wait: failed to register helper");
+    /* Register the helper — it will run on the runtime thread. Allocation
+     * failure is transient and this function's contract (does not return
+     * until the target is unregistered) leaves no room for giving up:
+     * retry with backoff until registration succeeds or the runtime
+     * closes (the closed early-return above covers the terminal case; a
+     * close racing the retry is re-checked here). */
+    while (!mmapq_runtime_register(rt, &impl.self_exec)) {
+        if (mmapq_runtime_is_closed(rt)) return;
+        mmapq_spin_hint();
+        struct timespec ts = { .tv_sec = 0, .tv_nsec = 1000000 };
+        nanosleep(&ts, NULL);
+    }
 
     /* Spin until the runtime thread signals completion */
     while (!atomic_load_explicit(&impl.done, memory_order_acquire)) {

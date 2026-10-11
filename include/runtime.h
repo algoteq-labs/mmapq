@@ -158,7 +158,9 @@ int mmapq_runtime_create(
  * Register an MmapqExecutable with the MmapqRuntime.
  *
  * May be called from any thread.
- * Returns 1 on success, 0 if the MmapqRuntime is already closed.
+ * Returns 1 on success, 0 if the MmapqRuntime is already closed or an
+ * internal allocation failed (transient — retry; the installed list is
+ * unchanged on failure).
  *
  * The MmapqExecutable must remain valid until close() is called on it.
  * The MmapqRuntime does NOT take ownership of the MmapqExecutable pointer —
@@ -171,6 +173,10 @@ int mmapq_runtime_register(MmapqRuntime *rt, MmapqExecutable *exec);
  *
  * MUST be called from the MmapqRuntime thread only (MMAP_ASSERT enforced).
  * Cross-thread unregistration: register a DeregisterExecutable instead.
+ *
+ * Never fails on allocation failure: the target's slot is replaced in
+ * place with a no-op executable instead (see runtime.c). Callers may
+ * continue to close/free the target unconditionally.
  *
  * Returns 1 on success, 0 if not found or MmapqRuntime is closed.
  */
