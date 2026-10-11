@@ -49,11 +49,20 @@
 #include "internal/file_mapper.h"
 #include "internal/file_initialiser.h"
 #include "internal/region_ring.h"
+#include "internal/queue_meta.h"
+#include "indexed_queue.h"
+#include "indexed_appender.h"
+#include "indexed_reader.h"
 #include "mmap_platform.h"
 #include "runtime.h"
 
 #include <stdatomic.h>
 #include <stddef.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 extern void *__real_calloc(size_t, size_t);
 
@@ -367,6 +376,57 @@ void test_async_ring_ring_calloc_fail_no_uaf(void)
     TEST_ASSERT_NULL(ring);
 }
 
+/* ── D1c: consumption is total — validation returns destroy the mapper ───── */
+
+void test_reader_open_corrupt_meta_region_size_no_leak(void)
+{
+    /* A corrupt meta region_size (positive, divides max_file_size, but not a
+     * power of two) passes meta_validate and rolled_create, then EINVALs at
+     * ring creation — reached from disk via the reader's lazy open
+     * (indexed_reader.c reader_init). Pre-fix the header mapper chain leaked
+     * on every open attempt (LSan: 4 allocations). */
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd), "rm -rf %s/q && mkdir -p %s", DIR, DIR);
+    if (system(cmd) != 0) { /* best-effort */ }
+
+    /* meta is written on the appender path, not by bare queue create */
+    MmapqIndexedQueue *q = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create(
+        DIR, "q", REGION_SIZE, RING_SIZE, 1, MAX_FILE, 0,
+        TIMEOUT_NS, 0, NULL, NULL, &q));
+    TEST_ASSERT_NOT_NULL(q);
+    MmapqIndexedAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(q, &a));
+    int32_t payload = 42;
+    TEST_ASSERT_TRUE(mmapq_indexed_appender_append(a, &payload, sizeof(payload)) >= 0);
+    mmapq_indexed_appender_close(a);
+    mmapq_indexed_queue_close(q);
+
+    char meta_path[256];
+    snprintf(meta_path, sizeof(meta_path), "%s/q/meta", DIR);
+    int fd = open(meta_path, O_RDWR);
+    TEST_ASSERT_TRUE(fd >= 0);
+    int32_t bad_region_size = 12288;   /* 3 × 4096: divides 49152, not pow2 */
+    int64_t bad_max_file    = 49152;
+    TEST_ASSERT_EQUAL(4, pwrite(fd, &bad_region_size, 4, QUEUE_META_REGION_SIZE_OFFSET));
+    TEST_ASSERT_EQUAL(8, pwrite(fd, &bad_max_file, 8, QUEUE_META_MAX_FILE_SIZE_OFFSET));
+    close(fd);
+
+    MmapqIndexedReader *r = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_reader_create(
+        DIR, "q", RING_SIZE, TIMEOUT_NS, NULL, &r));
+    TEST_ASSERT_NOT_NULL(r);
+
+    MmapqReadingContext ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    mmapq_indexed_reader_read(r, 0, &ctx);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ENTRY_ERROR, ctx.status);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL, mmapq_indexed_reader_last_error(r));
+    mmapq_indexed_reader_close(r);
+
+    if (system(cmd) != 0) { /* best-effort */ }
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -385,5 +445,6 @@ int main(void)
     RUN_TEST(test_async_ring_create_closed_runtime_no_leak);
     RUN_TEST(test_async_ring_impl_calloc_fail_no_uaf);
     RUN_TEST(test_async_ring_ring_calloc_fail_no_uaf);
+    RUN_TEST(test_reader_open_corrupt_meta_region_size_no_leak);
     return UNITY_END();
 }

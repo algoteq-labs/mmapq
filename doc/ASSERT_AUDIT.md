@@ -87,7 +87,7 @@ Lines 216, 297-298, 328, 373, 386, 401, 411. Internal dispatch null checks.
 
 ### region_ring.c — 2 (all I)
 
-Lines 20, 186. Internal dispatch null checks.
+Lines 20, 187. Internal dispatch null checks.
 
 ### region_ring_accessor.c — 5 (all I)
 

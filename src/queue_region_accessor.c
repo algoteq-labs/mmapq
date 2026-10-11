@@ -49,7 +49,9 @@ static int make_ring_accessor(
     MmapqRuntime    *runtime,
     RegionAccessor **out)
 {
-    if (out == NULL) return MMAPQ_EINVAL;
+    /* Consumption is total, matching the ring creates: even a caller-error
+     * EINVAL destroys the mapper (NULL-safe), keeping "any failure" exact. */
+    if (out == NULL) { mmapqi_file_mapper_destroy(mapper); return MMAPQ_EINVAL; }
     *out = NULL;
 
     RegionRing *ring = NULL;

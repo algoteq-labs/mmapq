@@ -48,14 +48,15 @@ int mmapqi_region_ring_sync_create(
     if (out == NULL) return MMAPQ_EINVAL;
     *out = NULL;
     if (file_mapper == NULL) return MMAPQ_EINVAL;
-    if (ring_size <= 0) return MMAPQ_EINVAL;
-    if ((ring_size & (ring_size - 1)) != 0) return MMAPQ_EINVAL;
-    if (region_size <= 0) return MMAPQ_EINVAL;
-    if ((region_size & (region_size - 1)) != 0) return MMAPQ_EINVAL;
+    /* A non-NULL mapper is consumed on every path: owned by the ring on
+     * success, destroyed here on failure — the caller must never touch it
+     * after this call. Reachable from disk: a corrupt meta region_size
+     * passes meta_validate and rolled_create and EINVALs here. */
+    if (ring_size <= 0) { mmapqi_file_mapper_destroy(file_mapper); return MMAPQ_EINVAL; }
+    if ((ring_size & (ring_size - 1)) != 0) { mmapqi_file_mapper_destroy(file_mapper); return MMAPQ_EINVAL; }
+    if (region_size <= 0) { mmapqi_file_mapper_destroy(file_mapper); return MMAPQ_EINVAL; }
+    if ((region_size & (region_size - 1)) != 0) { mmapqi_file_mapper_destroy(file_mapper); return MMAPQ_EINVAL; }
 
-    /* Past validation the mapper is consumed on every path: owned by the
-     * ring on success, destroyed here on failure — the caller must never
-     * touch it after this call. */
     Region **regions = calloc((size_t)ring_size, sizeof(Region *));
     if (regions == NULL) { mmapqi_file_mapper_destroy(file_mapper); return MMAPQ_ENOMEM; }
 
@@ -292,10 +293,11 @@ int mmapqi_region_ring_async_create(
     *out = NULL;
     if (file_mapper == NULL) return MMAPQ_EINVAL;
     if (runtime     == NULL) return MMAPQ_EINVAL;
-    if (ring_size <= 0) return MMAPQ_EINVAL;
-    if ((ring_size & (ring_size - 1)) != 0) return MMAPQ_EINVAL;
-    if (region_size <= 0) return MMAPQ_EINVAL;
-    if ((region_size & (region_size - 1)) != 0) return MMAPQ_EINVAL;
+    /* Consumed on every path, as in sync_create. */
+    if (ring_size <= 0) { mmapqi_file_mapper_destroy(file_mapper); return MMAPQ_EINVAL; }
+    if ((ring_size & (ring_size - 1)) != 0) { mmapqi_file_mapper_destroy(file_mapper); return MMAPQ_EINVAL; }
+    if (region_size <= 0) { mmapqi_file_mapper_destroy(file_mapper); return MMAPQ_EINVAL; }
+    if ((region_size & (region_size - 1)) != 0) { mmapqi_file_mapper_destroy(file_mapper); return MMAPQ_EINVAL; }
 
     /*
      * Allocate everything first; register last. Registration is the
@@ -303,8 +305,8 @@ int mmapqi_region_ring_async_create(
      * runtime thread can reach through mapping_impl — the regions array
      * and its region objects — must be fully initialized before
      * mmapq_runtime_register. Every failure path below also destroys the
-     * mapper (consumed on any failure past validation; caller must not
-     * touch it after this call).
+     * mapper (consumed on any failure; the caller must not touch it after
+     * this call).
      */
     Region **regions = calloc((size_t)ring_size, sizeof(Region *));
     if (regions == NULL) { mmapqi_file_mapper_destroy(file_mapper); return MMAPQ_ENOMEM; }
@@ -387,8 +389,8 @@ void mmapqi_region_ring_destroy(RegionRing *ring)
      * Ownership rule: FileMapper ownership is transferred to RegionRing
      * at region_ring_*_create(). The caller must not close or destroy
      * the FileMapper after passing it to RegionRing — on success the ring
-     * owns it, and on any create failure past argument validation the
-     * create has already destroyed it. Consumption is total.
+     * owns it, and on any create failure the create has already destroyed
+     * it. Consumption is total.
      */
     region_ring_close(ring);
 
