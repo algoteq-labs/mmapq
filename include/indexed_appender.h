@@ -148,7 +148,11 @@ int64_t mmapq_indexed_appender_append_uncommitted(
  *
  * Writes the header, making the message visible to pollers and readers.
  * Returns the queue index assigned to this message,
- * or MMAPQ_EINVAL if a or payload_offset is NULL/invalid,
+ * or MMAPQ_EINVAL if a or payload_offset is NULL/invalid — or if the
+ * payload has been overtaken by archiving: a payload whose position is
+ * below the appender's current start_offset can never become live
+ * (CAND-30; its file may already be listed for reclamation). Append it
+ * again instead.
  * or MMAPQ_ECLOSED if the appender is closed,
  * or -1 on mapping timeout.
  *

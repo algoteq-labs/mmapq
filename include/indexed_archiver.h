@@ -14,7 +14,23 @@
  *
  * The archiver does NOT delete files itself — that is the caller's
  * responsibility. archivable_files() returns the list; the caller decides
- * what to do with them.
+ * what to do with them. Callers must NOT delete listed files immediately:
+ * mark, wait, then delete only files that a fresh archivable_files() call
+ * taken after the wait still lists (see doc/archiving-design.md, "Deleting
+ * files"). A mark is a snapshot, not permission.
+ *
+ * Commit order is not write order: append_uncommitted + commit lets an
+ * application commit payloads in any order (UDP resequencing). The payload
+ * boundary is therefore computed from headers — the end of the archived
+ * entry with the maximum payload position, lowered below any live payload
+ * that sits under it — and an uncommitted payload overtaken by archiving
+ * can no longer be committed (commit returns MMAPQ_EINVAL).
+ *
+ * Archiving is serialised per queue on <dir>/<queue>/archive.lock (flock):
+ * archive_up_to_index holds it exclusively, archivable_files shared — a
+ * listing never observes an archive in progress. The lock file is created
+ * on first use, so archiving or listing a queue in a read-only directory
+ * fails with MMAPQ_EIO.
  *
  * Archiving can move in two directions:
  *   Forward (index > current start_index): mark entries as archived.
@@ -66,20 +82,30 @@ int mmapq_indexed_archiver_archivable(MmapqIndexedArchiver *a);
  * Archive all entries up to @p index (exclusive).
  *
  * Forward archiving (index > current start_index):
- *   - Walks headers backwards from index-1 to current start_index,
- *     recording the last committed payload position per appender.
- *   - Validates each payload position is readable.
- *   - Advances past the committed message to find the next write offset.
- *   - Writes that offset to appender_meta_N for each appender.
- *   - Commits the new start_index atomically in queue meta.
+ *   - Reads and validates every header in [start_index, index) — each must
+ *     reference a complete message, else MMAPQ_ECORRUPT before any mutation.
+ *   - Per appender, computes the candidate boundary as the end of the
+ *     archived entry with the maximum payload position (commit order is
+ *     not write order under resequencing).
+ *   - Publishes the boundary (never below the current one), then commits
+ *     the new start_index atomically in queue meta.
+ *   - Makes one pass over the live headers [index, end of stream),
+ *     lowering the boundary below any live payload that sits under it.
+ *   - If a live-pass read fails, restores every boundary to its pre-call
+ *     value and returns the error; the new start_index stands (a retry of
+ *     the same index is a no-op; the next forward archive recomputes the
+ *     boundary).
  *
  * Backward archiving / undo (index < current start_index):
  *   - Walks headers forward from index to current start_index.
  *   - Validates that all header and payload files covering that range
  *     still exist on disk.
- *   - Records the first payload position per appender in that range.
- *   - Writes those positions to appender_meta_N.
+ *   - Lowers each appender's boundary to the lowest payload position in
+ *     that range — never raises it.
  *   - Commits the new (lower) start_index.
+ *
+ * Both directions hold the queue's archive.lock exclusively (see the file
+ * comment above).
  *
  * No-op if index == current start_index.
  *
@@ -98,10 +124,12 @@ int mmapq_indexed_archiver_archive_up_to_index(MmapqIndexedArchiver *a, int64_t 
 int64_t mmapq_indexed_archiver_start_index(MmapqIndexedArchiver *a);
 
 /**
- * Return the payload start offset for the given appender at start_index.
+ * Return the payload boundary for the given appender.
  *
- * This is the byte offset in the appender's payload file from which a new
- * appender would resume writing after archiving. Returns -1 if the appender
+ * start_offset is the per-appender deletion boundary: payload files wholly
+ * below it may be reclaimed. It is also the anchor a joining appender with
+ * no entry in the live range walks forward from to find the end of its
+ * payload stream — it is NOT a write position. Returns 0 if the appender
  * ID is not used by this queue.
  */
 int mmapq_indexed_archiver_start_offset(
@@ -109,11 +137,22 @@ int mmapq_indexed_archiver_start_offset(
 
 /**
  * Populate @p paths_out with paths to files fully covered by the archive
- * boundary (i.e. files safe to delete, move, or compress).
+ * boundary at the time of the call (i.e. files safe to delete, move, or
+ * compress).
  *
  * Includes header_N and payload_N_M files whose entire index / byte range
  * falls below the current start_index / start_offset respectively.
  * Only files that actually exist on disk are included.
+ *
+ * DELETION PROTOCOL: a listing is a snapshot, not permission. Mark the
+ * listed files, wait, then delete only files that a fresh
+ * archivable_files() call taken AFTER the wait still lists. The wait must
+ * outlast a writer's stall between publishing a commit and its boundary
+ * re-check — normally a few instructions, so seconds to minutes covers
+ * preemption; it cannot cover a writer process stopped in that window
+ * (SIGSTOP, a debugger). Deletion safety in that window rests on the
+ * caller following this protocol; the library does not enforce it.
+ * See doc/archiving-design.md.
  *
  * a:         the archiver
  * paths_out: caller-allocated array of char* to populate

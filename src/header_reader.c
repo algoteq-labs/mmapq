@@ -1,10 +1,24 @@
 #include "internal/header_reader.h"
 #include "internal/header_codec.h"
 #include "internal/mmap_assert.h"
+#include "internal/test_hooks.h"
 #include "mmap_platform.h"
 
 #include <stdint.h>
 #include <stdatomic.h>
+
+/* ── Test hook (P15) — never compiled into release builds ──────────────────
+ * Substitutes the wrap result while armed. Armed only from the archivers'
+ * live-header pass (the archiver-side hook decides when); the point is that
+ * an injected WRAP_MAP_TIMED_OUT collapses to HEADER_NULL through the plain
+ * read but reports MMAPQ_ETIMEDOUT through the checked read. */
+#ifdef MMAPQ_TEST_HOOKS
+static int header_wrap_inject;
+void mmapq_test_hook_header_wrap_inject(int wrap_result)
+{
+    header_wrap_inject = wrap_result;
+}
+#endif
 
 /* ── mmapqi_header_read ─────────────────────────────────────────────────────────── */
 
@@ -18,6 +32,9 @@ uint64_t mmapqi_header_read(
     (void)queue_name;  /* used in MMAP_ASSERT message only */
 
     WrapResult r = region_accessor_wrap_no_premap(header_accessor, position, buf);
+#ifdef MMAPQ_TEST_HOOKS
+    if (header_wrap_inject != 0) r = (WrapResult)header_wrap_inject;
+#endif
 
     if (r == WRAP_SUCCESS) {
         /*
@@ -79,6 +96,9 @@ int mmapqi_header_read_checked(
 {
     *header = HEADER_NULL;
     WrapResult result = region_accessor_wrap_no_premap(header_accessor, header_position(index), buf);
+#ifdef MMAPQ_TEST_HOOKS
+    if (header_wrap_inject != 0) result = (WrapResult)header_wrap_inject;
+#endif
     if (result == WRAP_FILE_NOT_FOUND || result == WRAP_BEYOND_FILE_SIZE) return 0;
     if (result == WRAP_MAP_TIMED_OUT) return MMAPQ_ETIMEDOUT;
     if (result != WRAP_SUCCESS || buf->capacity < HEADER_SIZE) return MMAPQ_ECORRUPT;

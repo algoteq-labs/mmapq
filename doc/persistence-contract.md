@@ -28,6 +28,21 @@ They do not provide power-loss-durable commit acknowledgments.
 - Unlinking archived files is not permission to truncate or overwrite live
   mapped files. Arbitrary external modification can invalidate the queue's
   safety and publication assumptions.
+- An uncommitted payload overtaken by archiving can never become live:
+  committing it returns `MMAPQ_EINVAL` (append it again instead). This is
+  what keeps reclamation safe under resequenced commits
+  (`append_uncommitted` + `commit` in any order).
+- `archivable_files()` is a snapshot, not permission to delete. Mark the
+  listed files, wait, and delete only files that a fresh listing taken
+  after the wait still names. The wait must outlast a writer's stall
+  between publishing a commit and its boundary re-check; a writer process
+  stopped in that window (SIGSTOP, a debugger) is not covered. The library
+  does not enforce this protocol — deletion safety rests on the caller.
+  See `archiving-design.md`.
+- `archive.lock` is locked by inode. Deleting or recreating the queue
+  directory while an archiver or lister has it open lets two processes
+  hold locks on different files. Recreate a queue only with all clients
+  closed — the same rule as for every other queue file.
 - Normal queues retain compatibility with Algoteq's evolved Java format;
   Java does not currently read batch queues. No disk layout changes are
   introduced by the hardening work.

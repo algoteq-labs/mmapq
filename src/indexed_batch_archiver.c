@@ -5,6 +5,7 @@
 #include "internal/appender_meta.h"
 #include "internal/header_reader.h"
 #include "internal/header_codec.h"
+#include "internal/test_hooks.h"
 #include "batch_payload_iterator.h"
 #include "internal/batch_payload_iterator_internal.h"
 #include "mmap_platform.h"
@@ -12,6 +13,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdatomic.h>
+#include <unistd.h>
 
 #define OFFSET_NOT_SET ((int64_t)-1)
 
@@ -112,6 +115,13 @@ static MmapqBatchPayloadIterator *get_iterator(MmapqIndexedBatchArchiver *a, uin
     return a->iterators[id];
 }
 
+/* ── Test hook (P15) — never compiled into release builds ────────────────── */
+
+#ifdef MMAPQ_TEST_HOOKS
+static int (*live_pass_hook)(void);
+void mmapq_test_hook_set_batch_archiver_live_pass(int (*fn)(void)) { live_pass_hook = fn; }
+#endif
+
 /* ── Factory ─────────────────────────────────────────────────────────────── */
 
 int mmapq_indexed_batch_archiver_create(
@@ -149,10 +159,138 @@ int mmapq_indexed_batch_archiver_archivable(MmapqIndexedBatchArchiver *a)
     return queue_meta_archivable(m);
 }
 
-int mmapq_indexed_batch_archiver_archive_up_to_index(MmapqIndexedBatchArchiver *a, int64_t index)
+/* Lower every published start_offset back to its pre-call value after a
+ * live-pass failure. atomic-min can only lower, so a commit that raced in
+ * below old[] survives. old[] satisfied I1 over a superset of the new live
+ * range, so this is always safe; the logical archive (start_index) stands —
+ * only reclamation does not advance. Retrying the same index is a no-op
+ * (index == current); the next forward archive past it recomputes the
+ * boundary. */
+static void rollback_start_offsets(MmapqIndexedBatchArchiver *a, const int64_t *old)
 {
-    if (a == NULL || !header_index_in_range(index)) return MMAPQ_EINVAL;
+    for (int aid = 0; aid < MAX_APPENDERS; aid++) {
+        if (old[aid] == OFFSET_NOT_SET) continue;
+        appender_meta_start_offset_min(get_appender_meta(a, (uint8_t)aid),
+                                       old[aid]);
+    }
+}
 
+/* ── Forward archiving (CAND-30) ───────────────────────────────────────────
+ *
+ * The deletion boundary is computed from headers, not write order — see
+ * indexed_archiver.c's archive_forward_variable for the full rationale and
+ * the store-buffering argument. Batch twin: the candidate is the position
+ * after the archived batch with the MAXIMUM payload position; the live pass
+ * lowers the boundary below any live batch sitting under it. */
+static int archive_forward(MmapqIndexedBatchArchiver *a,
+                           int64_t current, int64_t index)
+{
+    int64_t max_pos[MAX_APPENDERS];  /* highest archived batch position     */
+    int32_t counts[MAX_APPENDERS];   /* message count of that batch         */
+    int64_t ends[MAX_APPENDERS];     /* position after that batch           */
+    int64_t old[MAX_APPENDERS];      /* boundary before this call           */
+    for (int i = 0; i < MAX_APPENDERS; i++) {
+        max_pos[i] = OFFSET_NOT_SET;
+        counts[i]  = 0;
+        ends[i]    = OFFSET_NOT_SET;
+        old[i]     = OFFSET_NOT_SET;
+    }
+
+    /* Read and validate every header in [current, index) (I4) */
+    for (int64_t i = current; i < index; i++) {
+        uint64_t hdr = mmapqi_header_read(a->header_acc, &a->header_buf,
+                                          i, a->queue_name);
+        if (hdr == HEADER_NULL)
+            return MMAPQ_EINVAL;
+        uint8_t aid = header_appender_id(hdr);
+        int64_t pos = header_payload_position(hdr);
+
+        MmapqBatchPayloadIterator *it = get_iterator(a, aid);
+        if (it == NULL) return MMAPQ_ENOMEM;
+        int32_t msg_count = mmapq_batch_iterator_read_message_count(it, pos);
+        if (msg_count < 0) return msg_count;
+        if (msg_count == 0)
+            return MMAPQ_ECORRUPT;
+
+        if (pos > max_pos[aid]) {
+            max_pos[aid] = pos;
+            counts[aid]  = msg_count;
+        }
+    }
+
+    /* Exhaust the max-position batch per appender for the candidate end */
+    for (int aid = 0; aid < MAX_APPENDERS; aid++) {
+        if (max_pos[aid] == OFFSET_NOT_SET) continue;
+        MmapqBatchPayloadIterator *it = get_iterator(a, (uint8_t)aid);
+        if (it == NULL) return MMAPQ_ENOMEM;
+        mmapq_batch_iterator_init(it, max_pos[aid], counts[aid], 0);
+        mmapq_batch_iterator_exhaust(it);
+        /* Exhaustion also signals failure; a partial scan is not an
+         * archive boundary and must not reach the metadata updates. */
+        if (it->last_error != 0) return it->last_error;
+        ends[aid] = batch_iterator_next_payload_position(it);
+    }
+
+    /* Validate all appender metas are accessible before mutating; record the
+     * pre-call boundary for the live-pass failure rollback. */
+    for (int aid = 0; aid < MAX_APPENDERS; aid++) {
+        if (ends[aid] == OFFSET_NOT_SET) continue;
+        AppenderMeta *m = get_appender_meta(a, (uint8_t)aid);
+        if (m == NULL) return MMAPQ_ECORRUPT;
+        old[aid] = appender_meta_start_offset(m);
+    }
+
+    /* Open rw_meta before publishing: no failure point between the boundary
+     * stores and the start_index store. */
+    QueueMeta *rwm = rw_meta_open(a);
+    if (rwm == NULL) return MMAPQ_EIO;
+
+    /* Publish the candidate boundary (never lowered here), then start_index */
+    for (int aid = 0; aid < MAX_APPENDERS; aid++) {
+        if (ends[aid] == OFFSET_NOT_SET) continue;
+        AppenderMeta *m = get_appender_meta(a, (uint8_t)aid);
+        if (m == NULL) return MMAPQ_ECORRUPT;
+        if (ends[aid] > old[aid])
+            appender_meta_set_start_offset(m, ends[aid]);
+    }
+    queue_meta_set_start_index(rwm, index);
+
+    /* One pass over the live headers, lowering below any live batch. The
+     * checked read is required — the plain read maps a mapping timeout to
+     * HEADER_NULL and would end the pass early, silently leaving the
+     * boundary too high. */
+    atomic_thread_fence(memory_order_seq_cst);
+    for (int64_t i = index; ; i++) {
+        uint64_t hdr;
+#ifdef MMAPQ_TEST_HOOKS
+        /* P15 twin: inject at the wrap-result level (see indexed_archiver.c) */
+        if (live_pass_hook != NULL && live_pass_hook() != 0)
+            mmapq_test_hook_header_wrap_inject(WRAP_MAP_TIMED_OUT);
+#endif
+        int hrc = mmapqi_header_read_checked(a->header_acc, &a->header_buf,
+                                             i, &hdr);
+#ifdef MMAPQ_TEST_HOOKS
+        mmapq_test_hook_header_wrap_inject(0);
+#endif
+        if (hrc != 0) {
+            rollback_start_offsets(a, old);
+            return hrc;
+        }
+        if (hdr == HEADER_NULL) break;   /* end of stream */
+        uint8_t aid = header_appender_id(hdr);
+        int64_t pos = header_payload_position(hdr);
+        AppenderMeta *m = get_appender_meta(a, (uint8_t)aid);
+        if (m == NULL) {                 /* live entry's meta must exist */
+            rollback_start_offsets(a, old);
+            return MMAPQ_ECORRUPT;
+        }
+        appender_meta_start_offset_min(m, pos);
+    }
+    return 0;
+}
+
+static int archive_up_to_index_locked(MmapqIndexedBatchArchiver *a, int64_t index)
+{
     QueueMeta *rom = ro_init(a);
     if (rom == NULL || !queue_meta_archivable(rom)) return MMAPQ_EINVAL;
 
@@ -164,61 +302,7 @@ int mmapq_indexed_batch_archiver_archive_up_to_index(MmapqIndexedBatchArchiver *
 
     if (index > current) {
         /* ── Forward archiving ─────────────────────────────────────────── */
-
-        /* Walk backwards: putIfAbsent — captures the highest-index (most
-         * recent) committed batch payload position per appender. */
-        int64_t last_positions[MAX_APPENDERS];
-        int64_t next_offsets[MAX_APPENDERS];
-        for (int i = 0; i < MAX_APPENDERS; i++) {
-            last_positions[i] = OFFSET_NOT_SET;
-            next_offsets[i]   = OFFSET_NOT_SET;
-        }
-
-        for (int64_t i = index - 1; i >= current; i--) {
-            uint64_t hdr = mmapqi_header_read(a->header_acc, &a->header_buf,
-                                       i, a->queue_name);
-            if (hdr == HEADER_NULL)
-                return MMAPQ_EINVAL;
-            uint8_t aid = header_appender_id(hdr);
-            int64_t pos = header_payload_position(hdr);
-            if (last_positions[aid] == OFFSET_NOT_SET)
-                last_positions[aid] = pos;
-        }
-
-        /* Exhaust the batch at last_position to find nextPayloadPosition */
-        for (int aid = 0; aid < MAX_APPENDERS; aid++) {
-            int64_t pos = last_positions[aid];
-            if (pos == OFFSET_NOT_SET) continue;
-
-            MmapqBatchPayloadIterator *it = get_iterator(a, (uint8_t)aid);
-            if (it == NULL) return MMAPQ_ENOMEM;
-            int32_t msg_count = mmapq_batch_iterator_read_message_count(it, pos);
-            if (msg_count < 0) return msg_count;
-            if (msg_count == 0)
-                return MMAPQ_ECORRUPT;
-
-            mmapq_batch_iterator_init(it, pos, msg_count, 0);
-            mmapq_batch_iterator_exhaust(it);
-            /* Exhaustion also signals failure; a partial scan is not an
-             * archive boundary and must not reach the metadata updates. */
-            if (it->last_error != 0) return it->last_error;
-            next_offsets[aid] = batch_iterator_next_payload_position(it);
-        }
-
-        /* Validate all appender metas are accessible before mutating */
-        for (int aid = 0; aid < MAX_APPENDERS; aid++) {
-            if (next_offsets[aid] == OFFSET_NOT_SET) continue;
-            if (get_appender_meta(a, (uint8_t)aid) == NULL)
-                return MMAPQ_ECORRUPT;
-        }
-
-        /* Update appender metas */
-        for (int aid = 0; aid < MAX_APPENDERS; aid++) {
-            if (next_offsets[aid] == OFFSET_NOT_SET) continue;
-            AppenderMeta *m = get_appender_meta(a, (uint8_t)aid);
-            if (m == NULL) return MMAPQ_ECORRUPT;
-            appender_meta_set_start_offset(m, next_offsets[aid]);
-        }
+        return archive_forward(a, current, index);
 
     } else {
         /* ── Backward archiving (undo) ─────────────────────────────────── */
@@ -256,7 +340,9 @@ int mmapq_indexed_batch_archiver_archive_up_to_index(MmapqIndexedBatchArchiver *
             uint8_t aid = header_appender_id(hdr);
             int64_t pos = header_payload_position(hdr);
 
-            if (first_positions[aid] == OFFSET_NOT_SET)
+            /* The boundary must cover the LOWEST restored position */
+            if (first_positions[aid] == OFFSET_NOT_SET ||
+                pos < first_positions[aid])
                 first_positions[aid] = pos;
 
             /* Track all payload files spanned by this batch's messages */
@@ -313,24 +399,38 @@ int mmapq_indexed_batch_archiver_archive_up_to_index(MmapqIndexedBatchArchiver *
                 return MMAPQ_ECORRUPT;
         }
 
-        /* All files present — update appender metas */
+        /* All files present — lower appender boundaries; undo never raises */
         for (int aid = 0; aid < MAX_APPENDERS; aid++) {
             if (first_positions[aid] == OFFSET_NOT_SET) continue;
             AppenderMeta *m = get_appender_meta(a, (uint8_t)aid);
             if (m == NULL) return MMAPQ_ECORRUPT;
-            appender_meta_set_start_offset(m, first_positions[aid]);
+            appender_meta_start_offset_min(m, first_positions[aid]);
         }
     }
 
     /* Commit new start_index atomically — visible to all readers immediately.
      * rw_meta_open can fail from external I/O, which is returned rather than
-     * asserted. If it fails after appender meta updates above, the metas are
-     * already committed but the start_index is not — on retry the function
-     * recomputes identical offsets, making the meta writes idempotent. */
+     * asserted. Undo lowers boundaries via atomic-min, so a retry recomputes
+     * the same values and the min-writes are idempotent. */
     QueueMeta *rwm = rw_meta_open(a);
     if (rwm == NULL) return MMAPQ_EIO;
     queue_meta_set_start_index(rwm, index);
     return 0;
+}
+
+int mmapq_indexed_batch_archiver_archive_up_to_index(MmapqIndexedBatchArchiver *a, int64_t index)
+{
+    if (a == NULL || !header_index_in_range(index)) return MMAPQ_EINVAL;
+
+    /* I6: one archive operation at a time per queue */
+    int lock_fd;
+    int lrc = mmapqi_archive_lock_acquire(a->directory, a->queue_name,
+                                          1, &lock_fd);
+    if (lrc != 0) return lrc;
+
+    int rc = archive_up_to_index_locked(a, index);
+    close(lock_fd);
+    return rc;
 }
 
 /* ── Query ───────────────────────────────────────────────────────────────── */
@@ -357,12 +457,11 @@ int mmapq_indexed_batch_archiver_start_offset(
     return 1;
 }
 
-int mmapq_indexed_batch_archiver_archivable_files(
+static int archivable_files_locked(
     MmapqIndexedBatchArchiver *a,
     char                **paths_out,
     int                   max_paths)
 {
-    if (a == NULL || paths_out == NULL) return 0;
 
     QueueMeta *m = ro_init(a);
     if (m == NULL) return 0;
@@ -416,6 +515,27 @@ int mmapq_indexed_batch_archiver_archivable_files(
     }
 
     return count;
+}
+
+int mmapq_indexed_batch_archiver_archivable_files(
+    MmapqIndexedBatchArchiver *a,
+    char                **paths_out,
+    int                   max_paths)
+{
+    if (a == NULL || paths_out == NULL) return 0;
+
+    /* Shared lock: a listing never observes an archive in progress (I6).
+     * A missing queue directory yields an empty listing, matching the
+     * uninitialised-queue outcome below. */
+    int lock_fd;
+    int lrc = mmapqi_archive_lock_acquire(a->directory, a->queue_name,
+                                          0, &lock_fd);
+    if (lrc == MMAPQ_EINVAL) return 0;
+    if (lrc != 0) return lrc;
+
+    int n = archivable_files_locked(a, paths_out, max_paths);
+    close(lock_fd);
+    return n;
 }
 
 /* ── Lifecycle ───────────────────────────────────────────────────────────── */

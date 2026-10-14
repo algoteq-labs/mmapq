@@ -36,6 +36,32 @@ int mmapqi_queue_files_get_appender_ids(
     uint8_t    *ids,
     int         max_ids);
 
+/* ── Archive lock ─────────────────────────────────────────────────────────── */
+
+/**
+ * mmapqi_archive_lock_acquire — take the queue's archive lock
+ * (<directory>/<queue_name>/archive.lock, created on first use) via flock.
+ * Archiving holds it exclusively; archivable_files holds it shared, so a
+ * listing never observes an archive in progress (I6).
+ *
+ * The lock is advisory and per-inode: recreating the queue directory while
+ * clients hold the lock breaks exclusivity — queue recreation requires all
+ * clients closed (same rule as every other queue file).
+ *
+ * directory:   queue root directory
+ * queue_name:  queue name
+ * exclusive:   1 for LOCK_EX (archive_up_to_index), 0 for LOCK_SH (listing)
+ * out_fd:      receives the lock-holding fd; release with close()
+ * Returns: 0 on success; MMAPQ_EINVAL if the queue directory does not exist
+ *          (mirrors the missing-queue outcome callers had before the lock);
+ *          MMAPQ_EIO on any other failure. Blocking; retries on EINTR.
+ */
+int mmapqi_archive_lock_acquire(
+    const char *directory,
+    const char *queue_name,
+    int         exclusive,
+    int        *out_fd);
+
 /* ── File-index bitset ────────────────────────────────────────────────────── */
 
 /**

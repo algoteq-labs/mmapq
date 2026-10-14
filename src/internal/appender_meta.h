@@ -20,14 +20,15 @@
  *   10 : padding to 64 bytes
  *
  * start_offset:
- *   The earliest valid payload position for this appender.
- *   Initialised to INITIAL_PAYLOAD_POSITION (64) at creation.
- *   Updated by the archiver when old data is removed.
- *   Read with acquire, written with release — safe across processes.
- *
- * Archiving is excluded from this C port. start_offset remains at its
- * initial value throughout the queue's lifetime here. The field layout
- * is preserved for binary compatibility with the Java implementation.
+ *   The per-appender deletion boundary: payload files wholly below it may
+ *   be reclaimed. Initialised to INITIAL_PAYLOAD_POSITION (64) at creation.
+ *   Updated by the archiver (forward: end of the maximum-position archived
+ *   entry, lowered by the live-header pass; undo: atomic-min to the lowest
+ *   restored position) and lowered by a commit's re-check when a gap-fill
+ *   commit races an archive (CAND-30). It is also the anchor a joining
+ *   appender with no live entry walks forward from — never a write
+ *   position. Read with acquire, written with release/atomic-min — safe
+ *   across processes.
  */
 
 /*
@@ -65,13 +66,30 @@ static inline int64_t appender_meta_start_offset(const AppenderMeta *m)
 
 /**
  * appender_meta_set_start_offset — write start_offset with release semantics.
- * Used by the archiver. Provided for completeness; not used in this C port.
+ * Used by the archiver.
  */
 static inline void appender_meta_set_start_offset(AppenderMeta *m, int64_t offset)
 {
-    _Atomic int64_t *p =
-        (_Atomic int64_t *)(m->base + APPENDER_META_START_OFFSET_OFFSET);
+    _Atomic int64_t *p = (_Atomic int64_t *)(m->base + APPENDER_META_START_OFFSET_OFFSET);
     atomic_store_explicit(p, offset, memory_order_release);
+}
+
+/**
+ * appender_meta_start_offset_min — atomically lower start_offset to offset
+ * when offset is smaller (CAS loop, acq_rel). Never raises it. Used by the
+ * archiver's live-header pass and undo, and by the commit re-check
+ * (CAND-30): a store that could raise the value would re-expose a live
+ * payload to reclamation.
+ */
+static inline void appender_meta_start_offset_min(AppenderMeta *m, int64_t offset)
+{
+    _Atomic int64_t *p = (_Atomic int64_t *)(m->base + APPENDER_META_START_OFFSET_OFFSET);
+    int64_t cur = atomic_load_explicit(p, memory_order_acquire);
+    while (offset < cur &&
+           !atomic_compare_exchange_weak_explicit(p, &cur, offset,
+                                                  memory_order_acq_rel,
+                                                  memory_order_acquire)) {
+    }
 }
 
 static inline uint8_t appender_meta_appender_id(const AppenderMeta *m)

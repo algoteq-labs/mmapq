@@ -1,6 +1,11 @@
 #include "internal/queue_files.h"
+#include "mmap_platform.h"
 #include <sys/stat.h>
+#include <sys/file.h>
 #include <dirent.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <errno.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -35,6 +40,31 @@ int mmapqi_queue_files_get_appender_ids(
     }
     closedir(d);
     return count;
+}
+
+/* ── Archive lock ─────────────────────────────────────────────────────────── */
+
+int mmapqi_archive_lock_acquire(
+    const char *directory,
+    const char *queue_name,
+    int         exclusive,
+    int        *out_fd)
+{
+    char path[4096];
+    snprintf(path, sizeof(path), "%s/%s/archive.lock", directory, queue_name);
+
+    int fd = open(path, O_RDWR | O_CREAT, 0644);
+    if (fd < 0)
+        return (errno == ENOENT) ? MMAPQ_EINVAL : MMAPQ_EIO;
+
+    int op = exclusive ? LOCK_EX : LOCK_SH;
+    while (flock(fd, op) != 0) {
+        if (errno == EINTR) continue;
+        close(fd);
+        return MMAPQ_EIO;
+    }
+    *out_fd = fd;
+    return 0;
 }
 
 /* ── FileIndexSet iteration ───────────────────────────────────────────────── */

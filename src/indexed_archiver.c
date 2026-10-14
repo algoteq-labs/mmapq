@@ -6,11 +6,14 @@
 #include "internal/header_reader.h"
 #include "internal/header_codec.h"
 #include "internal/payload_walk.h"
+#include "internal/test_hooks.h"
 #include "mmap_platform.h"
 
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdatomic.h>
+#include <unistd.h>
 
 #define OFFSET_NOT_SET ((int64_t)-1)
 
@@ -104,6 +107,13 @@ static AppenderMeta *get_appender_meta(MmapqIndexedArchiver *a, uint8_t id)
     return a->appender_metas[id];
 }
 
+/* ── Test hook (P15) — never compiled into release builds ────────────────── */
+
+#ifdef MMAPQ_TEST_HOOKS
+static int (*live_pass_hook)(void);
+void mmapq_test_hook_set_archiver_live_pass(int (*fn)(void)) { live_pass_hook = fn; }
+#endif
+
 /* ── Factory ─────────────────────────────────────────────────────────────── */
 
 int mmapq_indexed_archiver_create(
@@ -142,10 +152,144 @@ int mmapq_indexed_archiver_archivable(MmapqIndexedArchiver *a)
     return queue_meta_archivable(m);
 }
 
-int mmapq_indexed_archiver_archive_up_to_index(MmapqIndexedArchiver *a, int64_t index)
+/* Lower every published start_offset back to its pre-call value after a
+ * live-pass failure. atomic-min can only lower, so a commit that raced in
+ * below old[] survives. old[] satisfied I1 over a superset of the new live
+ * range, so this is always safe; the logical archive (start_index) stands —
+ * only reclamation does not advance. Retrying the same index is a no-op
+ * (index == current); the next forward archive past it recomputes the
+ * boundary. */
+static void rollback_start_offsets(MmapqIndexedArchiver *a, const int64_t *old)
 {
-    if (a == NULL || !header_index_in_range(index)) return MMAPQ_EINVAL;
+    for (int aid = 0; aid < MAX_APPENDERS; aid++) {
+        if (old[aid] == OFFSET_NOT_SET) continue;
+        appender_meta_start_offset_min(get_appender_meta(a, (uint8_t)aid),
+                                       old[aid]);
+    }
+}
 
+/* ── Forward archiving, variable-size payloads (CAND-30) ───────────────────
+ *
+ * The deletion boundary is computed from headers, not write order:
+ * resequenced commits (append_uncommitted + commit) can place a live payload
+ * below an archived one. The candidate is the end of the archived entry with
+ * the MAXIMUM payload position; after publishing, one pass over the live
+ * headers lowers the boundary below any live payload sitting under it.
+ *
+ * Ordering: the archiver stores start_offset (release), seq_cst fence, then
+ * loads headers (acquire); the appender stores its header (acq_rel CAS),
+ * seq_cst fence, then loads start_offset (acquire). The two fences carry the
+ * store-buffering argument: at least one side observes the other, so every
+ * live payload ends at or above start_offset once the archive returns. The
+ * residual window — a commit between its CAS and its re-check — is covered
+ * by the caller's deletion re-validation (doc/archiving-design.md). */
+static int archive_forward_variable(MmapqIndexedArchiver *a,
+                                    int64_t current, int64_t index)
+{
+    int64_t max_pos[MAX_APPENDERS];  /* highest archived payload position   */
+    int64_t ends[MAX_APPENDERS];     /* end of that entry's message         */
+    int64_t old[MAX_APPENDERS];      /* boundary before this call           */
+    for (int i = 0; i < MAX_APPENDERS; i++) {
+        max_pos[i] = OFFSET_NOT_SET;
+        ends[i]    = OFFSET_NOT_SET;
+        old[i]     = OFFSET_NOT_SET;
+    }
+
+    /* Read and validate every header in [current, index) (I4) */
+    for (int64_t i = current; i < index; i++) {
+        uint64_t hdr = mmapqi_header_read(a->header_acc, &a->header_buf,
+                                          i, a->queue_name);
+        if (hdr == HEADER_NULL)
+            return MMAPQ_EINVAL;
+        uint8_t aid = header_appender_id(hdr);
+        int64_t pos = header_payload_position(hdr);
+
+        RegionAccessor *pay_acc =
+            mmapqi_queue_region_accessor_payload(a->ro_acc, aid);
+        Buffer pay_buf = {0};
+        WrapResult wr = region_accessor_wrap(pay_acc, pos, &pay_buf);
+        if (wr == WRAP_MAP_TIMED_OUT)
+            return MMAPQ_ETIMEDOUT;
+        if (wr != WRAP_SUCCESS)
+            return MMAPQ_ECORRUPT;
+
+        /* Headers must reference a complete message in this mapping.
+         * A bogus length must not advance the deletion boundary. */
+        if (pay_buf.capacity < PAYLOAD_LENGTH_SIZE)
+            return MMAPQ_ECORRUPT;
+        int32_t len;
+        memcpy(&len, pay_buf.data + PAYLOAD_LENGTH_OFFSET, PAYLOAD_LENGTH_SIZE);
+        if (len <= 0 || len > pay_buf.capacity - PAYLOAD_LENGTH_SIZE)
+            return MMAPQ_ECORRUPT;
+
+        if (pos > max_pos[aid]) {
+            max_pos[aid] = pos;
+            ends[aid]    = pos + PAYLOAD_LENGTH_SIZE + len;
+        }
+    }
+
+    /* Validate all appender metas are accessible before mutating; record the
+     * pre-call boundary for the live-pass failure rollback. */
+    for (int aid = 0; aid < MAX_APPENDERS; aid++) {
+        if (ends[aid] == OFFSET_NOT_SET) continue;
+        AppenderMeta *m = get_appender_meta(a, (uint8_t)aid);
+        if (m == NULL) return MMAPQ_ECORRUPT;
+        old[aid] = appender_meta_start_offset(m);
+    }
+
+    /* Open rw_meta before publishing: no failure point between the boundary
+     * stores and the start_index store. */
+    QueueMeta *rwm = rw_meta_open(a);
+    if (rwm == NULL) return MMAPQ_EIO;
+
+    /* Publish the candidate boundary (never lowered here), then start_index */
+    for (int aid = 0; aid < MAX_APPENDERS; aid++) {
+        if (ends[aid] == OFFSET_NOT_SET) continue;
+        AppenderMeta *m = get_appender_meta(a, (uint8_t)aid);
+        if (m == NULL) return MMAPQ_ECORRUPT;
+        if (ends[aid] > old[aid])
+            appender_meta_set_start_offset(m, ends[aid]);
+    }
+    queue_meta_set_start_index(rwm, index);
+
+    /* One pass over the live headers: lower the boundary below any live
+     * payload sitting under it. The checked read is required — the plain
+     * read maps a mapping timeout to HEADER_NULL and would end the pass
+     * early, silently leaving the boundary too high. */
+    atomic_thread_fence(memory_order_seq_cst);
+    for (int64_t i = index; ; i++) {
+        uint64_t hdr;
+#ifdef MMAPQ_TEST_HOOKS
+        /* P15: inject at the wrap-result level so the plain read (mutation
+         * M11b) collapses the timeout to end-of-stream while the checked
+         * read reports MMAPQ_ETIMEDOUT */
+        if (live_pass_hook != NULL && live_pass_hook() != 0)
+            mmapq_test_hook_header_wrap_inject(WRAP_MAP_TIMED_OUT);
+#endif
+        int hrc = mmapqi_header_read_checked(a->header_acc, &a->header_buf,
+                                             i, &hdr);
+#ifdef MMAPQ_TEST_HOOKS
+        mmapq_test_hook_header_wrap_inject(0);
+#endif
+        if (hrc != 0) {
+            rollback_start_offsets(a, old);
+            return hrc;
+        }
+        if (hdr == HEADER_NULL) break;   /* end of stream */
+        uint8_t aid = header_appender_id(hdr);
+        int64_t pos = header_payload_position(hdr);
+        AppenderMeta *m = get_appender_meta(a, (uint8_t)aid);
+        if (m == NULL) {                 /* live entry's meta must exist */
+            rollback_start_offsets(a, old);
+            return MMAPQ_ECORRUPT;
+        }
+        appender_meta_start_offset_min(m, pos);
+    }
+    return 0;
+}
+
+static int archive_up_to_index_locked(MmapqIndexedArchiver *a, int64_t index)
+{
     QueueMeta *rom = ro_init(a);
     if (rom == NULL || !queue_meta_archivable(rom)) return MMAPQ_EINVAL;
 
@@ -158,76 +302,13 @@ int mmapq_indexed_archiver_archive_up_to_index(MmapqIndexedArchiver *a, int64_t 
     if (index > current) {
         /* ── Forward archiving ─────────────────────────────────────────── */
 
-        if (!fixed_size) {
-            /* Walk backwards from index-1: putIfAbsent — captures the
-             * highest-index (most recent) committed payload position per
-             * appender, which is the one whose successor is the next start. */
-            int64_t last_positions[MAX_APPENDERS];
-            int64_t next_offsets[MAX_APPENDERS];
-            for (int i = 0; i < MAX_APPENDERS; i++) {
-                last_positions[i] = OFFSET_NOT_SET;
-                next_offsets[i]   = OFFSET_NOT_SET;
-            }
+        if (!fixed_size)
+            return archive_forward_variable(a, current, index);
 
-            for (int64_t i = index - 1; i >= current; i--) {
-                uint64_t hdr = mmapqi_header_read(a->header_acc, &a->header_buf,
-                                           i, a->queue_name);
-                if (hdr == HEADER_NULL)
-                    return MMAPQ_EINVAL;
-                uint8_t aid = header_appender_id(hdr);
-                int64_t pos = header_payload_position(hdr);
-                if (last_positions[aid] == OFFSET_NOT_SET)
-                    last_positions[aid] = pos;
-            }
-
-            /* For each appender: read the length at the last payload position
-             * and compute the byte offset immediately following the message. */
-            for (int aid = 0; aid < MAX_APPENDERS; aid++) {
-                int64_t pos = last_positions[aid];
-                if (pos == OFFSET_NOT_SET) continue;
-
-                RegionAccessor *pay_acc =
-                    mmapqi_queue_region_accessor_payload(a->ro_acc, (uint8_t)aid);
-                Buffer pay_buf = {0};
-                WrapResult wr = region_accessor_wrap(pay_acc, pos, &pay_buf);
-                if (wr == WRAP_MAP_TIMED_OUT)
-                    return MMAPQ_ETIMEDOUT;
-                if (wr != WRAP_SUCCESS)
-                    return MMAPQ_ECORRUPT;
-
-                /* Headers must reference a complete message in this mapping.
-                 * A bogus length must not advance the deletion boundary. */
-                if (pay_buf.capacity < PAYLOAD_LENGTH_SIZE)
-                    return MMAPQ_ECORRUPT;
-                int32_t len;
-                memcpy(&len, pay_buf.data + PAYLOAD_LENGTH_OFFSET,
-                       PAYLOAD_LENGTH_SIZE);
-                if (len <= 0 || len > pay_buf.capacity - PAYLOAD_LENGTH_SIZE)
-                    return MMAPQ_ECORRUPT;
-
-                next_offsets[aid] = pos + PAYLOAD_LENGTH_SIZE + len;
-            }
-
-            /* Validate all appender metas are accessible before mutating */
-            for (int aid = 0; aid < MAX_APPENDERS; aid++) {
-                if (next_offsets[aid] == OFFSET_NOT_SET) continue;
-                if (get_appender_meta(a, (uint8_t)aid) == NULL)
-                    return MMAPQ_ECORRUPT;
-            }
-
-            /* All validated — update appender metas */
-            for (int aid = 0; aid < MAX_APPENDERS; aid++) {
-                if (next_offsets[aid] == OFFSET_NOT_SET) continue;
-                AppenderMeta *m = get_appender_meta(a, (uint8_t)aid);
-                if (m == NULL) return MMAPQ_ECORRUPT;
-                appender_meta_set_start_offset(m, next_offsets[aid]);
-            }
-        } else {
-            /* Fixed-size queue: just validate the boundary entry exists */
-            if (!header_found(a->header_acc, &a->header_buf,
-                              index - 1, a->queue_name))
-                return MMAPQ_EINVAL;
-        }
+        /* Fixed-size queue: just validate the boundary entry exists */
+        if (!header_found(a->header_acc, &a->header_buf,
+                          index - 1, a->queue_name))
+            return MMAPQ_EINVAL;
 
     } else {
         /* ── Backward archiving (undo) ─────────────────────────────────── */
@@ -268,7 +349,10 @@ int mmapq_indexed_archiver_archive_up_to_index(MmapqIndexedArchiver *a, int64_t 
             if (!fixed_size) {
                 uint8_t aid = header_appender_id(hdr);
                 int64_t pos = header_payload_position(hdr);
-                if (first_positions[aid] == OFFSET_NOT_SET)
+                /* Resequenced commits make payload order non-monotonic; the
+                 * boundary must cover the LOWEST restored position. */
+                if (first_positions[aid] == OFFSET_NOT_SET ||
+                    pos < first_positions[aid])
                     first_positions[aid] = pos;
                 if (!file_index_set_set(&pay_files[aid], pos / max_file_size))
                     return MMAPQ_EINVAL;  /* payload span too wide — undo in smaller steps */
@@ -307,24 +391,38 @@ int mmapq_indexed_archiver_archive_up_to_index(MmapqIndexedArchiver *a, int64_t 
                 return MMAPQ_ECORRUPT;
         }
 
-        /* All files present — update appender metas */
+        /* All files present — lower appender boundaries; undo never raises */
         for (int aid = 0; aid < MAX_APPENDERS; aid++) {
             if (first_positions[aid] == OFFSET_NOT_SET) continue;
             AppenderMeta *m = get_appender_meta(a, (uint8_t)aid);
             if (m == NULL) return MMAPQ_ECORRUPT;
-            appender_meta_set_start_offset(m, first_positions[aid]);
+            appender_meta_start_offset_min(m, first_positions[aid]);
         }
     }
 
     /* Commit new start_index atomically — visible to all readers immediately.
      * rw_meta_open can fail from external I/O, which is returned rather than
-     * asserted. If it fails after appender meta updates above, the metas are
-     * already committed but the start_index is not — on retry the function
-     * recomputes identical offsets, making the meta writes idempotent. */
+     * asserted. Undo lowers boundaries via atomic-min, so a retry recomputes
+     * the same values and the min-writes are idempotent. */
     QueueMeta *rwm = rw_meta_open(a);
     if (rwm == NULL) return MMAPQ_EIO;
     queue_meta_set_start_index(rwm, index);
     return 0;
+}
+
+int mmapq_indexed_archiver_archive_up_to_index(MmapqIndexedArchiver *a, int64_t index)
+{
+    if (a == NULL || !header_index_in_range(index)) return MMAPQ_EINVAL;
+
+    /* I6: one archive operation at a time per queue */
+    int lock_fd;
+    int lrc = mmapqi_archive_lock_acquire(a->directory, a->queue_name,
+                                          1, &lock_fd);
+    if (lrc != 0) return lrc;
+
+    int rc = archive_up_to_index_locked(a, index);
+    close(lock_fd);
+    return rc;
 }
 
 /* ── Query ───────────────────────────────────────────────────────────────── */
@@ -351,12 +449,11 @@ int mmapq_indexed_archiver_start_offset(
     return 1;
 }
 
-int mmapq_indexed_archiver_archivable_files(
+static int archivable_files_locked(
     MmapqIndexedArchiver  *a,
     char            **paths_out,
     int               max_paths)
 {
-    if (a == NULL || paths_out == NULL) return 0;
 
     QueueMeta *m = ro_init(a);
     if (m == NULL) return 0;
@@ -412,6 +509,27 @@ int mmapq_indexed_archiver_archivable_files(
     }
 
     return count;
+}
+
+int mmapq_indexed_archiver_archivable_files(
+    MmapqIndexedArchiver  *a,
+    char            **paths_out,
+    int               max_paths)
+{
+    if (a == NULL || paths_out == NULL) return 0;
+
+    /* Shared lock: a listing never observes an archive in progress (I6).
+     * A missing queue directory yields an empty listing, matching the
+     * uninitialised-queue outcome below. */
+    int lock_fd;
+    int lrc = mmapqi_archive_lock_acquire(a->directory, a->queue_name,
+                                          0, &lock_fd);
+    if (lrc == MMAPQ_EINVAL) return 0;
+    if (lrc != 0) return lrc;
+
+    int n = archivable_files_locked(a, paths_out, max_paths);
+    close(lock_fd);
+    return n;
 }
 
 static int64_t archiver_start_index_fn(void *ctx)

@@ -8,6 +8,7 @@
 #include "internal/payload_walk.h"
 #include "internal/payload_iterator.h"
 #include "internal/uncommitted_payload_iterator.h"
+#include "internal/test_hooks.h"
 #include "internal/mmap_assert.h"
 #include "mmap_platform.h"
 
@@ -42,6 +43,8 @@ struct MmapqIndexedAppender {
     int64_t current_index;
     int64_t current_header_position;
     int64_t current_payload_position;
+    int64_t last_appended;   /* payload offset of the most recent append —
+                              * commit() fast-path key (CAND-30)            */
 
     /* Reusable buffers (flyweight) */
     Buffer header_buf;
@@ -135,6 +138,7 @@ static int write_payload(MmapqIndexedAppender *a, const void *data, int32_t leng
     memcpy(a->payload_buf.data + PAYLOAD_DATA_OFFSET, data, (size_t)length);
 
     a->current_payload_position += PAYLOAD_LENGTH_SIZE + length;
+    a->last_appended           = payload_offset;
 
     *out_offset = payload_offset;
     return 0;
@@ -225,6 +229,39 @@ static int commit_header(MmapqIndexedAppender *a, int64_t payload_offset, int64_
 
 /* ── Initialise append position after (re)start ──────────────────────────── */
 
+/* Walk forward from `from` to the end of the payload stream, read-only and
+ * never creating files (CAND-30, I5: a joining appender never writes at
+ * start_offset — bytes there may belong to a dead payload, and writing a
+ * shorter message over a longer one leaves stale bytes a later recovery
+ * would misread). A position with no file yet, or beyond a file's end, is
+ * the end of the stream. The pre-wrap is required: payload_walk collapses
+ * "no file" into -1 (D8). */
+static int walk_payload_to_end(MmapqIndexedAppender *a, int64_t from,
+                               int64_t *out_end)
+{
+    RegionAccessor *ro_payload =
+        mmapqi_queue_region_accessor_payload(a->ro_acc, a->appender_id);
+    int64_t probing = from;
+    while (1) {
+        WrapResult wr = region_accessor_wrap_no_premap(ro_payload, probing,
+                                                       &a->ro_buf);
+        if (wr == WRAP_FILE_NOT_FOUND || wr == WRAP_BEYOND_FILE_SIZE)
+            break;   /* end of stream */
+        if (wr == WRAP_MAP_TIMED_OUT)
+            return MMAPQ_ETIMEDOUT;
+        if (wr != WRAP_SUCCESS)
+            return MMAPQ_ECORRUPT;
+        int64_t msg_off = PAYLOAD_ITERATOR_NOT_SET;
+        int32_t len = mmapqi_payload_walk_advance(a->queue_name, &probing,
+                                                  &msg_off,
+                                                  ro_payload, &a->ro_buf);
+        if (len == 0) break;
+        if (len < 0) return MMAPQ_ECORRUPT;
+    }
+    *out_end = probing;
+    return 0;
+}
+
 static int initialise_append_position(MmapqIndexedAppender *a, int64_t start_index)
 {
     /*
@@ -241,22 +278,30 @@ static int initialise_append_position(MmapqIndexedAppender *a, int64_t start_ind
         ro_header, ro_buf,
         a->queue_name);
 
+    /* I5: never read headers below start_index — those files may have been
+     * deleted (P12). One acquire load; a concurrent archive advancing it
+     * further is covered by the deletion protocol (archiving-design.md). */
+    int64_t scan_floor = queue_meta_start_index(a->queue_meta);
+
     if (last_index == HEADER_NULL_INDEX) {
-        /* Queue is empty — start at the requested start_index */
-        a->current_index           = start_index;
-        a->current_payload_position = appender_meta_start_offset(a->appender_meta);
+        /* Queue is empty — start at the requested start_index; walk from
+         * start_offset to the end of stream (no file yet = the offset) */
+        a->current_index = start_index;
+        int wrc = walk_payload_to_end(a, appender_meta_start_offset(a->appender_meta),
+                                      &a->current_payload_position);
+        if (wrc != 0) return wrc;
     } else {
         a->current_index = last_index + 1;
 
         /*
          * Step 2: Scan backwards from lastIndex to find this appender's
-         *         last committed header. Linear scan — no jumping —
-         *         since we need to walk the payload stream forward from
-         *         that point.
+         *         last committed header, bounded at start_index. Linear
+         *         scan — no jumping — since we need to walk the payload
+         *         stream forward from that point.
          */
         int64_t committed_payload_pos = PAYLOAD_ITERATOR_NOT_SET;
 
-        for (int64_t i = last_index; i >= 0; i--) {
+        for (int64_t i = last_index; i >= scan_floor; i--) {
             uint64_t hdr = mmapqi_header_read(ro_header, ro_buf, i, a->queue_name);
             if (hdr == HEADER_NULL) break;
             if (header_appender_id(hdr) == a->appender_id) {
@@ -266,8 +311,11 @@ static int initialise_append_position(MmapqIndexedAppender *a, int64_t start_ind
         }
 
         if (committed_payload_pos == PAYLOAD_ITERATOR_NOT_SET) {
-            /* No committed entry found for this appender */
-            a->current_payload_position = appender_meta_start_offset(a->appender_meta);
+            /* No committed entry in the live range for this appender —
+             * walk forward from start_offset to the end of the stream */
+            int wrc = walk_payload_to_end(a, appender_meta_start_offset(a->appender_meta),
+                                          &a->current_payload_position);
+            if (wrc != 0) return wrc;
         } else {
             /*
              * Step 3: Walk payload forward past the committed message
@@ -552,6 +600,11 @@ int64_t mmapq_indexed_appender_append_uncommitted(
 
 /* ── mmapq_indexed_appender_commit ─────────────────────────────────────────────── */
 
+#ifdef MMAPQ_TEST_HOOKS
+static void (*commit_pre_hook)(void);
+void mmapq_test_hook_set_commit_pre(void (*fn)(void)) { commit_pre_hook = fn; }
+#endif
+
 int64_t mmapq_indexed_appender_commit(
     MmapqIndexedAppender *a,
     int64_t          payload_offset)
@@ -559,6 +612,33 @@ int64_t mmapq_indexed_appender_commit(
     if (a == NULL) return MMAPQ_EINVAL;
     if (a->closed) return MMAPQ_ECLOSED;
     if (payload_offset <= 0) return MMAPQ_EINVAL;
+
+    /* Fast path — the payload this appender appended most recently (the
+     * normal in-sequence case): no shared loads. Keyed on the last APPENDED
+     * offset; "greater than the last committed" is not safe under
+     * resequencing (a gap-fill payload below the last committed one would
+     * skip the check entirely). */
+    if (payload_offset != a->last_appended) {
+        /* Slow path (gap fill). CAND-30: a payload overtaken by archiving
+         * can never become live — its file may already be listed. */
+        if (payload_offset < appender_meta_start_offset(a->appender_meta))
+            return MMAPQ_EINVAL;
+#ifdef MMAPQ_TEST_HOOKS
+        if (commit_pre_hook) commit_pre_hook();
+#endif
+        int64_t committed;
+        if (commit_header(a, payload_offset, &committed)) return -1;
+        /* Race with an archive that published a higher boundary between the
+         * pre-check and the CAS: the archiver stores start_offset, fences,
+         * then reads headers; this commit stored its header, fences, then
+         * reads start_offset — with seq_cst fences on both sides at least
+         * one side observes the other, so one of them lowers the boundary
+         * below this payload. */
+        atomic_thread_fence(memory_order_seq_cst);
+        if (payload_offset < appender_meta_start_offset(a->appender_meta))
+            appender_meta_start_offset_min(a->appender_meta, payload_offset);
+        return committed;
+    }
 
     int64_t committed;
     if (commit_header(a, payload_offset, &committed)) return -1;

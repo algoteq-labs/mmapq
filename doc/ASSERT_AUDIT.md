@@ -55,13 +55,13 @@ Lines 28-29, 52. Internal dispatch null checks.
 
 ### header_reader.c — 2 (all I)
 
-Lines 38, 71. Internal dispatch null checks.
+Lines 55, 88. Internal dispatch null checks.
 
 ### indexed_appender.c — 1 (V→I, Phase 6a)
 
 | Line | Disposition | Verified |
 |---|---|---|
-| 124 length + 4 > region_size | I | Phase 6a converted. Guarded by EINVAL checks at public entry points. |
+| 127 length + 4 > region_size | I | Phase 6a converted. Guarded by EINVAL checks at public entry points. |
 
 ### indexed_poller.c — 1 (1 I)
 

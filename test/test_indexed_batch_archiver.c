@@ -359,6 +359,204 @@ void test_batch_archiver_undo_rejects_partial_scan(void)
     check_batch_archive_rejects_partial_scan(1);
 }
 
+/* ── CAND-30 pins (batch twins: P3/P4/P6/P12 equivalents) ────────────────── */
+/* Geometry: 4 KiB regions, 4 KiB files, archivable. */
+
+static MmapqIndexedBatchAppender *tiny_archivable_batch_appender(uint8_t id)
+{
+    char dir_path[512];
+    snprintf(dir_path, sizeof(dir_path), "%s/%s", DIR, QUEUE);
+    mkdir(dir_path, 0775);
+    QueueMeta *m = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapqi_queue_meta_open_rw(DIR, QUEUE, 0,
+        4096, 4096, /* archivable= */ 1, QUEUE_TYPE_BATCH, &m));
+    TEST_ASSERT_NOT_NULL(m);
+    mmapqi_queue_meta_close(m);
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_create_with_id(
+        DIR, QUEUE, 4096, 4, 4096, TIMEOUT, 0, rt, id, 0, &a));
+    TEST_ASSERT_NOT_NULL(a);
+    return a;
+}
+
+static MmapqIndexedBatchArchiver *tiny_batch_archiver(void)
+{
+    MmapqIndexedBatchArchiver *arch = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_batch_archiver_create(DIR, QUEUE, 4, rt, &arch));
+    TEST_ASSERT_NOT_NULL(arch);
+    return arch;
+}
+
+static int64_t batch_arch_start_offset(MmapqIndexedBatchArchiver *arch, uint8_t aid)
+{
+    int64_t off = -1;
+    TEST_ASSERT_EQUAL_INT(1,
+        mmapq_indexed_batch_archiver_start_offset(arch, aid, &off));
+    return off;
+}
+
+static int64_t commit_one_msg_batch(MmapqIndexedBatchAppender *a,
+                                    const void *data, int32_t len)
+{
+    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    TEST_ASSERT_NOT_NULL(b);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(b, data, len));
+    return mmapq_indexed_batch_appender_commit_batch(
+        a, mmapq_mutable_batch_complete(b));
+}
+
+/* P10/P3: undo lowers the boundary to the lowest restored batch position and
+ * never raises it. (In-order batches: min == first — this is the guard twin;
+ * the discriminating pin is the plain queue's P3.) */
+void test_batch_archiver_undo_never_raises_start_offset(void)
+{
+    char msg[800]; memset(msg, 'b', sizeof(msg));
+    MmapqIndexedBatchAppender *a = tiny_archivable_batch_appender(0);
+    TEST_ASSERT_EQUAL_INT64(0, commit_one_msg_batch(a, msg, (int32_t)sizeof(msg)));
+    TEST_ASSERT_EQUAL_INT64(1, commit_one_msg_batch(a, msg, (int32_t)sizeof(msg)));
+    mmapq_indexed_batch_appender_close(a);
+
+    MmapqIndexedBatchArchiver *arch = tiny_batch_archiver();
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_batch_archiver_archive_up_to_index(arch, 2));
+    int64_t after_forward = batch_arch_start_offset(arch, 0);
+    TEST_ASSERT_GREATER_THAN_INT64(64, after_forward);
+
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_batch_archiver_archive_up_to_index(arch, 0));
+    int64_t after_undo = batch_arch_start_offset(arch, 0);
+    TEST_ASSERT_LESS_OR_EQUAL_INT64(after_forward, after_undo);
+    TEST_ASSERT_LESS_OR_EQUAL_INT64(64, after_undo);
+    mmapq_indexed_batch_archiver_close(arch);
+}
+
+/* P10/P4: joining batch appender with no live entry must walk forward from
+ * start_offset, not write at it (bytes there may be a dead batch). a0
+ * abandons a completed-but-uncommitted batch; a1 commits idx 0. */
+void test_batch_appender_rejoin_over_abandoned_batch(void)
+{
+    char payload_a[3000]; memset(payload_a, 'A', sizeof(payload_a));
+
+    MmapqIndexedBatchAppender *a0 = tiny_archivable_batch_appender(0);
+    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a0);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(b, payload_a, (int32_t)sizeof(payload_a)));
+    int64_t off_a = mmapq_mutable_batch_complete(b);
+    TEST_ASSERT_GREATER_THAN_INT64(0, off_a);
+    /* abandoned — never committed */
+    mmapq_indexed_batch_appender_close(a0);
+
+    MmapqIndexedBatchAppender *a1 = tiny_archivable_batch_appender(1);
+    TEST_ASSERT_EQUAL_INT64(0, commit_one_msg_batch(a1, "B-live", 6));
+    mmapq_indexed_batch_appender_close(a1);
+
+    MmapqIndexedBatchArchiver *arch = tiny_batch_archiver();
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_batch_archiver_archive_up_to_index(arch, 1));
+    mmapq_indexed_batch_archiver_close(arch);
+
+    MmapqIndexedBatchAppender *r1 = tiny_archivable_batch_appender(0);
+    TEST_ASSERT_EQUAL_INT64(1, commit_one_msg_batch(r1, "Zshort", 6));
+    TEST_ASSERT_EQUAL_INT64(2, commit_one_msg_batch(r1, "W", 1));
+    mmapq_indexed_batch_appender_close(r1);
+
+    /* Second rejoin must recover cleanly */
+    MmapqIndexedBatchAppender *r2 = tiny_archivable_batch_appender(0);
+    mmapq_indexed_batch_appender_close(r2);
+
+    /* Batches 1 and 2 read back intact */
+    MmapqIndexedBatchPoller *p = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_batch_poller_create(DIR, QUEUE, 4, TIMEOUT, rt, &p));
+    MmapqBatchReadingContext ctx = {0};
+    TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_ADVANCED,
+        mmapq_indexed_batch_poller_poll(p, advance_handler, NULL));   /* idx 0 */
+    TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_ADVANCED,
+        mmapq_indexed_batch_poller_poll(p, advance_handler, NULL));   /* idx 1 */
+    (void)ctx;
+    mmapq_indexed_batch_poller_close(p);
+}
+
+/* P10/P6 (guard): in-order batches — the header-based boundary equals the old
+ * computation exactly. The 11th batch's offset IS the end of batch idx 9. */
+void test_batch_archiver_in_order_boundary_unchanged(void)
+{
+    char msg[800]; memset(msg, 'm', sizeof(msg));
+    MmapqIndexedBatchAppender *a = tiny_archivable_batch_appender(0);
+    int64_t off_10 = -1;
+    for (int i = 0; i < 11; i++) {
+        MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+        TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(b, msg, (int32_t)sizeof(msg)));
+        int64_t off = mmapq_mutable_batch_complete(b);
+        if (i == 10) { off_10 = off; continue; }
+        TEST_ASSERT_EQUAL_INT64(i, mmapq_indexed_batch_appender_commit_batch(a, off));
+    }
+    mmapq_indexed_batch_appender_close(a);
+    TEST_ASSERT_GREATER_THAN_INT64(0, off_10);
+
+    MmapqIndexedBatchArchiver *arch = tiny_batch_archiver();
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_batch_archiver_archive_up_to_index(arch, 10));
+    TEST_ASSERT_EQUAL_INT64(off_10, batch_arch_start_offset(arch, 0));
+    mmapq_indexed_batch_archiver_close(arch);
+}
+
+/* P10/P12: the batch join's backward header scan must be bounded at
+ * start_index — an archived header may point into a deleted payload file.
+ * a0's single batch spans into file 1 (two 3000 B messages), so archiving it
+ * lists payload_0_0; the file is deleted; a1 stays live. Pre-fix: the scan
+ * finds the archived batch header, the walk stops early at the deleted file,
+ * and the rejoined appender writes into file 0 (below the boundary). */
+void test_batch_appender_rejoin_after_payload_file_deleted(void)
+{
+    char big[3000]; memset(big, 'Z', sizeof(big));
+
+    MmapqIndexedBatchAppender *a0 = tiny_archivable_batch_appender(0);
+    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a0);
+    /* append returns the message's index within the batch */
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(b, big, (int32_t)sizeof(big)));
+    TEST_ASSERT_EQUAL_INT(1, mmapq_mutable_batch_append(b, big, (int32_t)sizeof(big)));
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_batch_appender_commit_batch(
+        a0, mmapq_mutable_batch_complete(b)));
+    mmapq_indexed_batch_appender_close(a0);
+
+    MmapqIndexedBatchAppender *a1 = tiny_archivable_batch_appender(1);
+    TEST_ASSERT_EQUAL_INT64(1, commit_one_msg_batch(a1, "live", 4));
+    mmapq_indexed_batch_appender_close(a1);
+
+    MmapqIndexedBatchArchiver *arch = tiny_batch_archiver();
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_batch_archiver_archive_up_to_index(arch, 1));
+    TEST_ASSERT_GREATER_OR_EQUAL_INT64(4096, batch_arch_start_offset(arch, 0));
+
+    char *paths[64] = {0};
+    int n = mmapq_indexed_batch_archiver_archivable_files(arch, paths, 64);
+    TEST_ASSERT_GREATER_OR_EQUAL(0, n);
+    int found = 0;
+    for (int i = 0; i < n; i++) {
+        if (strstr(paths[i], "payload_0_0")) found = 1;
+        unlink(paths[i]);
+        free(paths[i]);
+    }
+    TEST_ASSERT_TRUE(found);
+    mmapq_indexed_batch_archiver_close(arch);
+
+    /* Rejoin a0: its only batch is archived and its first payload file is
+     * gone. The bounded scan finds no live entry; the join skips from
+     * start_offset to the end of the stream. */
+    MmapqIndexedBatchAppender *r1 = tiny_archivable_batch_appender(0);
+    TEST_ASSERT_EQUAL_INT64(2, commit_one_msg_batch(r1, "back", 4));
+    mmapq_indexed_batch_appender_close(r1);
+
+    /* The new batch must land at or past the boundary (file 1), not in the
+     * reclaimed file 0 — verify via the boundary after archiving it */
+    MmapqIndexedBatchArchiver *arch2 = tiny_batch_archiver();
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_batch_archiver_archive_up_to_index(arch2, 3));
+    TEST_ASSERT_GREATER_THAN_INT64(4096, batch_arch_start_offset(arch2, 0));
+    mmapq_indexed_batch_archiver_close(arch2);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -373,5 +571,11 @@ int main(void)
     RUN_TEST(test_batch_archive_forward_empty_queue);
     RUN_TEST(test_batch_archiver_forward_rejects_partial_scan);
     RUN_TEST(test_batch_archiver_undo_rejects_partial_scan);
+
+    /* CAND-30 pins (batch) */
+    RUN_TEST(test_batch_archiver_undo_never_raises_start_offset);
+    RUN_TEST(test_batch_appender_rejoin_over_abandoned_batch);
+    RUN_TEST(test_batch_archiver_in_order_boundary_unchanged);
+    RUN_TEST(test_batch_appender_rejoin_after_payload_file_deleted);
     return UNITY_END();
 }

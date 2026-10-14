@@ -122,13 +122,23 @@ static int initialise_append_position(MmapqIndexedBatchAppender *a, int64_t star
         ro_header, ro_buf,
         a->queue_name);
 
+    /* I5: never read headers below start_index — those files may have been
+     * deleted (P12). One acquire load; a concurrent archive advancing it
+     * further is covered by the deletion protocol (archiving-design.md). */
+    int64_t scan_floor = queue_meta_start_index(a->queue_meta);
+
     if (last_index == HEADER_NULL_INDEX) {
         a->current_index = start_index;
-        a->current_payload_position = appender_meta_start_offset(a->appender_meta);
+        /* No live entry possible — skip from start_offset to the end of the
+         * stream rather than writing at it (CAND-30) */
+        int rc_skip = skip_to_end_of_stream(a,
+            appender_meta_start_offset(a->appender_meta),
+            &a->current_payload_position);
+        if (rc_skip != 0) return rc_skip;
     } else {
         a->current_index = last_index + 1;
         int64_t committed_payload_pos = -1;
-        for (int64_t i = last_index; i >= 0; i--) {
+        for (int64_t i = last_index; i >= scan_floor; i--) {
             uint64_t hdr = mmapqi_header_read(ro_header, ro_buf, i, a->queue_name);
             if (hdr != HEADER_NULL && header_appender_id(hdr) == a->appender_id) {
                 committed_payload_pos = header_payload_position(hdr);
@@ -141,7 +151,12 @@ static int initialise_append_position(MmapqIndexedBatchAppender *a, int64_t star
                                                 &a->current_payload_position);
             if (rc_scan != 0) return rc_scan;
         } else {
-            a->current_payload_position = appender_meta_start_offset(a->appender_meta);
+            /* No committed entry in the live range for this appender —
+             * skip forward from start_offset to the end of the stream */
+            int rc_skip = skip_to_end_of_stream(a,
+                appender_meta_start_offset(a->appender_meta),
+                &a->current_payload_position);
+            if (rc_skip != 0) return rc_skip;
         }
     }
 

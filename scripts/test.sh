@@ -33,7 +33,11 @@ TESTS=(
     test_alloc_faults
 )
 
-CFLAGS="-std=gnu11 -g -O0 -D_GNU_SOURCE -I include -I src"
+# MMAPQ_TEST_HOOKS enables the deterministic race/failure-injection hooks
+# (CAND-30 pins P9/P15) in the normal loop only; the release loop below
+# compiles without it, and the shipped library never contains the hooks
+# (nm check at acceptance).
+CFLAGS="-std=gnu11 -g -O0 -D_GNU_SOURCE -DMMAPQ_TEST_HOOKS -I include -I src"
 LDFLAGS="-pthread -lm"
 SRCS="$(ls src/*.c)"
 UNITY="test/unity.c"

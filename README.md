@@ -327,26 +327,42 @@ logically prunes old entries by advancing the queue's `start_index` without
 physically deleting data.
 
 **Forward archiving** (`index > current start_index`):
-Scans headers backwards from `index - 1` to the current start, identifies
-the last committed payload position per appender, advances past each message
-(or exhausts the batch), and writes the new start offsets to per-appender
-metadata. Finally, commits the new `start_index` atomically in the queue
-meta — all `poll()` / `read()` calls immediately see the boundary.
+Reads and validates every header in the archived range, computes each
+appender's boundary as the end of the archived entry with the maximum
+payload position (commit order is not write order — `append_uncommitted` +
+`commit` may resequence), publishes the boundary, commits the new
+`start_index` atomically in the queue meta, then makes one pass over the
+live headers, lowering the boundary below any live payload that sits under
+it. All `poll()` / `read()` calls immediately see the boundary. See
+[doc/archiving-design.md](doc/archiving-design.md).
 
 **Backward archiving / undo** (`index < current start_index`):
 Restores access to previously archived entries by scanning headers
 forward, validating that all required header and payload files still exist
-on disk, and rolling back the per-appender start offsets.
+on disk, and lowering each appender's boundary to the lowest restored
+payload position — undo never raises it.
 
 **Archivable file discovery** (`archivable_files()`):
 Returns the set of header and payload files fully covered by the current
-archive boundary — safe to delete, compress, or migrate to cold storage.
+archive boundary at the time of the call. A listing is a snapshot, not
+permission: **mark the listed files, wait, then delete only files that a
+fresh call taken after the wait still lists.** The wait must outlast a
+writer's stall between publishing a commit and its boundary re-check —
+seconds to minutes covers preemption; a writer process stopped in exactly
+that window (SIGSTOP, a debugger) is not covered. Deletion safety in that
+window rests on the caller following this protocol; the library does not
+enforce it.
+
+Archiving is serialised per queue on `archive.lock` (flock): archiving
+holds it exclusively and listing holds it shared, so a listing never
+observes an archive in progress.
 
 Typical usage in production:
 1. Hourly: call `archiveUpToIndex()` to log the archive boundary.
-2. Call `archivableFiles()` to list fully covered files.
+2. Call `archivableFiles()` to list fully covered files; mark them.
 3. Upload those files to S3 or Glacier.
-4. Delete local copies once confirmed uploaded.
+4. Wait, re-list with a fresh `archivableFiles()` call, and delete local
+   copies only of files still listed.
 
 ### Export / import (QueueTransfer)
 
