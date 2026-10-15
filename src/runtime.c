@@ -1,5 +1,6 @@
 #include "runtime.h"
 #include "internal/mmap_assert.h"
+#include "internal/runtime_internal.h"
 #include "mmap_platform.h"
 
 #include <stdlib.h>
@@ -740,7 +741,9 @@ int mmapq_runtime_clone(MmapqRuntime *rt, MmapqRuntime **out)
     if (out == NULL) return MMAPQ_EINVAL;
     *out = NULL;
     if (rt == NULL) return MMAPQ_EINVAL;
-    __atomic_fetch_add(&rt->refcount, 1, __ATOMIC_RELAXED);
+    /* relaxed: the caller already holds a live reference, so this bump
+     * publishes nothing and needs no ordering against other threads. */
+    atomic_fetch_add_explicit(&rt->refcount, 1, memory_order_relaxed);
     *out = rt;
     return 0;
 }
@@ -748,7 +751,11 @@ int mmapq_runtime_clone(MmapqRuntime *rt, MmapqRuntime **out)
 void mmapq_runtime_destroy(MmapqRuntime *rt)
 {
     if (rt == NULL) return;
-    if (    __atomic_fetch_sub(&rt->refcount, 1, __ATOMIC_ACQ_REL) > 1) {
+    /* acq_rel: release publishes this thread's prior accesses to rt; the
+     * acquire side ensures the thread that observes the count reach zero
+     * frees rt only after every other releaser's accesses are visible.
+     * (Classic shared-refcount decrement ordering.) */
+    if (    atomic_fetch_sub_explicit(&rt->refcount, 1, memory_order_acq_rel) > 1) {
         return;  /* other references still alive */
     }
     mmapq_runtime_close(rt);

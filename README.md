@@ -502,12 +502,15 @@ cmake ..
 make -j$(nproc)
 ```
 
+CMake builds the library and examples only; `scripts/test.sh` is the test
+runner (see below).
+
 ---
 
 ## Running the tests
 
 ```bash
-./scripts/test.sh            # normal build + tests (19 passed, 0 failed)
+./scripts/test.sh            # normal + release-flags loops (22 passed, 0 failed each)
 ./scripts/test.sh --asan     # AddressSanitizer
 ./scripts/test.sh --tsan     # ThreadSanitizer (run with ASLR disabled: setarch $(uname -m) -R ...)
 ```

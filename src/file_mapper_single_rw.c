@@ -111,7 +111,6 @@ static int rw_init(SingleFileRwImpl *impl)
                   S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
     if (fd < 0) {
         return -1;
-        return 0;
     }
 
     /* Run initialiser (typically mmapqi_file_init_zeros for new files) */
@@ -122,7 +121,6 @@ static int rw_init(SingleFileRwImpl *impl)
                                                    impl->initialiser_ctx) != 0) {
             close(fd);
             return -1;
-            return 0;
         }
     }
 

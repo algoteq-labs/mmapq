@@ -41,7 +41,6 @@ set(MMAP_RELDBG_FLAGS  ${MMAP_COMMON_FLAGS} -O2 -g -DNDEBUG)
 # variables were defined here but never referenced.
 
 # ── Options ───────────────────────────────────────────────────────────────
-option(MMAP_BUILD_TESTS    "Build test suite"         ON)
 option(MMAP_ENABLE_ASAN    "Enable AddressSanitizer"  OFF)
 option(MMAP_ENABLE_UBSAN   "Enable UBSanitizer"       OFF)
 option(MMAP_ENABLE_TSAN    "Enable ThreadSanitizer"   OFF)
@@ -56,12 +55,10 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 endif()
 
 # ── Subdirectories ────────────────────────────────────────────────────────
+# Tests are built and run exclusively by scripts/test.sh (both build
+# configurations plus per-test fault-injection special-casing); there is
+# no CMake test target by design — see README "Running the tests".
 add_subdirectory(src)
-
-if(MMAP_BUILD_TESTS)
-    enable_testing()
-    add_subdirectory(test)
-endif()
 
 # ── Examples / Benchmarks ────────────────────────────────────────────────
 add_executable(demo examples/demo.c)
@@ -77,7 +74,6 @@ target_link_libraries(echo_server PRIVATE mmapq)
 message(STATUS "")
 message(STATUS "mmapq ${PROJECT_VERSION}")
 message(STATUS "  Build type : ${CMAKE_BUILD_TYPE}")
-message(STATUS "  Tests      : ${MMAP_BUILD_TESTS}")
 message(STATUS "  ASAN       : ${MMAP_ENABLE_ASAN}")
 message(STATUS "  UBSAN      : ${MMAP_ENABLE_UBSAN}")
 message(STATUS "  TSAN       : ${MMAP_ENABLE_TSAN}")
