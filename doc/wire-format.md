@@ -96,10 +96,10 @@ Payload files are framed per appender as:
 
 Two padding cases at a region end:
 
-- **Short padding** — when fewer than 4 bytes remain in a region, skip to the
-  next region without writing a length field at all.
-- **Long padding** — write a negative length whose absolute value encodes the
-  bytes to skip across the boundary.
+- **Short padding** — when 4 or fewer bytes remain in a region
+  (`capacity ≤ 4`), skip to the next region without writing a length field.
+- **Long padding** — write a negative length; skip `abs(length) + 4` bytes
+  (= the remaining region capacity) across the boundary.
 
 ### Alignment contract
 

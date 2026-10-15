@@ -35,7 +35,7 @@ int32_t mmapqi_payload_walk_advance(
 
     int32_t capacity = payload_buf->capacity;
 
-    /* ── Short padding: region end has < 4 bytes ─────────────────────────── */
+    /* ── Short padding: region end has <= 4 bytes ────────────────────────── */
     if (payload_is_short_padding(capacity)) {
         position += capacity;
         *message_offset_out = position;

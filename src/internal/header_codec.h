@@ -24,7 +24,7 @@
  *   length < 0  : long padding  — region boundary, abs(length) + 4 bytes to skip (= remaining region capacity)
  *   length == 0 : end of stream (no message written here yet)
  *
- *   Short padding: when remaining capacity at region end < 4 bytes,
+ *   Short padding: when remaining capacity at region end <= 4 bytes,
  *                  skip to next region (no length field written).
  *
  *   Alignment contract (see doc/payload_alignment_design.md):
@@ -228,7 +228,7 @@ static inline int64_t header_index(int64_t position)
 /* ── Payload length field helpers ────────────────────────────────────────── */
 
 /**
- * payload_is_short_padding — true when region end has fewer than 4 bytes remaining.
+ * payload_is_short_padding — true when region end has 4 or fewer bytes remaining (capacity <= 4).
  * The caller must skip to the next region without reading a length field.
  */
 static inline int payload_is_short_padding(int32_t capacity)
