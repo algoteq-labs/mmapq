@@ -1,0 +1,17 @@
+# name expected speed(0=seconds,1=minutes,2=~1h)
+current FAIL 0
+current_no_undo FAIL 0
+current_no_undo_no_timeout PASS 1
+cand36_undo_race FAIL 0
+cand37_cas_publish PASS 1
+fixed PASS 1
+naive_delete FAIL 0
+no_wait FAIL 0
+no_fence_archiver FAIL 0
+no_fence_committer FAIL 0
+cand33_arbitrary_commit FAIL 0
+cand31_chase FAIL 0
+cand31_bounded PASS 1
+cand35_crash FAIL 0
+cand35_crash_listing_cap PASS 2
+cand35_no_wait_listing_cap FAIL 0

@@ -15,6 +15,11 @@ data. It is two separate things:
 This document defines when a file may be listed, and how a caller must
 delete, because that is the step that can lose data if it is wrong.
 
+A TLA+ model of this protocol (archive, commit, join, undo, deletion) lives
+in `doc/model/`; its README maps the model steps to the code. The model
+currently reports three open reclamation defects (CAND-35/36/37); see
+`doc/model/README.md`.
+
 ## The persistent fields
 
 | File | Field | Meaning |
