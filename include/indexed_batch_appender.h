@@ -151,7 +151,9 @@ int64_t mmapq_mutable_batch_complete(MmapqMutableBatch *b);
  * a:           the appender
  * batch_offset: the value returned by mmapq_mutable_batch_complete()
  * Returns: the zero-based index of the committed batch,
- *         or -1 on mapping timeout
+ *         or -1 on mapping timeout, or MMAPQ_EINVAL if batch_offset is
+ *         above this appender's last written start (a batch it never
+ *         started — CAND-32)
  */
 int64_t mmapq_indexed_batch_appender_commit_batch(MmapqIndexedBatchAppender *a, int64_t batch_offset);
 
@@ -187,7 +189,9 @@ void mmapq_indexed_batch_appender_discard_batch(MmapqIndexedBatchAppender *a, in
  * data:  pointer to the message payload
  * length: number of bytes to write (must be <= region_size - 4)
  * Returns: the zero-based index of the committed batch,
- *         or -1 on mapping timeout, or MMAPQ_EINVAL if message exceeds region size
+ *         or -1 on mapping timeout, or MMAPQ_EINVAL if message exceeds region size,
+ *         or MMAPQ_ECORRUPT if the batch offset is outside the encodable
+ *         56-bit field
  */
 int64_t mmapq_indexed_batch_appender_append_and_commit(MmapqIndexedBatchAppender *a, const void *data, int32_t length);
 

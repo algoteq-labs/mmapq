@@ -1244,6 +1244,408 @@ void test_batch_read_no_alias_at_file_index_2pow32(void)
     mmapq_indexed_batch_appender_close(a);
 }
 
+/* ── CAND-32 pins, batch surface: on-disk appender_meta.start_offset ───────
+ *
+ * Batch mirrors of the test_indexed_queue.c CAND-32 pins (see that file's
+ * section header for the defect mechanism and the C1/C2 bounds). The batch
+ * append-time check (C2) sits at the top of commit_batch. The v3 caller-
+ * offset check (C3) is mirrored by the P7/P9 batch pins; P8 mirrors the
+ * c32_limit scenario with a batch whose end lands exactly on 2^56.
+ *
+ * Geometry per the owner probes: region 4096, ring 16, max_file_size 2^20,
+ * archivable 1.
+ */
+
+#define C32_REGION_SIZE    4096
+#define C32_RING_SIZE      16
+#define C32_MAX_FILE_SIZE  ((int64_t)1 << 20)
+#define C32_POS_LIMIT      ((int64_t)1 << 56)   /* 2^56 */
+
+static void c32_cleanup(const char *qname)
+{
+    char cmd[512];
+    snprintf(cmd, sizeof(cmd), "rm -rf %s/%s", DIR, qname);
+    int rc = system(cmd); (void)rc;
+}
+
+/* Create the pin queue (archivable) and appender id 0 so appender_meta_0
+ * exists on disk, then close both. */
+static void c32_create_queue(const char *qname)
+{
+    c32_cleanup(qname);
+    MmapqIndexedBatchQueue *cq = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create(
+        DIR, qname, C32_REGION_SIZE, C32_RING_SIZE, 1,
+        C32_MAX_FILE_SIZE, 0, TIMEOUT, 1, rt, rt, &cq));
+    TEST_ASSERT_NOT_NULL(cq);
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_batch_queue_create_appender_with_id(cq, 0, &a));
+    TEST_ASSERT_NOT_NULL(a);
+    mmapq_indexed_batch_appender_close(a);
+    mmapq_indexed_batch_queue_close(cq);
+}
+
+/* Overwrite the on-disk start_offset (int64 at offset 0 of appender_meta_0). */
+static void c32_plant_start_offset(const char *qname, int64_t value)
+{
+    char path[512];
+    snprintf(path, sizeof(path), "%s/%s/appender_meta_0", DIR, qname);
+    int fd = open(path, O_WRONLY);
+    TEST_ASSERT_MESSAGE(fd >= 0, "open appender_meta_0");
+    TEST_ASSERT_EQUAL_INT64((int64_t)sizeof(value),
+        (int64_t)pwrite(fd, &value, sizeof(value), 0));
+    TEST_ASSERT_EQUAL_INT(0, close(fd));
+}
+
+/* Reopen the pin queue and rejoin appender id 0; returns the appender
+ * create rc (*out_a stays NULL on failure). */
+static int c32_rejoin(const char *qname, MmapqIndexedBatchQueue **out_q,
+                      MmapqIndexedBatchAppender **out_a)
+{
+    *out_q = NULL;
+    *out_a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create(
+        DIR, qname, C32_REGION_SIZE, C32_RING_SIZE, 1,
+        C32_MAX_FILE_SIZE, 0, TIMEOUT, 1, rt, rt, out_q));
+    TEST_ASSERT_NOT_NULL(*out_q);
+    return mmapq_indexed_batch_queue_create_appender_with_id(*out_q, 0, out_a);
+}
+
+/* One-message batch "HELLO": start, append, complete; returns the batch
+ * offset for commit_batch. */
+static int64_t c32_complete_hello_batch(MmapqIndexedBatchAppender *a)
+{
+    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    TEST_ASSERT_NOT_NULL(b);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(b, "HELLO", 5));
+    return mmapq_mutable_batch_complete(b);
+}
+
+/* Batch index 0 must have no committed entry. */
+static void c32_assert_batch0_empty(MmapqIndexedBatchQueue *cq)
+{
+    MmapqIndexedBatchReader *r = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_reader(cq, &r));
+    TEST_ASSERT_NOT_NULL(r);
+    MmapqBatchReadingContext ctx = {0};
+    mmapq_indexed_batch_reader_read(r, 0, &ctx);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_BATCH_ENTRY_END_OF_STREAM, ctx.status);
+    mmapq_indexed_batch_reader_close(r);
+}
+
+void test_c32_batch_p1_start_offset_2pow57_rejoin_refused(void)
+{
+    const char *qn = "mmap_test_ibq_c32_p1";
+    c32_create_queue(qn);
+    c32_plant_start_offset(qn, (int64_t)1 << 57);
+
+    MmapqIndexedBatchQueue *cq = NULL;
+    MmapqIndexedBatchAppender *a = NULL;
+    int rc = c32_rejoin(qn, &cq, &a);
+    if (rc == 0) {
+        /* Pre-CAND-32 defect chain (see the plain P1 pin): debug aborts in
+         * header_encode (header_codec.h:113) from commit_batch; release
+         * masks 2^57 into HEADER_NULL and reports a commit nothing reads. */
+        int64_t off = c32_complete_hello_batch(a);
+        int64_t idx = mmapq_indexed_batch_appender_commit_batch(a, off);
+        char msg[96];
+        snprintf(msg, sizeof(msg),
+                 "start_offset 2^57 accepted: rejoin rc=0, commit_batch=%lld",
+                 (long long)idx);
+        mmapq_indexed_batch_appender_close(a);
+        mmapq_indexed_batch_queue_close(cq);
+        c32_cleanup(qn);
+        TEST_FAIL_MESSAGE(msg);
+    }
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ECORRUPT, rc);
+    TEST_ASSERT_NULL(a);
+
+    mmapq_indexed_batch_queue_close(cq);
+    c32_cleanup(qn);
+}
+
+void test_c32_batch_p2_start_offset_2pow56_commit_refused(void)
+{
+    const char *qn = "mmap_test_ibq_c32_p2";
+    c32_create_queue(qn);
+    /* 2^56 is a legitimate END position (region boundary) — C1 accepts. */
+    c32_plant_start_offset(qn, C32_POS_LIMIT);
+
+    MmapqIndexedBatchQueue *cq = NULL;
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, c32_rejoin(qn, &cq, &a));
+    TEST_ASSERT_NOT_NULL(a);
+
+    /* ...but 2^56 is an unencodable START (56-bit field): C2 refuses. */
+    int64_t off = c32_complete_hello_batch(a);
+    TEST_ASSERT_EQUAL_INT64(C32_POS_LIMIT, off);
+    TEST_ASSERT_EQUAL_INT64(MMAPQ_ECORRUPT,
+        mmapq_indexed_batch_appender_commit_batch(a, off));
+    c32_assert_batch0_empty(cq);
+
+    mmapq_indexed_batch_appender_close(a);
+    mmapq_indexed_batch_queue_close(cq);
+    c32_cleanup(qn);
+}
+
+void test_c32_batch_p3_start_offset_negative_rejoin_refused(void)
+{
+    const char *qn = "mmap_test_ibq_c32_p3";
+    c32_create_queue(qn);
+    c32_plant_start_offset(qn, -1000);
+
+    MmapqIndexedBatchQueue *cq = NULL;
+    MmapqIndexedBatchAppender *a = NULL;
+    int rc = c32_rejoin(qn, &cq, &a);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ECORRUPT, rc);
+    TEST_ASSERT_NULL(a);
+
+    mmapq_indexed_batch_queue_close(cq);
+    c32_cleanup(qn);
+}
+
+void test_c32_batch_p4_start_offset_below_initial_rejoin_refused(void)
+{
+    const char *qn = "mmap_test_ibq_c32_p4";
+    c32_create_queue(qn);
+    c32_plant_start_offset(qn, INITIAL_PAYLOAD_POSITION - 1);   /* 63 */
+
+    MmapqIndexedBatchQueue *cq = NULL;
+    MmapqIndexedBatchAppender *a = NULL;
+    int rc = c32_rejoin(qn, &cq, &a);
+    if (rc == 0) {
+        /* Pre-CAND-32 record path: 63 encodes fine — the batch commits over
+         * the reserved prefix region, silent corruption, no error. */
+        int64_t off = c32_complete_hello_batch(a);
+        int64_t idx = mmapq_indexed_batch_appender_commit_batch(a, off);
+        char msg[96];
+        snprintf(msg, sizeof(msg),
+                 "start_offset 63 accepted: rejoin rc=0, commit_batch=%lld",
+                 (long long)idx);
+        mmapq_indexed_batch_appender_close(a);
+        mmapq_indexed_batch_queue_close(cq);
+        c32_cleanup(qn);
+        TEST_FAIL_MESSAGE(msg);
+    }
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ECORRUPT, rc);
+    TEST_ASSERT_NULL(a);
+
+    mmapq_indexed_batch_queue_close(cq);
+    c32_cleanup(qn);
+}
+
+void test_c32_batch_p5_start_offset_roll_to_limit_commit_refused(void)
+{
+    const char *qn = "mmap_test_ibq_c32_p5";
+    c32_create_queue(qn);
+    c32_plant_start_offset(qn, C32_POS_LIMIT - 2);
+
+    MmapqIndexedBatchQueue *cq = NULL;
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, c32_rejoin(qn, &cq, &a));
+    TEST_ASSERT_NOT_NULL(a);
+
+    /* 2 bytes of region capacity remain at 2^56−2 — too small for the
+     * 4-byte batch count, so start_batch rolls the position to exactly
+     * 2^56: an unencodable START. C2 refuses at commit_batch. */
+    int64_t off = c32_complete_hello_batch(a);
+    TEST_ASSERT_EQUAL_INT64(C32_POS_LIMIT, off);
+    TEST_ASSERT_EQUAL_INT64(MMAPQ_ECORRUPT,
+        mmapq_indexed_batch_appender_commit_batch(a, off));
+    c32_assert_batch0_empty(cq);
+
+    mmapq_indexed_batch_appender_close(a);
+    mmapq_indexed_batch_queue_close(cq);
+    c32_cleanup(qn);
+}
+
+void test_c32_batch_p6_start_offset_near_limit_append_works(void)
+{
+    /* POSITIVE CONTROL: a legitimate near-limit start_offset must still
+     * commit and read back — guards over-rejection by C1/C2. */
+    const char *qn = "mmap_test_ibq_c32_p6";
+    c32_create_queue(qn);
+    c32_plant_start_offset(qn, C32_POS_LIMIT - C32_MAX_FILE_SIZE);
+
+    MmapqIndexedBatchQueue *cq = NULL;
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, c32_rejoin(qn, &cq, &a));
+    TEST_ASSERT_NOT_NULL(a);
+
+    int64_t off = c32_complete_hello_batch(a);
+    TEST_ASSERT_EQUAL_INT64(C32_POS_LIMIT - C32_MAX_FILE_SIZE, off);
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_batch_appender_commit_batch(a, off));
+
+    MmapqIndexedBatchReader *r = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_reader(cq, &r));
+    TEST_ASSERT_NOT_NULL(r);
+    MmapqBatchReadingContext ctx = {0};
+    mmapq_indexed_batch_reader_read(r, 0, &ctx);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_BATCH_ENTRY_AVAILABLE, ctx.status);
+    TEST_ASSERT_EQUAL_INT(1, ctx.message_count);
+    const void *data = NULL;
+    int32_t length = 0;
+    TEST_ASSERT_EQUAL_INT(1, mmapq_batch_iterator_next(ctx.iterator, &data, &length));
+    TEST_ASSERT_EQUAL_INT32(5, length);
+    TEST_ASSERT_EQUAL_MEMORY("HELLO", data, 5);
+    mmapq_indexed_batch_reader_close(r);
+
+    mmapq_indexed_batch_appender_close(a);
+    mmapq_indexed_batch_queue_close(cq);
+    c32_cleanup(qn);
+}
+
+void test_c32_batch_p8_region_boundary_end_offset_legitimate(void)
+{
+    /* Batch mirror of the c32_limit scenario: batch [count=1][len=4088]
+     * [4088 bytes] at 2^56−4096 ends exactly at 2^56 and archives to
+     * start_offset == 2^56. C1's upper bound is 2^56 INCLUSIVE; a 2^56−1
+     * bound (mutation M3d) ECORRUPTs this legitimate queue. */
+    const char *qn = "mmap_test_ibq_c32_p8";
+    c32_create_queue(qn);
+    c32_plant_start_offset(qn, C32_POS_LIMIT - C32_REGION_SIZE);
+
+    MmapqIndexedBatchQueue *cq = NULL;
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, c32_rejoin(qn, &cq, &a));
+    TEST_ASSERT_NOT_NULL(a);
+
+    char msg[C32_REGION_SIZE - MMAPQ_BATCH_MSG_COUNT_SIZE - PAYLOAD_LENGTH_SIZE];
+    memset(msg, 'L', sizeof(msg));
+    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    TEST_ASSERT_NOT_NULL(b);
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_mutable_batch_append(b, msg, (int32_t)sizeof(msg)));
+    int64_t off = mmapq_mutable_batch_complete(b);
+    TEST_ASSERT_EQUAL_INT64(C32_POS_LIMIT - C32_REGION_SIZE, off);
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_batch_appender_commit_batch(a, off));
+
+    MmapqIndexedBatchReader *r = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_reader(cq, &r));
+    TEST_ASSERT_NOT_NULL(r);
+    MmapqBatchReadingContext ctx = {0};
+    mmapq_indexed_batch_reader_read(r, 0, &ctx);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_BATCH_ENTRY_AVAILABLE, ctx.status);
+    TEST_ASSERT_EQUAL_INT(1, ctx.message_count);
+    const void *data = NULL;
+    int32_t length = 0;
+    TEST_ASSERT_EQUAL_INT(1, mmapq_batch_iterator_next(ctx.iterator, &data, &length));
+    TEST_ASSERT_EQUAL_INT32((int32_t)sizeof(msg), length);
+    TEST_ASSERT_EQUAL_MEMORY(msg, data, sizeof(msg));
+    mmapq_indexed_batch_reader_close(r);
+
+    MmapqIndexedBatchArchiver *ar = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_archiver(cq, &ar));
+    TEST_ASSERT_NOT_NULL(ar);
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_batch_archiver_archive_up_to_index(ar, 1));
+    int64_t so = -1;
+    /* start_offset() returns 1 on success, 0 if the appender ID is unused */
+    TEST_ASSERT_EQUAL_INT(1,
+        mmapq_indexed_batch_archiver_start_offset(ar, 0, &so));
+    TEST_ASSERT_EQUAL_INT64(C32_POS_LIMIT, so);
+    mmapq_indexed_batch_archiver_close(ar);
+    mmapq_indexed_batch_appender_close(a);
+    mmapq_indexed_batch_queue_close(cq);
+
+    /* Rejoin with start_offset == 2^56 on disk: C1 must accept. */
+    MmapqIndexedBatchAppender *a2 = NULL;
+    TEST_ASSERT_EQUAL_INT(0, c32_rejoin(qn, &cq, &a2));
+    TEST_ASSERT_NOT_NULL(a2);
+    mmapq_indexed_batch_appender_close(a2);
+
+    /* A fresh archiver opens the meta through the same validated path. */
+    MmapqIndexedBatchArchiver *ar2 = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_archiver(cq, &ar2));
+    TEST_ASSERT_NOT_NULL(ar2);
+    so = -1;
+    TEST_ASSERT_EQUAL_INT(1,
+        mmapq_indexed_batch_archiver_start_offset(ar2, 0, &so));
+    TEST_ASSERT_EQUAL_INT64(C32_POS_LIMIT, so);
+    mmapq_indexed_batch_archiver_close(ar2);
+    mmapq_indexed_batch_queue_close(cq);
+    c32_cleanup(qn);
+}
+
+void test_c32_batch_p7_commit_batch_2pow57_refused(void)
+{
+    /* Batch C3: commit_batch(a, 2^57) is above this appender's last written
+     * start — a caller error, MMAPQ_EINVAL (CAND-32 v3), refused before the
+     * encode (never a debug abort at header_codec.h:113). Uses the setUp
+     * queue. */
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
+    TEST_ASSERT_NOT_NULL(a);
+
+    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    TEST_ASSERT_NOT_NULL(b);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(b, "small", 5));
+    int64_t off = mmapq_mutable_batch_complete(b);
+    TEST_ASSERT_EQUAL_INT64(INITIAL_PAYLOAD_POSITION, off);
+
+    TEST_ASSERT_EQUAL_INT64(MMAPQ_EINVAL,
+        mmapq_indexed_batch_appender_commit_batch(a, (int64_t)1 << 57));
+    c32_assert_batch0_empty(q);
+
+    /* The real batch still commits as index 0 and reads back. */
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_batch_appender_commit_batch(a, off));
+    MmapqIndexedBatchReader *r = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_reader(q, &r));
+    TEST_ASSERT_NOT_NULL(r);
+    MmapqBatchReadingContext ctx = {0};
+    mmapq_indexed_batch_reader_read(r, 0, &ctx);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_BATCH_ENTRY_AVAILABLE, ctx.status);
+    TEST_ASSERT_EQUAL_INT(1, ctx.message_count);
+    const void *data = NULL;
+    int32_t length = 0;
+    TEST_ASSERT_EQUAL_INT(1, mmapq_batch_iterator_next(ctx.iterator, &data, &length));
+    TEST_ASSERT_EQUAL_INT32(5, length);
+    TEST_ASSERT_EQUAL_MEMORY("small", data, 5);
+    mmapq_indexed_batch_reader_close(r);
+
+    mmapq_indexed_batch_appender_close(a);
+}
+
+void test_c32_batch_p9_commit_batch_above_last_written_refused(void)
+{
+    /* Batch C3: an IN-DOMAIN offset above the last completed batch's start
+     * was never written by this appender — caller error, MMAPQ_EINVAL.
+     * Pre-C3 (re-observed at fail-first): commit_batch(5000) returned 0,
+     * having CASed index 0's header at position 5000; index 0 then read
+     * BATCH_ENTRY_ERROR forever. Uses the setUp queue. */
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
+    TEST_ASSERT_NOT_NULL(a);
+
+    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    TEST_ASSERT_NOT_NULL(b);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(b, "small", 5));
+    int64_t off = mmapq_mutable_batch_complete(b);
+    TEST_ASSERT_EQUAL_INT64(INITIAL_PAYLOAD_POSITION, off);
+
+    TEST_ASSERT_EQUAL_INT64(MMAPQ_EINVAL,
+        mmapq_indexed_batch_appender_commit_batch(a, 5000));
+    c32_assert_batch0_empty(q);
+
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_batch_appender_commit_batch(a, off));
+    MmapqIndexedBatchReader *r = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_reader(q, &r));
+    TEST_ASSERT_NOT_NULL(r);
+    MmapqBatchReadingContext ctx = {0};
+    mmapq_indexed_batch_reader_read(r, 0, &ctx);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_BATCH_ENTRY_AVAILABLE, ctx.status);
+    TEST_ASSERT_EQUAL_INT(1, ctx.message_count);
+    const void *data = NULL;
+    int32_t length = 0;
+    TEST_ASSERT_EQUAL_INT(1, mmapq_batch_iterator_next(ctx.iterator, &data, &length));
+    TEST_ASSERT_EQUAL_INT32(5, length);
+    TEST_ASSERT_EQUAL_MEMORY("small", data, 5);
+    mmapq_indexed_batch_reader_close(r);
+
+    mmapq_indexed_batch_appender_close(a);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -1281,5 +1683,14 @@ int main(void)
     RUN_TEST(test_batch_reader_rejects_absurd_index);
     RUN_TEST(test_batch_queue_create_start_index_boundary);
     RUN_TEST(test_batch_read_no_alias_at_file_index_2pow32);
+    RUN_TEST(test_c32_batch_p1_start_offset_2pow57_rejoin_refused);
+    RUN_TEST(test_c32_batch_p2_start_offset_2pow56_commit_refused);
+    RUN_TEST(test_c32_batch_p3_start_offset_negative_rejoin_refused);
+    RUN_TEST(test_c32_batch_p4_start_offset_below_initial_rejoin_refused);
+    RUN_TEST(test_c32_batch_p5_start_offset_roll_to_limit_commit_refused);
+    RUN_TEST(test_c32_batch_p6_start_offset_near_limit_append_works);
+    RUN_TEST(test_c32_batch_p8_region_boundary_end_offset_legitimate);
+    RUN_TEST(test_c32_batch_p7_commit_batch_2pow57_refused);
+    RUN_TEST(test_c32_batch_p9_commit_batch_above_last_written_refused);
     return UNITY_END();
 }

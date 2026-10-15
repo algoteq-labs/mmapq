@@ -134,8 +134,8 @@ static inline int64_t queue_meta_start_index(const QueueMeta *m)
 
 /**
  * queue_meta_set_start_index — write start_index with release semantics.
- * Only valid when archivable == 1. Not used in this C port but provided
- * for completeness.
+ * Only valid when archivable == 1. Called by both archivers under the
+ * archive_up_to_index_locked archivable guard.
  */
 static inline void queue_meta_set_start_index(QueueMeta *m, int64_t index)
 {

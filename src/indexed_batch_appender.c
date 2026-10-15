@@ -415,6 +415,17 @@ static int move_to_last_header(MmapqIndexedBatchAppender *a)
 
 int64_t mmapq_indexed_batch_appender_commit_batch(MmapqIndexedBatchAppender *a, int64_t batch_offset)
 {
+    /* CAND-32 C3: an offset above the last started batch's start was never
+     * written by this appender — caller error. current_batch.batch_offset
+     * is calloc-zeroed at create and set only by start_batch. */
+    if (batch_offset > a->current_batch.batch_offset) return MMAPQ_EINVAL;
+
+    /* Encoded positions are STARTS — limited to the 56-bit field (2^56−1),
+     * one tighter than the start_offset open check (CAND-32 spec §2). */
+    if (batch_offset < INITIAL_PAYLOAD_POSITION ||
+        batch_offset > (int64_t)HEADER_PAYLOAD_MASK)
+        return MMAPQ_ECORRUPT;
+
     uint64_t header = header_encode(a->appender_id, batch_offset);
     WrapResult r = region_accessor_wrap(a->header_acc, a->current_header_position, &a->header_buf);
     if (r != WRAP_SUCCESS) return -1;

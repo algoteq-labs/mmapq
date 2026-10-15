@@ -195,6 +195,12 @@ static int move_to_last_header(MmapqIndexedAppender *a)
 
 static int commit_header(MmapqIndexedAppender *a, int64_t payload_offset, int64_t *out_index)
 {
+    /* Encoded positions are STARTS — limited to the 56-bit field (2^56−1),
+     * one tighter than the start_offset open check (CAND-32 spec §2). */
+    if (payload_offset < INITIAL_PAYLOAD_POSITION ||
+        payload_offset > (int64_t)HEADER_PAYLOAD_MASK)
+        return MMAPQ_ECORRUPT;
+
     uint64_t header = header_encode(a->appender_id, payload_offset);
 
     WrapResult r = region_accessor_wrap(a->header_acc,
@@ -578,7 +584,8 @@ int64_t mmapq_indexed_appender_append(
     if (write_payload(a, data, length, &payload_offset)) return -1;
 
     int64_t committed;
-    if (commit_header(a, payload_offset, &committed)) return -1;
+    int crc = commit_header(a, payload_offset, &committed);
+    if (crc != 0) return crc;
     return committed;
 }
 
@@ -612,6 +619,11 @@ int64_t mmapq_indexed_appender_commit(
     if (a == NULL) return MMAPQ_EINVAL;
     if (a->closed) return MMAPQ_ECLOSED;
     if (payload_offset <= 0) return MMAPQ_EINVAL;
+    /* CAND-32 C3: an offset above this appender's last written start was
+     * never written by it — caller error. last_appended is calloc-zeroed
+     * at create and set only in the write path, so a post-rejoin commit of
+     * a pre-rejoin offset is refused here too. */
+    if (payload_offset > a->last_appended) return MMAPQ_EINVAL;
 
     /* Fast path — the payload this appender appended most recently (the
      * normal in-sequence case): no shared loads. Keyed on the last APPENDED
@@ -627,7 +639,8 @@ int64_t mmapq_indexed_appender_commit(
         if (commit_pre_hook) commit_pre_hook();
 #endif
         int64_t committed;
-        if (commit_header(a, payload_offset, &committed)) return -1;
+        int crc = commit_header(a, payload_offset, &committed);
+        if (crc != 0) return crc;
         /* Race with an archive that published a higher boundary between the
          * pre-check and the CAS: the archiver stores start_offset, fences,
          * then reads headers; this commit stored its header, fences, then
@@ -641,7 +654,8 @@ int64_t mmapq_indexed_appender_commit(
     }
 
     int64_t committed;
-    if (commit_header(a, payload_offset, &committed)) return -1;
+    int crc = commit_header(a, payload_offset, &committed);
+    if (crc != 0) return crc;
     return committed;
 }
 

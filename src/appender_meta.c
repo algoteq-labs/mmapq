@@ -2,6 +2,7 @@
 #include "internal/mmap_assert.h"
 #include "mmap_platform.h"
 #include "internal/file_initialiser.h"
+#include "internal/header_codec.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -84,6 +85,17 @@ static int appender_meta_open_internal(
     m->region      = region;
     m->base        = buf.data;
     m->appender_id = appender_id;
+
+    /* start_offset is the END of the last archived message, so 2^56 is a
+     * legitimate value (region-boundary end) even though header_encode
+     * positions are limited to 56 bits. See CAND-32 spec §2. */
+    int64_t so = appender_meta_start_offset(m);
+    if (so < INITIAL_PAYLOAD_POSITION ||
+        so > (int64_t)HEADER_PAYLOAD_MASK + 1) {
+        mmapqi_fixed_size_region_destroy(region);
+        free(m);
+        return MMAPQ_ECORRUPT;
+    }
 
     *out = m;
     return 0;

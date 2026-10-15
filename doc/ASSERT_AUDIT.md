@@ -1,12 +1,14 @@
 # ASSERT_AUDIT.md — MMAP_ASSERT Inventory
 
 **71 asserts across 18 files** (15 src/*.c, 3 src/internal/*.h). Generated from source.
-Last verified: 2026-10-15 (D6/CAND-18 — the gate was extended to
-`src/internal/*.h`, adding 8 header sites, and the scope and counting
-rules below were recorded; D6 v2 reclassified the header_encode 56-bit
-field check in header_codec.h as V pending conversion (CAND-32) and
-corrected the queue_meta.h rationale — the setter is called by both
-archivers).
+Last verified: 2026-10-15 (CAND-32 — the header_encode 56-bit field check
+(:113) is now guarded by MMAPQ_ECORRUPT runtime checks at both append
+commit paths and the appender_meta open-time start_offset validation, and
+is reclassified I; the pending-V table has no pending rows. Previously:
+D6/CAND-18 — the gate was extended to `src/internal/*.h`, adding 8 header
+sites, and the scope and counting rules below were recorded; D6 v2 had
+reclassified :113 as V pending CAND-32 and corrected the queue_meta.h
+rationale — the setter is called by both archivers).
 
 ## Legend
 
@@ -32,8 +34,8 @@ archivers).
 
 | Disposition | Count |
 |---|---|
-| I (stays, re-verified) | 70 |
-| V (pending conversion) | 1 |
+| I (stays, re-verified) | 71 |
+| V (pending conversion) | 0 |
 | (converted from V in Phase 16e) | 2 |
 | **Total** | **71** |
 
@@ -73,13 +75,13 @@ Lines 28-29, 52. Internal dispatch null checks.
 
 Lines 55, 88. Internal dispatch null checks.
 
-### header_codec.h — 5 (4 I, 1 V)
+### header_codec.h — 5 (all I)
 
 | Line | Disposition | Verified |
 |---|---|---|
 | 100 | I | ASSERT_HEADER_ALIGNED macro definition — counted per the wrapper-macro rule; its invocation is not a separate site. Platform/mapping alignment invariant. |
-| 111 | I | header_encode NULL_HEADER check — a negative on-disk start_offset fails rejoin's payload walk before header_encode is reached. |
-| 113 | V | header_encode 56-bit field check — reachable from on-disk appender_meta.start_offset, unvalidated on open (CAND-32; debug aborts, release commits an unreadable header). |
+| 111 | I | header_encode NULL_HEADER check — a non-positive on-disk start_offset is refused at appender_meta open (CAND-32 C1) before header_encode is reached. |
+| 113 | I | header_encode 56-bit field check — guarded by MMAPQ_ECORRUPT runtime checks at both append commit paths (indexed_appender.c commit_header, indexed_batch_appender.c commit_batch) and the appender_meta open-time start_offset validation (CAND-32). |
 | 191 | I | header_position: non-negativity of internally computed index. |
 | 214 | I | header_index: non-negativity of internally computed position. |
 
@@ -114,8 +116,8 @@ Archivable contract on the start_index setter; called by both archivers
 (`queue_meta_set_start_index` in `indexed_archiver.c` and
 `indexed_batch_archiver.c`, two sites each), guarded by the
 `queue_meta_archivable` EINVAL check in `archive_up_to_index_locked`.
-(The in-code comment claiming the setter is unused is stale — cleanup
-logged under CAND-32.)
+(The in-code comment claiming the setter was unused was corrected under
+CAND-32.)
 
 ### queue_region_accessor.h — 2 (all I)
 
@@ -155,7 +157,7 @@ init and rewind NULL checks became MMAPQ_EINVAL returns.)
 | File | Line | Assert | Action |
 |---|---|---|---|
 | `batch_payload_iterator.c` | 83 | capacity == padded | (converted Phase 16e — runtime check) |
-| `header_codec.h` | 113 | payload_position exceeds 56-bit field | pending — CAND-32 (validate start_offset on rejoin; ECORRUPT runtime checks in both appenders) |
+| `header_codec.h` | 113 | payload_position exceeds 56-bit field | (resolved CAND-32 — guarded invariant: ECORRUPT runtime checks at both append commit paths + appender_meta open-time start_offset validation) |
 | `indexed_reader.c` | 163 | length > 0 | (converted Phase 16e — runtime check) |
 
 ## Files with zero asserts (all V-class already converted)
