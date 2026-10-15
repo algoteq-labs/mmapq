@@ -47,7 +47,7 @@ Lines 71-72, 110-112, 125. Internal dispatch null checks.
 
 ### file_mapper_single_rw.c — 7 (all I)
 
-Lines 46, 138-139, 186-188, 200. Internal dispatch null checks.
+Lines 46, 136-137, 184-186, 198. Internal dispatch null checks.
 
 ### fixed_size_region.c — 3 (all I)
 
@@ -99,7 +99,7 @@ Lines 44, 81, 176-177, 183-184, 190. Internal dispatch null checks.
 
 ### runtime.c — 1 (all I)
 
-Lines 547. Internal threading-contract check. (CAND-26: the
+Lines 548. Internal threading-contract check. (CAND-26: the
 unregister_and_wait helper-registration assert became a retry loop —
 allocation failure is transient and the function's contract leaves no
 room for giving up.)
