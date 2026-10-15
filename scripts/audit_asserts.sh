@@ -7,6 +7,15 @@ set -euo pipefail
 SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 cd "$(dirname "$0")/.."
 
+shopt -s nullglob
+SRC_FILES=(src/*.c)
+HDR_FILES=(src/internal/*.h)
+shopt -u nullglob
+if [ ${#SRC_FILES[@]} -eq 0 ] || [ ${#HDR_FILES[@]} -eq 0 ]; then
+    echo "ERROR: scan scope missing (need src/*.c and src/internal/*.h) — wrong working directory?" >&2
+    exit 1
+fi
+
 VERIFY="${1:-}"
 
 # Doc path is parameterizable so --self-test can run against a mutated copy.
@@ -34,6 +43,15 @@ parse_line_list() {
     fi
   done
   echo "$out" | tr ' ' '\n' | sort -n | tr '\n' ' '
+}
+
+# ── Inventory one file's MMAP_ASSERT sites.
+#    A site is a line whose first non-whitespace token is MMAP_ASSERT( —
+#    this excludes comment mentions (including block-comment continuation
+#    lines, which the old (//|/\*) filter could not catch) and the macro's
+#    own #ifndef/#define lines in mmap_assert.h.
+assert_sites() {
+  grep -nE '^[[:space:]]*MMAP_ASSERT\(' "$1" || true
 }
 
 # ── Extract claimed line numbers from ASSERT_AUDIT.md for a given file.
@@ -70,10 +88,13 @@ get_claimed_lines() {
 verify_per_file() {
   local errors=0
 
-  for f in src/*.c; do
-    local basename="${f#src/}"
-    local raw matches count
-    raw=$(grep -n 'MMAP_ASSERT' "$f" | grep -vE '(//|/\*).*MMAP_ASSERT' || true)
+  for f in "${SRC_FILES[@]}" "${HDR_FILES[@]}"; do
+    local basename raw matches count actual claimed claimed_line
+    case "$f" in
+      src/internal/*) basename="${f#src/internal/}" ;;
+      *)              basename="${f#src/}" ;;
+    esac
+    raw=$(assert_sites "$f")
     matches=$(echo "$raw" | grep -c . || true)
     [ "$matches" -gt 0 ] || continue
 
@@ -136,8 +157,8 @@ verify_dispositions() {
 total=0
 files=0
 
-for f in src/*.c; do
-  matches=$(grep -n 'MMAP_ASSERT' "$f" | grep -vE '(//|/\*).*MMAP_ASSERT' || true)
+for f in "${SRC_FILES[@]}" "${HDR_FILES[@]}"; do
+  matches=$(assert_sites "$f")
   count=$(echo "$matches" | grep -c . || true)
   [ "$count" -gt 0 ] || continue
   files=$((files + 1))
@@ -151,19 +172,21 @@ done
 
 echo "---"
 if [ "$total" -eq 0 ]; then
-    echo "ERROR: no MMAP_ASSERT sites found — wrong working directory? (checked src/*.c)" >&2
+    echo "ERROR: no MMAP_ASSERT sites found — wrong working directory? (checked src/*.c and src/internal/*.h)" >&2
     exit 1
 fi
 echo "Total: $total assert(s) across $files file(s)"
 
 if [ "$VERIFY" = "--verify" ]; then
     claimed=$(sed -n 's/^\*\*\([0-9][0-9]*\) asserts.*$/\1/p' "$DOC")
-    if [ "$total" -ne "${claimed:-0}" ]; then
-        echo "VERIFY FAILED: source has $total, ASSERT_AUDIT.md claims $claimed"
-        exit 1
-    fi
+    # Per-file first: a planted-site canary must be reported as a per-file
+    # mismatch naming the file, not masked by the aggregate count check.
     if ! verify_per_file; then
         echo "VERIFY FAILED: per-file line number mismatches"
+        exit 1
+    fi
+    if [ "$total" -ne "${claimed:-0}" ]; then
+        echo "VERIFY FAILED: source has $total, ASSERT_AUDIT.md claims $claimed"
         exit 1
     fi
     if ! verify_dispositions; then
@@ -194,6 +217,21 @@ if [ "$VERIFY" = "--self-test" ]; then
         exit 1
     else
         echo "  self-test fail case: OK"
+    fi
+
+    # Negative: drop one header site from the doc — the per-file header
+    # check must catch it (header scope is D6; a doc-side mutation only,
+    # the planted-source canary is manual acceptance, not self-test).
+    sed 's/^Lines 138-139\./Lines 138./' "$DOC" > "$STMP/fail-hdr.md"
+    if cmp -s "$DOC" "$STMP/fail-hdr.md"; then
+        echo "  self-test setup error: header fail-case sed did not change the doc" >&2
+        exit 1
+    fi
+    if ASSERT_AUDIT_DOC="$STMP/fail-hdr.md" bash "$SELF" --verify >/dev/null 2>&1; then
+        echo "  self-test fail case (header line dropped): FAIL (not detected)"
+        exit 1
+    else
+        echo "  self-test fail case (header line dropped): OK"
     fi
 
     echo "self-test: PASS"

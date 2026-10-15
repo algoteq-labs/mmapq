@@ -1,9 +1,9 @@
 # ASSERT_AUDIT.md — MMAP_ASSERT Inventory
 
-**63 asserts across 15 src/*.c files.** Generated from source.
-Last verified: 2026-10-11 (CAND-26 — `mmapq_runtime_unregister_and_wait`'s
-assert on the helper-register result became a real `if (!ok) return;`
-when register learned to return 0 on allocation failure).
+**71 asserts across 18 files** (15 src/*.c, 3 src/internal/*.h). Generated from source.
+Last verified: 2026-10-15 (D6/CAND-18 — the gate was extended to
+`src/internal/*.h`, adding 8 header sites, and the scope and counting
+rules below were recorded).
 
 ## Legend
 
@@ -12,14 +12,27 @@ when register learned to return 0 on allocation failure).
 | **I** | Internal invariant — stays as assert |
 | **V** | Validation — should be runtime check |
 
+## Scope and counting rules
+
+- Scanned scope: `src/*.c` and `src/internal/*.h`. The gate fails closed
+  if either scope is absent.
+- A site is a line whose first non-whitespace token is `MMAP_ASSERT(`.
+  Comment mentions — including block-comment continuation lines — are not
+  sites, and neither are `mmap_assert.h`'s own `#ifndef`/`#define` lines.
+- Wrapper macros: a macro whose body is an MMAP_ASSERT is inventoried at
+  its definition site only; invocation sites are not counted (an
+  invocation does not contain the `MMAP_ASSERT` token).
+  `ASSERT_HEADER_ALIGNED` in header_codec.h is the current instance; its
+  invocation in indexed_appender.c is not a separate site.
+
 ## Summary
 
 | Disposition | Count |
 |---|---|
-| I (stays, re-verified) | 63 |
+| I (stays, re-verified) | 71 |
 | V (pending conversion) | 0 |
 | (converted from V in Phase 16e) | 2 |
-| **Total** | **63** |
+| **Total** | **71** |
 
 ## Per-file inventory
 
@@ -57,6 +70,15 @@ Lines 28-29, 52. Internal dispatch null checks.
 
 Lines 55, 88. Internal dispatch null checks.
 
+### header_codec.h — 5 (all I)
+
+Lines 100, 111, 113, 191, 214.
+100 is the ASSERT_HEADER_ALIGNED macro definition (counted per the
+wrapper-macro rule; its invocation is not a separate site); 111/113 are
+header_encode field invariants on on-disk-format-derived values,
+EINVAL-guarded at public entry points; 191/214 assert non-negativity of
+internally computed index/position. All I.
+
 ### indexed_appender.c — 1 (V→I, Phase 6a)
 
 | Line | Disposition | Verified |
@@ -80,6 +102,16 @@ Lines 55, 88. Internal dispatch null checks.
 Lines 97, 110, 145-146. Internal dispatch null checks. (A5/CAND-22: init
 and rewind gained `int` return channels; their NULL/not-initialised checks
 became MMAPQ_EINVAL returns.)
+
+### queue_meta.h — 1 (all I)
+
+Lines 142.
+Archivable contract on an internal setter unused in this port.
+
+### queue_region_accessor.h — 2 (all I)
+
+Lines 138-139.
+Internal dispatch NULL checks.
 
 ### region_async.c — 8 (all I)
 
@@ -125,3 +157,6 @@ init and rewind NULL checks became MMAPQ_EINVAL returns.)
 `payload_walk.c`, `queue_region_accessor.c`, `file_initialiser.c`,
 `queue_latency_probe.c`, `batch_queue_latency_probe.c`,
 `queue_transfer.c`, `batch_queue_transfer.c`, `queue_files.c`
+
+The `src/internal` headers not listed above have only comment mentions of
+MMAP_ASSERT, which the site rule excludes.
