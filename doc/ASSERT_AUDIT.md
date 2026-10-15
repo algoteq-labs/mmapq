@@ -3,7 +3,10 @@
 **71 asserts across 18 files** (15 src/*.c, 3 src/internal/*.h). Generated from source.
 Last verified: 2026-10-15 (D6/CAND-18 — the gate was extended to
 `src/internal/*.h`, adding 8 header sites, and the scope and counting
-rules below were recorded).
+rules below were recorded; D6 v2 reclassified the header_encode 56-bit
+field check in header_codec.h as V pending conversion (CAND-32) and
+corrected the queue_meta.h rationale — the setter is called by both
+archivers).
 
 ## Legend
 
@@ -29,8 +32,8 @@ rules below were recorded).
 
 | Disposition | Count |
 |---|---|
-| I (stays, re-verified) | 71 |
-| V (pending conversion) | 0 |
+| I (stays, re-verified) | 70 |
+| V (pending conversion) | 1 |
 | (converted from V in Phase 16e) | 2 |
 | **Total** | **71** |
 
@@ -70,14 +73,15 @@ Lines 28-29, 52. Internal dispatch null checks.
 
 Lines 55, 88. Internal dispatch null checks.
 
-### header_codec.h — 5 (all I)
+### header_codec.h — 5 (4 I, 1 V)
 
-Lines 100, 111, 113, 191, 214.
-100 is the ASSERT_HEADER_ALIGNED macro definition (counted per the
-wrapper-macro rule; its invocation is not a separate site); 111/113 are
-header_encode field invariants on on-disk-format-derived values,
-EINVAL-guarded at public entry points; 191/214 assert non-negativity of
-internally computed index/position. All I.
+| Line | Disposition | Verified |
+|---|---|---|
+| 100 | I | ASSERT_HEADER_ALIGNED macro definition — counted per the wrapper-macro rule; its invocation is not a separate site. Platform/mapping alignment invariant. |
+| 111 | I | header_encode NULL_HEADER check — a negative on-disk start_offset fails rejoin's payload walk before header_encode is reached. |
+| 113 | V | header_encode 56-bit field check — reachable from on-disk appender_meta.start_offset, unvalidated on open (CAND-32; debug aborts, release commits an unreadable header). |
+| 191 | I | header_position: non-negativity of internally computed index. |
+| 214 | I | header_index: non-negativity of internally computed position. |
 
 ### indexed_appender.c — 1 (V→I, Phase 6a)
 
@@ -106,7 +110,12 @@ became MMAPQ_EINVAL returns.)
 ### queue_meta.h — 1 (all I)
 
 Lines 142.
-Archivable contract on an internal setter unused in this port.
+Archivable contract on the start_index setter; called by both archivers
+(`queue_meta_set_start_index` in `indexed_archiver.c` and
+`indexed_batch_archiver.c`, two sites each), guarded by the
+`queue_meta_archivable` EINVAL check in `archive_up_to_index_locked`.
+(The in-code comment claiming the setter is unused is stale — cleanup
+logged under CAND-32.)
 
 ### queue_region_accessor.h — 2 (all I)
 
@@ -146,6 +155,7 @@ init and rewind NULL checks became MMAPQ_EINVAL returns.)
 | File | Line | Assert | Action |
 |---|---|---|---|
 | `batch_payload_iterator.c` | 83 | capacity == padded | (converted Phase 16e — runtime check) |
+| `header_codec.h` | 113 | payload_position exceeds 56-bit field | pending — CAND-32 (validate start_offset on rejoin; ECORRUPT runtime checks in both appenders) |
 | `indexed_reader.c` | 163 | length > 0 | (converted Phase 16e — runtime check) |
 
 ## Files with zero asserts (all V-class already converted)
