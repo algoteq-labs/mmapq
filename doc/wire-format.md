@@ -19,7 +19,8 @@ in this document; a change here is a binary-incompatible break.
 A queue lives in its own directory, `<directory>/<queue_name>/`, containing:
 
 - `meta` — a fixed 64-byte cache-line metadata block.
-- `header` — a single header file holding one 8-byte entry per queue index.
+- `header_0`, `header_1`, … — header files holding one 8-byte entry per
+  queue index, rolled when a file reaches `max_file_size` (like payloads).
 - `payload_<A>_<N>` — appender payload files, one per appender, rolled when
   a file reaches `max_file_size`.
 
@@ -43,7 +44,7 @@ refuses to open with `MMAPQ_ESCHEMA`.
 `start_index` is 8-byte aligned and atomic: written with release, read with
 acquire, so an archiver's progress is observable across processes.
 
-## Header file (`header`)
+## Header files (`header_0`, `header_1`, …)
 
 Each queue entry has an **8-byte header** (`HEADER_SIZE`):
 
@@ -89,7 +90,8 @@ Payload files are framed per appender as:
 
 - `length > 0` — a valid message; `length` payload bytes follow.
 - `length < 0` — long padding; a region boundary marker. Skip forward by
-  `abs(length)` bytes (which includes the 4-byte length field itself).
+  `abs(length) + 4` bytes (= the remaining region capacity); `abs(length)`
+  counts the bytes after the 4-byte length field.
 - `length == 0` — end of stream; nothing written at this position yet.
 
 Two padding cases at a region end:

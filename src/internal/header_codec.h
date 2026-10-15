@@ -21,7 +21,7 @@
  *   [int32 length][payload bytes...]
  *
  *   length > 0  : valid message, payload_bytes = length
- *   length < 0  : long padding  — region boundary, abs(length) - 4 bytes to skip
+ *   length < 0  : long padding  — region boundary, abs(length) + 4 bytes to skip (= remaining region capacity)
  *   length == 0 : end of stream (no message written here yet)
  *
  *   Short padding: when remaining capacity at region end < 4 bytes,
@@ -238,8 +238,8 @@ static inline int payload_is_short_padding(int32_t capacity)
 
 /**
  * payload_is_long_padding — true when the 4-byte length field is negative.
- * The padding size = abs(length) bytes (including the 4-byte length field itself).
- * The caller must skip forward by abs(length) bytes.
+ * abs(length) counts the bytes after the 4-byte length field itself;
+ * the caller skips forward by abs(length) + PAYLOAD_LENGTH_SIZE (= remaining region capacity).
  *
  * NOTE: The Java implementation writes (PAYLOAD_LENGTH_SIZE - capacity) as the negative
  * length, so abs(length) + PAYLOAD_LENGTH_SIZE = original capacity.

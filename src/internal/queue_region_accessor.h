@@ -22,18 +22,18 @@
  *     (appender: one RW accessor to its own payload file;
  *      poller/reader: one RO accessor per appender ID encountered)
  *
- * Header file: "<directory>/<queue_name>/header"
+ * Header files: "<directory>/<queue_name>/header_<N>" (rolled: N = 0, 1, …)
  *   - Shared between all appenders and readers
  *   - Read-only for pollers/readers, read-write for appenders
  *
- * Payload files: "<directory>/<queue_name>/payload_<appenderId>"
+ * Payload files: "<directory>/<queue_name>/payload_<A>_<N>" (A = appender ID, N = roll index)
  *   - One file per appender
  *   - Read-write for the owning appender
  *   - Read-only for pollers/readers
  *
- * FILE NAMING MATCHES Java exactly:
- *   header file  = "header"       (no suffix)
- *   payload file = "payload_N"    (N = appender ID, decimal)
+ * FILE NAMING MATCHES Java:
+ *   header files  = "header_<N>"      (N = roll index, decimal)
+ *   payload files = "payload_<A>_<N>" (A = appender ID, N = roll index)
  *
  * PRE-MAP TRIGGER RATIOS (from Java RegionAccessorSupplier):
  *   RO: 0.5 (premap at halfway through current region)
