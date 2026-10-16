@@ -612,6 +612,8 @@ static void (*commit_pre_hook)(void);
 void mmapq_test_hook_set_commit_pre(void (*fn)(void)) { commit_pre_hook = fn; }
 static void (*commit_min_pre_hook)(void);
 void mmapq_test_hook_set_commit_min_pre(void (*fn)(void)) { commit_min_pre_hook = fn; }
+static void (*commit_post_cas_hook)(void);
+void mmapq_test_hook_set_commit_post_cas(void (*fn)(void)) { commit_post_cas_hook = fn; }
 #endif
 
 int64_t mmapq_indexed_appender_commit(
@@ -643,6 +645,10 @@ int64_t mmapq_indexed_appender_commit(
         int64_t committed;
         int crc = commit_header(a, payload_offset, &committed);
         if (crc != 0) return crc;
+#ifdef MMAPQ_TEST_HOOKS
+        /* CAND-35 pin: kill -9 between the CAS and the fence + re-check */
+        if (commit_post_cas_hook) commit_post_cas_hook();
+#endif
         /* Race with an archive that published a higher boundary between the
          * pre-check and the CAS: the archiver stores start_offset, fences,
          * then reads headers; this commit stored its header, fences, then

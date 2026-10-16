@@ -46,8 +46,11 @@ CONSTANTS
                      \* archive.lock SH (a library-side reclaim call)
     PublishCAS,      \* proposal: publish raises start_offset only by a CAS
                      \* from the snapshot value (never clobbers a lowering)
-    UndoRule         \* documented hand-deleter rule (CAND-36): undo never
+    UndoRule,        \* documented hand-deleter rule (CAND-36): undo never
                      \* starts between the re-list and the unlink
+    WaitPreCasOnly   \* historical record (CAND-35 review): the wait
+                     \* covering only the pre-CAS window — UNSAFE even with
+                     \* the listing cap (cand35_narrow_wait FAILS)
 
 Appenders == 1..NA
 Pos       == 0..(NPos-1)
@@ -414,7 +417,8 @@ List1 ==
 
 List2 ==
     /\ dpc = "wait" /\ xpc = "idle"
-    /\ WaitAssumption => \A a \in Appenders : apc[a] \notin WindowStates
+    /\ WaitAssumption => \A a \in Appenders :
+         apc[a] \notin (IF WaitPreCasOnly THEN PreCasWindow ELSE WindowStates)
     /\ IF AtomicDelete
          THEN LET tP == markedP \cap ListedP
                   tH == markedH \cap ListedH

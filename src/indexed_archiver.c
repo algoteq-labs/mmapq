@@ -117,6 +117,8 @@ static void (*publish_pre_hook)(void);
 void mmapq_test_hook_set_archiver_publish_pre(void (*fn)(void)) { publish_pre_hook = fn; }
 static void (*reclaim_pre_unlink_hook)(void);
 void mmapq_test_hook_set_reclaim_pre_unlink(void (*fn)(void)) { reclaim_pre_unlink_hook = fn; }
+static int (*listing_scan_hook)(void);
+void mmapq_test_hook_set_archiver_listing_scan(int (*fn)(void)) { listing_scan_hook = fn; }
 #endif
 
 /* ── Factory ─────────────────────────────────────────────────────────────── */
@@ -481,6 +483,39 @@ static int archivable_files_locked(
     int64_t headers_in_file = max_file_size / HEADER_SIZE;
     int     count = 0;
 
+    /* CAND-35: cap each lane's deletable boundary at the lowest live
+     * payload visible in the headers (the model's ListingLivePass).
+     * A slow-path commit that crashes between its header CAS and its
+     * boundary re-check leaves start_offset raised above a live payload
+     * forever; trusting it alone lists a live file. The checked read is
+     * required — the plain read maps a mapping timeout to HEADER_NULL
+     * and would end the scan early, silently skipping the cap. A header
+     * CASed after the scan passed its slot is inside the commit's window
+     * — covered by the caller's deletion wait, not by this scan. Placed
+     * before any strdup: a scan failure has no partial listing to free. */
+    int64_t live_floor[MAX_APPENDERS];
+    for (int i = 0; i < MAX_APPENDERS; i++) live_floor[i] = OFFSET_NOT_SET;
+    if (!queue_meta_fixed_size_8bytes(m)) {
+        for (int64_t i = start; ; i++) {
+            uint64_t hdr;
+#ifdef MMAPQ_TEST_HOOKS
+            if (listing_scan_hook != NULL && listing_scan_hook() != 0)
+                mmapq_test_hook_header_wrap_inject(WRAP_MAP_TIMED_OUT);
+#endif
+            int hrc = mmapqi_header_read_checked(a->header_acc,
+                                                 &a->header_buf, i, &hdr);
+#ifdef MMAPQ_TEST_HOOKS
+            mmapq_test_hook_header_wrap_inject(0);
+#endif
+            if (hrc != 0) return hrc;
+            if (hdr == HEADER_NULL) break;   /* end of stream */
+            uint8_t aid = header_appender_id(hdr);
+            int64_t pos = header_payload_position(hdr);
+            if (live_floor[aid] == OFFSET_NOT_SET || pos < live_floor[aid])
+                live_floor[aid] = pos;
+        }
+    }
+
     /* Fully covered header files: files whose entire index range < start */
     int64_t full_header_files = (start - 1) / headers_in_file;
     for (int64_t i = 0; i < full_header_files && count < max_paths; i++) {
@@ -498,7 +533,8 @@ static int archivable_files_locked(
         }
     }
 
-    /* Fully covered payload files: files whose byte range < start_offset */
+    /* Fully covered payload files: files whose byte range < the lane's
+     * start_offset capped at its lowest live payload (CAND-35) */
     if (!queue_meta_fixed_size_8bytes(m)) {
         uint8_t ids[MAX_APPENDERS];
         int n_ids = mmapqi_queue_files_get_appender_ids(
@@ -507,6 +543,9 @@ static int archivable_files_locked(
             AppenderMeta *am = get_appender_meta(a, ids[k]);
             if (!am) continue;
             int64_t start_off    = appender_meta_start_offset(am);
+            if (live_floor[ids[k]] != OFFSET_NOT_SET &&
+                live_floor[ids[k]] < start_off)
+                start_off = live_floor[ids[k]];
             int64_t full_payload = start_off / max_file_size;
             for (int64_t fi = 0; fi < full_payload && count < max_paths; fi++) {
                 char path[4096];

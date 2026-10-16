@@ -148,8 +148,12 @@ int mmapq_indexed_archiver_start_offset(
  * compress).
  *
  * Includes header_N and payload_N_M files whose entire index / byte range
- * falls below the current start_index / start_offset respectively.
- * Only files that actually exist on disk are included.
+ * falls below the current start_index / start_offset respectively, the
+ * latter capped at the lowest live payload visible in the headers
+ * (CAND-35): a slow-path commit killed between its header CAS and its
+ * boundary re-check leaves start_offset raised above a live payload, and
+ * the listing's live-header scan never lists below what it can see is
+ * live. Only files that actually exist on disk are included.
  *
  * DELETION PROTOCOL: a listing is a snapshot, not permission. Mark the
  * listed files, wait, then delete only files that a fresh
@@ -159,12 +163,18 @@ int mmapq_indexed_archiver_start_offset(
  * preemption; it cannot cover a writer process stopped in that window
  * (SIGSTOP, a debugger). Deletion safety in that window rests on the
  * caller following this protocol; the library does not enforce it.
+ * The listing cap additionally covers a writer that dies between
+ * publishing its header and its re-check; it does not shorten the wait
+ * for live writers.
  * See doc/archiving-design.md.
  *
  * a:         the archiver
  * paths_out: caller-allocated array of char* to populate
  * max_paths: capacity of paths_out
- * Returns: number of paths written to paths_out (may be less than max_paths)
+ * Returns: number of paths written to paths_out (may be less than
+ *          max_paths), or a negative MMAPQ_* code: MMAPQ_ENOMEM
+ *          (allocation failure), MMAPQ_ETIMEDOUT (a live-header read
+ *          timed out during the cap scan; nothing listed).
  */
 int mmapq_indexed_archiver_archivable_files(
     MmapqIndexedArchiver *a,
@@ -183,7 +193,10 @@ int mmapq_indexed_archiver_archivable_files(
  * so an undo (which takes the lock exclusively) cannot slip between them
  * and have its restored files deleted. The re-list is complete: it grows
  * until nothing was truncated, so a mark whose files sort after other
- * appenders' in the enumeration is never starved.
+ * appenders' in the enumeration is never starved. The re-list is capped
+ * at the lowest live payload per lane exactly like archivable_files()
+ * (CAND-35) — the cap is inherited through the shared listing code, and
+ * it does not shorten the wait for live writers.
  *
  * Marks that a fresh listing no longer reports are skipped — they are live
  * again (an undo ran before the hold) or already gone. A file already
@@ -198,8 +211,10 @@ int mmapq_indexed_archiver_archivable_files(
  * n_marked:     number of entries in marked_paths
  * Returns: the number of files this call unlinked (>= 0), or a negative
  *          MMAPQ_* code: MMAPQ_EINVAL (invalid arguments), MMAPQ_ENOMEM
- *          (allocation failure), MMAPQ_EIO (lock or unlink failure — files
- *          unlinked so far stay unlinked; a retry re-lists and skips them).
+ *          (allocation failure), MMAPQ_ETIMEDOUT (a live-header read
+ *          timed out during the re-list's cap scan), MMAPQ_EIO (lock or
+ *          unlink failure — files unlinked so far stay unlinked; a retry
+ *          re-lists and skips them).
  *          A missing queue directory yields 0, mirroring archivable_files.
  */
 int mmapq_indexed_archiver_reclaim_files(

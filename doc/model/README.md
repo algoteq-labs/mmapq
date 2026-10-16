@@ -32,7 +32,9 @@ checks reproduce open defects. When a fix lands, its check's expectation
 flips to PASS in the same commit: CAS publish made `current_no_undo` pass
 (CAND-37); adding the reclaim call made `current` pass (CAND-36). The
 historical `cand36_undo_race` check keeps failing as the record of the
-defect.
+defect. The listing cap left `cand35_crash` failing as the record of the
+defect (CAND-35), and `cand35_narrow_wait` records that the wait may not
+be narrowed to the pre-CAS window.
 
 ## What is modelled
 
@@ -45,7 +47,7 @@ defect.
 | Crash | `Crash` at any appender step; pending payloads become dead | process death (kill -9) |
 | Forward archive | `ForwardStart` (validate, candidate = end of highest-position archived message, snapshot `old`), `Publish` (CAS from the snapshot per lane — CAND-37), `PublishSi`, `Fence`, `PassStep` (checked header read, atomic-min), `PassFail` (rollback to `old`), `Finish` | `archive_forward_variable` (publish via `appender_meta_start_offset_cas`), `rollback_start_offsets` in `indexed_archiver.c` |
 | Undo | `UndoStart` (check files exist, lower to lowest restored position), `UndoSi` | backward branch of `archive_up_to_index_locked` |
-| Listing / deletion | `List1` (mark), `List2`+`Delete` fused under `AtomicDelete=TRUE` (re-list, intersect, unlink in one step); unfused (`Delete` outside the lock) for the hand protocol | `archivable_files` (mark); `mmapq_indexed_archiver_reclaim_files` + batch twin (fused); the hand-deleter protocol in `archiving-design.md` "Deleting files" (unfused) |
+| Listing / deletion | `List1` (mark), `List2`+`Delete` fused under `AtomicDelete=TRUE` (re-list, intersect, unlink in one step); unfused (`Delete` outside the lock) for the hand protocol; `Bound(a)` = `min(so[a], LowestLive(a))` under `ListingLivePass` | `archivable_files` (mark); `mmapq_indexed_archiver_reclaim_files` + batch twin (fused); the hand-deleter protocol in `archiving-design.md` "Deleting files" (unfused); the cap: the live-header scan in `archivable_files_locked` (both twins), checked reads, first `HEADER_NULL` ends the scan |
 | Hand-deleter undo rule | `UndoStart` guard (`UndoRule`) | the hand-deleter paragraph in `archiving-design.md` "Deleting files" |
 | Memory | `Flush` drains the archiver's buffered `start_offset` stores | store buffer, closed by the archiver's seq_cst fence |
 
@@ -85,7 +87,8 @@ positions (see Results) adds depth, not exhaustiveness.
 | `PublishCAS` | Landed fix (CAND-37): publish raises `start_offset` only by a CAS from the snapshot value, so it never erases a concurrent commit's lowering. |
 | `AtomicDelete` | Landed fix (CAND-36): the reclaim call re-lists and unlinks in one `archive.lock` SH hold, so undo cannot interleave. |
 | `UndoRule` | Landed documented rule (CAND-36): for hand-deleters, undo never starts between the re-list and the unlink; `reclaim_files` enforces it by holding the lock across both steps. |
-| `ListingLivePass` | Candidate fix (CAND-35): listing caps each lane's boundary at the lowest live payload visible in the headers. |
+| `ListingLivePass` | Landed fix (CAND-35): the listing caps each lane's boundary at the lowest live payload visible in the headers (`archivable_files`; `reclaim_files` inherits it through the re-list). |
+| `WaitPreCasOnly` | Historical record (CAND-35 review): the wait narrowed to the pre-CAS window — UNSAFE even with the cap (`cand35_narrow_wait`); landed so the wait is never narrowed. |
 | `BoundedPass` | CAND-31 proposal: the live pass stops at the tail seen after the fence. |
 | `ArchFence`, `CommitFence` | The two seq_cst fences. |
 | `WaitAssumption` | The deleter's second listing happens only when no commit is between its pre-check and its re-check (what "wait" in the deletion protocol must achieve). |
@@ -96,7 +99,7 @@ positions (see Results) adds depth, not exhaustiveness.
 
 | Check | Expect | Result | Distinct states |
 |---|---|---|---|
-| `current` | PASS | pass | 44,590,581 |
+| `current` | PASS | pass | 44,763,809 |
 | `current_no_undo` | PASS | pass | 7,465,618 |
 | `current_no_undo_no_timeout` | PASS | pass | 4,979,768 |
 | `cand36_undo_race` | FAIL | `NoLiveLoss` | — |
@@ -112,6 +115,7 @@ positions (see Results) adds depth, not exhaustiveness.
 | `cand35_crash` | FAIL | `I1` | — |
 | `cand35_crash_listing_cap` | PASS | pass | 195,522,487 |
 | `cand35_no_wait_listing_cap` | FAIL | `NoLiveLoss` | — |
+| `cand35_narrow_wait` | FAIL | `NoLiveLoss` | — |
 | `hand_delete_undo_rule` | PASS | pass | 56,137,369 |
 
 **Random simulation at larger bounds** (6 header slots, 6 positions per
@@ -126,9 +130,10 @@ lane, traces up to depth 120, TLC `-simulate`):
 Simulation samples behaviours; it is not exhaustive. Its value here is
 depth at sizes the exhaustive search cannot reach.
 
-`cand35_crash_listing_cap` (the ~70 min run) was verified with a newer TLC
-build (2026.10.13 nightly); the other results were re-run with the pinned
-1.7.4 via `check.sh`.
+All results are verified with the pinned 1.7.4 via `check.sh`, including
+`cand35_crash_listing_cap` (the ~1 h run): PASS, 195,522,487 distinct
+states, 1 h 05 min wall — reproducing the original 2026.10.13-nightly
+proof's count exactly.
 
 ## Counterexamples, in plain steps
 
@@ -172,7 +177,7 @@ Needs a live-pass read failure; without `AllowTimeout` the landed protocol
 passes. Fix: `PublishCAS` (landed; passes in `cand37_cas_publish` and
 `fixed`, and `current_no_undo` now passes with it).
 
-### CAND-35: crash between CAS and re-check
+### CAND-35: crash between CAS and re-check (FIXED — listing cap)
 
 1. X uncommitted at 0; Y at 1 committed (index 0).
 2. Commit X (slow path): pre-check passes.
@@ -183,12 +188,16 @@ passes. Fix: `PublishCAS` (landed; passes in `cand37_cas_publish` and
    the deleter's wait does not help, because the dead process is not in
    any window. File 0 is listable. `I1` violated.
 
-Fix candidate: listing caps each lane at the lowest live payload it can see
-(`ListingLivePass`, passes in `cand35_crash_listing_cap`). It does **not**
-replace the wait: `cand35_no_wait_listing_cap` fails in the pre-CAS
-window: a commit passes its pre-check, an archive raises the boundary, the
-listing sees no header yet and the file is deleted, then the CAS makes the
-entry live.
+Fix (landed): the listing caps each lane at the lowest live payload it can
+see (`ListingLivePass`, proven in `cand35_crash_listing_cap`) —
+`archivable_files` in both twins, inherited by `reclaim_files` through the
+shared re-list. It does **not** replace the wait:
+`cand35_no_wait_listing_cap` fails in the pre-CAS window: a commit passes
+its pre-check, an archive raises the boundary, the listing sees no header
+yet and the file is deleted, then the CAS makes the entry live. Nor may
+the wait be narrowed to the pre-CAS window: `cand35_narrow_wait` fails —
+a commit's late re-check lowering re-admits a deleted file to a second
+gap-fill commit (CAND-35 review probe, landed as a regression check).
 
 ### The fences
 

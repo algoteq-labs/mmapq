@@ -94,8 +94,8 @@ Regression: `../mmapq-py/tests/test_reader_borrowing.py`
 |---|---|---|---|
 | Archiver create / archivable check | ✓ | ✓ | — |
 | archive_up_to_index (advances start_index; returns `MMAPQ_EINVAL` on non-archivable) | ✓ | ✓ | — |
-| archivable_files (which files may be deleted) | ✓ | ✓ | — |
-| reclaim_files (mark → wait → reclaim; re-list + unlink in one `archive.lock` SH hold) | ✓ `mmapq_indexed_archiver_reclaim_files` + `mmapq_indexed_batch_archiver_reclaim_files`; tests `test_reclaim_*` (P1–P6) and `test_batch_reclaim_*` (B1–B6) | — | — |
+| archivable_files (which files may be deleted; boundary capped at the lowest live payload visible in the headers) | ✓ `mmapq_indexed_archiver_archivable_files` + batch twin; tests `test_c35_*` | ✓ | — |
+| reclaim_files (mark → wait → reclaim; re-list + unlink in one `archive.lock` SH hold; re-list inherits the live-payload cap) | ✓ `mmapq_indexed_archiver_reclaim_files` + `mmapq_indexed_batch_archiver_reclaim_files`; tests `test_reclaim_*` (P1–P6) and `test_batch_reclaim_*` (B1–B6) | — | — |
 | print_summary | ✓ | ◐ single-message only (no batch C function) | — |
 | Batch archiver | ✓ | ◐ create/close | — |
 

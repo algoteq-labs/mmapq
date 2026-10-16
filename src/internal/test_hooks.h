@@ -13,6 +13,9 @@
  * commit_min_pre: invoked in the slow path's re-check lowering branch,
  *   immediately before appender_meta_start_offset_min — lets a pin hold
  *   the commit between the archiver's snapshot and its publish (CAND-37).
+ * commit_post_cas: invoked in the slow path immediately after the header
+ *   CAS and before the seq_cst fence + re-check — the CAND-35 crash
+ *   point; lets a pin kill -9 the process at the literal window.
  * archiver_live_pass / batch twin: invoked on each iteration of the
  *   archiver's live-header pass; a nonzero return arms the wrap-level
  *   injection for that read (P15).
@@ -22,6 +25,10 @@
  * reclaim_pre_unlink / batch twin: invoked once per reclaim_files call
  *   immediately before the unlink loop, while archive.lock SH is held —
  *   lets a pin park a reclaim mid-hold (CAND-36).
+ * archiver_listing_scan / batch twin: invoked on each iteration of the
+ *   listing's live-header scan (CAND-35); a nonzero return arms the
+ *   wrap-level injection for that read — same discipline as
+ *   archiver_live_pass.
  * header_wrap_inject: substitutes the wrap result inside both
  *   mmapqi_header_read and mmapqi_header_read_checked while armed — so an
  *   injected timeout collapses to end-of-stream through the plain read but
@@ -31,11 +38,14 @@
 #ifdef MMAPQ_TEST_HOOKS
 void mmapq_test_hook_set_commit_pre(void (*fn)(void));
 void mmapq_test_hook_set_commit_min_pre(void (*fn)(void));
+void mmapq_test_hook_set_commit_post_cas(void (*fn)(void));
 void mmapq_test_hook_set_archiver_live_pass(int (*fn)(void));
 void mmapq_test_hook_set_batch_archiver_live_pass(int (*fn)(void));
 void mmapq_test_hook_set_archiver_publish_pre(void (*fn)(void));
 void mmapq_test_hook_set_reclaim_pre_unlink(void (*fn)(void));
 void mmapq_test_hook_set_batch_reclaim_pre_unlink(void (*fn)(void));
+void mmapq_test_hook_set_archiver_listing_scan(int (*fn)(void));
+void mmapq_test_hook_set_batch_archiver_listing_scan(int (*fn)(void));
 void mmapq_test_hook_header_wrap_inject(int wrap_result);
 #endif
 

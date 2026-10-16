@@ -19,7 +19,7 @@ delete, because that is the step that can lose data if it is wrong.
 
 A TLA+ model of this protocol (archive, commit, join, undo, deletion) lives
 in `doc/model/`; its README maps the model steps to the code. The model
-currently reports one open reclamation defect (CAND-35); see
+found three reclamation defects (CAND-35/36/37), all now fixed; see
 `doc/model/README.md`.
 
 ## The persistent fields
@@ -168,7 +168,14 @@ over a longer one leaves stale bytes that a later recovery would misread.
 `archivable_files()` (taking `archive.lock` shared) lists:
 
 - header files wholly below `start_index`;
-- payload files of each appender wholly below its `start_offset`.
+- payload files of each appender wholly below its `start_offset`, capped
+  at the lowest live payload visible in the headers. A slow-path commit
+  killed between its header CAS and its boundary re-check leaves
+  `start_offset` raised above a live payload forever; the listing's
+  live-header scan never lists below what it can see is live.
+
+`reclaim_files()` re-lists through this same listing, so its re-check
+carries the cap too.
 
 The library path is **mark → wait → `reclaim_files(marks)`**. Mark the
 listed files, wait, then call `reclaim_files()`: it re-lists — completely,
@@ -195,6 +202,9 @@ re-check — normally a few instructions — so seconds to minutes covers
 preemption and scheduling. It does not cover a writer process stopped in
 exactly that window (SIGSTOP, a debugger). Deletion safety in that window
 rests on callers following this protocol; the library does not enforce it.
+The listing cap (CAND-35) additionally covers a writer that dies between
+publishing its header and its re-check; it does not shorten the wait for
+live writers.
 
 Never truncate or rewrite a mapped file (see `persistence-contract.md`).
 Undo is possible only while the files it needs still exist.
@@ -205,8 +215,8 @@ Undo is possible only while the files it needs still exist.
 |---|---|---|
 | Archiver | `start_offset` (CAS from the snapshot, acq_rel), `start_index` | live headers (acquire, after a seq_cst fence) |
 | Appender, slow-path commit | header (CAS) | `start_offset` (acquire, after a seq_cst fence) |
-| `archivable_files` | — | `start_index`, `start_offset`, under the shared lock |
-| `reclaim_files` | unlinks marked ∩ re-listed files | `start_index`, `start_offset` — under the shared lock, held across the unlink |
+| `archivable_files` | — | `start_index`, `start_offset`, live headers (checked reads) — under the shared lock |
+| `reclaim_files` | unlinks marked ∩ re-listed files | `start_index`, `start_offset`, live headers (via the re-list) — under the shared lock, held across the unlink |
 
 The two seq_cst fences carry the argument; the accesses themselves need
 only release/acquire. Lowering is always an atomic-min loop; nothing stores
@@ -227,12 +237,17 @@ a queue only with all clients closed.
   over all live headers per call. It runs off the hot path.
 - **Reclaim:** one complete listing plus at most |marked| `unlink()` calls,
   under the shared lock; blocks archivers for the hold. Off the hot path.
+- **Listing:** one existence stat per candidate file (unchanged), plus one
+  checked read per live header for the boundary cap (CAND-35) — memory
+  reads through the already-mapped read-only accessor, no per-header
+  syscalls. Reclaim pays the scan once per re-list pass. Off the hot path.
 
 ## Java parity
 
 Mixed C/Java queues are safe only when Java follows the same rules:
 
-1. Exclusive archive lock; listing takes it shared.
+1. Exclusive archive lock; listing takes it shared and caps each appender
+   at the lowest live payload visible in the headers.
 2. Forward: candidate = end of the archived message with the highest
    position; publish; one pass over the live headers lowering it.
 3. Every archived header must reference a complete message.

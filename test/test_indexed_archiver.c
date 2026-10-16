@@ -19,11 +19,14 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/file.h>
+#include <sys/wait.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <sched.h>
+#include <poll.h>
+#include <signal.h>
 
 static const char    *DIR      = "/tmp";
 static const char    *QUEUE    = "mmap_test_arch";
@@ -2155,6 +2158,288 @@ void test_reclaim_tolerates_concurrent_unlink(void)
 #endif
 }
 
+/* ── CAND-35 pins: the listing caps each lane's deletable boundary at the ───
+ * lowest live payload visible in the headers. A slow-path commit killed
+ * between its header CAS and its boundary re-check strands start_offset
+ * above a live payload forever; the listing must not trust start_offset
+ * alone. */
+
+/* P2: a mapping timeout inside the listing's live-header scan must
+ * propagate as MMAPQ_ETIMEDOUT — the checked read is load-bearing (the
+ * plain read would collapse the timeout to end-of-stream and silently
+ * skip the cap). */
+#ifdef MMAPQ_TEST_HOOKS
+static _Atomic int c35_scan_fired;
+
+static int c35_listing_inject(void)
+{
+    atomic_store_explicit(&c35_scan_fired, 1, memory_order_release);
+    return 1;   /* inject WRAP_MAP_TIMED_OUT at the wrap-result level */
+}
+#endif
+
+void test_c35_listing_scan_timeout_propagates(void)
+{
+#ifdef MMAPQ_TEST_HOOKS
+    /* A @64 idx 0 (ends 4068), B @4096 idx 1 (ends 4200) */
+    single_lane_geometry();
+
+    MmapqIndexedArchiver *arch = tiny_archiver();
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_archiver_archive_up_to_index(arch, 1));
+    TEST_ASSERT_EQUAL_INT64(4068, arch_start_offset(arch, 0));
+
+    /* Control: the scan runs (B at 4096 floors the lane; cap
+     * min(4068, 4096)) and the honest listing stays empty */
+    char *paths[64] = {0};
+    int n = mmapq_indexed_archiver_archivable_files(arch, paths, 64);
+    TEST_ASSERT_EQUAL_INT(0, n);
+    free_paths(paths, n);
+
+    atomic_store(&c35_scan_fired, 0);
+    mmapq_test_hook_set_archiver_listing_scan(c35_listing_inject);
+    n = mmapq_indexed_archiver_archivable_files(arch, paths, 64);
+    mmapq_test_hook_set_archiver_listing_scan(NULL);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ETIMEDOUT, n);
+    TEST_ASSERT_TRUE_MESSAGE(atomic_load(&c35_scan_fired),
+        "listing scan hook never fired");
+    mmapq_indexed_archiver_close(arch);
+#else
+    TEST_IGNORE_MESSAGE("needs MMAPQ_TEST_HOOKS (normal-loop build only)");
+#endif
+}
+
+/* P1/P3 fork machinery (B2): the suite setUp acquires the runtime
+ * singleton, whose mapper thread does not exist in a forked child — the
+ * child uses a NULL runtime (sync ring) for ALL library calls (reviewer
+ * probe: inherited rt hangs; NULL finishes in 0.00 s). The parent
+ * pre-creates the queue meta BEFORE the fork (no runtime needed) and
+ * keeps the suite rt for itself. Every parent wait is bounded: poll()
+ * with a 5 000 ms bound on the rendezvous pipe, a WNOHANG waitpid loop —
+ * on expiry the child is killed and reaped BEFORE failing. The child
+ * carries alarm() as a backstop, never returns to Unity, asserts
+ * nothing. Excluded under TSan: the parent is multi-threaded at fork
+ * (the singleton's thread), so die_after_fork would kill the child
+ * (test_runtime.c precedent). */
+#if defined(MMAPQ_TEST_HOOKS) && !defined(__SANITIZE_THREAD__)
+static int c35_c2p[2], c35_p2c[2];
+
+static void c35_child_pre_hook(void)
+{
+    /* pre-check passed — rendezvous with the parent, then wait for go */
+    (void)!write(c35_c2p[1], "P", 1);
+    char b;
+    (void)!read(c35_p2c[0], &b, 1);
+}
+
+static void c35_child_post_cas_hook(void)
+{
+    /* the literal kill -9 between the header CAS and the fence/re-check */
+    raise(SIGKILL);
+}
+
+/* Pre-create the archivable queue meta (parent side, before fork). */
+static void c35_precreate_meta(void)
+{
+    char dir_path[512];
+    snprintf(dir_path, sizeof(dir_path), "%s/%s", DIR, QUEUE);
+    mkdir(dir_path, 0775);
+    QueueMeta *m = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapqi_queue_meta_open_rw(DIR, QUEUE, 0,
+        4096, 4096, /* archivable= */ 1, QUEUE_TYPE_NORMAL, &m));
+    TEST_ASSERT_NOT_NULL(m);
+    mmapqi_queue_meta_close(m);
+}
+
+/* poll-bounded read of one rendezvous byte; 0 on timeout. */
+static int c35_read_byte_bounded(int fd)
+{
+    struct pollfd pfd = { .fd = fd, .events = POLLIN };
+    if (poll(&pfd, 1, 5000) <= 0) return 0;
+    char b;
+    return read(fd, &b, 1) == 1;
+}
+
+/* Bounded waitpid (WNOHANG loop, 5 000 ms); 0 and *status set on reaped
+ * exit, -1 on expiry (caller kills, reaps, then fails). */
+static int c35_wait_child_bounded(pid_t pid, int *status)
+{
+    for (int ms = 0; ms < 5000; ms += 10) {
+        if (waitpid(pid, status, WNOHANG) == pid) return 0;
+        struct timespec ts = { .tv_sec = 0, .tv_nsec = 10000000 };
+        nanosleep(&ts, NULL);
+    }
+    return -1;
+}
+#endif
+
+/* P1: kill -9 between a resequenced commit's CAS and its re-check strands
+ * start_offset (4200) above the live entry (A at 64). The capped listing
+ * must return nothing. Fail-first: pre-fix lists payload_0_0 (n == 1). */
+void test_c35_listing_cap_covers_crashed_commit(void)
+{
+#if defined(MMAPQ_TEST_HOOKS) && !defined(__SANITIZE_THREAD__)
+    char payload_a[4000]; memset(payload_a, 'A', sizeof(payload_a));
+
+    c35_precreate_meta();
+    TEST_ASSERT_EQUAL_INT(0, pipe(c35_c2p));
+    TEST_ASSERT_EQUAL_INT(0, pipe(c35_p2c));
+
+    pid_t pid = fork();
+    TEST_ASSERT_NOT_EQUAL(-1, pid);
+
+    if (pid == 0) {
+        /* Child: the appender that crashes mid-commit. NULL runtime (B2). */
+        alarm(15);
+        close(c35_c2p[0]);
+        close(c35_p2c[1]);
+        MmapqIndexedAppender *a = NULL;
+        if (mmapq_indexed_appender_create(DIR, QUEUE, 4096, 4, 4096,
+                TIMEOUT, 0, NULL, 0, &a) != 0) _exit(2);
+        char a_pay[4000]; memset(a_pay, 'A', sizeof(a_pay));
+        char b_pay[100];  memset(b_pay, 'B', sizeof(b_pay));
+        if (mmapq_indexed_appender_append_uncommitted(a, a_pay,
+                (int32_t)sizeof(a_pay)) != INITIAL_PAYLOAD_POSITION) _exit(3);
+        if (mmapq_indexed_appender_append_uncommitted(a, b_pay,
+                (int32_t)sizeof(b_pay)) != 4096) _exit(4);
+        if (mmapq_indexed_appender_commit(a, 4096) != 0) _exit(5);
+        mmapq_test_hook_set_commit_pre(c35_child_pre_hook);
+        mmapq_test_hook_set_commit_post_cas(c35_child_post_cas_hook);
+        /* slow path: pre-check passes (start_offset 64), parks, CASes the
+         * header at index 1, dies before the fence + re-check + min */
+        mmapq_indexed_appender_commit(a, INITIAL_PAYLOAD_POSITION);
+        _exit(6);
+    }
+
+    close(c35_c2p[1]);
+    close(c35_p2c[0]);
+
+    if (!c35_read_byte_bounded(c35_c2p[0])) {
+        kill(pid, SIGKILL);
+        waitpid(pid, NULL, 0);
+        TEST_FAIL_MESSAGE("child never reached the commit pre-check");
+    }
+
+    /* Archive while the child is parked between the pre-check and the CAS:
+     * publishes end of B (4200); the live pass sees no index 1. */
+    MmapqIndexedArchiver *arch = tiny_archiver();
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_archiver_archive_up_to_index(arch, 1));
+    TEST_ASSERT_EQUAL_INT64(4200, arch_start_offset(arch, 0));
+
+    TEST_ASSERT_EQUAL_INT(1, (int)write(c35_p2c[1], "G", 1));
+    int wst = 0;
+    if (c35_wait_child_bounded(pid, &wst) != 0) {
+        kill(pid, SIGKILL);
+        waitpid(pid, NULL, 0);
+        mmapq_indexed_archiver_close(arch);
+        TEST_FAIL_MESSAGE("child did not die at the post-CAS hook");
+    }
+    TEST_ASSERT_TRUE(WIFSIGNALED(wst));
+    TEST_ASSERT_EQUAL_INT(SIGKILL, WTERMSIG(wst));
+
+    /* The stranded state: start_offset 4200 above live A at 64. */
+    char *paths[64] = {0};
+    int n = mmapq_indexed_archiver_archivable_files(arch, paths, 64);
+    TEST_ASSERT_EQUAL_INT(0, n);
+    TEST_ASSERT_FALSE(list_contains(paths, n, "payload_0_0"));
+    free_paths(paths, n);
+    mmapq_indexed_archiver_close(arch);
+
+    /* Non-vacuity: the stranded entry really is live and readable */
+    MmapqIndexedReader *r = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_reader_create(DIR, QUEUE, 4, TIMEOUT, NULL, &r));
+    MmapqReadingContext ctx = {0};
+    mmapq_indexed_reader_read(r, 1, &ctx);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ENTRY_AVAILABLE, ctx.status);
+    TEST_ASSERT_EQUAL_INT((int)sizeof(payload_a), ctx.length);
+    TEST_ASSERT_EQUAL_MEMORY(payload_a, ctx.data, sizeof(payload_a));
+    mmapq_indexed_reader_close(r);
+#else
+    TEST_IGNORE_MESSAGE("needs MMAPQ_TEST_HOOKS; fork excluded under TSan");
+#endif
+}
+
+/* P3: the cap is PER LANE — lane 1 (no live entries) keeps its honestly
+ * archivable file listed while the stranded lane 0's file drops out.
+ * Fail-first: pre-fix lists BOTH payload_0_0 and payload_1_0 (n == 2). */
+void test_c35_listing_cap_is_per_lane(void)
+{
+#if defined(MMAPQ_TEST_HOOKS) && !defined(__SANITIZE_THREAD__)
+    c35_precreate_meta();
+    TEST_ASSERT_EQUAL_INT(0, pipe(c35_c2p));
+    TEST_ASSERT_EQUAL_INT(0, pipe(c35_p2c));
+
+    pid_t pid = fork();
+    TEST_ASSERT_NOT_EQUAL(-1, pid);
+
+    if (pid == 0) {
+        /* Child: both appenders, NULL runtime (B2). */
+        alarm(15);
+        close(c35_c2p[0]);
+        close(c35_p2c[1]);
+        MmapqIndexedAppender *a0 = NULL, *a1 = NULL;
+        if (mmapq_indexed_appender_create_with_id(DIR, QUEUE, 4096, 4,
+                4096, TIMEOUT, 0, NULL, 0, 0, &a0) != 0) _exit(2);
+        if (mmapq_indexed_appender_create_with_id(DIR, QUEUE, 4096, 4,
+                4096, TIMEOUT, 0, NULL, 1, 0, &a1) != 0) _exit(3);
+        char big[4000]; memset(big, 'G', sizeof(big));
+        char sm[100];   memset(sm, 's', sizeof(sm));
+        /* lane 1: two committed entries, indices 0 and 1 */
+        if (mmapq_indexed_appender_append(a1, big, (int32_t)sizeof(big)) != 0) _exit(4);
+        if (mmapq_indexed_appender_append(a1, sm, (int32_t)sizeof(sm)) != 1) _exit(5);
+        /* lane 0: A0 uncommitted @64, B0 uncommitted @4096, commit B0 -> 2 */
+        if (mmapq_indexed_appender_append_uncommitted(a0, big,
+                (int32_t)sizeof(big)) != INITIAL_PAYLOAD_POSITION) _exit(6);
+        if (mmapq_indexed_appender_append_uncommitted(a0, sm,
+                (int32_t)sizeof(sm)) != 4096) _exit(7);
+        if (mmapq_indexed_appender_commit(a0, 4096) != 2) _exit(8);
+        mmapq_test_hook_set_commit_pre(c35_child_pre_hook);
+        mmapq_test_hook_set_commit_post_cas(c35_child_post_cas_hook);
+        /* commit A0: parks, CASes the header at index 3, dies pre-fence */
+        mmapq_indexed_appender_commit(a0, INITIAL_PAYLOAD_POSITION);
+        _exit(9);
+    }
+
+    close(c35_c2p[1]);
+    close(c35_p2c[0]);
+
+    if (!c35_read_byte_bounded(c35_c2p[0])) {
+        kill(pid, SIGKILL);
+        waitpid(pid, NULL, 0);
+        TEST_FAIL_MESSAGE("child never reached the commit pre-check");
+    }
+
+    /* Archive indices 0-2 while the child is parked: lane boundaries
+     * 4200 (end of Y1) / 4200 (end of B0); the live pass sees no index 3. */
+    MmapqIndexedArchiver *arch = tiny_archiver();
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_archiver_archive_up_to_index(arch, 3));
+    TEST_ASSERT_EQUAL_INT64(4200, arch_start_offset(arch, 0));
+    TEST_ASSERT_EQUAL_INT64(4200, arch_start_offset(arch, 1));
+
+    TEST_ASSERT_EQUAL_INT(1, (int)write(c35_p2c[1], "G", 1));
+    int wst = 0;
+    if (c35_wait_child_bounded(pid, &wst) != 0) {
+        kill(pid, SIGKILL);
+        waitpid(pid, NULL, 0);
+        mmapq_indexed_archiver_close(arch);
+        TEST_FAIL_MESSAGE("child did not die at the post-CAS hook");
+    }
+    TEST_ASSERT_TRUE(WIFSIGNALED(wst));
+    TEST_ASSERT_EQUAL_INT(SIGKILL, WTERMSIG(wst));
+
+    /* Lane 0 capped at 64 (live A0); lane 1 has no live entries -> uncapped */
+    char *paths[64] = {0};
+    int n = mmapq_indexed_archiver_archivable_files(arch, paths, 64);
+    TEST_ASSERT_EQUAL_INT(1, n);
+    TEST_ASSERT_TRUE(list_contains(paths, n, "payload_1_0"));
+    TEST_ASSERT_FALSE(list_contains(paths, n, "payload_0_0"));
+    free_paths(paths, n);
+    mmapq_indexed_archiver_close(arch);
+#else
+    TEST_IGNORE_MESSAGE("needs MMAPQ_TEST_HOOKS; fork excluded under TSan");
+#endif
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -2203,5 +2488,10 @@ int main(void)
     RUN_TEST(test_reclaim_lock_is_shared);
     RUN_TEST(test_reclaim_tolerates_concurrent_unlink);
     RUN_TEST(test_reclaim_relists_beyond_mark_capacity);
+
+    /* CAND-35 pins */
+    RUN_TEST(test_c35_listing_scan_timeout_propagates);
+    RUN_TEST(test_c35_listing_cap_covers_crashed_commit);
+    RUN_TEST(test_c35_listing_cap_is_per_lane);
     return UNITY_END();
 }
