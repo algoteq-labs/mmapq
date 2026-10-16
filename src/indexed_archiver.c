@@ -331,6 +331,9 @@ static int archive_up_to_index_locked(MmapqIndexedArchiver *a, int64_t index)
     } else {
         /* ── Backward archiving (undo) ─────────────────────────────────── */
 
+        /* Contiguous index range per header file — holds because
+         * max_file_size is a multiple of the transposed header block
+         * (CAND-38 geometry rule). */
         int64_t headers_in_file = max_file_size / HEADER_SIZE;
 
         /* Collect file indices using O(1) bitsets — no heap allocation needed.
@@ -516,7 +519,9 @@ static int archivable_files_locked(
         }
     }
 
-    /* Fully covered header files: files whose entire index range < start */
+    /* Fully covered header files: files whose entire index range < start.
+     * Contiguous index range per header file — holds because max_file_size
+     * is a multiple of the header block (CAND-38 geometry rule). */
     int64_t full_header_files = (start - 1) / headers_in_file;
     for (int64_t i = 0; i < full_header_files && count < max_paths; i++) {
         char path[4096];
@@ -707,6 +712,8 @@ int mmapq_indexed_archiver_print_summary(MmapqIndexedArchiver *a, char *sb, int 
            queue_meta_fixed_size_8bytes(m) ? "yes" : "no");
 
     int64_t max_file_size   = queue_meta_max_file_size(m);
+    /* Contiguous index range per header file — holds because max_file_size
+     * is a multiple of the header block (CAND-38 geometry rule). */
     int64_t headers_in_file = max_file_size / HEADER_SIZE;
     int64_t last_index      = mmapqi_header_search_last_index(
         0, archiver_start_index_fn, m,

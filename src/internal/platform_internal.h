@@ -37,4 +37,14 @@ static inline long page_size(void)
     return cached;
 }
 
+/**
+ * mmapqi_page_size — runtime page size seen by the queue geometry rule
+ * (CAND-38): region_size must be a multiple of this so region mmap offsets
+ * stay page-aligned on 16/64 KB-page kernels. Defined in platform.c as a
+ * real function so the MMAPQ_TEST_HOOKS override (test_hooks.h) is a single
+ * process-global. Generic region layers use page_size() above — the rule
+ * is a queue geometry rule, not a mapper rule.
+ */
+long mmapqi_page_size(void);
+
 #endif /* PLATFORM_INTERNAL_H */

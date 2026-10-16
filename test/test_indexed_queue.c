@@ -27,9 +27,10 @@
 
 static const char    *DIR        = "/tmp";
 static const char    *QUEUE      = "mmap_test_iq";
-static const int32_t  REGION_SZ  = 4096;
+/* CAND-38: 32768 is the smallest legal region (one 32 KB header block). */
+static const int32_t  REGION_SZ  = 32768;
 static const int      RING_SZ    = 16;
-static const int64_t  MAX_FILE   = 4096LL * 64;   /* small — triggers rolling */
+static const int64_t  MAX_FILE   = 32768LL * 8;   /* small — triggers rolling */
 static const uint64_t TIMEOUT_NS = 5000000000ULL;  /* 5 seconds */
 
 static MmapqRuntime       *rt = NULL;
@@ -519,13 +520,15 @@ void test_large_message_sequence_crossing_regions(void)
 
     /*
      * Write messages large enough to force region crossings.
-     * Region size = 4096 bytes. Each message = 1000 bytes.
-     * ~4 messages per region. After ~16 messages we've crossed 4 regions.
+     * Region size = 32768 bytes. Each message = 1000 bytes (+4 prefix).
+     * ~32 messages per region. 140 messages = 140 KB crosses 4+ regions
+     * (140 x 1004 = 140560 > 4 x 32768 = 131072) and stays within
+     * MAX_FILE (8 regions).
      */
     char msg[1000];
     memset(msg, 'X', sizeof(msg));
 
-    int count = 20;
+    int count = 140;
     for (int i = 0; i < count; i++) {
         msg[0] = (char)('A' + i);  /* unique first byte per message */
         int64_t idx = mmapq_indexed_appender_append(a, msg, sizeof(msg));
@@ -815,7 +818,7 @@ void test_poller_automatically_discovers_region_size(void)
     mmapq_indexed_appender_close(a);
     mmapq_indexed_queue_close(q1);
 
-    /* Phase 2: Create a second queue instance with "wrong" default (4KB) */
+    /* Phase 2: Create a second queue instance with "wrong" default (32KB) */
     MmapqIndexedQueue *q2 = NULL;
     int rc_q2 = mmapq_indexed_queue_create(DIR, QUEUE, REGION_SZ, RING_SZ, 1,
                                       MAX_FILE, 0, TIMEOUT_NS, 0, rt, rt, &q2);
@@ -879,7 +882,7 @@ void test_append_rejects_oversized_message(void)
     /* Create with small region so we can exceed it */
     int rc_q = mmapq_indexed_queue_create(DIR, QUEUE,
         REGION_SZ, RING_SZ, 1,
-        4096LL * 64, 0, TIMEOUT_NS,
+        MAX_FILE, 0, TIMEOUT_NS,
         0, rt, rt, &q);
     TEST_ASSERT_EQUAL_INT(0, rc_q);
     TEST_ASSERT_NOT_NULL(q);
@@ -890,8 +893,8 @@ void test_append_rejects_oversized_message(void)
     int64_t ok = mmapq_indexed_appender_append(a, "small", 5);
     TEST_ASSERT_EQUAL_INT64(0, ok);
 
-    /* REGION_SZ = 4096, message of 4096 bytes exceeds region_size - 4 */
-    char big[4096];
+    /* Message of REGION_SZ bytes exceeds region_size - 4 */
+    char big[REGION_SZ];
     memset(big, 'x', sizeof(big));
     int64_t bad = mmapq_indexed_appender_append(a, big, (int32_t)sizeof(big));
     TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL, bad);
@@ -1213,7 +1216,7 @@ void test_reader_last_error_reports_eschema(void)
     cleanup();
     MmapqIndexedBatchQueue *bq = NULL;
     int rc = mmapq_indexed_batch_queue_create(DIR, QUEUE,
-              4096, 16, 1, 4096LL * 64, 0, 5000000000ULL, 0, rt, rt, &bq);
+              32768, 16, 1, 32768LL * 8, 0, 5000000000ULL, 0, rt, rt, &bq);
     TEST_ASSERT_EQUAL_INT(0, rc);
     TEST_ASSERT_NOT_NULL(bq);
     /* Write a batch so meta exists with QUEUE_TYPE_BATCH */
@@ -1286,7 +1289,7 @@ void test_append_rejects_max_int_length(void)
 
     int rc_q = mmapq_indexed_queue_create(DIR, QUEUE,
         REGION_SZ, RING_SZ, 1,
-        4096LL * 64, 0, TIMEOUT_NS,
+        MAX_FILE, 0, TIMEOUT_NS,
         0, rt, rt, &q);
     TEST_ASSERT_EQUAL_INT(0, rc_q);
     TEST_ASSERT_NOT_NULL(q);
@@ -1393,7 +1396,13 @@ static void test_appender_open_rejects_corrupt_length(void)
     snprintf(path, sizeof(path), "%s/%s/payload_%u_0", DIR, QUEUE, (unsigned)id);
     int fd = open(path, O_WRONLY);
     TEST_ASSERT_MESSAGE(fd >= 0, "open payload");
-    int32_t bogus = REGION_SZ * 8;   /* beyond capacity, jumps past the small file */
+    /* Beyond the region capacity but landing INSIDE the (zero-filled) file 0,
+     * so the unbounded follow-on walk keeps reading garbage rather than
+     * hitting a clean WRAP_FILE_NOT_FOUND. (CAND-38 migration: REGION_SZ*8
+     * == MAX_FILE landed past file 0 at the 32 KB region geometry, masking
+     * the missing bound — vacuous. R9 revert re-run proved this value
+     * discriminates: SIGBUS (135) unfixed, ECORRUPT fixed.) */
+    int32_t bogus = REGION_SZ * 4;
     TEST_ASSERT_EQUAL_INT64((int64_t)sizeof(int32_t),
         (int64_t)pwrite(fd, &bogus, sizeof(int32_t), INITIAL_PAYLOAD_POSITION));
     TEST_ASSERT_EQUAL_INT(0, close(fd));
@@ -1427,7 +1436,7 @@ static void test_appender_open_rejects_corrupt_uncommitted_tail(void)
     snprintf(path, sizeof(path), "%s/%s/payload_%u_0", DIR, QUEUE, (unsigned)id);
     int fd = open(path, O_WRONLY);
     TEST_ASSERT_MESSAGE(fd >= 0, "open payload");
-    int32_t bogus = REGION_SZ * 8;
+    int32_t bogus = REGION_SZ * 4;   /* see the first-walk pin: inside file 0 */
     TEST_ASSERT_EQUAL_INT64((int64_t)sizeof(int32_t),
         (int64_t)pwrite(fd, &bogus, sizeof(int32_t), tail));
     TEST_ASSERT_EQUAL_INT(0, close(fd));
@@ -2036,11 +2045,12 @@ void test_read_no_alias_at_file_index_2pow32(void)
  *   C2 (append-time, both append commit paths): encoded positions are
  *      STARTS — valid range [INITIAL_PAYLOAD_POSITION, 2^56−1].
  *
- * Geometry per the owner probes: region 4096, ring 16, max_file_size 2^20,
+ * Geometry per the owner probes, migrated by CAND-38: region 32768 (the
+ * smallest legal region — was 4096), ring 16, max_file_size 2^20,
  * archivable 1.
  */
 
-#define C32_REGION_SIZE    4096
+#define C32_REGION_SIZE    32768
 #define C32_RING_SIZE      16
 #define C32_MAX_FILE_SIZE  ((int64_t)1 << 20)
 #define C32_POS_LIMIT      ((int64_t)1 << 56)   /* 2^56 */
@@ -2222,8 +2232,9 @@ void test_c32_p5_start_offset_roll_to_limit_append_refused(void)
     TEST_ASSERT_EQUAL_INT(0, c32_rejoin(qn, &cq, &a));
     TEST_ASSERT_NOT_NULL(a);
 
-    /* 2 bytes of region capacity remain at 2^56−2: write_padding rolls the
-     * position to exactly 2^56 — an unencodable START. C2 refuses. */
+    /* 2 bytes of region capacity remain at 2^56−2 (2^56 is a multiple of
+     * the region size): write_padding rolls the position to exactly 2^56 —
+     * an unencodable START. C2 refuses. */
     TEST_ASSERT_EQUAL_INT64(MMAPQ_ECORRUPT,
         mmapq_indexed_appender_append(a, "HELLO", 5));
     c32_assert_index0_empty(cq);
@@ -2347,7 +2358,7 @@ void test_c32_p8_region_boundary_end_offset_legitimate(void)
     TEST_ASSERT_EQUAL_INT(0, c32_rejoin(qn, &cq, &a));
     TEST_ASSERT_NOT_NULL(a);
 
-    /* 2^56−4096 start + 4-byte prefix + 4092 bytes ends exactly at 2^56. */
+    /* 2^56−32768 start + 4-byte prefix + 32764 bytes ends exactly at 2^56. */
     char msg[C32_REGION_SIZE - PAYLOAD_LENGTH_SIZE];
     memset(msg, 'L', sizeof(msg));
     TEST_ASSERT_EQUAL_INT64(0,
@@ -2391,6 +2402,48 @@ void test_c32_p8_region_boundary_end_offset_legitimate(void)
     mmapq_indexed_archiver_close(ar2);
     mmapq_indexed_queue_close(cq);
     c32_cleanup(qn);
+}
+
+/* ── CAND-38 pin P1: the geometry rule at create ───────────────────────────
+ *
+ * Header-file reclaim assumes each header file holds a contiguous index
+ * range; that holds iff max_file_size is a multiple of the 32 KB transposed
+ * header block, which the rule guarantees via region_size >= 32 KB (a power
+ * of two dividing max_file_size). Pre-rule geometries (region < 32 KB) lose
+ * live committed headers on reclaim — reviewer probe
+ * audit/claude-CAND-38/hdrloss.c: 992 of the first 2112 live entries
+ * unreadable at 8 KB files. Refused at create with EINVAL. */
+
+void test_c38_create_refuses_region_below_header_block(void)
+{
+    MmapqIndexedQueue *q2 = NULL;
+    TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL, mmapq_indexed_queue_create(
+        DIR, "mmap_test_iq_c38_small", 4096, 16, 1, 8192, 0,
+        TIMEOUT_NS, 0, rt, rt, &q2));
+    TEST_ASSERT_NULL(q2);
+    c32_cleanup("mmap_test_iq_c38_small");
+
+    /* Region below the block with a BLOCK-ALIGNED file: only the region
+     * rule can refuse this one (mutation M1 discriminates here). */
+    TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL, mmapq_indexed_queue_create(
+        DIR, "mmap_test_iq_c38_small2", 4096, 16, 1, 32768, 0,
+        TIMEOUT_NS, 0, rt, rt, &q2));
+    TEST_ASSERT_NULL(q2);
+    c32_cleanup("mmap_test_iq_c38_small2");
+}
+
+void test_c38_create_accepts_non_pow2_file_multiple(void)
+{
+    /* Positive control: the smallest legal region and a NON-power-of-two
+     * multiple of it (3 x 32 KB) — legal: file % region == 0 and the file
+     * is a multiple of the header block. */
+    MmapqIndexedQueue *q2 = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create(
+        DIR, "mmap_test_iq_c38_ok", 32768, 16, 1, 32768LL * 3, 0,
+        TIMEOUT_NS, 0, rt, rt, &q2));
+    TEST_ASSERT_NOT_NULL(q2);
+    mmapq_indexed_queue_close(q2);
+    c32_cleanup("mmap_test_iq_c38_ok");
 }
 
 int main(void)
@@ -2472,6 +2525,9 @@ int main(void)
     RUN_TEST(test_c32_p7_commit_unencodable_offset_refused);
     RUN_TEST(test_c32_p8_region_boundary_end_offset_legitimate);
     RUN_TEST(test_c32_p9_commit_above_last_written_refused);
+
+    RUN_TEST(test_c38_create_refuses_region_below_header_block);
+    RUN_TEST(test_c38_create_accepts_non_pow2_file_multiple);
 
     return UNITY_END();
 }

@@ -2,6 +2,8 @@
 #include "indexed_batch_archiver.h"
 #include "indexed_batch_appender.h"
 #include "indexed_batch_poller.h"
+#include "indexed_batch_queue.h"
+#include "indexed_batch_reader.h"
 #include "batch_payload_iterator.h"
 #include "internal/batch_payload_iterator_internal.h"
 #include "internal/queue_meta.h"
@@ -27,6 +29,19 @@ static const int32_t  REGION_SZ = 4096 * 16;
 static const int64_t  MAX_FILE  = (int64_t)4096 * 16 * 64;
 static const int      RING_SZ   = 4;
 static const uint64_t TIMEOUT   = 5000000000ULL;
+
+/* Tiny archivable geometry for the CAND-30/35/36 batch pins: 32 KiB
+ * regions, 32 KiB files — one 32 KB header block per file, the smallest
+ * legal geometry since CAND-38 (the pre-rule probes used 4 KiB). A big
+ * one-message batch fills file 0 leaving 24 bytes, so the next batch's
+ * message rolls to file 1. Exact layout: batch A @64 ends TINYB_A_END,
+ * batch B's message rolls to @TINYB_B_START, ends TINYB_B_END. */
+#define TINY_REGION   32768
+#define TINY_FILE     32768
+#define TINY_BIG_LEN  (TINY_FILE - INITIAL_PAYLOAD_POSITION - MMAPQ_BATCH_MSG_COUNT_SIZE - PAYLOAD_LENGTH_SIZE - 24)
+#define TINYB_A_END   ((int64_t)TINY_FILE - 24)                          /* 32744 */
+#define TINYB_B_START ((int64_t)TINY_FILE)                               /* 32768 */
+#define TINYB_B_END   ((int64_t)TINY_FILE + PAYLOAD_LENGTH_SIZE + 100)   /* 32872 */
 
 static MmapqRuntime *rt = NULL;
 
@@ -369,7 +384,8 @@ void test_batch_archiver_undo_rejects_partial_scan(void)
 }
 
 /* ── CAND-30 pins (batch twins: P3/P4/P6/P12 equivalents) ────────────────── */
-/* Geometry: 4 KiB regions, 4 KiB files, archivable. */
+/* Geometry: 32 KiB regions, 32 KiB files, archivable (smallest legal since
+ * CAND-38; the pre-rule probes used 4 KiB). */
 
 static MmapqIndexedBatchAppender *tiny_archivable_batch_appender(uint8_t id)
 {
@@ -378,12 +394,12 @@ static MmapqIndexedBatchAppender *tiny_archivable_batch_appender(uint8_t id)
     mkdir(dir_path, 0775);
     QueueMeta *m = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapqi_queue_meta_open_rw(DIR, QUEUE, 0,
-        4096, 4096, /* archivable= */ 1, QUEUE_TYPE_BATCH, &m));
+        TINY_REGION, TINY_FILE, /* archivable= */ 1, QUEUE_TYPE_BATCH, &m));
     TEST_ASSERT_NOT_NULL(m);
     mmapqi_queue_meta_close(m);
     MmapqIndexedBatchAppender *a = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_create_with_id(
-        DIR, QUEUE, 4096, 4, 4096, TIMEOUT, 0, rt, id, 0, &a));
+        DIR, QUEUE, TINY_REGION, 4, TINY_FILE, TIMEOUT, 0, rt, id, 0, &a));
     TEST_ASSERT_NOT_NULL(a);
     return a;
 }
@@ -490,7 +506,9 @@ void test_batch_appender_rejoin_over_abandoned_batch(void)
  * computation exactly. The 11th batch's offset IS the end of batch idx 9. */
 void test_batch_archiver_in_order_boundary_unchanged(void)
 {
-    char msg[800]; memset(msg, 'm', sizeof(msg));
+    /* 4000 B x 11 batches = 44 KB > 32 KiB file: rolling stays exercised
+     * (CAND-38 migration: was 800 B at 4 KiB files). */
+    char msg[4000]; memset(msg, 'm', sizeof(msg));
     MmapqIndexedBatchAppender *a = tiny_archivable_batch_appender(0);
     int64_t off_10 = -1;
     for (int i = 0; i < 11; i++) {
@@ -512,13 +530,14 @@ void test_batch_archiver_in_order_boundary_unchanged(void)
 
 /* P10/P12: the batch join's backward header scan must be bounded at
  * start_index — an archived header may point into a deleted payload file.
- * a0's single batch spans into file 1 (two 3000 B messages), so archiving it
- * lists payload_0_0; the file is deleted; a1 stays live. Pre-fix: the scan
+ * a0's single batch spans into file 1 (two 20000 B messages: 40 KB > 32 KiB;
+ * CAND-38 migration: was two 3000 B at 4 KiB), so archiving it lists
+ * payload_0_0; the file is deleted; a1 stays live. Pre-fix: the scan
  * finds the archived batch header, the walk stops early at the deleted file,
  * and the rejoined appender writes into file 0 (below the boundary). */
 void test_batch_appender_rejoin_after_payload_file_deleted(void)
 {
-    char big[3000]; memset(big, 'Z', sizeof(big));
+    char big[20000]; memset(big, 'Z', sizeof(big));
 
     MmapqIndexedBatchAppender *a0 = tiny_archivable_batch_appender(0);
     MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a0);
@@ -536,7 +555,7 @@ void test_batch_appender_rejoin_after_payload_file_deleted(void)
     MmapqIndexedBatchArchiver *arch = tiny_batch_archiver();
     TEST_ASSERT_EQUAL_INT(0,
         mmapq_indexed_batch_archiver_archive_up_to_index(arch, 1));
-    TEST_ASSERT_GREATER_OR_EQUAL_INT64(4096, batch_arch_start_offset(arch, 0));
+    TEST_ASSERT_GREATER_OR_EQUAL_INT64(TINY_FILE, batch_arch_start_offset(arch, 0));
 
     char *paths[64] = {0};
     int n = mmapq_indexed_batch_archiver_archivable_files(arch, paths, 64);
@@ -557,25 +576,47 @@ void test_batch_appender_rejoin_after_payload_file_deleted(void)
     TEST_ASSERT_EQUAL_INT64(2, commit_one_msg_batch(r1, "back", 4));
     mmapq_indexed_batch_appender_close(r1);
 
+    /* Boundary reach, asserted directly (CAND-38 migration): the rejoined
+     * batch must NOT land in the reclaimed file 0. Pre-fix the unbounded
+     * scan found the archived header, the walk stopped at the deleted
+     * file, and "back" landed at 64 — below the boundary (scratch revert:
+     * batch_offset 64 vs 52772 fixed). The boundary assertion below cannot
+     * see this — the forward publish never lowers — so it is pinned here
+     * on the batch's own offset. */
+    {
+        MmapqIndexedBatchQueue *vq = NULL;
+        TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create(
+            DIR, QUEUE, TINY_REGION, 4, 1, TINY_FILE, 0, TIMEOUT, 1, rt, rt, &vq));
+        MmapqIndexedBatchReader *vr = NULL;
+        TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_reader(vq, &vr));
+        MmapqBatchReadingContext vctx = {0};
+        mmapq_indexed_batch_reader_read(vr, 2, &vctx);
+        TEST_ASSERT_EQUAL_INT(MMAPQ_BATCH_ENTRY_AVAILABLE, vctx.status);
+        TEST_ASSERT_GREATER_OR_EQUAL_INT64(TINY_FILE, vctx.batch_offset);
+        mmapq_indexed_batch_reader_close(vr);
+        mmapq_indexed_batch_queue_close(vq);
+    }
+
     /* The new batch must land at or past the boundary (file 1), not in the
      * reclaimed file 0 — verify via the boundary after archiving it */
     MmapqIndexedBatchArchiver *arch2 = tiny_batch_archiver();
     TEST_ASSERT_EQUAL_INT(0,
         mmapq_indexed_batch_archiver_archive_up_to_index(arch2, 3));
-    TEST_ASSERT_GREATER_THAN_INT64(4096, batch_arch_start_offset(arch2, 0));
+    TEST_ASSERT_GREATER_THAN_INT64(TINY_FILE, batch_arch_start_offset(arch2, 0));
     mmapq_indexed_batch_archiver_close(arch2);
 }
 
 /* ── CAND-36 pins (batch twins of P1–P6): reclaim_files under archive.lock SH ── */
 /* Batch geometry: a one-message batch is a 4-byte count field followed by
- * the message under the appender's padding rule at region == file == 4096.
- * batch_record_end(64, 4000) = 4072; batch_record_end(4072, 100) = 4200
- * (rolls to file 1) — mirrors the single-message 4068/4200 (B2). */
+ * the message under the appender's padding rule at region == file ==
+ * TINY_FILE. batch_record_end(64, TINY_BIG_LEN) = TINYB_A_END;
+ * batch_record_end(TINYB_A_END, 100) = TINYB_B_END (rolls to file 1) —
+ * mirrors the single-message TINY_A_END/TINY_B_END (B2). */
 
 static int64_t batch_record_end(int64_t pos, int32_t len)
 {
     int64_t p = pos + MMAPQ_BATCH_MSG_COUNT_SIZE;
-    int64_t cap = 4096 - (p % 4096);
+    int64_t cap = TINY_FILE - (p % TINY_FILE);
     if (cap < (int64_t)(PAYLOAD_LENGTH_SIZE + len)) p += cap;
     return p + PAYLOAD_LENGTH_SIZE + len;
 }
@@ -606,27 +647,27 @@ static void batch_free_paths(char **paths, int n)
     for (int i = 0; i < n; i++) free(paths[i]);
 }
 
-/* Single-lane: batch A one 4000-byte msg (idx 0, @64, ends 4072), batch B
- * one 100-byte msg (idx 1, rolls, ends 4200). archive(2) -> start_offset
- * 4200 -> payload_0_0 listed. */
+/* Single-lane: batch A one TINY_BIG_LEN-byte msg (idx 0, @64, ends
+ * TINYB_A_END), batch B one 100-byte msg (idx 1, rolls, ends TINYB_B_END).
+ * archive(2) -> start_offset TINYB_B_END -> payload_0_0 listed. */
 static void batch_single_lane_geometry(void)
 {
-    char big[4000]; memset(big, 'G', sizeof(big));
+    char big[TINY_BIG_LEN]; memset(big, 'G', sizeof(big));
     char sm[100];   memset(sm, 's', sizeof(sm));
     MmapqIndexedBatchAppender *a = tiny_archivable_batch_appender(0);
     TEST_ASSERT_EQUAL_INT64(0, commit_one_msg_batch(a, big, (int32_t)sizeof(big)));
     TEST_ASSERT_EQUAL_INT64(1, commit_one_msg_batch(a, sm, (int32_t)sizeof(sm)));
     mmapq_indexed_batch_appender_close(a);
-    TEST_ASSERT_EQUAL_INT64(4072, batch_record_end(64, 4000));
-    TEST_ASSERT_EQUAL_INT64(4200, batch_record_end(4072, 100));
+    TEST_ASSERT_EQUAL_INT64(TINYB_A_END, batch_record_end(64, TINY_BIG_LEN));
+    TEST_ASSERT_EQUAL_INT64(TINYB_B_END, batch_record_end(TINYB_A_END, 100));
 }
 
-/* B2 batch geometry: two appenders, a0:4000, a1:4000, a0:100, a1:100
- * (indices 0-3). archive(4) -> 4200/4200, payload_0_0 and payload_1_0
- * listed. */
+/* B2 batch geometry: two appenders, a0:big, a1:big, a0:100, a1:100
+ * (indices 0-3). archive(4) -> TINYB_B_END/TINYB_B_END, payload_0_0 and
+ * payload_1_0 listed. */
 static void batch_two_lane_geometry(void)
 {
-    char big[4000]; memset(big, 'G', sizeof(big));
+    char big[TINY_BIG_LEN]; memset(big, 'G', sizeof(big));
     char sm[100];   memset(sm, 's', sizeof(sm));
     MmapqIndexedBatchAppender *a0 = tiny_archivable_batch_appender(0);
     MmapqIndexedBatchAppender *a1 = tiny_archivable_batch_appender(1);
@@ -636,8 +677,8 @@ static void batch_two_lane_geometry(void)
     TEST_ASSERT_EQUAL_INT64(3, commit_one_msg_batch(a1, sm, (int32_t)sizeof(sm)));
     mmapq_indexed_batch_appender_close(a0);
     mmapq_indexed_batch_appender_close(a1);
-    TEST_ASSERT_EQUAL_INT64(4072, batch_record_end(64, 4000));
-    TEST_ASSERT_EQUAL_INT64(4200, batch_record_end(4072, 100));
+    TEST_ASSERT_EQUAL_INT64(TINYB_A_END, batch_record_end(64, TINY_BIG_LEN));
+    TEST_ASSERT_EQUAL_INT64(TINYB_B_END, batch_record_end(TINYB_A_END, 100));
 }
 
 static int b36_wait(_Atomic int *flag)
@@ -675,8 +716,8 @@ void test_batch_reclaim_deletes_only_marked_still_archivable(void)
     MmapqIndexedBatchArchiver *arch = tiny_batch_archiver();
     TEST_ASSERT_EQUAL_INT(0,
         mmapq_indexed_batch_archiver_archive_up_to_index(arch, 4));
-    TEST_ASSERT_EQUAL_INT64(4200, batch_arch_start_offset(arch, 0));
-    TEST_ASSERT_EQUAL_INT64(4200, batch_arch_start_offset(arch, 1));
+    TEST_ASSERT_EQUAL_INT64(TINYB_B_END, batch_arch_start_offset(arch, 0));
+    TEST_ASSERT_EQUAL_INT64(TINYB_B_END, batch_arch_start_offset(arch, 1));
 
     char *paths[64] = {0};
     int n = mmapq_indexed_batch_archiver_archivable_files(arch, paths, 64);
@@ -714,7 +755,7 @@ void test_batch_reclaim_relist_excludes_undo_restored_files(void)
     MmapqIndexedBatchArchiver *arch = tiny_batch_archiver();
     TEST_ASSERT_EQUAL_INT(0,
         mmapq_indexed_batch_archiver_archive_up_to_index(arch, 2));
-    TEST_ASSERT_EQUAL_INT64(4200, batch_arch_start_offset(arch, 0));
+    TEST_ASSERT_EQUAL_INT64(TINYB_B_END, batch_arch_start_offset(arch, 0));
 
     char *paths[64] = {0};
     int n = mmapq_indexed_batch_archiver_archivable_files(arch, paths, 64);
@@ -1013,20 +1054,21 @@ static MmapqNextMove c35_batch_capture_handler(
  * boundary) needs no crash: start A, start B, commit B, archive, then
  * commit A. (This construction is CAND-33-batch-illegal-in-future; CAND-33
  * must CONVERT these pins, never delete them — see the CAND-33 entry.)
- * Probed geometry (v2 spec): batch A one 4000-byte msg @64 ends 4072; batch
- * B one 100-byte msg STARTS at 4072, its message rolls into file 1, ends
- * 4200; archive(1) with B committed -> boundary 4200. */
+ * Probed geometry (v2 spec, migrated by CAND-38): batch A one
+ * TINY_BIG_LEN-byte msg @64 ends TINYB_A_END; batch B one 100-byte msg
+ * STARTS at TINYB_A_END, its message rolls into file 1, ends TINYB_B_END;
+ * archive(1) with B committed -> boundary TINYB_B_END. */
 
 /* B1: a stale commit stranding the boundary above a live batch — the
  * capped listing must not list the live batch's payload file.
  * Fail-first: pre-fix lists payload_0_0. */
 void test_c35_batch_listing_cap_covers_stranded_batch(void)
 {
-    char big[4000]; memset(big, 'A', sizeof(big));
+    char big[TINY_BIG_LEN]; memset(big, 'A', sizeof(big));
     char sm[100];   memset(sm, 'B', sizeof(sm));
 
-    TEST_ASSERT_EQUAL_INT64(4072, batch_record_end(64, 4000));
-    TEST_ASSERT_EQUAL_INT64(4200, batch_record_end(4072, 100));
+    TEST_ASSERT_EQUAL_INT64(TINYB_A_END, batch_record_end(64, TINY_BIG_LEN));
+    TEST_ASSERT_EQUAL_INT64(TINYB_B_END, batch_record_end(TINYB_A_END, 100));
 
     MmapqIndexedBatchAppender *a = tiny_archivable_batch_appender(0);
     /* Batch A: written and completed, NOT committed */
@@ -1043,7 +1085,7 @@ void test_c35_batch_listing_cap_covers_stranded_batch(void)
     MmapqIndexedBatchArchiver *arch = tiny_batch_archiver();
     TEST_ASSERT_EQUAL_INT(0,
         mmapq_indexed_batch_archiver_archive_up_to_index(arch, 1));
-    TEST_ASSERT_EQUAL_INT64(4200, batch_arch_start_offset(arch, 0));
+    TEST_ASSERT_EQUAL_INT64(TINYB_B_END, batch_arch_start_offset(arch, 0));
 
     /* The stale commit lands BELOW the published boundary (index 1) */
     TEST_ASSERT_EQUAL_INT64(1,
@@ -1087,16 +1129,17 @@ static int c35_batch_listing_inject(void)
 void test_c35_batch_listing_scan_timeout_propagates(void)
 {
 #ifdef MMAPQ_TEST_HOOKS
-    /* batch A idx 0 @64 (ends 4072), batch B idx 1 @4072 (rolls, ends 4200) */
+    /* batch A idx 0 @64 (ends TINYB_A_END), batch B idx 1 @TINYB_A_END
+     * (rolls, ends TINYB_B_END) */
     batch_single_lane_geometry();
 
     MmapqIndexedBatchArchiver *arch = tiny_batch_archiver();
     TEST_ASSERT_EQUAL_INT(0,
         mmapq_indexed_batch_archiver_archive_up_to_index(arch, 1));
-    TEST_ASSERT_EQUAL_INT64(4072, batch_arch_start_offset(arch, 0));
+    TEST_ASSERT_EQUAL_INT64(TINYB_A_END, batch_arch_start_offset(arch, 0));
 
-    /* Control: the scan runs (B at 4072 floors the lane; cap
-     * min(4072, 4072)) and the honest listing stays empty */
+    /* Control: the scan runs (B at TINYB_A_END floors the lane; cap
+     * min(TINYB_A_END, TINYB_A_END)) and the honest listing stays empty */
     char *paths[64] = {0};
     int n = mmapq_indexed_batch_archiver_archivable_files(arch, paths, 64);
     TEST_ASSERT_EQUAL_INT(0, n);
@@ -1120,11 +1163,11 @@ void test_c35_batch_listing_scan_timeout_propagates(void)
  * Fail-first: pre-fix lists BOTH payload_0_0 and payload_1_0. */
 void test_c35_batch_listing_cap_is_per_lane(void)
 {
-    char big[4000]; memset(big, 'G', sizeof(big));
+    char big[TINY_BIG_LEN]; memset(big, 'G', sizeof(big));
     char sm[100];   memset(sm, 's', sizeof(sm));
 
-    TEST_ASSERT_EQUAL_INT64(4072, batch_record_end(64, 4000));
-    TEST_ASSERT_EQUAL_INT64(4200, batch_record_end(4072, 100));
+    TEST_ASSERT_EQUAL_INT64(TINYB_A_END, batch_record_end(64, TINY_BIG_LEN));
+    TEST_ASSERT_EQUAL_INT64(TINYB_B_END, batch_record_end(TINYB_A_END, 100));
 
     /* Lane 1: two committed batches (indices 0, 1) — both archived below */
     MmapqIndexedBatchAppender *b0 = tiny_archivable_batch_appender(0);
@@ -1147,8 +1190,8 @@ void test_c35_batch_listing_cap_is_per_lane(void)
     MmapqIndexedBatchArchiver *arch = tiny_batch_archiver();
     TEST_ASSERT_EQUAL_INT(0,
         mmapq_indexed_batch_archiver_archive_up_to_index(arch, 3));
-    TEST_ASSERT_EQUAL_INT64(4200, batch_arch_start_offset(arch, 0));
-    TEST_ASSERT_EQUAL_INT64(4200, batch_arch_start_offset(arch, 1));
+    TEST_ASSERT_EQUAL_INT64(TINYB_B_END, batch_arch_start_offset(arch, 0));
+    TEST_ASSERT_EQUAL_INT64(TINYB_B_END, batch_arch_start_offset(arch, 1));
 
     /* Lane 0's stale commit strands the boundary above live A0 (index 3) */
     TEST_ASSERT_EQUAL_INT64(3,
@@ -1163,6 +1206,84 @@ void test_c35_batch_listing_cap_is_per_lane(void)
     TEST_ASSERT_FALSE(batch_list_contains(paths, n, "payload_0_0"));
     batch_free_paths(paths, n);
     mmapq_indexed_batch_archiver_close(arch);
+}
+
+/* ── CAND-38 pin P2 (batch twin): positive reclaim guard at aligned ────────
+ * geometry — see test_indexed_archiver.c for the full comment. Mirrors the
+ * probe hdrloss_batch.c's aligned rows (0 unreadable); the misaligned rows
+ * (992/2112 live batches lost at 8 KB files) are refused at create
+ * post-rule (P1). */
+static void c38_batch_reclaim_loses_nothing(int64_t max_file)
+{
+    const int32_t region = 32768;
+    const int64_t hif    = max_file / HEADER_SIZE;  /* headers per file */
+    const int64_t N      = 2 * hif + 100;
+    const int64_t upto   = hif + 50;                /* past one header file */
+
+    char dir_path[512];
+    snprintf(dir_path, sizeof(dir_path), "%s/%s", DIR, QUEUE);
+    mkdir(dir_path, 0775);
+    QueueMeta *m = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapqi_queue_meta_open_rw(DIR, QUEUE, 0,
+        region, max_file, /* archivable= */ 1, QUEUE_TYPE_BATCH, &m));
+    TEST_ASSERT_NOT_NULL(m);
+    mmapqi_queue_meta_close(m);
+
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_create_with_id(
+        DIR, QUEUE, region, 16, max_file, TIMEOUT, 0, rt, 0, 0, &a));
+    TEST_ASSERT_NOT_NULL(a);
+    for (int64_t i = 0; i < N; i++)
+        TEST_ASSERT_EQUAL_INT64(i,
+            mmapq_indexed_batch_appender_append_and_commit(a, "cccc", 4));
+
+    MmapqIndexedBatchArchiver *arch = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_batch_archiver_create(DIR, QUEUE, 4, rt, &arch));
+    TEST_ASSERT_NOT_NULL(arch);
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_batch_archiver_archive_up_to_index(arch, upto));
+
+    char *paths[64] = {0};
+    int n = mmapq_indexed_batch_archiver_archivable_files(arch, paths, 64);
+    TEST_ASSERT_GREATER_OR_EQUAL(1, n);
+    int hdr = 0;
+    for (int i = 0; i < n; i++) if (strstr(paths[i], "/header_")) hdr++;
+    TEST_ASSERT_GREATER_OR_EQUAL(1, hdr);   /* a header file really listed */
+    TEST_ASSERT_EQUAL_INT(n,
+        mmapq_indexed_batch_archiver_reclaim_files(arch, paths, n));
+    batch_free_paths(paths, n);
+    mmapq_indexed_batch_archiver_close(arch);
+    mmapq_indexed_batch_appender_close(a);
+
+    /* Fresh reader over the whole live range: nothing lost. */
+    MmapqIndexedBatchReader *r = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_batch_reader_create(DIR, QUEUE, 4, TIMEOUT, rt, &r));
+    TEST_ASSERT_NOT_NULL(r);
+    for (int64_t i = upto; i < N; i++)
+        TEST_ASSERT_EQUAL_INT(MMAPQ_BATCH_ENTRY_AVAILABLE,
+            mmapq_indexed_batch_reader_entry_status(r, i));
+    mmapq_indexed_batch_reader_close(r);
+
+    /* Rejoin: the next append is index N — no committed index reused. */
+    MmapqIndexedBatchAppender *a2 = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_create_with_id(
+        DIR, QUEUE, region, 16, max_file, TIMEOUT, 0, rt, 0, 0, &a2));
+    TEST_ASSERT_NOT_NULL(a2);
+    TEST_ASSERT_EQUAL_INT64(N,
+        mmapq_indexed_batch_appender_append_and_commit(a2, "next", 4));
+    mmapq_indexed_batch_appender_close(a2);
+}
+
+void test_c38_batch_reclaim_aligned_32k_file_loses_nothing(void)
+{
+    c38_batch_reclaim_loses_nothing(32768);
+}
+
+void test_c38_batch_reclaim_aligned_96k_file_loses_nothing(void)
+{
+    c38_batch_reclaim_loses_nothing(98304);
 }
 
 int main(void)
@@ -1198,5 +1319,9 @@ int main(void)
     RUN_TEST(test_c35_batch_listing_cap_covers_stranded_batch);
     RUN_TEST(test_c35_batch_listing_scan_timeout_propagates);
     RUN_TEST(test_c35_batch_listing_cap_is_per_lane);
+
+    /* CAND-38 pins (batch) */
+    RUN_TEST(test_c38_batch_reclaim_aligned_32k_file_loses_nothing);
+    RUN_TEST(test_c38_batch_reclaim_aligned_96k_file_loses_nothing);
     return UNITY_END();
 }

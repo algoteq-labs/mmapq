@@ -62,7 +62,7 @@ static MmapqIndexedQueue *create_queue(const char *name, const char **msgs, int 
     mkdir(path, 0775);
 
     MmapqIndexedQueue *q = NULL;
-    int rc_q = mmapq_indexed_queue_create(TEST_DIR, name, 4096, 16, 1, 4096LL * 64,
+    int rc_q = mmapq_indexed_queue_create(TEST_DIR, name, 32768, 16, 1, 32768LL * 8,
                                      start_index, 5000000000ULL, 0, rt, rt, &q);
     TEST_ASSERT_EQUAL_INT(0, rc_q);
     TEST_ASSERT_NOT_NULL(q);
@@ -80,7 +80,7 @@ static MmapqIndexedQueue *create_queue(const char *name, const char **msgs, int 
 static int load_messages(const char *name, char out[][100], int max)
 {
     MmapqIndexedQueue *q = NULL;
-    int rc_q = mmapq_indexed_queue_create(TEST_DIR, name, 4096, 16, 1, 4096LL * 64,
+    int rc_q = mmapq_indexed_queue_create(TEST_DIR, name, 32768, 16, 1, 32768LL * 8,
                                      0, 5000000000ULL, 0, rt, rt, &q);
     TEST_ASSERT_EQUAL_INT(0, rc_q);
     TEST_ASSERT_NOT_NULL(q);
@@ -108,7 +108,7 @@ static int load_messages(const char *name, char out[][100], int max)
 static void verify_batch_index_space(const char *name, int64_t expected_start, int64_t expected_end)
 {
     MmapqIndexedBatchQueue *vq = NULL;
-    int rc_vq = mmapq_indexed_batch_queue_create(TEST_DIR, name, 4096, 16, 1, 4096LL * 64,
+    int rc_vq = mmapq_indexed_batch_queue_create(TEST_DIR, name, 32768, 16, 1, 32768LL * 8,
                                              0, 5000000000ULL, 0, rt, rt, &vq);
     TEST_ASSERT_EQUAL_INT(0, rc_vq);
     TEST_ASSERT_NOT_NULL(vq);
@@ -137,7 +137,7 @@ static void verify_batch_index_space(const char *name, int64_t expected_start, i
 static void verify_index_space(const char *name, int64_t expected_start, int64_t expected_end)
 {
     MmapqIndexedQueue *vq = NULL;
-    int rc_vq = mmapq_indexed_queue_create(TEST_DIR, name, 4096, 16, 1, 4096LL * 64,
+    int rc_vq = mmapq_indexed_queue_create(TEST_DIR, name, 32768, 16, 1, 32768LL * 8,
                                       expected_start, 5000000000ULL, 0, rt, rt, &vq);
     TEST_ASSERT_EQUAL_INT(0, rc_vq);
     TEST_ASSERT_NOT_NULL(vq);
@@ -170,7 +170,7 @@ static MmapqIndexedBatchQueue *create_batch_queue(const char *name, const char *
     mkdir(path, 0775);
 
     MmapqIndexedBatchQueue *q = NULL;
-    int rc_q = mmapq_indexed_batch_queue_create(TEST_DIR, name, 4096, 16, 1, 4096LL * 64,
+    int rc_q = mmapq_indexed_batch_queue_create(TEST_DIR, name, 32768, 16, 1, 32768LL * 8,
                                            0, 5000000000ULL, 0, rt, rt, &q);
     TEST_ASSERT_EQUAL_INT(0, rc_q);
     TEST_ASSERT_NOT_NULL(q);
@@ -269,7 +269,7 @@ void test_export_import_preserve_start_index(void)
 
     /* Verify index space is preserved */
     MmapqIndexedQueue *vq = NULL;
-    int rc_vq = mmapq_indexed_queue_create(TEST_DIR, COPY_Q, 4096, 16, 1, 4096LL * 64,
+    int rc_vq = mmapq_indexed_queue_create(TEST_DIR, COPY_Q, 32768, 16, 1, 32768LL * 8,
                                       actual_start, 5000000000ULL, 0, rt, rt, &vq);
     TEST_ASSERT_EQUAL_INT(0, rc_vq);
     TEST_ASSERT_NOT_NULL(vq);
@@ -324,7 +324,7 @@ void test_poller_starts_at_preserved_index(void)
 
     /* Now poll the imported queue — first entry should be at index 100 */
     MmapqIndexedQueue *iq = NULL;
-    int rc_iq = mmapq_indexed_queue_create(TEST_DIR, COPY_Q, 4096, 16, 1, 4096LL * 64,
+    int rc_iq = mmapq_indexed_queue_create(TEST_DIR, COPY_Q, 32768, 16, 1, 32768LL * 8,
                                       si, 5000000000ULL, 0, rt, rt, &iq);
     TEST_ASSERT_EQUAL_INT(0, rc_iq);
     TEST_ASSERT_NOT_NULL(iq);
@@ -383,7 +383,7 @@ void test_export_import_rebase_start_index(void)
     TEST_ASSERT_EQUAL_INT(3, cnt);
 
     MmapqIndexedQueue *vq = NULL;
-    int rc_vq = mmapq_indexed_queue_create(TEST_DIR, COPY_Q, 4096, 16, 1, 4096LL * 64,
+    int rc_vq = mmapq_indexed_queue_create(TEST_DIR, COPY_Q, 32768, 16, 1, 32768LL * 8,
                                       0, 5000000000ULL, 0, rt, rt, &vq);
     TEST_ASSERT_EQUAL_INT(0, rc_vq);
     TEST_ASSERT_NOT_NULL(vq);
@@ -1263,7 +1263,7 @@ void test_copy_normal_to_batch_1msg(void)
 
     /* Verify by reading back the batch queue */
     MmapqIndexedBatchQueue *q = NULL;
-    int rc_q = mmapq_indexed_batch_queue_create(TEST_DIR, CROSS_Q, 4096, 16, 1, 4096LL * 64,
+    int rc_q = mmapq_indexed_batch_queue_create(TEST_DIR, CROSS_Q, 32768, 16, 1, 32768LL * 8,
                                            0, 5000000000ULL, 0, rt, rt, &q);
     TEST_ASSERT_EQUAL_INT(0, rc_q);
     TEST_ASSERT_NOT_NULL(q);
@@ -1313,7 +1313,7 @@ void test_copy_cross_type_roundtrip(void)
 
     /* batch → normal (flatten back) */
     MmapqIndexedBatchQueue *bq = NULL;
-    int rc_bq = mmapq_indexed_batch_queue_create(TEST_DIR, CROSS_Q, 4096, 16, 1, 4096LL * 64,
+    int rc_bq = mmapq_indexed_batch_queue_create(TEST_DIR, CROSS_Q, 32768, 16, 1, 32768LL * 8,
                                             0, 5000000000ULL, 0, rt, rt, &bq);
     TEST_ASSERT_EQUAL_INT(0, rc_bq);
     TEST_ASSERT_NOT_NULL(bq);
@@ -1686,7 +1686,7 @@ void test_copy_batch_to_normal_preserve_nonzero(void)
     mkdir("/tmp/mmap_test_bqtrans", 0775);
     MmapqIndexedBatchQueue *src = NULL;
     int rc_src = mmapq_indexed_batch_queue_create(
-        TEST_DIR, BQ_QUEUE, 4096, 16, 1, 4096LL * 64,
+        TEST_DIR, BQ_QUEUE, 32768, 16, 1, 32768LL * 8,
         100, 5000000000ULL, 0, rt, rt, &src);
     TEST_ASSERT_EQUAL_INT(0, rc_src);
     TEST_ASSERT_NOT_NULL(src);
@@ -1746,7 +1746,7 @@ void test_import_batch_stream_preserve_nonzero(void)
     mkdir("/tmp/mmap_test_bqtrans", 0775);
     MmapqIndexedBatchQueue *src = NULL;
     int rc_src = mmapq_indexed_batch_queue_create(
-        TEST_DIR, BQ_QUEUE, 4096, 16, 1, 4096LL * 64,
+        TEST_DIR, BQ_QUEUE, 32768, 16, 1, 32768LL * 8,
         100, 5000000000ULL, 0, rt, rt, &src);
     TEST_ASSERT_EQUAL_INT(0, rc_src);
     TEST_ASSERT_NOT_NULL(src);
@@ -1833,7 +1833,7 @@ void test_batch_import_preserves_appender_ids(void)
 
     MmapqIndexedBatchQueue *q = NULL;
     int rc_q = mmapq_indexed_batch_queue_create(
-        TEST_DIR, QUEUE, 4096, 16, 1, 4096LL * 64,
+        TEST_DIR, QUEUE, 32768, 16, 1, 32768LL * 8,
         0, 5000000000ULL, 0, rt, rt, &q);
     TEST_ASSERT_EQUAL_INT(0, rc_q);
     TEST_ASSERT_NOT_NULL(q);
@@ -1884,7 +1884,7 @@ void test_batch_import_preserves_appender_ids(void)
     /* Verify via poller */
     MmapqIndexedBatchQueue *vq = NULL;
     int rc_vq = mmapq_indexed_batch_queue_create(
-        TEST_DIR, COPY_Q, 4096, 16, 1, 4096LL * 64,
+        TEST_DIR, COPY_Q, 32768, 16, 1, 32768LL * 8,
         0, 5000000000ULL, 0, rt, rt, &vq);
     TEST_ASSERT_EQUAL_INT(0, rc_vq);
     TEST_ASSERT_NOT_NULL(vq);
@@ -1922,7 +1922,7 @@ void test_import_preserves_appender_ids(void)
     mkdir(path, 0775);
 
     MmapqIndexedQueue *q = NULL;
-    int rc_q = mmapq_indexed_queue_create(TEST_DIR, QUEUE, 4096, 16, 1, 4096LL * 64,
+    int rc_q = mmapq_indexed_queue_create(TEST_DIR, QUEUE, 32768, 16, 1, 32768LL * 8,
                                      0, 5000000000ULL, 0, rt, rt, &q);
     TEST_ASSERT_EQUAL_INT(0, rc_q);
     TEST_ASSERT_NOT_NULL(q);
@@ -1967,7 +1967,7 @@ void test_import_preserves_appender_ids(void)
     /* Verify via reader: each entry has correct appender_id */
     {
         MmapqIndexedQueue *vq = NULL;
-        int rc_vq = mmapq_indexed_queue_create(TEST_DIR, COPY_Q, 4096, 16, 1, 4096LL * 64,
+        int rc_vq = mmapq_indexed_queue_create(TEST_DIR, COPY_Q, 32768, 16, 1, 32768LL * 8,
                                            0, 5000000000ULL, 0, rt, rt, &vq);
         TEST_ASSERT_EQUAL_INT(0, rc_vq);
         TEST_ASSERT_NOT_NULL(vq);
@@ -2000,7 +2000,7 @@ void test_import_merge_via_mapper(void)
     mkdir(path, 0775);
 
     MmapqIndexedQueue *q = NULL;
-    int rc_q = mmapq_indexed_queue_create(TEST_DIR, QUEUE, 4096, 16, 1, 4096LL * 64,
+    int rc_q = mmapq_indexed_queue_create(TEST_DIR, QUEUE, 32768, 16, 1, 32768LL * 8,
                                      0, 5000000000ULL, 0, rt, rt, &q);
     TEST_ASSERT_EQUAL_INT(0, rc_q);
     TEST_ASSERT_NOT_NULL(q);
@@ -2041,7 +2041,7 @@ void test_import_merge_via_mapper(void)
 
     /* Verify all entries landed in appender 0 */
     MmapqIndexedQueue *vq = NULL;
-    int rc_vq = mmapq_indexed_queue_create(TEST_DIR, COPY_Q, 4096, 16, 1, 4096LL * 64,
+    int rc_vq = mmapq_indexed_queue_create(TEST_DIR, COPY_Q, 32768, 16, 1, 32768LL * 8,
                                       0, 5000000000ULL, 0, rt, rt, &vq);
     TEST_ASSERT_EQUAL_INT(0, rc_vq);
     TEST_ASSERT_NOT_NULL(vq);
@@ -2070,7 +2070,7 @@ void test_import_auto_on_conflict(void)
 
     /* Pre-create destination queue — keep appender ID 0 locked during import */
     MmapqIndexedQueue *dest = NULL;
-    int rc_dest = mmapq_indexed_queue_create(TEST_DIR, COPY_Q, 4096, 16, 1, 4096LL * 64,
+    int rc_dest = mmapq_indexed_queue_create(TEST_DIR, COPY_Q, 32768, 16, 1, 32768LL * 8,
                                         0, 5000000000ULL, 0, rt, rt, &dest);
     TEST_ASSERT_EQUAL_INT(0, rc_dest);
     TEST_ASSERT_NOT_NULL(dest);
@@ -2084,7 +2084,7 @@ void test_import_auto_on_conflict(void)
     snprintf(path, sizeof(path), "%s/%s", TEST_DIR, QUEUE);
     mkdir(path, 0775);
     MmapqIndexedQueue *src = NULL;
-    int rc_src = mmapq_indexed_queue_create(TEST_DIR, QUEUE, 4096, 16, 1, 4096LL * 64,
+    int rc_src = mmapq_indexed_queue_create(TEST_DIR, QUEUE, 32768, 16, 1, 32768LL * 8,
                                        0, 5000000000ULL, 0, rt, rt, &src);
     TEST_ASSERT_EQUAL_INT(0, rc_src);
     TEST_ASSERT_NOT_NULL(src);
@@ -2116,7 +2116,7 @@ void test_import_auto_on_conflict(void)
 
     /* Verify the imported entry got a different appender ID (not 0, which is held) */
     MmapqIndexedQueue *vq = NULL;
-    int rc_vq = mmapq_indexed_queue_create(TEST_DIR, COPY_Q, 4096, 16, 1, 4096LL * 64,
+    int rc_vq = mmapq_indexed_queue_create(TEST_DIR, COPY_Q, 32768, 16, 1, 32768LL * 8,
                                       0, 5000000000ULL, 0, rt, rt, &vq);
     TEST_ASSERT_EQUAL_INT(0, rc_vq);
     TEST_ASSERT_NOT_NULL(vq);
@@ -2145,7 +2145,7 @@ void test_import_abort_on_conflict(void)
 
     /* Pre-create destination queue — keep appender ID 0 locked during import */
     MmapqIndexedQueue *dest = NULL;
-    int rc_dest = mmapq_indexed_queue_create(TEST_DIR, COPY_Q, 4096, 16, 1, 4096LL * 64,
+    int rc_dest = mmapq_indexed_queue_create(TEST_DIR, COPY_Q, 32768, 16, 1, 32768LL * 8,
                                         0, 5000000000ULL, 0, rt, rt, &dest);
     TEST_ASSERT_EQUAL_INT(0, rc_dest);
     TEST_ASSERT_NOT_NULL(dest);
@@ -2159,7 +2159,7 @@ void test_import_abort_on_conflict(void)
     snprintf(path, sizeof(path), "%s/%s", TEST_DIR, QUEUE);
     mkdir(path, 0775);
     MmapqIndexedQueue *src = NULL;
-    int rc_src = mmapq_indexed_queue_create(TEST_DIR, QUEUE, 4096, 16, 1, 4096LL * 64,
+    int rc_src = mmapq_indexed_queue_create(TEST_DIR, QUEUE, 32768, 16, 1, 32768LL * 8,
                                        0, 5000000000ULL, 0, rt, rt, &src);
     TEST_ASSERT_EQUAL_INT(0, rc_src);
     TEST_ASSERT_NOT_NULL(src);
@@ -2208,7 +2208,7 @@ void test_import_mapper_invalid_id_falls_back_to_auto(void)
     mkdir(path, 0775);
 
     MmapqIndexedQueue *q = NULL;
-    int rc_q = mmapq_indexed_queue_create(TEST_DIR, QUEUE, 4096, 16, 1, 4096LL * 64,
+    int rc_q = mmapq_indexed_queue_create(TEST_DIR, QUEUE, 32768, 16, 1, 32768LL * 8,
                                      0, 5000000000ULL, 0, rt, rt, &q);
     TEST_ASSERT_EQUAL_INT(0, rc_q);
     TEST_ASSERT_NOT_NULL(q);
@@ -2258,9 +2258,9 @@ void test_export_meta_encode_zeroes_reserved(void)
     ExportMeta meta;
     export_meta_init(&meta);
     meta.schema_version = 1;
-    meta.region_size    = 4096;
+    meta.region_size    = 32768;
     meta.start_index    = 7;
-    meta.max_file_size  = 4096LL * 64;
+    meta.max_file_size  = 32768LL * 8;
     meta.total_entries  = 3;
     meta.archivable     = 0;
     meta.queue_type     = 0;
@@ -2443,7 +2443,7 @@ void test_batch_import_accepts_nonzero_reserved_bytes(void)
     /* Read back the imported payloads, not just the index space: reserved-byte
        garbage must not disturb the batch stream parse. */
     MmapqIndexedBatchQueue *vq = NULL;
-    int rc_vq = mmapq_indexed_batch_queue_create(TEST_DIR, BQ_COPY, 4096, 16, 1, 4096LL * 64,
+    int rc_vq = mmapq_indexed_batch_queue_create(TEST_DIR, BQ_COPY, 32768, 16, 1, 32768LL * 8,
                                                  0, 5000000000ULL, 0, rt, rt, &vq);
     TEST_ASSERT_EQUAL_INT(0, rc_vq);
     TEST_ASSERT_NOT_NULL(vq);

@@ -71,6 +71,22 @@
 #define HEADER_SECTOR_MASK       63
 #define HEADER_BLOCK_MASK        4095
 
+/*
+ * MMAPQI_HEADER_BLOCK_BYTES — byte size of one transposed header block
+ * (4096 headers x 8 bytes = 32 KB).
+ *
+ * Header-file reclaim lists and deletes whole header files by contiguous
+ * index range (indexed_archiver.c, indexed_batch_archiver.c: file f holds
+ * indices [f*hif, (f+1)*hif), hif = max_file_size/8). Because the layout
+ * transposes indices within each 4096-index block, that contiguity holds
+ * iff max_file_size is a multiple of one block. This is enforced as a
+ * queue geometry rule (CAND-38): region_size % MMAPQI_HEADER_BLOCK_BYTES
+ * == 0 and max_file_size % MMAPQI_HEADER_BLOCK_BYTES == 0.
+ */
+#define MMAPQI_HEADER_BLOCK_BYTES ((int64_t)(1 << HEADER_BLOCK_SIZE_BITS) * HEADER_SIZE)
+_Static_assert(MMAPQI_HEADER_BLOCK_BYTES == 32768,
+    "header block must stay 32 KB — the archivers' file-contiguity assumption and the CAND-38 geometry rule depend on it");
+
 #define PAYLOAD_LENGTH_OFFSET    ((int32_t)0)
 #define PAYLOAD_LENGTH_SIZE      ((int32_t)4)
 #define PAYLOAD_DATA_OFFSET      ((int32_t)(PAYLOAD_LENGTH_OFFSET + PAYLOAD_LENGTH_SIZE))

@@ -62,7 +62,7 @@ static void test_shared_factory_creates_independent_participants(void)
 {
     MmapqIndexedQueue *queue = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create(directory, "queue",
-        4096, 16, 1, 4096 * 64, 17, 5000000000ULL, 1, NULL, NULL, &queue));
+        32768, 16, 1, 32768 * 8, 17, 5000000000ULL, 1, NULL, NULL, &queue));
     MmapqIndexedAppender *seed = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender_with_id(queue, 0, &seed));
     TEST_ASSERT_EQUAL_INT64(17, mmapq_indexed_appender_append(seed, "seed", 4));

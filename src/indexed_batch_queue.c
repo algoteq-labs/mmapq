@@ -5,6 +5,7 @@
 #include "mmap_platform.h"
 #include "internal/mmap_assert.h"
 #include "internal/header_codec.h"
+#include "internal/platform_internal.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -60,11 +61,17 @@ int mmapq_indexed_batch_queue_create(
     if (queue_name == NULL) return MMAPQ_EINVAL;
     if (region_size <= 0) return MMAPQ_EINVAL;
     if ((region_size & (region_size - 1)) != 0) return MMAPQ_EINVAL;
+    /* CAND-38 geometry rule — see mmapq_indexed_queue_create. */
+    if (region_size % MMAPQI_HEADER_BLOCK_BYTES != 0) return MMAPQ_EINVAL;
+    if (region_size % mmapqi_page_size() != 0) return MMAPQ_EINVAL;
     if (ring_size <= 0) return MMAPQ_EINVAL;
     if ((ring_size & (ring_size - 1)) != 0) return MMAPQ_EINVAL;
     if (ring_size < mmapq_min_ring_size(region_size)) return MMAPQ_EINVAL;
     if (max_file_size <= 0) return MMAPQ_EINVAL;
     if (max_file_size % region_size != 0) return MMAPQ_EINVAL;
+    /* Explicit though implied today — reclaim's contiguity assumption
+     * depends on it (see mmapq_indexed_queue_create). */
+    if (max_file_size % MMAPQI_HEADER_BLOCK_BYTES != 0) return MMAPQ_EINVAL;
     if (!header_index_in_range(start_index)) return MMAPQ_EINVAL;
 
     MmapqIndexedBatchQueue *q = calloc(1, sizeof(MmapqIndexedBatchQueue));

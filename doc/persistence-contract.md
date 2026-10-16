@@ -43,6 +43,16 @@ They do not provide power-loss-durable commit acknowledgments.
   directory while an archiver or lister has it open lets two processes
   hold locks on different files. Recreate a queue only with all clients
   closed — the same rule as for every other queue file.
+- Queue geometry is constrained (CAND-38): `region_size` must be a power of
+  two and a multiple of 32 KB (one transposed header block), and a multiple
+  of the host's page size; `max_file_size` must be a multiple of `region_size`
+  (and therefore of the 32 KB block). Header-file reclaim depends on each
+  header file holding a contiguous index range, which only block-aligned
+  files guarantee. A queue created before this rule, or on a host with a
+  larger page size, is refused on reopen with `MMAPQ_ESCHEMA` (not
+  `MMAPQ_ECORRUPT` — the files are not damaged): recreate it with a legal
+  geometry. Portability consequence: a queue is portable only to hosts
+  whose page size divides its `region_size`.
 - Normal queues retain compatibility with Algoteq's evolved Java format;
   Java does not currently read batch queues. No disk layout changes are
   introduced by the hardening work.

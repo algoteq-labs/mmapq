@@ -34,6 +34,10 @@
  *   injected timeout collapses to end-of-stream through the plain read but
  *   reports MMAPQ_ETIMEDOUT through the checked read (this is what makes
  *   the plain-read mutation observable).
+ * set_page_size: overrides the runtime page size seen by the CAND-38
+ *   geometry checks (region_size % page_size == 0) — the only way to pin
+ *   16/64 KB-page host behaviour on a 4 KB-page host (CAND-38 P4).
+ *   0 disarms.
  */
 #ifdef MMAPQ_TEST_HOOKS
 void mmapq_test_hook_set_commit_pre(void (*fn)(void));
@@ -47,6 +51,7 @@ void mmapq_test_hook_set_batch_reclaim_pre_unlink(void (*fn)(void));
 void mmapq_test_hook_set_archiver_listing_scan(int (*fn)(void));
 void mmapq_test_hook_set_batch_archiver_listing_scan(int (*fn)(void));
 void mmapq_test_hook_header_wrap_inject(int wrap_result);
+void mmapq_test_hook_set_page_size(long page_size);
 #endif
 
 #endif /* TEST_HOOKS_H */

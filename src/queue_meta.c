@@ -1,6 +1,7 @@
 #include "internal/queue_meta.h"
 #include "internal/header_codec.h"
 #include "internal/mmap_assert.h"
+#include "internal/platform_internal.h"
 #include "mmap_platform.h"
 #include "internal/file_initialiser.h"
 
@@ -107,6 +108,26 @@ static int meta_validate(const QueueMeta *m, uint8_t expected_type,
     if (m->start_index < 0 || m->start_index > MMAPQI_MAX_INDEX) {
         return MMAPQ_ECORRUPT;
     }
+    /* CAND-38 geometry rule for on-disk metas. A meta written before the
+     * rule (region not a multiple of the 32 KB header block, or a file not
+     * a multiple of it) or written on a smaller-page host than this one is
+     * NOT corrupt — it is geometry this build/host refuses to run, so
+     * ESCHEMA, not ECORRUPT (the remedies differ: recreate with a legal
+     * geometry vs. treat as damaged). These checks stay AFTER the ECORRUPT
+     * block: impossible values remain corruption. The file-block check is
+     * implied by the region rule + the % region check above today; kept
+     * explicit so the archivers' contiguity assumption survives any later
+     * relaxation of the region rule. Portability consequence: a queue is
+     * portable only to hosts whose page size divides its region_size. */
+    if (m->region_size % MMAPQI_HEADER_BLOCK_BYTES != 0) {
+        return MMAPQ_ESCHEMA;
+    }
+    if (m->region_size % mmapqi_page_size() != 0) {
+        return MMAPQ_ESCHEMA;
+    }
+    if (m->max_file_size % MMAPQI_HEADER_BLOCK_BYTES != 0) {
+        return MMAPQ_ESCHEMA;
+    }
     return 0;
 }
 
@@ -128,8 +149,14 @@ int mmapqi_queue_meta_open_rw(
     if (queue_name == NULL) return MMAPQ_EINVAL;
     if (region_size <= 0) return MMAPQ_EINVAL;
     if ((region_size & (region_size - 1)) != 0) return MMAPQ_EINVAL;
+    /* CAND-38 geometry rule — see mmapq_indexed_queue_create and
+     * meta_validate. Caller-supplied violations are EINVAL. */
+    if (region_size % MMAPQI_HEADER_BLOCK_BYTES != 0) return MMAPQ_EINVAL;
+    if (region_size % mmapqi_page_size() != 0) return MMAPQ_EINVAL;
     if (max_file_size <= 0) return MMAPQ_EINVAL;
     if (max_file_size % region_size != 0) return MMAPQ_EINVAL;
+    /* Explicit though implied today (see meta_validate). */
+    if (max_file_size % MMAPQI_HEADER_BLOCK_BYTES != 0) return MMAPQ_EINVAL;
 
     char path[4096];
     meta_file_path(directory, queue_name, path, sizeof(path));

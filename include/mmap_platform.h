@@ -9,7 +9,9 @@
  *    -2   MMAPQ_EINVAL      — invalid argument (NULL, zero length, etc.)
  *    -3   MMAPQ_ECLOSED     — operation on closed handle
  *    -4   MMAPQ_ECORRUPT    — on-disk corruption detected
- *    -5   MMAPQ_ESCHEMA     — schema version or queue type mismatch
+ *    -5   MMAPQ_ESCHEMA     — schema version or queue type mismatch, or
+ *                             on-disk geometry not supported by this build/host
+ *                             (CAND-38: pre-rule geometry or a page-size mismatch)
  *    -6   MMAPQ_EEXIST      — destination queue already exists
  *    -7   MMAPQ_ENOENT      — file or queue does not exist
  *    -8   MMAPQ_EIDCONFLICT — requested appender ID already in use
@@ -22,7 +24,7 @@
 #define MMAPQ_EINVAL     (-2)   /* invalid argument (NULL, zero length, etc.) */
 #define MMAPQ_ECLOSED    (-3)   /* operation on closed handle */
 #define MMAPQ_ECORRUPT   (-4)   /* on-disk corruption detected */
-#define MMAPQ_ESCHEMA    (-5)   /* schema version or queue type mismatch */
+#define MMAPQ_ESCHEMA    (-5)   /* schema version or queue type mismatch, or on-disk geometry not supported by this build/host */
 #define MMAPQ_EEXIST     (-6)   /* destination queue already exists */
 #define MMAPQ_ENOENT     (-7)   /* file or queue does not exist */
 #define MMAPQ_EIDCONFLICT (-8)  /* requested appender ID already in use */

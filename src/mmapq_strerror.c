@@ -8,7 +8,7 @@ const char *mmapq_strerror(int rc)
     case MMAPQ_EINVAL:     return "invalid argument (NULL, zero length, etc.)";
     case MMAPQ_ECLOSED:    return "operation on closed handle";
     case MMAPQ_ECORRUPT:   return "on-disk corruption detected";
-    case MMAPQ_ESCHEMA:    return "schema version or queue type mismatch";
+    case MMAPQ_ESCHEMA:    return "schema version or queue type mismatch, or on-disk geometry not supported by this build/host";
     case MMAPQ_EEXIST:     return "destination queue already exists";
     case MMAPQ_ENOENT:     return "file or queue does not exist";
     case MMAPQ_EIDCONFLICT: return "requested appender ID already in use";

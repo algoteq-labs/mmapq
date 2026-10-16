@@ -113,6 +113,22 @@ concurrent-appender counts they're sized for, because the fundamental
 guarantee — *adjacent sectors never overlap a cache line* — holds for any
 `sectorSize` that is a multiple of 8 (one word).
 
+### 3.1 Block size vs. header file size (the CAND-38 geometry rule)
+
+The transposition means a block's 4096 indices are **not** contiguous in
+the file: within each 32 KB block, consecutive indices sit 512 bytes apart.
+A header file therefore holds a contiguous index *range*
+(`[f·hif, (f+1)·hif)`, `hif = max_file_size / 8`) only when
+`max_file_size` is a whole number of blocks. Header-file reclaim (listing
+and deleting fully covered files, undo's file set, `print_summary` ranges)
+assumes exactly that. Since CAND-38 this is a hard create/open rule:
+`region_size` a multiple of 32 KB (a power of two dividing
+`max_file_size`, so the file is block-aligned) and a multiple of the host
+page size (so region mmap offsets stay page-aligned on 16/64 KB-page
+kernels).
+Queues written before the rule, or moved to a larger-page host, are
+refused on reopen with `MMAPQ_ESCHEMA`.
+
 ---
 
 ## 4. Why `sectorSize = 64` is the chosen value

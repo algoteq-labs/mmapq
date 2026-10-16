@@ -306,6 +306,9 @@ static int archive_up_to_index_locked(MmapqIndexedBatchArchiver *a, int64_t inde
     if (index == current) return 0;
 
     int64_t max_file_size   = queue_meta_max_file_size(rom);
+    /* Contiguous index range per header file — holds because
+     * max_file_size is a multiple of the transposed header block
+     * (CAND-38 geometry rule). */
     int64_t headers_in_file = max_file_size / HEADER_SIZE;
 
     if (index > current) {
@@ -510,7 +513,9 @@ static int archivable_files_locked(
             live_floor[aid] = pos;
     }
 
-    /* Fully covered header files */
+    /* Fully covered header files: contiguous index range per header file —
+     * holds because max_file_size is a multiple of the header block
+     * (CAND-38 geometry rule). */
     int64_t full_header_files = (start - 1) / headers_in_file;
     for (int64_t i = 0; i < full_header_files && count < max_paths; i++) {
         char path[4096];

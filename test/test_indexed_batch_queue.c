@@ -1252,11 +1252,12 @@ void test_batch_read_no_alias_at_file_index_2pow32(void)
  * offset check (C3) is mirrored by the P7/P9 batch pins; P8 mirrors the
  * c32_limit scenario with a batch whose end lands exactly on 2^56.
  *
- * Geometry per the owner probes: region 4096, ring 16, max_file_size 2^20,
+ * Geometry per the owner probes, migrated by CAND-38: region 32768 (the
+ * smallest legal region — was 4096), ring 16, max_file_size 2^20,
  * archivable 1.
  */
 
-#define C32_REGION_SIZE    4096
+#define C32_REGION_SIZE    32768
 #define C32_RING_SIZE      16
 #define C32_MAX_FILE_SIZE  ((int64_t)1 << 20)
 #define C32_POS_LIMIT      ((int64_t)1 << 56)   /* 2^56 */
@@ -1498,8 +1499,8 @@ void test_c32_batch_p6_start_offset_near_limit_append_works(void)
 
 void test_c32_batch_p8_region_boundary_end_offset_legitimate(void)
 {
-    /* Batch mirror of the c32_limit scenario: batch [count=1][len=4088]
-     * [4088 bytes] at 2^56−4096 ends exactly at 2^56 and archives to
+    /* Batch mirror of the c32_limit scenario: batch [count=1][len=32760]
+     * [32760 bytes] at 2^56−32768 ends exactly at 2^56 and archives to
      * start_offset == 2^56. C1's upper bound is 2^56 INCLUSIVE; a 2^56−1
      * bound (mutation M3d) ECORRUPTs this legitimate queue. */
     const char *qn = "mmap_test_ibq_c32_p8";
@@ -1646,6 +1647,43 @@ void test_c32_batch_p9_commit_batch_above_last_written_refused(void)
     mmapq_indexed_batch_appender_close(a);
 }
 
+/* ── CAND-38 pin P1 (batch twin): the geometry rule at create ──────────────
+ * Same rule as the plain queue (see test_indexed_queue.c): region_size <
+ * 32 KB lets max_file_size be a non-multiple of the transposed header
+ * block, and header-file reclaim then deletes live committed headers
+ * (probe audit/claude-CAND-38/hdrloss_batch.c: 992 of the first 2112 live
+ * batches unreadable at 8 KB files). Refused at create with EINVAL. */
+
+void test_c38_batch_create_refuses_region_below_header_block(void)
+{
+    MmapqIndexedBatchQueue *bq = NULL;
+    TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL, mmapq_indexed_batch_queue_create(
+        DIR, "mmap_test_ibq_c38_small", 4096, 16, 1, 8192, 0,
+        TIMEOUT, 0, rt, rt, &bq));
+    TEST_ASSERT_NULL(bq);
+    c32_cleanup("mmap_test_ibq_c38_small");
+
+    /* Region below the block with a BLOCK-ALIGNED file: only the region
+     * rule can refuse this one (mutation M1 discriminates here). */
+    TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL, mmapq_indexed_batch_queue_create(
+        DIR, "mmap_test_ibq_c38_small2", 4096, 16, 1, 32768, 0,
+        TIMEOUT, 0, rt, rt, &bq));
+    TEST_ASSERT_NULL(bq);
+    c32_cleanup("mmap_test_ibq_c38_small2");
+}
+
+void test_c38_batch_create_accepts_non_pow2_file_multiple(void)
+{
+    /* Positive control: 3 x 32 KB files on the smallest legal region. */
+    MmapqIndexedBatchQueue *bq = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create(
+        DIR, "mmap_test_ibq_c38_ok", 32768, 16, 1, 32768LL * 3, 0,
+        TIMEOUT, 0, rt, rt, &bq));
+    TEST_ASSERT_NOT_NULL(bq);
+    mmapq_indexed_batch_queue_close(bq);
+    c32_cleanup("mmap_test_ibq_c38_ok");
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -1692,5 +1730,7 @@ int main(void)
     RUN_TEST(test_c32_batch_p8_region_boundary_end_offset_legitimate);
     RUN_TEST(test_c32_batch_p7_commit_batch_2pow57_refused);
     RUN_TEST(test_c32_batch_p9_commit_batch_above_last_written_refused);
+    RUN_TEST(test_c38_batch_create_refuses_region_below_header_block);
+    RUN_TEST(test_c38_batch_create_accepts_non_pow2_file_multiple);
     return UNITY_END();
 }

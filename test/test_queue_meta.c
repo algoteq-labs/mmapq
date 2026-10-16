@@ -1,5 +1,6 @@
 #include "unity.h"
 #include "internal/queue_meta.h"
+#include "internal/test_hooks.h"
 
 #include <unistd.h>
 #include <stdio.h>
@@ -37,7 +38,7 @@ void tearDown(void)
 
 void test_open_rw_creates_file(void)
 {
-    qmerr = mmapqi_queue_meta_open_rw(DIR, QUEUE, 0, 4096, 4096 * 256, 0, QUEUE_TYPE_NORMAL, &meta);
+    qmerr = mmapqi_queue_meta_open_rw(DIR, QUEUE, 0, 32768, 32768 * 256, 0, QUEUE_TYPE_NORMAL, &meta);
     TEST_ASSERT_EQUAL_INT(0, qmerr);
     TEST_ASSERT_NOT_NULL(meta);
 
@@ -50,22 +51,22 @@ void test_open_rw_creates_file(void)
 
 void test_open_rw_stores_region_size(void)
 {
-    qmerr = mmapqi_queue_meta_open_rw(DIR, QUEUE, 0, 8192, 8192 * 256, 0, QUEUE_TYPE_NORMAL, &meta);
+    qmerr = mmapqi_queue_meta_open_rw(DIR, QUEUE, 0, 65536, 65536 * 256, 0, QUEUE_TYPE_NORMAL, &meta);
     TEST_ASSERT_EQUAL_INT(0, qmerr);
-    TEST_ASSERT_EQUAL_INT32(8192, queue_meta_region_size(meta));
+    TEST_ASSERT_EQUAL_INT32(65536, queue_meta_region_size(meta));
 }
 
 void test_open_rw_stores_max_file_size(void)
 {
-    int64_t mfs = 4096LL * 512;
-    qmerr = mmapqi_queue_meta_open_rw(DIR, QUEUE, 0, 4096, mfs, 0, QUEUE_TYPE_NORMAL, &meta);
+    int64_t mfs = 32768LL * 512;
+    qmerr = mmapqi_queue_meta_open_rw(DIR, QUEUE, 0, 32768, mfs, 0, QUEUE_TYPE_NORMAL, &meta);
     TEST_ASSERT_EQUAL_INT(0, qmerr);
     TEST_ASSERT_EQUAL_INT64(mfs, queue_meta_max_file_size(meta));
 }
 
 void test_open_rw_schema_version(void)
 {
-    qmerr = mmapqi_queue_meta_open_rw(DIR, QUEUE, 0, 4096, 4096 * 256, 0, QUEUE_TYPE_NORMAL, &meta);
+    qmerr = mmapqi_queue_meta_open_rw(DIR, QUEUE, 0, 32768, 32768 * 256, 0, QUEUE_TYPE_NORMAL, &meta);
     TEST_ASSERT_EQUAL_INT(0, qmerr);
     TEST_ASSERT_EQUAL_INT32(QUEUE_META_SCHEMA_VERSION, queue_meta_schema_version(meta));
 }
@@ -80,7 +81,7 @@ void test_open_ro_returns_null_when_missing(void)
 
 void test_open_ro_reads_existing_file(void)
 {
-    int qmerr = mmapqi_queue_meta_open_rw(DIR, QUEUE, 0, 4096, 4096 * 256, 0, QUEUE_TYPE_NORMAL, &meta);
+    int qmerr = mmapqi_queue_meta_open_rw(DIR, QUEUE, 0, 32768, 32768 * 256, 0, QUEUE_TYPE_NORMAL, &meta);
     TEST_ASSERT_EQUAL_INT(0, qmerr);
     mmapqi_queue_meta_close(meta);
     meta = NULL;
@@ -89,49 +90,50 @@ void test_open_ro_reads_existing_file(void)
     int roerr = mmapqi_queue_meta_open_ro(DIR, QUEUE, QUEUE_TYPE_NORMAL, &ro);
     TEST_ASSERT_EQUAL_INT(0, roerr);
     TEST_ASSERT_NOT_NULL(ro);
-    TEST_ASSERT_EQUAL_INT32(4096, queue_meta_region_size(ro));
+    TEST_ASSERT_EQUAL_INT32(32768, queue_meta_region_size(ro));
     mmapqi_queue_meta_close(ro);
 }
 
 void test_start_index_zero_non_archivable(void)
 {
-    qmerr = mmapqi_queue_meta_open_rw(DIR, QUEUE, 0, 4096, 4096 * 256, 0, QUEUE_TYPE_NORMAL, &meta);
+    qmerr = mmapqi_queue_meta_open_rw(DIR, QUEUE, 0, 32768, 32768 * 256, 0, QUEUE_TYPE_NORMAL, &meta);
     TEST_ASSERT_EQUAL_INT(0, qmerr);
     TEST_ASSERT_EQUAL_INT64(0, queue_meta_start_index(meta));
 }
 
 void test_archivable_false(void)
 {
-    qmerr = mmapqi_queue_meta_open_rw(DIR, QUEUE, 0, 4096, 4096 * 256, 0, QUEUE_TYPE_NORMAL, &meta);
+    qmerr = mmapqi_queue_meta_open_rw(DIR, QUEUE, 0, 32768, 32768 * 256, 0, QUEUE_TYPE_NORMAL, &meta);
     TEST_ASSERT_EQUAL_INT(0, qmerr);
     TEST_ASSERT_EQUAL_INT(0, queue_meta_archivable(meta));
 }
 
 void test_reopen_rw_preserves_values(void)
 {
-    qmerr = mmapqi_queue_meta_open_rw(DIR, QUEUE, 0, 4096, 4096 * 256, 0, QUEUE_TYPE_NORMAL, &meta);
+    qmerr = mmapqi_queue_meta_open_rw(DIR, QUEUE, 0, 32768, 32768 * 256, 0, QUEUE_TYPE_NORMAL, &meta);
     TEST_ASSERT_EQUAL_INT(0, qmerr);
     mmapqi_queue_meta_close(meta);
 
     /* Re-open with different params — existing values should be preserved */
-    qmerr = mmapqi_queue_meta_open_rw(DIR, QUEUE, 0, 8192, 8192 * 256, 0, QUEUE_TYPE_NORMAL, &meta);
+    qmerr = mmapqi_queue_meta_open_rw(DIR, QUEUE, 0, 65536, 65536 * 256, 0, QUEUE_TYPE_NORMAL, &meta);
     TEST_ASSERT_EQUAL_INT(0, qmerr);
-    /* File already existed — region_size from file is 4096, not 8192 */
-    TEST_ASSERT_EQUAL_INT32(4096, queue_meta_region_size(meta));
+    /* File already existed — region_size from file is 32768, not 65536 */
+    TEST_ASSERT_EQUAL_INT32(32768, queue_meta_region_size(meta));
 }
 
 /* ── D2: RW size guard + meta_validate geometry checks ───────────────────── */
 
-/* max_file_size 49152 = 12 × 4096 is divisible by the corrupt region_size
- * 12288 (3 × 4096) used below, so each corrupt value trips exactly one
- * geometry check. */
-#define D2_MAX_FILE ((int64_t)49152)
+/* max_file_size 98304 = 3 x 32 KB = 8 x 12288 is divisible by the corrupt
+ * region_size 12288 (3 x 4096) used below, so each corrupt value trips
+ * exactly one geometry check. (CAND-38 migration: was 49152 = 12 x 4096,
+ * now a multiple of the 32 KB header block.) */
+#define D2_MAX_FILE ((int64_t)98304)
 
 static void create_valid_meta(void)
 {
     QueueMeta *m = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapqi_queue_meta_open_rw(
-        DIR, QUEUE, 0, 4096, D2_MAX_FILE, 0, QUEUE_TYPE_NORMAL, &m));
+        DIR, QUEUE, 0, 32768, D2_MAX_FILE, 0, QUEUE_TYPE_NORMAL, &m));
     TEST_ASSERT_NOT_NULL(m);
     mmapqi_queue_meta_close(m);
 }
@@ -166,7 +168,7 @@ void test_rw_meta_open_rejects_truncated_meta(void)
 
     QueueMeta *m = NULL;
     int rc = mmapqi_queue_meta_open_rw(
-        DIR, QUEUE, 0, 4096, D2_MAX_FILE, 0, QUEUE_TYPE_NORMAL, &m);
+        DIR, QUEUE, 0, 32768, D2_MAX_FILE, 0, QUEUE_TYPE_NORMAL, &m);
     TEST_ASSERT_EQUAL_INT(MMAPQ_ENOTREADY, rc);
     TEST_ASSERT_NULL(m);
 }
@@ -218,7 +220,7 @@ void test_open_rw_corrupt_region_size_not_pow2(void)
 
     QueueMeta *m = NULL;
     int rc = mmapqi_queue_meta_open_rw(
-        DIR, QUEUE, 0, 4096, D2_MAX_FILE, 0, QUEUE_TYPE_NORMAL, &m);
+        DIR, QUEUE, 0, 32768, D2_MAX_FILE, 0, QUEUE_TYPE_NORMAL, &m);
     TEST_ASSERT_EQUAL_INT(MMAPQ_ECORRUPT, rc);
     TEST_ASSERT_NULL(m);
 }
@@ -236,7 +238,7 @@ void test_open_rw_caller_region_size_not_pow2_eINVAL(void)
 void test_open_rw_caller_max_file_size_not_multiple_eINVAL(void)
 {
     qmerr = mmapqi_queue_meta_open_rw(
-        DIR, QUEUE, 0, 4096, D2_MAX_FILE + 8, 0, QUEUE_TYPE_NORMAL, &meta);
+        DIR, QUEUE, 0, 32768, D2_MAX_FILE + 8, 0, QUEUE_TYPE_NORMAL, &meta);
     TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL, qmerr);
     TEST_ASSERT_NULL(meta);
 }
@@ -253,7 +255,7 @@ void test_open_valid_geometry_control(void)
     mmapqi_queue_meta_close(ro);
 
     qmerr = mmapqi_queue_meta_open_rw(
-        DIR, QUEUE, 0, 4096, D2_MAX_FILE, 0, QUEUE_TYPE_NORMAL, &meta);
+        DIR, QUEUE, 0, 32768, D2_MAX_FILE, 0, QUEUE_TYPE_NORMAL, &meta);
     TEST_ASSERT_EQUAL_INT(0, qmerr);
     TEST_ASSERT_NOT_NULL(meta);
 }
@@ -338,7 +340,7 @@ void test_open_rw_corrupt_start_index_above_max(void)
 
     QueueMeta *m = NULL;
     int rc = mmapqi_queue_meta_open_rw(
-        DIR, QUEUE, 0, 4096, D2_MAX_FILE, 0, QUEUE_TYPE_NORMAL, &m);
+        DIR, QUEUE, 0, 32768, D2_MAX_FILE, 0, QUEUE_TYPE_NORMAL, &m);
     TEST_ASSERT_EQUAL_INT(MMAPQ_ECORRUPT, rc);
     TEST_ASSERT_NULL(m);
 }
@@ -350,7 +352,7 @@ void test_open_start_index_max_boundary_control(void)
 {
     QueueMeta *m = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapqi_queue_meta_open_rw(
-        DIR, QUEUE, D3_MAX_INDEX, 4096, D2_MAX_FILE, 0, QUEUE_TYPE_NORMAL, &m));
+        DIR, QUEUE, D3_MAX_INDEX, 32768, D2_MAX_FILE, 0, QUEUE_TYPE_NORMAL, &m));
     TEST_ASSERT_NOT_NULL(m);
     mmapqi_queue_meta_close(m);
 
@@ -359,6 +361,106 @@ void test_open_start_index_max_boundary_control(void)
     TEST_ASSERT_NOT_NULL(ro);
     TEST_ASSERT_EQUAL_INT64(D3_MAX_INDEX, queue_meta_start_index(ro));
     mmapqi_queue_meta_close(ro);
+}
+
+/* ── CAND-38 pin P3: pre-rule on-disk geometry is ESCHEMA, not ECORRUPT ────
+ * A meta written before the geometry rule (region 4096, or 16384 with a
+ * file that is not a multiple of the 32 KB header block) describes a queue
+ * this build refuses to run — rejected-by-compatibility, not damaged:
+ * MMAPQ_ESCHEMA on reopen, both open paths. */
+
+void test_c38_open_ro_prerule_region_eschema(void)
+{
+    create_valid_meta();
+    int32_t old = 4096;
+    pwrite_meta_field(&old, sizeof(old), QUEUE_META_REGION_SIZE_OFFSET);
+    /* D2_MAX_FILE stays a multiple of 4096, so ONLY the geometry rule
+     * fires — the ECORRUPT impossible-value checks all pass. */
+    assert_ro_open_rc(MMAPQ_ESCHEMA);
+
+    /* The RW path with legal caller geometry refuses the same disk meta
+     * (disk values win; meta_validate's code propagates). */
+    QueueMeta *m = NULL;
+    int rc = mmapqi_queue_meta_open_rw(
+        DIR, QUEUE, 0, 32768, D2_MAX_FILE, 0, QUEUE_TYPE_NORMAL, &m);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ESCHEMA, rc);
+    TEST_ASSERT_NULL(m);
+}
+
+void test_c38_open_ro_prerule_file_geometry_eschema(void)
+{
+    create_valid_meta();
+    /* region 16384 (power of two, < 32 KB) + file 49152: file % region == 0
+     * but neither the region rule nor the header-block file rule holds. */
+    int32_t old_region = 16384;
+    int64_t old_file   = 49152;
+    pwrite_meta_field(&old_region, sizeof(old_region), QUEUE_META_REGION_SIZE_OFFSET);
+    pwrite_meta_field(&old_file,   sizeof(old_file),   QUEUE_META_MAX_FILE_SIZE_OFFSET);
+    assert_ro_open_rc(MMAPQ_ESCHEMA);
+}
+
+void test_c38_open_current_geometry_control(void)
+{
+    /* Valid post-rule geometry opens on both paths. */
+    create_valid_meta();
+
+    QueueMeta *ro = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapqi_queue_meta_open_ro(DIR, QUEUE, QUEUE_TYPE_NORMAL, &ro));
+    TEST_ASSERT_NOT_NULL(ro);
+    mmapqi_queue_meta_close(ro);
+
+    TEST_ASSERT_EQUAL_INT(0, mmapqi_queue_meta_open_rw(
+        DIR, QUEUE, 0, 32768, D2_MAX_FILE, 0, QUEUE_TYPE_NORMAL, &meta));
+    TEST_ASSERT_NOT_NULL(meta);
+}
+
+/* ── CAND-38 pin P4: the page-size half of the rule uses the RUNTIME page ──
+ * size. region_size 32768 is page-aligned on 4/16 KB-page hosts but not on
+ * a 64 KB-page host; the seam simulates both. A queue is portable only to
+ * hosts whose page size divides its region_size: reopening a 32 KB-region
+ * meta under a simulated 64 KB page is ESCHEMA (platform mismatch, not
+ * corruption). Caller-argument refusal is EINVAL. The hook is disarmed
+ * BEFORE every assertion so a longjmp cannot leak an armed override. */
+
+void test_c38_page_size_seam(void)
+{
+#ifdef MMAPQ_TEST_HOOKS
+    /* Simulated 64 KB-page host: region 32768 is not a page multiple. */
+    mmapq_test_hook_set_page_size(65536);
+    int rc64 = mmapqi_queue_meta_open_rw(
+        DIR, QUEUE, 0, 32768, 98304, 0, QUEUE_TYPE_NORMAL, &meta);
+    mmapq_test_hook_set_page_size(0);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL, rc64);
+    TEST_ASSERT_NULL(meta);
+
+    /* Simulated 16 KB and 4 KB pages: accepted (32768 % 16384 == 0). */
+    mmapq_test_hook_set_page_size(16384);
+    int rc16 = mmapqi_queue_meta_open_rw(
+        DIR, QUEUE, 0, 32768, 98304, 0, QUEUE_TYPE_NORMAL, &meta);
+    mmapq_test_hook_set_page_size(0);
+    TEST_ASSERT_EQUAL_INT(0, rc16);
+    TEST_ASSERT_NOT_NULL(meta);
+    mmapqi_queue_meta_close(meta); meta = NULL;
+
+    /* meta_validate path: the 32 KB-region meta on disk, reopened under a
+     * simulated 64 KB page, is a platform mismatch — ESCHEMA. */
+    mmapq_test_hook_set_page_size(65536);
+    QueueMeta *ro = NULL;
+    int rcro = mmapqi_queue_meta_open_ro(DIR, QUEUE, QUEUE_TYPE_NORMAL, &ro);
+    mmapq_test_hook_set_page_size(0);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ESCHEMA, rcro);
+    TEST_ASSERT_NULL(ro);
+
+    /* And still opens with the real (4 KB) page size once disarmed. */
+    ro = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapqi_queue_meta_open_ro(DIR, QUEUE, QUEUE_TYPE_NORMAL, &ro));
+    TEST_ASSERT_NOT_NULL(ro);
+    mmapqi_queue_meta_close(ro);
+#else
+    TEST_IGNORE_MESSAGE("needs MMAPQ_TEST_HOOKS (normal-loop build only)");
+#endif
 }
 
 int main(void)
@@ -387,5 +489,9 @@ int main(void)
     RUN_TEST(test_open_ro_corrupt_start_index_negative);
     RUN_TEST(test_open_rw_corrupt_start_index_above_max);
     RUN_TEST(test_open_start_index_max_boundary_control);
+    RUN_TEST(test_c38_open_ro_prerule_region_eschema);
+    RUN_TEST(test_c38_open_ro_prerule_file_geometry_eschema);
+    RUN_TEST(test_c38_open_current_geometry_control);
+    RUN_TEST(test_c38_page_size_seam);
     return UNITY_END();
 }

@@ -41,10 +41,15 @@ typedef struct MmapqIndexedBatchQueue MmapqIndexedBatchQueue;
  *
  * directory:          path to the directory for queue files
  * queue_name:         logical name of the queue
- * region_size:        payload region size in bytes (power of 2)
+ * region_size:        payload region size in bytes: power of 2 and a
+ *                     multiple of 32 KB (one transposed header block), and a
+ *                     multiple of the OS page size (CAND-38 geometry rule —
+ *                     see mmapq_indexed_queue_create)
  * ring_size:          number of simultaneously mapped regions
  * regions_to_map_ahead: number of regions to pre-map in the background (0 = sync mode)
- * max_file_size:      maximum size of a single rolled payload file
+ * max_file_size:      maximum size of a single rolled payload file (a
+ *                     multiple of region_size, therefore of the 32 KB
+ *                     header block)
  * start_index:        initial batch index (typically 0; must be in
  *                     [0, 2^56 - 1])
  * timeout_ns:         region-mapping timeout in nanoseconds

@@ -82,10 +82,16 @@ typedef struct MmapqIndexedQueue MmapqIndexedQueue;
  *
  * directory:          base directory (e.g. "/data/queues")
  * queue_name:         name of the queue (becomes a subdirectory)
- * region_size:        preferred region size (used ONLY if creating a new queue)
+ * region_size:        preferred region size (used ONLY if creating a new queue).
+ *                     Power of two and a multiple of 32 KB (one transposed
+ *                     header block), and a multiple of the OS page size —
+ *                     header-file reclaim relies on whole blocks per file, and
+ *                     region mmap offsets must stay page-aligned (CAND-38 rule)
  * ring_size:          regions in the ring (power of two, typically 4)
  * regions_to_map_ahead: premap count (typically 1)
- * max_file_size:      preferred maximum file size (used ONLY if creating new)
+ * max_file_size:      preferred maximum file size (used ONLY if creating new).
+ *                     A multiple of region_size (and therefore of the 32 KB
+ *                     header block)
  * start_index:        initial start index (used ONLY if creating new;
  *                     must be in [0, 2^56 - 1])
  * timeout_ns:         mapping timeout in nanoseconds

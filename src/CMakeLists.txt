@@ -11,6 +11,7 @@ add_library(mmapq STATIC
     region_ring_accessor.c
     fixed_size_region.c
     runtime.c
+    platform.c
     # Queue layer
     queue_meta.c
     appender_meta.c

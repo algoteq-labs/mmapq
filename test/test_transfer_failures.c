@@ -105,7 +105,7 @@ static void exercise(int batch_source, int batch_destination, enum Fault selecte
     MmapqIndexedBatchReader *batch_reader = NULL;
     const char *directory = "/tmp/mmapq-transfer-fault";
     if (batch_source) {
-        TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create(directory, "source", 4096, 16, 1, 4096 * 64, 0, 1000000000, 0, NULL, NULL, &batch));
+        TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create(directory, "source", 32768, 16, 1, 32768 * 8, 0, 1000000000, 0, NULL, NULL, &batch));
         for (int index = 0; index < 3; index++) {
             MmapqIndexedBatchAppender *appender = NULL;
             TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender_with_id(batch, (uint8_t)index, &appender));
@@ -114,7 +114,7 @@ static void exercise(int batch_source, int batch_destination, enum Fault selecte
         }
         TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_reader(batch, &batch_reader));
     } else {
-        TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create(directory, "source", 4096, 16, 1, 4096 * 64, 0, 1000000000, 0, NULL, NULL, &normal));
+        TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create(directory, "source", 32768, 16, 1, 32768 * 8, 0, 1000000000, 0, NULL, NULL, &normal));
         for (int index = 0; index < 3; index++) {
             MmapqIndexedAppender *appender = NULL;
             TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender_with_id(normal, (uint8_t)index, &appender));
@@ -160,7 +160,7 @@ static void exercise(int batch_source, int batch_destination, enum Fault selecte
     if (batch_destination) {
         MmapqIndexedBatchQueue *destination = NULL;
         MmapqIndexedBatchReader *reader = NULL;
-        TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create(directory, "destination", 4096, 16, 1, 4096 * 64, 0, 1000000000, 0, NULL, NULL, &destination));
+        TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create(directory, "destination", 32768, 16, 1, 32768 * 8, 0, 1000000000, 0, NULL, NULL, &destination));
         TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_reader(destination, &reader));
         TEST_ASSERT_EQUAL_INT64(fail_at - 2, mmapq_indexed_batch_reader_last_index(reader));
         MmapqIndexedBatchAppender *appender = NULL;
@@ -172,7 +172,7 @@ static void exercise(int batch_source, int batch_destination, enum Fault selecte
     } else {
         MmapqIndexedQueue *destination = NULL;
         MmapqIndexedReader *reader = NULL;
-        TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create(directory, "destination", 4096, 16, 1, 4096 * 64, 0, 1000000000, 0, NULL, NULL, &destination));
+        TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create(directory, "destination", 32768, 16, 1, 32768 * 8, 0, 1000000000, 0, NULL, NULL, &destination));
         TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_reader(destination, &reader));
         TEST_ASSERT_EQUAL_INT64(fail_at - 2, mmapq_indexed_reader_last_index(reader));
         MmapqIndexedAppender *appender = NULL;
@@ -215,7 +215,7 @@ static void test_chunk_export_does_not_serialize_context_padding(void)
     MmapqIndexedQueue *queue = NULL;
     MmapqIndexedAppender *appender = NULL;
     MmapqIndexedReader *reader = NULL;
-    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create(directory, "source", 4096, 16, 1, 4096 * 64, 0, 1000000000, 0, NULL, NULL, &queue));
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create(directory, "source", 32768, 16, 1, 32768 * 8, 0, 1000000000, 0, NULL, NULL, &queue));
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender_with_id(queue, 7, &appender));
     TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_appender_append(appender, "data", 4));
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_reader(queue, &reader));
@@ -274,7 +274,7 @@ static void exercise_export_counts(int batch_source, int chunked, int mode)
     MmapqIndexedBatchReader *batch_reader = NULL;
     if (batch_source) {
         MmapqIndexedBatchAppender *appender = NULL;
-        TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create(directory, "source", 4096, 16, 1, 4096 * 64, 0, 1000000000, 1, NULL, NULL, &batch));
+        TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create(directory, "source", 32768, 16, 1, 32768 * 8, 0, 1000000000, 1, NULL, NULL, &batch));
         TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender_with_id(batch, 0, &appender));
         for (int index = 0; index < 3; index++) {
             MmapqMutableBatch *pending = NULL;
@@ -288,7 +288,7 @@ static void exercise_export_counts(int batch_source, int chunked, int mode)
         TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_reader(batch, &batch_reader));
     } else {
         MmapqIndexedAppender *appender = NULL;
-        TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create(directory, "source", 4096, 16, 1, 4096 * 64, 0, 1000000000, 1, NULL, NULL, &normal));
+        TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create(directory, "source", 32768, 16, 1, 32768 * 8, 0, 1000000000, 1, NULL, NULL, &normal));
         TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender_with_id(normal, 0, &appender));
         for (int index = 0; index < 3; index++)
             TEST_ASSERT_EQUAL_INT64(index, mmapq_indexed_appender_append(appender, "data", 4));
@@ -328,7 +328,7 @@ static void exercise_export_counts(int batch_source, int chunked, int mode)
         if (batch_source) {
             MmapqIndexedBatchQueue *destination = NULL;
             MmapqIndexedBatchReader *reader = NULL;
-            TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create(directory, "destination", 4096, 16, 1, 4096 * 64, 0, 1000000000, 0, NULL, NULL, &destination));
+            TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create(directory, "destination", 32768, 16, 1, 32768 * 8, 0, 1000000000, 0, NULL, NULL, &destination));
             TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_reader(destination, &reader));
             for (int index = 0; index < 3; index++) {
                 MmapqBatchReadingContext context;
@@ -350,7 +350,7 @@ static void exercise_export_counts(int batch_source, int chunked, int mode)
         } else {
             MmapqIndexedQueue *destination = NULL;
             MmapqIndexedReader *reader = NULL;
-            TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create(directory, "destination", 4096, 16, 1, 4096 * 64, 0, 1000000000, 0, NULL, NULL, &destination));
+            TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create(directory, "destination", 32768, 16, 1, 32768 * 8, 0, 1000000000, 0, NULL, NULL, &destination));
             TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_reader(destination, &reader));
             for (int index = 0; index < 3; index++) {
                 MmapqReadingContext context;
@@ -425,7 +425,7 @@ static void exercise_empty_export(int batch_source, int populated, int after, in
     MmapqIndexedBatchReader *batch_reader = NULL;
     if (batch_source) {
         MmapqIndexedBatchAppender *appender = NULL;
-        TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create(directory, "source", 4096, 16, 1, 4096 * 64, initial_index, 1000000000, 1, NULL, NULL, &batch));
+        TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create(directory, "source", 32768, 16, 1, 32768 * 8, initial_index, 1000000000, 1, NULL, NULL, &batch));
         TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender_with_id(batch, 0, &appender));
         for (int index = 0; index < (populated ? 3 : 0); index++)
             TEST_ASSERT_EQUAL_INT64(initial_index + index, mmapq_indexed_batch_appender_append_and_commit(appender, "data", 4));
@@ -433,7 +433,7 @@ static void exercise_empty_export(int batch_source, int populated, int after, in
         TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_reader(batch, &batch_reader));
     } else {
         MmapqIndexedAppender *appender = NULL;
-        TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create(directory, "source", 4096, 16, 1, 4096 * 64, initial_index, 1000000000, 1, NULL, NULL, &normal));
+        TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create(directory, "source", 32768, 16, 1, 32768 * 8, initial_index, 1000000000, 1, NULL, NULL, &normal));
         TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender_with_id(normal, 0, &appender));
         for (int index = 0; index < (populated ? 3 : 0); index++)
             TEST_ASSERT_EQUAL_INT64(initial_index + index, mmapq_indexed_appender_append(appender, "data", 4));
@@ -468,8 +468,8 @@ static void exercise_empty_export(int batch_source, int populated, int after, in
     TEST_ASSERT_EQUAL_UINT64(EXPORT_META_SIZE, header_bytes);
     TEST_ASSERT_EQUAL_INT64(0, meta.total_entries);
     TEST_ASSERT_EQUAL_INT(1, meta.schema_version);
-    TEST_ASSERT_EQUAL_INT(4096, meta.region_size);
-    TEST_ASSERT_EQUAL_INT64(4096 * 64, meta.max_file_size);
+    TEST_ASSERT_EQUAL_INT(32768, meta.region_size);
+    TEST_ASSERT_EQUAL_INT64(32768 * 8, meta.max_file_size);
     TEST_ASSERT_EQUAL_INT(1, meta.archivable);
     TEST_ASSERT_EQUAL_INT(batch_source ? 2 : 0, meta.queue_type);
     TEST_ASSERT_EQUAL_INT64(preserve ? (start > initial_index ? start : initial_index) : 0, meta.start_index);

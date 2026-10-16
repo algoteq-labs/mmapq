@@ -35,6 +35,22 @@ static const int64_t  MAX_FILE  = (int64_t)4096 * 16 * 64;
 static const int      RING_SZ   = 4;
 static const uint64_t TIMEOUT   = 5000000000ULL;
 
+/* Tiny archivable geometry for the CAND-28/30/35/36/37 pins: 32 KiB
+ * regions, 32 KiB files — one 32 KB header block per file, the smallest
+ * legal geometry since CAND-38 (the pre-rule probes used 4 KiB). A big
+ * payload fills file 0 leaving 28 bytes (a long padding is written), so
+ * the next payload rolls to file 1. */
+#define TINY_REGION   32768
+#define TINY_FILE     32768
+#define TINY_BIG_LEN  (TINY_FILE - INITIAL_PAYLOAD_POSITION - PAYLOAD_LENGTH_SIZE - 28)
+/* Exact layout at the tiny geometry: A @64 ends at TINY_A_END, B rolls to
+ * file 1 (@TINY_B_START) and ends at TINY_B_END, Z (50 B) ends TINY_Z_END. */
+#define TINY_A_END    ((int64_t)TINY_FILE - 28)                          /* 32740 */
+#define TINY_B_START  ((int64_t)TINY_FILE)                               /* 32768 */
+#define TINY_B_END    ((int64_t)TINY_FILE + PAYLOAD_LENGTH_SIZE + 100)   /* 32872 */
+#define TINY_Z_END    (TINY_B_END + PAYLOAD_LENGTH_SIZE + 50)            /* 32926 */
+
+
 static MmapqRuntime *rt = NULL;
 
 static void cleanup(void)
@@ -735,28 +751,35 @@ void test_file_index_set_overflow_returns_zero(void)
 /* CAND-28 owner-review pin: a one-index undo whose file numbers are >=
  * FILE_INDEX_SET_MAX must succeed — the FileIndexSet records a SPAN
  * relative to the first file in the undo range, so a narrow undo high in
- * the file numbering is servable. With 4 KiB files (512 headers each),
- * index 2^21 sits in header file 4096; the absolute-indexed set refused
- * this undo with EINVAL (owner probe: the same undo returned 0 on the D3
- * tree). */
+ * the file numbering is servable. With 32 KiB files (4096 headers each),
+ * header file 4096 starts at index 4096*4096; the queue is created with
+ * start_index = S so two appends reach it (CAND-38 migration: the pre-rule
+ * 4 KiB-file version appended all S+2 entries — the boundary being pinned
+ * is the FILE NUMBER, not the append count). The absolute-indexed set
+ * refused this undo with EINVAL (owner probe: the same undo returned 0 on
+ * the D3 tree). */
 void test_archiver_undo_one_index_at_header_file_4096(void)
 {
-    const int64_t S = (int64_t)512 * 4096;  /* first index of header file 4096 */
+    const int64_t S = (int64_t)4096 * 4096;  /* first index of header file 4096 */
+
+    /* Boundary reach: the undo's file number really is >= FILE_INDEX_SET_MAX */
+    TEST_ASSERT_GREATER_OR_EQUAL_INT64(FILE_INDEX_SET_MAX,
+        (S + 1) / (TINY_FILE / HEADER_SIZE));
 
     char dir_path[512];
     snprintf(dir_path, sizeof(dir_path), "%s/%s", DIR, QUEUE);
     mkdir(dir_path, 0775);
     QueueMeta *m = NULL;
-    TEST_ASSERT_EQUAL_INT(0, mmapqi_queue_meta_open_rw(DIR, QUEUE, 0,
-        4096, 4096, /* archivable= */ 1, QUEUE_TYPE_NORMAL, &m));
+    TEST_ASSERT_EQUAL_INT(0, mmapqi_queue_meta_open_rw(DIR, QUEUE, S,
+        TINY_REGION, TINY_FILE, /* archivable= */ 1, QUEUE_TYPE_NORMAL, &m));
     TEST_ASSERT_NOT_NULL(m);
     mmapqi_queue_meta_close(m);
 
     MmapqIndexedAppender *a = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_appender_create(DIR, QUEUE,
-        4096, 4, 4096, TIMEOUT, 0, rt, 0, &a));
+        TINY_REGION, 4, TINY_FILE, TIMEOUT, 0, rt, S, &a));
     TEST_ASSERT_NOT_NULL(a);
-    for (int64_t i = 0; i < S + 2; i++)
+    for (int64_t i = S; i < S + 2; i++)
         TEST_ASSERT_EQUAL_INT64(i, mmapq_indexed_appender_append(a, "u", 1));
     mmapq_indexed_appender_close(a);
 
@@ -780,8 +803,8 @@ void test_archiver_undo_one_index_at_header_file_4096(void)
  * per-appender payload positions do NOT ascend with index. A narrow undo
  * must still succeed: the FileIndexSet records any window of
  * FILE_INDEX_SET_MAX consecutive file numbers regardless of arrival order.
- * Region = file = 4 KiB: A (4000 B) fills payload file 0 to offset 4068,
- * so B (100 B) rolls to file 1. Commit B -> idx 0, then A -> idx 1;
+ * Region = file = 32 KiB: A fills payload file 0 leaving 28 bytes (long
+ * padding), so B (100 B) rolls to file 1. Commit B -> idx 0, then A -> idx 1;
  * forward(2), undo(0): the payload set records file 1 first, then file 0
  * below the base. Owner probe: 0 on the D3 tree and the first CAND-28
  * tree; ECORRUPT on the relative-base tree without downward rebase.
@@ -794,16 +817,16 @@ void test_archiver_undo_with_resequenced_commits(void)
     mkdir(dir_path, 0775);
     QueueMeta *m = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapqi_queue_meta_open_rw(DIR, QUEUE, 0,
-        4096, 4096, /* archivable= */ 1, QUEUE_TYPE_NORMAL, &m));
+        TINY_REGION, TINY_FILE, /* archivable= */ 1, QUEUE_TYPE_NORMAL, &m));
     TEST_ASSERT_NOT_NULL(m);
     mmapqi_queue_meta_close(m);
 
     MmapqIndexedAppender *a = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_appender_create(DIR, QUEUE,
-        4096, 4, 4096, TIMEOUT, 0, rt, 0, &a));
+        TINY_REGION, 4, TINY_FILE, TIMEOUT, 0, rt, 0, &a));
     TEST_ASSERT_NOT_NULL(a);
 
-    char payload_a[4000];
+    char payload_a[TINY_BIG_LEN];
     memset(payload_a, 'A', sizeof(payload_a));
     char payload_b[100];
     memset(payload_b, 'B', sizeof(payload_b));
@@ -813,7 +836,7 @@ void test_archiver_undo_with_resequenced_commits(void)
     TEST_ASSERT_EQUAL_INT64(INITIAL_PAYLOAD_POSITION, off_a);
     int64_t off_b = mmapq_indexed_appender_append_uncommitted(
         a, payload_b, (int32_t)sizeof(payload_b));
-    TEST_ASSERT_EQUAL_INT64(4096, off_b);  /* rolled to payload file 1 */
+    TEST_ASSERT_EQUAL_INT64(TINY_B_START, off_b);  /* rolled to payload file 1 */
 
     /* Resequenced commit: B first, then A */
     TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_appender_commit(a, off_b));
@@ -852,13 +875,15 @@ void test_archiver_undo_with_resequenced_commits(void)
 }
 
 /* ── CAND-30 pins (archiving vs resequenced/uncommitted payloads) ────────── */
-/* Geometry for all CAND-30 pins: 4 KiB regions, 4 KiB files, archivable —
- * matches the reviewer probes (S1/S2/T1/T2/P12). */
-
-/* Mirrors the appender's padding rule at region == file == 4096. */
+/* Geometry for all CAND-30 pins: 32 KiB regions, 32 KiB files (one 32 KB
+ * header block per file — the smallest legal geometry since CAND-38; the
+ * pre-rule probes used 4 KiB), archivable — structure matches the reviewer
+ * probes (S1/S2/T1/T2/P12): a big payload fills file 0 leaving 28 bytes (a
+ * long padding is written), so the next payload rolls to file 1. */
+/* Mirrors the appender's padding rule at region == file == TINY_FILE. */
 static int64_t record_end(int64_t pos, int32_t len)
 {
-    int64_t cap = 4096 - (pos % 4096);
+    int64_t cap = TINY_FILE - (pos % TINY_FILE);
     if (cap < (int64_t)(PAYLOAD_LENGTH_SIZE + len)) pos += cap;
     return pos + PAYLOAD_LENGTH_SIZE + len;
 }
@@ -870,12 +895,12 @@ static MmapqIndexedAppender *tiny_archivable_appender(void)
     mkdir(dir_path, 0775);
     QueueMeta *m = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapqi_queue_meta_open_rw(DIR, QUEUE, 0,
-        4096, 4096, /* archivable= */ 1, QUEUE_TYPE_NORMAL, &m));
+        TINY_REGION, TINY_FILE, /* archivable= */ 1, QUEUE_TYPE_NORMAL, &m));
     TEST_ASSERT_NOT_NULL(m);
     mmapqi_queue_meta_close(m);
     MmapqIndexedAppender *a = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_appender_create(DIR, QUEUE,
-        4096, 4, 4096, TIMEOUT, 0, rt, 0, &a));
+        TINY_REGION, 4, TINY_FILE, TIMEOUT, 0, rt, 0, &a));
     TEST_ASSERT_NOT_NULL(a);
     return a;
 }
@@ -914,7 +939,7 @@ static void free_paths(char **paths, int n)
  * fails after deleting it (owner probe). */
 void test_archiver_resequenced_live_payload_not_listed(void)
 {
-    char payload_a[4000]; memset(payload_a, 'A', sizeof(payload_a));
+    char payload_a[TINY_BIG_LEN]; memset(payload_a, 'A', sizeof(payload_a));
     char payload_b[100];  memset(payload_b, 'B', sizeof(payload_b));
     char payload_c[50];   memset(payload_c, 'C', sizeof(payload_c));
 
@@ -922,7 +947,7 @@ void test_archiver_resequenced_live_payload_not_listed(void)
     int64_t off_a = mmapq_indexed_appender_append_uncommitted(a, payload_a, (int32_t)sizeof(payload_a));
     TEST_ASSERT_EQUAL_INT64(INITIAL_PAYLOAD_POSITION, off_a);
     int64_t off_b = mmapq_indexed_appender_append_uncommitted(a, payload_b, (int32_t)sizeof(payload_b));
-    TEST_ASSERT_EQUAL_INT64(4096, off_b);
+    TEST_ASSERT_EQUAL_INT64(TINY_B_START, off_b);
     TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_appender_commit(a, off_b));
     TEST_ASSERT_EQUAL_INT64(1, mmapq_indexed_appender_commit(a, off_a));
     TEST_ASSERT_EQUAL_INT64(2, mmapq_indexed_appender_append(a, payload_c, (int32_t)sizeof(payload_c)));
@@ -931,7 +956,7 @@ void test_archiver_resequenced_live_payload_not_listed(void)
     MmapqIndexedArchiver *arch = tiny_archiver();
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_archiver_archive_up_to_index(arch, 1));
 
-    /* Boundary must not pass A's live payload at 64 (pre-fix: 4200) */
+    /* Boundary must not pass A's live payload at 64 (pre-fix: TINY_B_END) */
     TEST_ASSERT_LESS_OR_EQUAL_INT64(INITIAL_PAYLOAD_POSITION,
         arch_start_offset(arch, 0));
 
@@ -959,7 +984,7 @@ void test_archiver_resequenced_live_payload_not_listed(void)
  * as idx 1; its file was already listed). */
 void test_commit_overtaken_payload_rejected(void)
 {
-    char payload_a[4000]; memset(payload_a, 'A', sizeof(payload_a));
+    char payload_a[TINY_BIG_LEN]; memset(payload_a, 'A', sizeof(payload_a));
     char payload_b[100];  memset(payload_b, 'B', sizeof(payload_b));
 
     MmapqIndexedAppender *a = tiny_archivable_appender();
@@ -984,17 +1009,17 @@ void test_commit_overtaken_payload_rejected(void)
 
 /* P3: undo lowers the boundary to the lowest restored payload and never
  * raises it. Pre-fix: undo takes the FIRST restored position and blind-stores
- * it — here raising 4068 (post-forward) to 4096. */
+ * it — here raising TINY_A_END (post-forward) to TINY_B_START. */
 void test_archiver_undo_never_raises_start_offset(void)
 {
-    char payload_a[4000]; memset(payload_a, 'A', sizeof(payload_a));
+    char payload_a[TINY_BIG_LEN]; memset(payload_a, 'A', sizeof(payload_a));
     char payload_b[100];  memset(payload_b, 'B', sizeof(payload_b));
 
     MmapqIndexedAppender *a = tiny_archivable_appender();
     int64_t off_a = mmapq_indexed_appender_append_uncommitted(a, payload_a, (int32_t)sizeof(payload_a));
     TEST_ASSERT_EQUAL_INT64(INITIAL_PAYLOAD_POSITION, off_a);
     int64_t off_b = mmapq_indexed_appender_append_uncommitted(a, payload_b, (int32_t)sizeof(payload_b));
-    TEST_ASSERT_EQUAL_INT64(4096, off_b);
+    TEST_ASSERT_EQUAL_INT64(TINY_B_START, off_b);
     TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_appender_commit(a, off_b));
     TEST_ASSERT_EQUAL_INT64(1, mmapq_indexed_appender_commit(a, off_a));
     mmapq_indexed_appender_close(a);
@@ -1003,9 +1028,9 @@ void test_archiver_undo_never_raises_start_offset(void)
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_archiver_archive_up_to_index(arch, 2));
     int64_t after_forward = arch_start_offset(arch, 0);
     /* Exact value: the candidate is the end of the MAXIMUM-POSITION archived
-     * entry (B ends at 4200), not the highest-index one (A ends at 4068) —
-     * this is what catches mutation M1. */
-    TEST_ASSERT_EQUAL_INT64(4200, after_forward);
+     * entry (B ends at TINY_B_END), not the highest-index one (A ends at
+     * TINY_A_END) — this is what catches mutation M1. */
+    TEST_ASSERT_EQUAL_INT64(TINY_B_END, after_forward);
 
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_archiver_archive_up_to_index(arch, 0));
     int64_t after_undo = arch_start_offset(arch, 0);
@@ -1029,11 +1054,11 @@ void test_appender_rejoin_over_abandoned_payload(void)
     mkdir(dir_path, 0775);
     QueueMeta *m = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapqi_queue_meta_open_rw(DIR, QUEUE, 0,
-        4096, 4096, /* archivable= */ 1, QUEUE_TYPE_NORMAL, &m));
+        TINY_REGION, TINY_FILE, /* archivable= */ 1, QUEUE_TYPE_NORMAL, &m));
     mmapqi_queue_meta_close(m);
 
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_appender_create_with_id(DIR, QUEUE,
-        4096, 4, 4096, TIMEOUT, 0, rt, 0, 0, &a0));
+        TINY_REGION, 4, TINY_FILE, TIMEOUT, 0, rt, 0, 0, &a0));
     int64_t off_a = mmapq_indexed_appender_append_uncommitted(a0, payload_a, (int32_t)sizeof(payload_a));
     TEST_ASSERT_EQUAL_INT64(INITIAL_PAYLOAD_POSITION, off_a);
     /* abandoned — never committed */
@@ -1041,7 +1066,7 @@ void test_appender_rejoin_over_abandoned_payload(void)
 
     MmapqIndexedAppender *a1 = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_appender_create_with_id(DIR, QUEUE,
-        4096, 4, 4096, TIMEOUT, 0, rt, 1, 0, &a1));
+        TINY_REGION, 4, TINY_FILE, TIMEOUT, 0, rt, 1, 0, &a1));
     TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_appender_append(a1, "B-live", 6));
     mmapq_indexed_appender_close(a1);
 
@@ -1052,7 +1077,7 @@ void test_appender_rejoin_over_abandoned_payload(void)
     /* Rejoin a0: no committed entry anywhere — must walk from start_offset */
     MmapqIndexedAppender *r1 = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_appender_create_with_id(DIR, QUEUE,
-        4096, 4, 4096, TIMEOUT, 0, rt, 0, 0, &r1));
+        TINY_REGION, 4, TINY_FILE, TIMEOUT, 0, rt, 0, 0, &r1));
     TEST_ASSERT_EQUAL_INT64(1, mmapq_indexed_appender_append(r1, "Zshort", 6));
     TEST_ASSERT_EQUAL_INT64(2, mmapq_indexed_appender_append(r1, "W", 1));
     mmapq_indexed_appender_close(r1);
@@ -1060,7 +1085,7 @@ void test_appender_rejoin_over_abandoned_payload(void)
     /* Second rejoin must recover cleanly (pre-fix: ECORRUPT) */
     MmapqIndexedAppender *r2 = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_appender_create_with_id(DIR, QUEUE,
-        4096, 4, 4096, TIMEOUT, 0, rt, 0, 0, &r2));
+        TINY_REGION, 4, TINY_FILE, TIMEOUT, 0, rt, 0, 0, &r2));
     mmapq_indexed_appender_close(r2);
 
     MmapqIndexedReader *rd = NULL;
@@ -1091,7 +1116,9 @@ void test_appender_join_fresh_queue(void)
  * highest-index computation exactly. Multi-file so rolling is exercised. */
 void test_archiver_in_order_boundary_unchanged(void)
 {
-    char msg[1000]; memset(msg, 'm', sizeof(msg));
+    /* 4000 B x 10 = 40 KB > 32 KiB file: rolling stays exercised (CAND-38
+     * migration: was 1000 B at 4 KiB files). */
+    char msg[4000]; memset(msg, 'm', sizeof(msg));
     MmapqIndexedAppender *a = tiny_archivable_appender();
     for (int i = 0; i < 10; i++)
         TEST_ASSERT_EQUAL_INT64(i, mmapq_indexed_appender_append(a, msg, (int32_t)sizeof(msg)));
@@ -1119,28 +1146,30 @@ void test_archiver_crash_tail_reclamation(void)
     /* crash tail — never committed */
     mmapq_indexed_appender_close(a);
 
-    /* Restart: the join walks past the dead payload */
+    /* Restart: the join walks past the dead payload. 5 + 1 + 65 = 71 records
+     * of ~1 KB ≈ 71 KB: two full 32 KiB files below the boundary (CAND-38
+     * migration: was 26 records at 4 KiB files). */
     MmapqIndexedAppender *a2 = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_appender_create(DIR, QUEUE,
-        4096, 4, 4096, TIMEOUT, 0, rt, 0, &a2));
-    for (int i = 5; i < 25; i++)
+        TINY_REGION, 4, TINY_FILE, TIMEOUT, 0, rt, 0, &a2));
+    for (int i = 5; i < 70; i++)
         TEST_ASSERT_EQUAL_INT64(i, mmapq_indexed_appender_append(a2, msg, (int32_t)sizeof(msg)));
     mmapq_indexed_appender_close(a2);
 
     int64_t expected = INITIAL_PAYLOAD_POSITION;
-    for (int i = 0; i < 26; i++) expected = record_end(expected, (int32_t)sizeof(msg));
+    for (int i = 0; i < 71; i++) expected = record_end(expected, (int32_t)sizeof(msg));
 
     MmapqIndexedArchiver *arch = tiny_archiver();
-    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_archiver_archive_up_to_index(arch, 25));
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_archiver_archive_up_to_index(arch, 70));
     TEST_ASSERT_EQUAL_INT64(expected, arch_start_offset(arch, 0));
 
-    int64_t files_below = expected / 4096;
+    int64_t files_below = expected / TINY_FILE;
     TEST_ASSERT_GREATER_OR_EQUAL_INT64(2, files_below);
     char *paths[64] = {0};
     int n = mmapq_indexed_archiver_archivable_files(arch, paths, 64);
     TEST_ASSERT_GREATER_OR_EQUAL(0, n);
     /* Every payload file below the boundary's file is listed, including the
-     * one holding the dead payload (file 1) */
+     * one holding the dead payload (file 0) */
     for (int64_t f = 0; f < files_below; f++) {
         char suffix[64];
         snprintf(suffix, sizeof(suffix), "payload_0_%lld", (long long)f);
@@ -1157,31 +1186,34 @@ void test_archiver_crash_tail_reclamation(void)
  * the archived header, walks from the deleted payload → ECORRUPT. */
 void test_appender_rejoin_after_payload_file_deleted(void)
 {
-    char big[4028]; memset(big, 'Z', sizeof(big));
+    /* Sized to end exactly at the file end: [64, TINY_FILE) (CAND-38
+     * migration: was 4028 at 4 KiB files). */
+    char big[TINY_FILE - INITIAL_PAYLOAD_POSITION - PAYLOAD_LENGTH_SIZE];
+    memset(big, 'Z', sizeof(big));
     char dir_path[512];
     snprintf(dir_path, sizeof(dir_path), "%s/%s", DIR, QUEUE);
     mkdir(dir_path, 0775);
     QueueMeta *m = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapqi_queue_meta_open_rw(DIR, QUEUE, 0,
-        4096, 4096, /* archivable= */ 1, QUEUE_TYPE_NORMAL, &m));
+        TINY_REGION, TINY_FILE, /* archivable= */ 1, QUEUE_TYPE_NORMAL, &m));
     mmapqi_queue_meta_close(m);
 
     MmapqIndexedAppender *a0 = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_appender_create_with_id(DIR, QUEUE,
-        4096, 4, 4096, TIMEOUT, 0, rt, 0, 0, &a0));
-    /* [64, 64+4+4028) = [64, 4096) — ends exactly at the file end */
+        TINY_REGION, 4, TINY_FILE, TIMEOUT, 0, rt, 0, 0, &a0));
+    /* [64, 64+4+sizeof(big)) = [64, TINY_FILE) — ends exactly at the file end */
     TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_appender_append(a0, big, (int32_t)sizeof(big)));
     mmapq_indexed_appender_close(a0);
 
     MmapqIndexedAppender *a1 = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_appender_create_with_id(DIR, QUEUE,
-        4096, 4, 4096, TIMEOUT, 0, rt, 1, 0, &a1));
+        TINY_REGION, 4, TINY_FILE, TIMEOUT, 0, rt, 1, 0, &a1));
     TEST_ASSERT_EQUAL_INT64(1, mmapq_indexed_appender_append(a1, "live", 4));
     mmapq_indexed_appender_close(a1);
 
     MmapqIndexedArchiver *arch = tiny_archiver();
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_archiver_archive_up_to_index(arch, 1));
-    TEST_ASSERT_EQUAL_INT64(4096, arch_start_offset(arch, 0));
+    TEST_ASSERT_EQUAL_INT64(TINY_FILE, arch_start_offset(arch, 0));
 
     char *paths[64] = {0};
     int n = mmapq_indexed_archiver_archivable_files(arch, paths, 64);
@@ -1193,10 +1225,10 @@ void test_appender_rejoin_after_payload_file_deleted(void)
 
     /* Rejoin a0: its only entry is archived and its payload file is gone.
      * The bounded scan finds no live entry; the join walks from
-     * start_offset = 4096 — the end of the stream. Pre-fix: ECORRUPT. */
+     * start_offset = TINY_FILE — the end of the stream. Pre-fix: ECORRUPT. */
     MmapqIndexedAppender *r1 = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_appender_create_with_id(DIR, QUEUE,
-        4096, 4, 4096, TIMEOUT, 0, rt, 0, 0, &r1));
+        TINY_REGION, 4, TINY_FILE, TIMEOUT, 0, rt, 0, 0, &r1));
     TEST_ASSERT_EQUAL_INT64(2, mmapq_indexed_appender_append(r1, "back", 4));
     mmapq_indexed_appender_close(r1);
 }
@@ -1330,7 +1362,7 @@ static void *p11_appender_main(void *arg)
     int *rejects = arg;
     char msg[200]; memset(msg, 'u', sizeof(msg));
     MmapqIndexedAppender *a = NULL;
-    if (mmapq_indexed_appender_create(DIR, QUEUE, 4096, 4, 4096, TIMEOUT,
+    if (mmapq_indexed_appender_create(DIR, QUEUE, TINY_REGION, 4, TINY_FILE, TIMEOUT,
                                       0, rt, 0, &a) != 0) {
         atomic_store(&p11_appender_done, 1);
         return NULL;
@@ -1397,7 +1429,7 @@ void test_commit_archive_race_stress(void)
     mkdir(dir_path, 0775);
     QueueMeta *m = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapqi_queue_meta_open_rw(DIR, QUEUE, 0,
-        4096, 4096, /* archivable= */ 1, QUEUE_TYPE_NORMAL, &m));
+        TINY_REGION, TINY_FILE, /* archivable= */ 1, QUEUE_TYPE_NORMAL, &m));
     mmapqi_queue_meta_close(m);
 
     atomic_store(&p11_rec_count, 0);
@@ -1454,7 +1486,7 @@ static void *p9_commit_main(void *arg)
 void test_commit_racing_archive_lowers_boundary(void)
 {
 #ifdef MMAPQ_TEST_HOOKS
-    char payload_p[4000]; memset(payload_p, 'P', sizeof(payload_p));
+    char payload_p[TINY_BIG_LEN]; memset(payload_p, 'P', sizeof(payload_p));
     char payload_b[100];  memset(payload_b, 'B', sizeof(payload_b));
 
     MmapqIndexedAppender *a = tiny_archivable_appender();
@@ -1518,7 +1550,7 @@ static int p15_inject_timeout(void) { return MMAPQ_ETIMEDOUT; }
 void test_archiver_live_pass_failure_restores_boundary(void)
 {
 #ifdef MMAPQ_TEST_HOOKS
-    char payload_a[4000]; memset(payload_a, 'A', sizeof(payload_a));
+    char payload_a[TINY_BIG_LEN]; memset(payload_a, 'A', sizeof(payload_a));
     char payload_b[100];  memset(payload_b, 'B', sizeof(payload_b));
     char payload_c[50];   memset(payload_c, 'C', sizeof(payload_c));
 
@@ -1554,11 +1586,12 @@ void test_archiver_live_pass_failure_restores_boundary(void)
 /* CAND-37: a slow-path commit's re-check min landing between the archiver's
  * start_offset snapshot and its publish must not be erased by the publish.
  * Pre-fix the publish is a plain store: X (uncommitted at 64) commits racing
- * archive(2); its min lowers 4200 -> 64 between the snapshot (old = 4200) and
- * the publish; the store of 4254 erases it; the live pass's injected timeout
- * then rolls back to old = 4200, leaving X live below the boundary and
- * payload_0_0 listed. Post-fix the publish is a CAS from the snapshot: it
- * fails against 64, the lowering stands, and the rollback mins 64 with 4200.
+ * archive(2); its min lowers TINY_B_END -> 64 between the snapshot (old =
+ * TINY_B_END) and the publish; the store of TINY_Z_END erases it; the live
+ * pass's injected timeout then rolls back to old = TINY_B_END, leaving X
+ * live below the boundary and payload_0_0 listed. Post-fix the publish is a
+ * CAS from the snapshot: it fails against 64, the lowering stands, and the
+ * rollback mins 64 with TINY_B_END.
  * (Hook-compiled builds only; the release-loop build is a trivial pass — the
  * scenario cannot be set up deterministically without the hooks.) */
 #ifdef MMAPQ_TEST_HOOKS
@@ -1628,7 +1661,7 @@ static int c37_wait(_Atomic int *flag)
 void test_archive_publish_cas_survives_racing_commit_min(void)
 {
 #ifdef MMAPQ_TEST_HOOKS
-    char payload_x[4000]; memset(payload_x, 'X', sizeof(payload_x));
+    char payload_x[TINY_BIG_LEN]; memset(payload_x, 'X', sizeof(payload_x));
     char payload_y[100];  memset(payload_y, 'Y', sizeof(payload_y));
     char payload_z[50];   memset(payload_z, 'Z', sizeof(payload_z));
 
@@ -1638,10 +1671,10 @@ void test_archive_publish_cas_survives_racing_commit_min(void)
     int64_t end_x = record_end(off_x, (int32_t)sizeof(payload_x));
     TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_appender_append(a, payload_y, (int32_t)sizeof(payload_y)));
     int64_t end_y = record_end(end_x, (int32_t)sizeof(payload_y));
-    TEST_ASSERT_EQUAL_INT64(4200, end_y);   /* rolls to file 1: 4096+4+100 */
+    TEST_ASSERT_EQUAL_INT64(TINY_B_END, end_y);  /* rolls to file 1 */
     TEST_ASSERT_EQUAL_INT64(1, mmapq_indexed_appender_append(a, payload_z, (int32_t)sizeof(payload_z)));
     int64_t end_z = record_end(end_y, (int32_t)sizeof(payload_z));
-    TEST_ASSERT_EQUAL_INT64(4254, end_z);
+    TEST_ASSERT_EQUAL_INT64(TINY_Z_END, end_z);
 
     atomic_store(&c37_pre_fired, 0);  atomic_store(&c37_pre_timed_out, 0);
     atomic_store(&c37_pre_go, 0);
@@ -1669,7 +1702,7 @@ void test_archive_publish_cas_survives_racing_commit_min(void)
     }
 
     /* 2. Full archive to 1 while the commit is held: publishes end of Y;
-     *    the live pass sees Z at 4200 (not below) and no index 2 yet */
+     *    the live pass sees Z at TINY_B_END (not below) and no index 2 yet */
     int rc1 = mmapq_indexed_archiver_archive_up_to_index(arch, 1);
     int64_t so1 = -1;
     int so1_rc = mmapq_indexed_archiver_start_offset(arch, 0, &so1);
@@ -1683,8 +1716,9 @@ void test_archive_publish_cas_survives_racing_commit_min(void)
         TEST_ASSERT_EQUAL_INT64(end_y, so1);
     }
 
-    /* 3. Release the commit: CAS at index 2, fence, re-check (64 < 4200),
-     *    then hold it at commit_min_pre, before the lowering min */
+    /* 3. Release the commit: CAS at index 2, fence, re-check (64 <
+     *    TINY_B_END), then hold it at commit_min_pre, before the lowering
+     *    min */
     mmapq_test_hook_set_commit_min_pre(c37_commit_min_pre_hook);
     atomic_store_explicit(&c37_pre_go, 1, memory_order_release);
     if (!c37_wait(&c37_min_fired)) {
@@ -1696,8 +1730,8 @@ void test_archive_publish_cas_survives_racing_commit_min(void)
         TEST_FAIL_MESSAGE("commit_min_pre never fired (re-check branch regression?)");
     }
 
-    /* 4. Archive to 2 with the commit parked: snapshot old = 4200, then
-     *    park the archiver at publish_pre. The commit's min lands while
+    /* 4. Archive to 2 with the commit parked: snapshot old = TINY_B_END,
+     *    then park the archiver at publish_pre. The commit's min lands while
      *    the archiver is parked; the publish must not erase it. The live
      *    pass's first read is failed by injection to force the rollback. */
     mmapq_test_hook_set_archiver_publish_pre(c37_publish_pre_hook);
@@ -1721,7 +1755,7 @@ void test_archive_publish_cas_survives_racing_commit_min(void)
     TEST_ASSERT_FALSE_MESSAGE(atomic_load(&c37_pub_timed_out), "publish_pre spin expired");
     /* The racing commit's lowering survives the publish and the rollback:
      * X at 64 is live, the boundary is 64, file 0 is not listable.
-     * Pre-fix: 4200 here and payload_0_0 listed. */
+     * Pre-fix: TINY_B_END here and payload_0_0 listed. */
     TEST_ASSERT_EQUAL_INT64(off_x, arch_start_offset(arch, 0));
     char *paths[64] = {0};
     int n = mmapq_indexed_archiver_archivable_files(arch, paths, 64);
@@ -1752,27 +1786,28 @@ static char *mark_of(char **paths, int n, const char *suffix)
     return NULL;
 }
 
-/* Single-lane geometry: A 4000 @64 (idx 0, ends 4068), B 100 @4096 (idx 1,
- * rolls, ends 4200). archive(2) -> start_offset 4200 -> payload_0_0 listed. */
+/* Single-lane geometry: A TINY_BIG_LEN @64 (idx 0, ends TINY_A_END), B 100
+ * @TINY_B_START (idx 1, rolls, ends TINY_B_END). archive(2) -> start_offset
+ * TINY_B_END -> payload_0_0 listed. */
 static void single_lane_geometry(void)
 {
-    char big[4000]; memset(big, 'G', sizeof(big));
+    char big[TINY_BIG_LEN]; memset(big, 'G', sizeof(big));
     char sm[100];   memset(sm, 's', sizeof(sm));
     MmapqIndexedAppender *a = tiny_archivable_appender();
     TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_appender_append(a, big, (int32_t)sizeof(big)));
     TEST_ASSERT_EQUAL_INT64(1, mmapq_indexed_appender_append(a, sm, (int32_t)sizeof(sm)));
     mmapq_indexed_appender_close(a);
-    TEST_ASSERT_EQUAL_INT64(4068, record_end(INITIAL_PAYLOAD_POSITION, 4000));
-    TEST_ASSERT_EQUAL_INT64(4200, record_end(4096, 100));
+    TEST_ASSERT_EQUAL_INT64(TINY_A_END, record_end(INITIAL_PAYLOAD_POSITION, TINY_BIG_LEN));
+    TEST_ASSERT_EQUAL_INT64(TINY_B_END, record_end(TINY_B_START, 100));
 }
 
-/* B2 geometry (reviewer probe): two appenders, appends a0:4000, a1:4000,
- * a0:100, a1:100 -> indices 0-3. Big payloads @64 end 4068; small payloads
- * roll to @4096 end 4200. archive(4) -> 4200/4200, payload_0_0 and
- * payload_1_0 listed. */
+/* B2 geometry (reviewer probe): two appenders, appends a0:big, a1:big,
+ * a0:100, a1:100 -> indices 0-3. Big payloads @64 end TINY_A_END; small
+ * payloads roll to @TINY_B_START end TINY_B_END. archive(4) ->
+ * TINY_B_END/TINY_B_END, payload_0_0 and payload_1_0 listed. */
 static void two_lane_geometry(void)
 {
-    char big[4000]; memset(big, 'G', sizeof(big));
+    char big[TINY_BIG_LEN]; memset(big, 'G', sizeof(big));
     char sm[100];   memset(sm, 's', sizeof(sm));
 
     char dir_path[512];
@@ -1780,14 +1815,14 @@ static void two_lane_geometry(void)
     mkdir(dir_path, 0775);
     QueueMeta *m = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapqi_queue_meta_open_rw(DIR, QUEUE, 0,
-        4096, 4096, /* archivable= */ 1, QUEUE_TYPE_NORMAL, &m));
+        TINY_REGION, TINY_FILE, /* archivable= */ 1, QUEUE_TYPE_NORMAL, &m));
     mmapqi_queue_meta_close(m);
 
     MmapqIndexedAppender *a0 = NULL, *a1 = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_appender_create_with_id(DIR, QUEUE,
-        4096, 4, 4096, TIMEOUT, 0, rt, 0, 0, &a0));
+        TINY_REGION, 4, TINY_FILE, TIMEOUT, 0, rt, 0, 0, &a0));
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_appender_create_with_id(DIR, QUEUE,
-        4096, 4, 4096, TIMEOUT, 0, rt, 1, 0, &a1));
+        TINY_REGION, 4, TINY_FILE, TIMEOUT, 0, rt, 1, 0, &a1));
     TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_appender_append(a0, big, (int32_t)sizeof(big)));
     TEST_ASSERT_EQUAL_INT64(1, mmapq_indexed_appender_append(a1, big, (int32_t)sizeof(big)));
     TEST_ASSERT_EQUAL_INT64(2, mmapq_indexed_appender_append(a0, sm, (int32_t)sizeof(sm)));
@@ -1795,8 +1830,8 @@ static void two_lane_geometry(void)
     mmapq_indexed_appender_close(a0);
     mmapq_indexed_appender_close(a1);
 
-    TEST_ASSERT_EQUAL_INT64(4068, record_end(INITIAL_PAYLOAD_POSITION, 4000));
-    TEST_ASSERT_EQUAL_INT64(4200, record_end(4096, 100));
+    TEST_ASSERT_EQUAL_INT64(TINY_A_END, record_end(INITIAL_PAYLOAD_POSITION, TINY_BIG_LEN));
+    TEST_ASSERT_EQUAL_INT64(TINY_B_END, record_end(TINY_B_START, 100));
 }
 
 /* Bounded main-side wait; 0 on timeout (caller disarms, joins, then fails). */
@@ -1835,8 +1870,8 @@ void test_reclaim_deletes_only_marked_still_archivable(void)
 
     MmapqIndexedArchiver *arch = tiny_archiver();
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_archiver_archive_up_to_index(arch, 4));
-    TEST_ASSERT_EQUAL_INT64(4200, arch_start_offset(arch, 0));
-    TEST_ASSERT_EQUAL_INT64(4200, arch_start_offset(arch, 1));
+    TEST_ASSERT_EQUAL_INT64(TINY_B_END, arch_start_offset(arch, 0));
+    TEST_ASSERT_EQUAL_INT64(TINY_B_END, arch_start_offset(arch, 1));
 
     char *paths[64] = {0};
     int n = mmapq_indexed_archiver_archivable_files(arch, paths, 64);
@@ -1877,7 +1912,7 @@ void test_reclaim_relist_excludes_undo_restored_files(void)
 
     MmapqIndexedArchiver *arch = tiny_archiver();
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_archiver_archive_up_to_index(arch, 2));
-    TEST_ASSERT_EQUAL_INT64(4200, arch_start_offset(arch, 0));
+    TEST_ASSERT_EQUAL_INT64(TINY_B_END, arch_start_offset(arch, 0));
 
     char *paths[64] = {0};
     int n = mmapq_indexed_archiver_archivable_files(arch, paths, 64);
@@ -2181,15 +2216,15 @@ static int c35_listing_inject(void)
 void test_c35_listing_scan_timeout_propagates(void)
 {
 #ifdef MMAPQ_TEST_HOOKS
-    /* A @64 idx 0 (ends 4068), B @4096 idx 1 (ends 4200) */
+    /* A @64 idx 0 (ends TINY_A_END), B @TINY_B_START idx 1 (ends TINY_B_END) */
     single_lane_geometry();
 
     MmapqIndexedArchiver *arch = tiny_archiver();
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_archiver_archive_up_to_index(arch, 1));
-    TEST_ASSERT_EQUAL_INT64(4068, arch_start_offset(arch, 0));
+    TEST_ASSERT_EQUAL_INT64(TINY_A_END, arch_start_offset(arch, 0));
 
-    /* Control: the scan runs (B at 4096 floors the lane; cap
-     * min(4068, 4096)) and the honest listing stays empty */
+    /* Control: the scan runs (B at TINY_B_START floors the lane; cap
+     * min(TINY_A_END, TINY_B_START)) and the honest listing stays empty */
     char *paths[64] = {0};
     int n = mmapq_indexed_archiver_archivable_files(arch, paths, 64);
     TEST_ASSERT_EQUAL_INT(0, n);
@@ -2223,6 +2258,7 @@ void test_c35_listing_scan_timeout_propagates(void)
 #if defined(MMAPQ_TEST_HOOKS) && !defined(__SANITIZE_THREAD__)
 static int c35_c2p[2], c35_p2c[2];
 
+
 static void c35_child_pre_hook(void)
 {
     /* pre-check passed — rendezvous with the parent, then wait for go */
@@ -2245,7 +2281,7 @@ static void c35_precreate_meta(void)
     mkdir(dir_path, 0775);
     QueueMeta *m = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapqi_queue_meta_open_rw(DIR, QUEUE, 0,
-        4096, 4096, /* archivable= */ 1, QUEUE_TYPE_NORMAL, &m));
+        TINY_REGION, TINY_FILE, /* archivable= */ 1, QUEUE_TYPE_NORMAL, &m));
     TEST_ASSERT_NOT_NULL(m);
     mmapqi_queue_meta_close(m);
 }
@@ -2273,12 +2309,13 @@ static int c35_wait_child_bounded(pid_t pid, int *status)
 #endif
 
 /* P1: kill -9 between a resequenced commit's CAS and its re-check strands
- * start_offset (4200) above the live entry (A at 64). The capped listing
- * must return nothing. Fail-first: pre-fix lists payload_0_0 (n == 1). */
+ * start_offset (TINY_B_END) above the live entry (A at 64). The capped
+ * listing must return nothing. Fail-first: pre-fix lists payload_0_0
+ * (n == 1). */
 void test_c35_listing_cap_covers_crashed_commit(void)
 {
 #if defined(MMAPQ_TEST_HOOKS) && !defined(__SANITIZE_THREAD__)
-    char payload_a[4000]; memset(payload_a, 'A', sizeof(payload_a));
+    char payload_a[TINY_BIG_LEN]; memset(payload_a, 'A', sizeof(payload_a));
 
     c35_precreate_meta();
     TEST_ASSERT_EQUAL_INT(0, pipe(c35_c2p));
@@ -2293,15 +2330,15 @@ void test_c35_listing_cap_covers_crashed_commit(void)
         close(c35_c2p[0]);
         close(c35_p2c[1]);
         MmapqIndexedAppender *a = NULL;
-        if (mmapq_indexed_appender_create(DIR, QUEUE, 4096, 4, 4096,
+        if (mmapq_indexed_appender_create(DIR, QUEUE, TINY_REGION, 4, TINY_FILE,
                 TIMEOUT, 0, NULL, 0, &a) != 0) _exit(2);
-        char a_pay[4000]; memset(a_pay, 'A', sizeof(a_pay));
+        char a_pay[TINY_BIG_LEN]; memset(a_pay, 'A', sizeof(a_pay));
         char b_pay[100];  memset(b_pay, 'B', sizeof(b_pay));
         if (mmapq_indexed_appender_append_uncommitted(a, a_pay,
                 (int32_t)sizeof(a_pay)) != INITIAL_PAYLOAD_POSITION) _exit(3);
         if (mmapq_indexed_appender_append_uncommitted(a, b_pay,
-                (int32_t)sizeof(b_pay)) != 4096) _exit(4);
-        if (mmapq_indexed_appender_commit(a, 4096) != 0) _exit(5);
+                (int32_t)sizeof(b_pay)) != TINY_B_START) _exit(4);
+        if (mmapq_indexed_appender_commit(a, TINY_B_START) != 0) _exit(5);
         mmapq_test_hook_set_commit_pre(c35_child_pre_hook);
         mmapq_test_hook_set_commit_post_cas(c35_child_post_cas_hook);
         /* slow path: pre-check passes (start_offset 64), parks, CASes the
@@ -2320,10 +2357,10 @@ void test_c35_listing_cap_covers_crashed_commit(void)
     }
 
     /* Archive while the child is parked between the pre-check and the CAS:
-     * publishes end of B (4200); the live pass sees no index 1. */
+     * publishes end of B (TINY_B_END); the live pass sees no index 1. */
     MmapqIndexedArchiver *arch = tiny_archiver();
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_archiver_archive_up_to_index(arch, 1));
-    TEST_ASSERT_EQUAL_INT64(4200, arch_start_offset(arch, 0));
+    TEST_ASSERT_EQUAL_INT64(TINY_B_END, arch_start_offset(arch, 0));
 
     TEST_ASSERT_EQUAL_INT(1, (int)write(c35_p2c[1], "G", 1));
     int wst = 0;
@@ -2336,7 +2373,7 @@ void test_c35_listing_cap_covers_crashed_commit(void)
     TEST_ASSERT_TRUE(WIFSIGNALED(wst));
     TEST_ASSERT_EQUAL_INT(SIGKILL, WTERMSIG(wst));
 
-    /* The stranded state: start_offset 4200 above live A at 64. */
+    /* The stranded state: start_offset TINY_B_END above live A at 64. */
     char *paths[64] = {0};
     int n = mmapq_indexed_archiver_archivable_files(arch, paths, 64);
     TEST_ASSERT_EQUAL_INT(0, n);
@@ -2378,21 +2415,22 @@ void test_c35_listing_cap_is_per_lane(void)
         close(c35_c2p[0]);
         close(c35_p2c[1]);
         MmapqIndexedAppender *a0 = NULL, *a1 = NULL;
-        if (mmapq_indexed_appender_create_with_id(DIR, QUEUE, 4096, 4,
-                4096, TIMEOUT, 0, NULL, 0, 0, &a0) != 0) _exit(2);
-        if (mmapq_indexed_appender_create_with_id(DIR, QUEUE, 4096, 4,
-                4096, TIMEOUT, 0, NULL, 1, 0, &a1) != 0) _exit(3);
-        char big[4000]; memset(big, 'G', sizeof(big));
+        if (mmapq_indexed_appender_create_with_id(DIR, QUEUE, TINY_REGION, 4,
+                TINY_FILE, TIMEOUT, 0, NULL, 0, 0, &a0) != 0) _exit(2);
+        if (mmapq_indexed_appender_create_with_id(DIR, QUEUE, TINY_REGION, 4,
+                TINY_FILE, TIMEOUT, 0, NULL, 1, 0, &a1) != 0) _exit(3);
+        char big[TINY_BIG_LEN]; memset(big, 'G', sizeof(big));
         char sm[100];   memset(sm, 's', sizeof(sm));
         /* lane 1: two committed entries, indices 0 and 1 */
         if (mmapq_indexed_appender_append(a1, big, (int32_t)sizeof(big)) != 0) _exit(4);
         if (mmapq_indexed_appender_append(a1, sm, (int32_t)sizeof(sm)) != 1) _exit(5);
-        /* lane 0: A0 uncommitted @64, B0 uncommitted @4096, commit B0 -> 2 */
+        /* lane 0: A0 uncommitted @64, B0 uncommitted @TINY_B_START,
+         * commit B0 -> 2 */
         if (mmapq_indexed_appender_append_uncommitted(a0, big,
                 (int32_t)sizeof(big)) != INITIAL_PAYLOAD_POSITION) _exit(6);
         if (mmapq_indexed_appender_append_uncommitted(a0, sm,
-                (int32_t)sizeof(sm)) != 4096) _exit(7);
-        if (mmapq_indexed_appender_commit(a0, 4096) != 2) _exit(8);
+                (int32_t)sizeof(sm)) != TINY_B_START) _exit(7);
+        if (mmapq_indexed_appender_commit(a0, TINY_B_START) != 2) _exit(8);
         mmapq_test_hook_set_commit_pre(c35_child_pre_hook);
         mmapq_test_hook_set_commit_post_cas(c35_child_post_cas_hook);
         /* commit A0: parks, CASes the header at index 3, dies pre-fence */
@@ -2410,11 +2448,12 @@ void test_c35_listing_cap_is_per_lane(void)
     }
 
     /* Archive indices 0-2 while the child is parked: lane boundaries
-     * 4200 (end of Y1) / 4200 (end of B0); the live pass sees no index 3. */
+     * TINY_B_END (end of Y1) / TINY_B_END (end of B0); the live pass sees
+     * no index 3. */
     MmapqIndexedArchiver *arch = tiny_archiver();
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_archiver_archive_up_to_index(arch, 3));
-    TEST_ASSERT_EQUAL_INT64(4200, arch_start_offset(arch, 0));
-    TEST_ASSERT_EQUAL_INT64(4200, arch_start_offset(arch, 1));
+    TEST_ASSERT_EQUAL_INT64(TINY_B_END, arch_start_offset(arch, 0));
+    TEST_ASSERT_EQUAL_INT64(TINY_B_END, arch_start_offset(arch, 1));
 
     TEST_ASSERT_EQUAL_INT(1, (int)write(c35_p2c[1], "G", 1));
     int wst = 0;
@@ -2438,6 +2477,85 @@ void test_c35_listing_cap_is_per_lane(void)
 #else
     TEST_IGNORE_MESSAGE("needs MMAPQ_TEST_HOOKS; fork excluded under TSan");
 #endif
+}
+
+/* ── CAND-38 pin P2: positive reclaim guard at aligned geometry ────────────
+ * 32 KB regions, one 32 KB header block per file: archiving past one header
+ * file and reclaiming must lose nothing, and the rejoined appender continues
+ * at N. Mirrors the reviewer probe's aligned rows (hdrloss.c M=32768/98304:
+ * 0 unreadable). The misaligned rows are the pre-fix data-loss demonstration
+ * (992/2112 live entries unreadable at 8 KB files); post-rule they are
+ * refused at create (P1), so they are recorded from the probe, not pinned. */
+static void c38_reclaim_loses_nothing(int64_t max_file)
+{
+    const int32_t region = 32768;
+    const int64_t hif    = max_file / HEADER_SIZE;  /* headers per file */
+    const int64_t N      = 2 * hif + 100;
+    const int64_t upto   = hif + 50;                /* past one header file */
+
+    char dir_path[512];
+    snprintf(dir_path, sizeof(dir_path), "%s/%s", DIR, QUEUE);
+    mkdir(dir_path, 0775);
+    QueueMeta *m = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapqi_queue_meta_open_rw(DIR, QUEUE, 0,
+        region, max_file, /* archivable= */ 1, QUEUE_TYPE_NORMAL, &m));
+    TEST_ASSERT_NOT_NULL(m);
+    mmapqi_queue_meta_close(m);
+
+    MmapqIndexedAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_appender_create(DIR, QUEUE,
+        region, 16, max_file, TIMEOUT, 0, rt, 0, &a));
+    TEST_ASSERT_NOT_NULL(a);
+    for (int64_t i = 0; i < N; i++)
+        TEST_ASSERT_EQUAL_INT64(i, mmapq_indexed_appender_append(a, "cccc", 4));
+
+    MmapqIndexedArchiver *arch = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_archiver_create(DIR, QUEUE, 4, rt, &arch));
+    TEST_ASSERT_NOT_NULL(arch);
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_archiver_archive_up_to_index(arch, upto));
+
+    char *paths[64] = {0};
+    int n = mmapq_indexed_archiver_archivable_files(arch, paths, 64);
+    TEST_ASSERT_GREATER_OR_EQUAL(1, n);
+    int hdr = 0;
+    for (int i = 0; i < n; i++) if (strstr(paths[i], "/header_")) hdr++;
+    TEST_ASSERT_GREATER_OR_EQUAL(1, hdr);   /* a header file really listed */
+    TEST_ASSERT_EQUAL_INT(n, mmapq_indexed_archiver_reclaim_files(arch, paths, n));
+    free_paths(paths, n);
+    mmapq_indexed_archiver_close(arch);
+    mmapq_indexed_appender_close(a);
+
+    /* Fresh reader over the whole live range: nothing lost. */
+    MmapqIndexedReader *r = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_reader_create(DIR, QUEUE, 4, TIMEOUT, NULL, &r));
+    TEST_ASSERT_NOT_NULL(r);
+    for (int64_t i = upto; i < N; i++) {
+        MmapqReadingContext ctx = {0};
+        mmapq_indexed_reader_read(r, i, &ctx);
+        TEST_ASSERT_EQUAL_INT(MMAPQ_ENTRY_AVAILABLE, ctx.status);
+    }
+    mmapq_indexed_reader_close(r);
+
+    /* Rejoin: the next append is index N — no committed index reused. */
+    MmapqIndexedAppender *a2 = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_appender_create(DIR, QUEUE,
+        region, 16, max_file, TIMEOUT, 0, rt, 0, &a2));
+    TEST_ASSERT_NOT_NULL(a2);
+    TEST_ASSERT_EQUAL_INT64(N, mmapq_indexed_appender_append(a2, "next", 4));
+    mmapq_indexed_appender_close(a2);
+}
+
+void test_c38_reclaim_aligned_32k_file_loses_nothing(void)
+{
+    c38_reclaim_loses_nothing(32768);
+}
+
+void test_c38_reclaim_aligned_96k_file_loses_nothing(void)
+{
+    c38_reclaim_loses_nothing(98304);
 }
 
 int main(void)
@@ -2493,5 +2611,9 @@ int main(void)
     RUN_TEST(test_c35_listing_scan_timeout_propagates);
     RUN_TEST(test_c35_listing_cap_covers_crashed_commit);
     RUN_TEST(test_c35_listing_cap_is_per_lane);
+
+    /* CAND-38 pins */
+    RUN_TEST(test_c38_reclaim_aligned_32k_file_loses_nothing);
+    RUN_TEST(test_c38_reclaim_aligned_96k_file_loses_nothing);
     return UNITY_END();
 }

@@ -1,6 +1,7 @@
 #include "indexed_queue.h"
 #include "indexed_archiver.h"
 #include "internal/header_codec.h"
+#include "internal/platform_internal.h"
 #include "internal/region_ring_accessor.h"
 #include "mmap_platform.h"
 
@@ -35,8 +36,7 @@ struct MmapqIndexedQueue {
 int mmapq_min_ring_size(int32_t region_size)
 {
     if (region_size <= 0) return MMAPQ_INDEXED_QUEUE_DEFAULT_RING_SIZE;
-    int64_t block = (int64_t)(1 << HEADER_BLOCK_SIZE_BITS) * HEADER_SIZE;
-    int64_t need  = (block + region_size - 1) / region_size
+    int64_t need  = (MMAPQI_HEADER_BLOCK_BYTES + region_size - 1) / region_size
                   + REGION_RING_ACCESSOR_DEFAULT_REGIONS_AHEAD;
     int p2 = 1;
     while ((int64_t)p2 < need) p2 <<= 1;
@@ -82,11 +82,22 @@ int mmapq_indexed_queue_create(
     if (queue_name == NULL) return MMAPQ_EINVAL;
     if (region_size <= 0) return MMAPQ_EINVAL;
     if ((region_size & (region_size - 1)) != 0) return MMAPQ_EINVAL;
+    /* CAND-38 geometry rule. Header-file reclaim assumes each header file
+     * holds a contiguous index range — true iff max_file_size is a multiple
+     * of the transposed header block; region_size a multiple of the block
+     * (a power of two dividing max_file_size) implies it. The page-size
+     * half keeps region mmap offsets page-aligned on 16/64 KB-page kernels. */
+    if (region_size % MMAPQI_HEADER_BLOCK_BYTES != 0) return MMAPQ_EINVAL;
+    if (region_size % mmapqi_page_size() != 0) return MMAPQ_EINVAL;
     if (ring_size <= 0) return MMAPQ_EINVAL;
     if ((ring_size & (ring_size - 1)) != 0) return MMAPQ_EINVAL;
     if (ring_size < mmapq_min_ring_size(region_size)) return MMAPQ_EINVAL;
     if (max_file_size <= 0) return MMAPQ_EINVAL;
     if (max_file_size % region_size != 0) return MMAPQ_EINVAL;
+    /* Implied by the rules above today; kept explicit — the archivers'
+     * contiguity assumption depends on THIS property, which must survive
+     * any later relaxation of the region rule. */
+    if (max_file_size % MMAPQI_HEADER_BLOCK_BYTES != 0) return MMAPQ_EINVAL;
     if (!header_index_in_range(start_index)) return MMAPQ_EINVAL;
 
     MmapqIndexedQueue *q = calloc(1, sizeof(MmapqIndexedQueue));

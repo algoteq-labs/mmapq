@@ -54,6 +54,13 @@ be narrowed to the pre-CAS window.
 **Abstractions.** Each appender owns a payload lane; a message occupies
 one position and ends at `p+1`; payload file `f` holds positions
 `[f*F, (f+1)*F)`, header file `h` holds indices `[h*HF, (h+1)*HF)`.
+The on-disk header layout transposes indices within each 32 KB block, so
+the header-file row is true of the implementation only because the CAND-38
+geometry rule (region a multiple of the 32 KB block and page-aligned, file
+a multiple of the block) guarantees block-aligned header files; without
+it, reclaim deletes
+live committed headers — a defect below this model's abstraction, found by
+probing, not by TLC.
 Headers are claimed lowest-empty-slot-first by one atomic CAS, so indices
 stay contiguous. Memory is sequentially consistent except where a fence
 switch is off: then the archiver's `start_offset` stores sit in a store
