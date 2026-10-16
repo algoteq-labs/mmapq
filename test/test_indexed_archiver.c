@@ -1548,6 +1548,190 @@ void test_archiver_live_pass_failure_restores_boundary(void)
 #endif
 }
 
+/* CAND-37: a slow-path commit's re-check min landing between the archiver's
+ * start_offset snapshot and its publish must not be erased by the publish.
+ * Pre-fix the publish is a plain store: X (uncommitted at 64) commits racing
+ * archive(2); its min lowers 4200 -> 64 between the snapshot (old = 4200) and
+ * the publish; the store of 4254 erases it; the live pass's injected timeout
+ * then rolls back to old = 4200, leaving X live below the boundary and
+ * payload_0_0 listed. Post-fix the publish is a CAS from the snapshot: it
+ * fails against 64, the lowering stands, and the rollback mins 64 with 4200.
+ * (Hook-compiled builds only; the release-loop build is a trivial pass — the
+ * scenario cannot be set up deterministically without the hooks.) */
+#ifdef MMAPQ_TEST_HOOKS
+static _Atomic int c37_pre_fired, c37_pre_timed_out, c37_pre_go;
+static _Atomic int c37_min_fired, c37_min_timed_out;
+static _Atomic int c37_pub_fired, c37_pub_timed_out;
+static _Atomic int c37_snapshot_taken, c37_min_done;
+
+static void c37_spin_until(_Atomic int *flag, _Atomic int *timed_out)
+{
+    /* Bounded: a hook routing regression must fail the pin via the
+     * fired/timed_out assertions, never hang the suite. */
+    for (int spins = 0; spins < 5000000; spins++) {
+        if (atomic_load_explicit(flag, memory_order_acquire)) return;
+        sched_yield();
+    }
+    atomic_store_explicit(timed_out, 1, memory_order_release);
+}
+
+static void c37_commit_pre_hook(void)
+{
+    atomic_store_explicit(&c37_pre_fired, 1, memory_order_release);
+    c37_spin_until(&c37_pre_go, &c37_pre_timed_out);
+}
+
+static void c37_commit_min_pre_hook(void)
+{
+    atomic_store_explicit(&c37_min_fired, 1, memory_order_release);
+    c37_spin_until(&c37_snapshot_taken, &c37_min_timed_out);
+}
+
+static void c37_publish_pre_hook(void)
+{
+    atomic_store_explicit(&c37_pub_fired, 1, memory_order_release);
+    atomic_store_explicit(&c37_snapshot_taken, 1, memory_order_release);
+    c37_spin_until(&c37_min_done, &c37_pub_timed_out);
+}
+
+static int c37_inject_timeout(void) { return MMAPQ_ETIMEDOUT; }
+
+typedef struct {
+    MmapqIndexedAppender *a;
+    int64_t              offset;
+    int64_t              rc;
+} C37Commit;
+
+static void *c37_commit_main(void *arg)
+{
+    C37Commit *c = arg;
+    c->rc = mmapq_indexed_appender_commit(c->a, c->offset);
+    atomic_store_explicit(&c37_min_done, 1, memory_order_release);
+    return NULL;
+}
+
+/* Bounded main-side wait; 0 on timeout (caller disarms, joins, then fails). */
+static int c37_wait(_Atomic int *flag)
+{
+    for (int ms = 0; ms < 5000; ms++) {
+        if (atomic_load_explicit(flag, memory_order_acquire)) return 1;
+        struct timespec ts = { .tv_sec = 0, .tv_nsec = 1000000 };
+        nanosleep(&ts, NULL);
+    }
+    return 0;
+}
+#endif
+
+void test_archive_publish_cas_survives_racing_commit_min(void)
+{
+#ifdef MMAPQ_TEST_HOOKS
+    char payload_x[4000]; memset(payload_x, 'X', sizeof(payload_x));
+    char payload_y[100];  memset(payload_y, 'Y', sizeof(payload_y));
+    char payload_z[50];   memset(payload_z, 'Z', sizeof(payload_z));
+
+    MmapqIndexedAppender *a = tiny_archivable_appender();
+    int64_t off_x = mmapq_indexed_appender_append_uncommitted(a, payload_x, (int32_t)sizeof(payload_x));
+    TEST_ASSERT_EQUAL_INT64(INITIAL_PAYLOAD_POSITION, off_x);
+    int64_t end_x = record_end(off_x, (int32_t)sizeof(payload_x));
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_appender_append(a, payload_y, (int32_t)sizeof(payload_y)));
+    int64_t end_y = record_end(end_x, (int32_t)sizeof(payload_y));
+    TEST_ASSERT_EQUAL_INT64(4200, end_y);   /* rolls to file 1: 4096+4+100 */
+    TEST_ASSERT_EQUAL_INT64(1, mmapq_indexed_appender_append(a, payload_z, (int32_t)sizeof(payload_z)));
+    int64_t end_z = record_end(end_y, (int32_t)sizeof(payload_z));
+    TEST_ASSERT_EQUAL_INT64(4254, end_z);
+
+    atomic_store(&c37_pre_fired, 0);  atomic_store(&c37_pre_timed_out, 0);
+    atomic_store(&c37_pre_go, 0);
+    atomic_store(&c37_min_fired, 0);  atomic_store(&c37_min_timed_out, 0);
+    atomic_store(&c37_pub_fired, 0);  atomic_store(&c37_pub_timed_out, 0);
+    atomic_store(&c37_snapshot_taken, 0); atomic_store(&c37_min_done, 0);
+
+    /* The archiver is created before the commit thread starts, and every
+     * result observed while the thread is held is captured into locals and
+     * asserted only after release+join+disarm — a Unity longjmp with the
+     * thread alive would let it write c.rc into a dead stack frame. */
+    MmapqIndexedArchiver *arch = tiny_archiver();
+
+    /* 1. Slow-path commit of X, held after the pre-check, before the CAS */
+    mmapq_test_hook_set_commit_pre(c37_commit_pre_hook);
+    C37Commit c = { .a = a, .offset = off_x, .rc = -999 };
+    pthread_t t;
+    TEST_ASSERT_EQUAL_INT(0, pthread_create(&t, NULL, c37_commit_main, &c));
+    if (!c37_wait(&c37_pre_fired)) {
+        atomic_store(&c37_pre_go, 1);
+        pthread_join(t, NULL);
+        mmapq_test_hook_set_commit_pre(NULL);
+        mmapq_indexed_archiver_close(arch);
+        TEST_FAIL_MESSAGE("commit_pre never fired (slow-path routing regression?)");
+    }
+
+    /* 2. Full archive to 1 while the commit is held: publishes end of Y;
+     *    the live pass sees Z at 4200 (not below) and no index 2 yet */
+    int rc1 = mmapq_indexed_archiver_archive_up_to_index(arch, 1);
+    int64_t so1 = -1;
+    int so1_rc = mmapq_indexed_archiver_start_offset(arch, 0, &so1);
+    if (rc1 != 0 || so1_rc != 1 || so1 != end_y) {
+        atomic_store_explicit(&c37_pre_go, 1, memory_order_release);
+        pthread_join(t, NULL);
+        mmapq_test_hook_set_commit_pre(NULL);
+        mmapq_indexed_archiver_close(arch);
+        TEST_ASSERT_EQUAL_INT(0, rc1);
+        TEST_ASSERT_EQUAL_INT(1, so1_rc);
+        TEST_ASSERT_EQUAL_INT64(end_y, so1);
+    }
+
+    /* 3. Release the commit: CAS at index 2, fence, re-check (64 < 4200),
+     *    then hold it at commit_min_pre, before the lowering min */
+    mmapq_test_hook_set_commit_min_pre(c37_commit_min_pre_hook);
+    atomic_store_explicit(&c37_pre_go, 1, memory_order_release);
+    if (!c37_wait(&c37_min_fired)) {
+        atomic_store(&c37_snapshot_taken, 1);
+        pthread_join(t, NULL);
+        mmapq_test_hook_set_commit_min_pre(NULL);
+        mmapq_test_hook_set_commit_pre(NULL);
+        mmapq_indexed_archiver_close(arch);
+        TEST_FAIL_MESSAGE("commit_min_pre never fired (re-check branch regression?)");
+    }
+
+    /* 4. Archive to 2 with the commit parked: snapshot old = 4200, then
+     *    park the archiver at publish_pre. The commit's min lands while
+     *    the archiver is parked; the publish must not erase it. The live
+     *    pass's first read is failed by injection to force the rollback. */
+    mmapq_test_hook_set_archiver_publish_pre(c37_publish_pre_hook);
+    mmapq_test_hook_set_archiver_live_pass(c37_inject_timeout);
+    int rc = mmapq_indexed_archiver_archive_up_to_index(arch, 2);
+    mmapq_test_hook_set_archiver_live_pass(NULL);
+    mmapq_test_hook_set_archiver_publish_pre(NULL);
+    TEST_ASSERT_EQUAL_INT(0, pthread_join(t, NULL));
+    mmapq_test_hook_set_commit_min_pre(NULL);
+    mmapq_test_hook_set_commit_pre(NULL);
+
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ETIMEDOUT, rc);
+    TEST_ASSERT_EQUAL_INT64(2, mmapq_indexed_archiver_start_index(arch));
+    TEST_ASSERT_EQUAL_INT64(2, c.rc);
+    /* Hook-liveness: the choreography, not luck, produced the interleaving */
+    TEST_ASSERT_TRUE_MESSAGE(atomic_load(&c37_pre_fired), "commit_pre never fired");
+    TEST_ASSERT_TRUE_MESSAGE(atomic_load(&c37_min_fired), "commit_min_pre never fired");
+    TEST_ASSERT_TRUE_MESSAGE(atomic_load(&c37_pub_fired), "publish_pre never fired");
+    TEST_ASSERT_FALSE_MESSAGE(atomic_load(&c37_pre_timed_out), "commit_pre spin expired");
+    TEST_ASSERT_FALSE_MESSAGE(atomic_load(&c37_min_timed_out), "commit_min_pre spin expired");
+    TEST_ASSERT_FALSE_MESSAGE(atomic_load(&c37_pub_timed_out), "publish_pre spin expired");
+    /* The racing commit's lowering survives the publish and the rollback:
+     * X at 64 is live, the boundary is 64, file 0 is not listable.
+     * Pre-fix: 4200 here and payload_0_0 listed. */
+    TEST_ASSERT_EQUAL_INT64(off_x, arch_start_offset(arch, 0));
+    char *paths[64] = {0};
+    int n = mmapq_indexed_archiver_archivable_files(arch, paths, 64);
+    TEST_ASSERT_GREATER_OR_EQUAL(0, n);
+    TEST_ASSERT_FALSE(list_contains(paths, n, "payload_0_0"));
+    free_paths(paths, n);
+    mmapq_indexed_archiver_close(arch);
+    mmapq_indexed_appender_close(a);
+#else
+    TEST_IGNORE_MESSAGE("needs MMAPQ_TEST_HOOKS (normal-loop build only)");
+#endif
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -1589,5 +1773,6 @@ int main(void)
     RUN_TEST(test_commit_archive_race_stress);
     RUN_TEST(test_commit_racing_archive_lowers_boundary);
     RUN_TEST(test_archiver_live_pass_failure_restores_boundary);
+    RUN_TEST(test_archive_publish_cas_survives_racing_commit_min);
     return UNITY_END();
 }

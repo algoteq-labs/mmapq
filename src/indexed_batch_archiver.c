@@ -245,13 +245,16 @@ static int archive_forward(MmapqIndexedBatchArchiver *a,
     QueueMeta *rwm = rw_meta_open(a);
     if (rwm == NULL) return MMAPQ_EIO;
 
-    /* Publish the candidate boundary (never lowered here), then start_index */
+    /* Publish the candidate boundary (never lowered here), then start_index.
+     * CAND-37 twin: CAS from the snapshot, as in indexed_archiver.c. Here
+     * the CAS cannot fail — batch commits never touch start_offset and
+     * archive.lock EX excludes other archivers — mirrored for symmetry. */
     for (int aid = 0; aid < MAX_APPENDERS; aid++) {
         if (ends[aid] == OFFSET_NOT_SET) continue;
         AppenderMeta *m = get_appender_meta(a, (uint8_t)aid);
         if (m == NULL) return MMAPQ_ECORRUPT;
         if (ends[aid] > old[aid])
-            appender_meta_set_start_offset(m, ends[aid]);
+            (void)appender_meta_start_offset_cas(m, old[aid], ends[aid]);
     }
     queue_meta_set_start_index(rwm, index);
 

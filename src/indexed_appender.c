@@ -610,6 +610,8 @@ int64_t mmapq_indexed_appender_append_uncommitted(
 #ifdef MMAPQ_TEST_HOOKS
 static void (*commit_pre_hook)(void);
 void mmapq_test_hook_set_commit_pre(void (*fn)(void)) { commit_pre_hook = fn; }
+static void (*commit_min_pre_hook)(void);
+void mmapq_test_hook_set_commit_min_pre(void (*fn)(void)) { commit_min_pre_hook = fn; }
 #endif
 
 int64_t mmapq_indexed_appender_commit(
@@ -648,8 +650,14 @@ int64_t mmapq_indexed_appender_commit(
          * one side observes the other, so one of them lowers the boundary
          * below this payload. */
         atomic_thread_fence(memory_order_seq_cst);
-        if (payload_offset < appender_meta_start_offset(a->appender_meta))
+        if (payload_offset < appender_meta_start_offset(a->appender_meta)) {
+#ifdef MMAPQ_TEST_HOOKS
+            /* CAND-37 pin: hold the commit between the archiver's snapshot
+             * and its publish, just before the lowering min */
+            if (commit_min_pre_hook) commit_min_pre_hook();
+#endif
             appender_meta_start_offset_min(a->appender_meta, payload_offset);
+        }
         return committed;
     }
 

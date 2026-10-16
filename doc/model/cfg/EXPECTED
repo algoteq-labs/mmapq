@@ -1,6 +1,6 @@
 # name expected speed(0=seconds,1=minutes,2=~1h)
 current FAIL 0
-current_no_undo FAIL 0
+current_no_undo PASS 1
 current_no_undo_no_timeout PASS 1
 cand36_undo_race FAIL 0
 cand37_cas_publish PASS 1

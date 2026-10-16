@@ -29,9 +29,9 @@ mismatch. TLC logs (with full counterexample traces) land in `out/`.
 
 **Expected-FAIL checks are deliberate.** `current` and the `cand3x_*`
 checks reproduce open defects. When a fix lands, its check's expectation
-flips to PASS in the same commit (for example, CAS publish makes
-`current_no_undo` pass; CAS publish plus the reclaim call makes `current`
-pass).
+flips to PASS in the same commit: CAS publish made `current_no_undo` pass
+(CAND-37); adding the reclaim call makes `current` pass (CAND-36,
+pending).
 
 ## What is modelled
 
@@ -42,7 +42,7 @@ pass).
 | Uncommitted append | `AppendUncommitted` | `mmapq_indexed_appender_append_uncommitted` |
 | Commit | `Commit` picks fast path iff offset = last appended (`FastCommit`), else slow path: `SlowPreCheck` (load start_offset, EINVAL if below), `SlowCAS`, `SlowRecheck` (after seq_cst fence), `SlowMin` (atomic-min) | `mmapq_indexed_appender_commit` |
 | Crash | `Crash` at any appender step; pending payloads become dead | process death (kill -9) |
-| Forward archive | `ForwardStart` (validate, candidate = end of highest-position archived message, snapshot `old`), `Publish` (plain store per lane), `PublishSi`, `Fence`, `PassStep` (checked header read, atomic-min), `PassFail` (rollback to `old`), `Finish` | `archive_forward_variable`, `rollback_start_offsets` in `indexed_archiver.c` |
+| Forward archive | `ForwardStart` (validate, candidate = end of highest-position archived message, snapshot `old`), `Publish` (CAS from the snapshot per lane — CAND-37), `PublishSi`, `Fence`, `PassStep` (checked header read, atomic-min), `PassFail` (rollback to `old`), `Finish` | `archive_forward_variable` (publish via `appender_meta_start_offset_cas`), `rollback_start_offsets` in `indexed_archiver.c` |
 | Undo | `UndoStart` (check files exist, lower to lowest restored position), `UndoSi` | backward branch of `archive_up_to_index_locked` |
 | Listing / deletion | `List1` (mark), `List2` (re-list, intersect), `Delete` (unlink, outside the lock) | `archivable_files_locked` + the caller protocol in `archiving-design.md` "Deleting files" |
 | Memory | `Flush` drains the archiver's buffered `start_offset` stores | store buffer, closed by the archiver's seq_cst fence |
@@ -80,7 +80,7 @@ positions (see Results) adds depth, not exhaustiveness.
 
 | Switch | Meaning |
 |---|---|
-| `PublishCAS` | Candidate fix (CAND-37): publish raises `start_offset` only by a CAS from the snapshot value, so it never erases a concurrent commit's lowering. |
+| `PublishCAS` | Landed fix (CAND-37): publish raises `start_offset` only by a CAS from the snapshot value, so it never erases a concurrent commit's lowering. |
 | `AtomicDelete` | Candidate fix (CAND-36): re-list and unlink in one step under `archive.lock` SH (a library-side reclaim call), so undo cannot interleave. |
 | `ListingLivePass` | Candidate fix (CAND-35): listing caps each lane's boundary at the lowest live payload visible in the headers. |
 | `BoundedPass` | CAND-31 proposal: the live pass stops at the tail seen after the fence. |
@@ -94,7 +94,7 @@ positions (see Results) adds depth, not exhaustiveness.
 | Check | Expect | Result | Distinct states |
 |---|---|---|---|
 | `current` | FAIL | `NoLiveLoss` (CAND-36) | — |
-| `current_no_undo` | FAIL | `I1` (CAND-37) | — |
+| `current_no_undo` | PASS | pass | 7,465,618 |
 | `current_no_undo_no_timeout` | PASS | pass | 4,979,768 |
 | `cand36_undo_race` | FAIL | `NoLiveLoss` | — |
 | `cand37_cas_publish` | PASS | pass | 7,465,618 |
@@ -147,7 +147,7 @@ Fix candidates: a reclaim call that re-lists and unlinks under
 `archive.lock` SH (`AtomicDelete`, passes in `fixed`); minimum: document
 that undo must not run while a reclamation is in flight.
 
-### CAND-37: rollback restores a stale boundary
+### CAND-37: rollback restores a stale boundary (FIXED — CAS publish)
 
 1. X uncommitted at 0; Y at 1 committed (index 0); Z at 2 committed
    (index 1).
@@ -163,8 +163,8 @@ that undo must not run while a reclamation is in flight.
    now listable. `I1` violated (and `NoLiveLoss` once a deleter runs).
 
 Needs a live-pass read failure; without `AllowTimeout` the landed protocol
-passes. Fix candidate: `PublishCAS` (passes in `cand37_cas_publish` and
-`fixed`).
+passes. Fix: `PublishCAS` (landed; passes in `cand37_cas_publish` and
+`fixed`, and `current_no_undo` now passes with it).
 
 ### CAND-35: crash between CAS and re-check
 

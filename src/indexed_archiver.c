@@ -112,6 +112,8 @@ static AppenderMeta *get_appender_meta(MmapqIndexedArchiver *a, uint8_t id)
 #ifdef MMAPQ_TEST_HOOKS
 static int (*live_pass_hook)(void);
 void mmapq_test_hook_set_archiver_live_pass(int (*fn)(void)) { live_pass_hook = fn; }
+static void (*publish_pre_hook)(void);
+void mmapq_test_hook_set_archiver_publish_pre(void (*fn)(void)) { publish_pre_hook = fn; }
 #endif
 
 /* ── Factory ─────────────────────────────────────────────────────────────── */
@@ -176,13 +178,16 @@ static void rollback_start_offsets(MmapqIndexedArchiver *a, const int64_t *old)
  * the MAXIMUM payload position; after publishing, one pass over the live
  * headers lowers the boundary below any live payload sitting under it.
  *
- * Ordering: the archiver stores start_offset (release), seq_cst fence, then
- * loads headers (acquire); the appender stores its header (acq_rel CAS),
- * seq_cst fence, then loads start_offset (acquire). The two fences carry the
- * store-buffering argument: at least one side observes the other, so every
- * live payload ends at or above start_offset once the archive returns. The
- * residual window — a commit between its CAS and its re-check — is covered
- * by the caller's deletion re-validation (doc/archiving-design.md). */
+ * Ordering: the archiver raises start_offset by CAS from the snapshot
+ * (acq_rel), seq_cst fence, then loads headers (acquire); the appender
+ * stores its header (acq_rel CAS), seq_cst fence, then loads start_offset
+ * (acquire). The two fences carry the store-buffering argument: at least
+ * one side observes the other, so every live payload ends at or above
+ * start_offset once the archive returns. The CAS from the snapshot is
+ * what keeps a commit's lowering that lands between the snapshot and the
+ * publish from being erased by the publish (CAND-37). The residual window
+ * — a commit between its CAS and its re-check — is covered by the caller's
+ * deletion re-validation (doc/archiving-design.md). */
 static int archive_forward_variable(MmapqIndexedArchiver *a,
                                     int64_t current, int64_t index)
 {
@@ -241,14 +246,22 @@ static int archive_forward_variable(MmapqIndexedArchiver *a,
      * stores and the start_index store. */
     QueueMeta *rwm = rw_meta_open(a);
     if (rwm == NULL) return MMAPQ_EIO;
+#ifdef MMAPQ_TEST_HOOKS
+    /* CAND-37 pin: park between the start_offset snapshot and the publish */
+    if (publish_pre_hook) publish_pre_hook();
+#endif
 
-    /* Publish the candidate boundary (never lowered here), then start_index */
+    /* Publish the candidate boundary (never lowered here), then start_index.
+     * CAND-37: raise by CAS from the snapshot — a commit re-check that
+     * lowered start_offset between the snapshot and this publish must not
+     * be erased; the CAS fails then and the lower value stands (the live
+     * pass and rollback only lower further). */
     for (int aid = 0; aid < MAX_APPENDERS; aid++) {
         if (ends[aid] == OFFSET_NOT_SET) continue;
         AppenderMeta *m = get_appender_meta(a, (uint8_t)aid);
         if (m == NULL) return MMAPQ_ECORRUPT;
         if (ends[aid] > old[aid])
-            appender_meta_set_start_offset(m, ends[aid]);
+            (void)appender_meta_start_offset_cas(m, old[aid], ends[aid]);
     }
     queue_meta_set_start_index(rwm, index);
 

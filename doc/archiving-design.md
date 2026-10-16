@@ -17,7 +17,7 @@ delete, because that is the step that can lose data if it is wrong.
 
 A TLA+ model of this protocol (archive, commit, join, undo, deletion) lives
 in `doc/model/`; its README maps the model steps to the code. The model
-currently reports three open reclamation defects (CAND-35/36/37); see
+currently reports two open reclamation defects (CAND-35/36); see
 `doc/model/README.md`.
 
 ## The persistent fields
@@ -74,8 +74,9 @@ Under the exclusive `archive.lock`:
 2. For each appender, take the archived entry with the **highest payload
    position** (not the highest index). The candidate is the end of that
    message, or of that batch.
-3. Publish `start_offset = max(current, candidate)` for each appender, then
-   `start_index = N`.
+3. Raise each appender's `start_offset` to the candidate by a CAS from the
+   snapshot value — a racing commit's lowering between snapshot and publish
+   must survive — then `start_index = N`.
 4. Make one pass over the live headers, from `N` to the end of the stream.
    For every live entry whose payload lies below its appender's
    `start_offset`, lower `start_offset` to it.
@@ -186,7 +187,7 @@ Undo is possible only while the files it needs still exist.
 
 | Actor | Writes | Then reads |
 |---|---|---|
-| Archiver | `start_offset` (release), `start_index` | live headers (acquire, after a seq_cst fence) |
+| Archiver | `start_offset` (CAS from the snapshot, acq_rel), `start_index` | live headers (acquire, after a seq_cst fence) |
 | Appender, slow-path commit | header (CAS) | `start_offset` (acquire, after a seq_cst fence) |
 | `archivable_files` | — | `start_index`, `start_offset`, under the shared lock |
 

@@ -22,12 +22,13 @@
  * start_offset:
  *   The per-appender deletion boundary: payload files wholly below it may
  *   be reclaimed. Initialised to INITIAL_PAYLOAD_POSITION (64) at creation.
- *   Updated by the archiver (forward: end of the maximum-position archived
- *   entry, lowered by the live-header pass; undo: atomic-min to the lowest
- *   restored position) and lowered by a commit's re-check when a gap-fill
- *   commit races an archive (CAND-30). It is also the anchor a joining
- *   appender with no live entry walks forward from — never a write
- *   position. Read with acquire, written with release/atomic-min — safe
+ *   Updated by the archiver (forward: raised to the end of the
+ *   maximum-position archived entry by CAS from the pre-call snapshot
+ *   (CAND-37), lowered by the live-header pass; undo: atomic-min to the
+ *   lowest restored position) and lowered by a commit's re-check when a
+ *   gap-fill commit races an archive (CAND-30). It is also the anchor a
+ *   joining appender with no live entry walks forward from — never a write
+ *   position. Read with acquire, written by CAS/atomic-min — safe
  *   across processes.
  */
 
@@ -65,13 +66,25 @@ static inline int64_t appender_meta_start_offset(const AppenderMeta *m)
 }
 
 /**
- * appender_meta_set_start_offset — write start_offset with release semantics.
- * Used by the archiver.
+ * appender_meta_start_offset_cas — raise start_offset from expected to
+ * desired in one strong CAS (acq_rel on success, acquire on failure).
+ * The archiver's publish (CAND-37): expected is the pre-call snapshot.
+ * Failure means a racing commit's re-check lowered the boundary below the
+ * snapshot between snapshot and publish — the current value is then
+ * already below desired, so there is nothing to do (archive.lock EX
+ * admits no other archiver; commits only ever lower). Never retry:
+ * raising over that lowering would re-expose a live payload to
+ * reclamation.
+ * Returns 1 if the CAS published, 0 if the boundary was already lower.
  */
-static inline void appender_meta_set_start_offset(AppenderMeta *m, int64_t offset)
+static inline int appender_meta_start_offset_cas(AppenderMeta *m,
+                                                 int64_t expected,
+                                                 int64_t desired)
 {
     _Atomic int64_t *p = (_Atomic int64_t *)(m->base + APPENDER_META_START_OFFSET_OFFSET);
-    atomic_store_explicit(p, offset, memory_order_release);
+    return atomic_compare_exchange_strong_explicit(p, &expected, desired,
+                                                   memory_order_acq_rel,
+                                                   memory_order_acquire);
 }
 
 /**
