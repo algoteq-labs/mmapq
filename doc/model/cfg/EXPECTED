@@ -1,5 +1,5 @@
 # name expected speed(0=seconds,1=minutes,2=~1h)
-current FAIL 0
+current PASS 1
 current_no_undo PASS 1
 current_no_undo_no_timeout PASS 1
 cand36_undo_race FAIL 0
@@ -15,3 +15,4 @@ cand31_bounded PASS 1
 cand35_crash FAIL 0
 cand35_crash_listing_cap PASS 2
 cand35_no_wait_listing_cap FAIL 0
+hand_delete_undo_rule PASS 1

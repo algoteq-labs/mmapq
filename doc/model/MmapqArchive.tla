@@ -44,8 +44,10 @@ CONSTANTS
                      \* lowest live payload it can see in the headers
     AtomicDelete,    \* proposal: re-list + unlink in one step under
                      \* archive.lock SH (a library-side reclaim call)
-    PublishCAS       \* proposal: publish raises start_offset only by a CAS
+    PublishCAS,      \* proposal: publish raises start_offset only by a CAS
                      \* from the snapshot value (never clobbers a lowering)
+    UndoRule         \* documented hand-deleter rule (CAND-36): undo never
+                     \* starts between the re-list and the unlink
 
 Appenders == 1..NA
 Pos       == 0..(NPos-1)
@@ -359,6 +361,7 @@ Finish ==
 (* restored payload (never raises), then stores start_index.               *)
 UndoStart ==
     /\ AllowUndo /\ xpc = "idle"
+    /\ UndoRule => dpc # "del"
     /\ \E N \in 0..(si-1) :
          LET R == N..(si-1) IN
          /\ \A i \in R : /\ hdr[i] # Null

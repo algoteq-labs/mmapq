@@ -2,8 +2,10 @@
 #include "indexed_batch_archiver.h"
 #include "indexed_batch_appender.h"
 #include "indexed_batch_poller.h"
+#include "batch_payload_iterator.h"
 #include "internal/queue_meta.h"
 #include "internal/header_codec.h"
+#include "internal/test_hooks.h"
 #include "runtime.h"
 
 #include <stdlib.h>
@@ -11,6 +13,12 @@
 #include <stdio.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/file.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <pthread.h>
+#include <stdatomic.h>
+#include <sched.h>
 
 static const char    *DIR      = "/tmp";
 static const char    *QUEUE    = "mmap_test_batch_arch";
@@ -557,6 +565,425 @@ void test_batch_appender_rejoin_after_payload_file_deleted(void)
     mmapq_indexed_batch_archiver_close(arch2);
 }
 
+/* ── CAND-36 pins (batch twins of P1–P6): reclaim_files under archive.lock SH ── */
+/* Batch geometry: a one-message batch is a 4-byte count field followed by
+ * the message under the appender's padding rule at region == file == 4096.
+ * batch_record_end(64, 4000) = 4072; batch_record_end(4072, 100) = 4200
+ * (rolls to file 1) — mirrors the single-message 4068/4200 (B2). */
+
+static int64_t batch_record_end(int64_t pos, int32_t len)
+{
+    int64_t p = pos + MMAPQ_BATCH_MSG_COUNT_SIZE;
+    int64_t cap = 4096 - (p % 4096);
+    if (cap < (int64_t)(PAYLOAD_LENGTH_SIZE + len)) p += cap;
+    return p + PAYLOAD_LENGTH_SIZE + len;
+}
+
+static int batch_queue_file_present(const char *name)
+{
+    char path[512];
+    snprintf(path, sizeof(path), "%s/%s/%s", DIR, QUEUE, name);
+    return access(path, F_OK) == 0;
+}
+
+static char *batch_mark_of(char **paths, int n, const char *suffix)
+{
+    for (int i = 0; i < n; i++)
+        if (strstr(paths[i], suffix)) return strdup(paths[i]);
+    return NULL;
+}
+
+static int batch_list_contains(char **paths, int n, const char *suffix)
+{
+    for (int i = 0; i < n; i++)
+        if (strstr(paths[i], suffix)) return 1;
+    return 0;
+}
+
+static void batch_free_paths(char **paths, int n)
+{
+    for (int i = 0; i < n; i++) free(paths[i]);
+}
+
+/* Single-lane: batch A one 4000-byte msg (idx 0, @64, ends 4072), batch B
+ * one 100-byte msg (idx 1, rolls, ends 4200). archive(2) -> start_offset
+ * 4200 -> payload_0_0 listed. */
+static void batch_single_lane_geometry(void)
+{
+    char big[4000]; memset(big, 'G', sizeof(big));
+    char sm[100];   memset(sm, 's', sizeof(sm));
+    MmapqIndexedBatchAppender *a = tiny_archivable_batch_appender(0);
+    TEST_ASSERT_EQUAL_INT64(0, commit_one_msg_batch(a, big, (int32_t)sizeof(big)));
+    TEST_ASSERT_EQUAL_INT64(1, commit_one_msg_batch(a, sm, (int32_t)sizeof(sm)));
+    mmapq_indexed_batch_appender_close(a);
+    TEST_ASSERT_EQUAL_INT64(4072, batch_record_end(64, 4000));
+    TEST_ASSERT_EQUAL_INT64(4200, batch_record_end(4072, 100));
+}
+
+/* B2 batch geometry: two appenders, a0:4000, a1:4000, a0:100, a1:100
+ * (indices 0-3). archive(4) -> 4200/4200, payload_0_0 and payload_1_0
+ * listed. */
+static void batch_two_lane_geometry(void)
+{
+    char big[4000]; memset(big, 'G', sizeof(big));
+    char sm[100];   memset(sm, 's', sizeof(sm));
+    MmapqIndexedBatchAppender *a0 = tiny_archivable_batch_appender(0);
+    MmapqIndexedBatchAppender *a1 = tiny_archivable_batch_appender(1);
+    TEST_ASSERT_EQUAL_INT64(0, commit_one_msg_batch(a0, big, (int32_t)sizeof(big)));
+    TEST_ASSERT_EQUAL_INT64(1, commit_one_msg_batch(a1, big, (int32_t)sizeof(big)));
+    TEST_ASSERT_EQUAL_INT64(2, commit_one_msg_batch(a0, sm, (int32_t)sizeof(sm)));
+    TEST_ASSERT_EQUAL_INT64(3, commit_one_msg_batch(a1, sm, (int32_t)sizeof(sm)));
+    mmapq_indexed_batch_appender_close(a0);
+    mmapq_indexed_batch_appender_close(a1);
+    TEST_ASSERT_EQUAL_INT64(4072, batch_record_end(64, 4000));
+    TEST_ASSERT_EQUAL_INT64(4200, batch_record_end(4072, 100));
+}
+
+static int b36_wait(_Atomic int *flag)
+{
+    for (int ms = 0; ms < 5000; ms++) {
+        if (atomic_load_explicit(flag, memory_order_acquire)) return 1;
+        struct timespec ts = { .tv_sec = 0, .tv_nsec = 1000000 };
+        nanosleep(&ts, NULL);
+    }
+    return 0;
+}
+
+typedef struct {
+    MmapqIndexedBatchArchiver *arch;
+    char                     **marks;
+    int                       n_marks;
+    _Atomic int               done;
+    int                       rc;
+} B36Reclaim;
+
+static void *b36_reclaim_main(void *arg)
+{
+    B36Reclaim *p = arg;
+    p->rc = mmapq_indexed_batch_archiver_reclaim_files(p->arch, p->marks,
+                                                       p->n_marks);
+    atomic_store_explicit(&p->done, 1, memory_order_release);
+    return NULL;
+}
+
+/* B1 (twin of P1) */
+void test_batch_reclaim_deletes_only_marked_still_archivable(void)
+{
+    batch_two_lane_geometry();
+
+    MmapqIndexedBatchArchiver *arch = tiny_batch_archiver();
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_batch_archiver_archive_up_to_index(arch, 4));
+    TEST_ASSERT_EQUAL_INT64(4200, batch_arch_start_offset(arch, 0));
+    TEST_ASSERT_EQUAL_INT64(4200, batch_arch_start_offset(arch, 1));
+
+    char *paths[64] = {0};
+    int n = mmapq_indexed_batch_archiver_archivable_files(arch, paths, 64);
+    TEST_ASSERT_EQUAL_INT(2, n);
+    char *marks[1] = { batch_mark_of(paths, n, "payload_0_0") };
+    TEST_ASSERT_NOT_NULL(marks[0]);
+    batch_free_paths(paths, n);
+
+    TEST_ASSERT_EQUAL_INT(1,
+        mmapq_indexed_batch_archiver_reclaim_files(arch, marks, 1));
+
+    TEST_ASSERT_EQUAL_INT(-1, access(marks[0], F_OK));
+    TEST_ASSERT_TRUE(batch_queue_file_present("payload_1_0"));
+    memset(paths, 0, sizeof(paths));
+    n = mmapq_indexed_batch_archiver_archivable_files(arch, paths, 64);
+    TEST_ASSERT_EQUAL_INT(1, n);
+    TEST_ASSERT_TRUE(batch_list_contains(paths, n, "payload_1_0"));
+    batch_free_paths(paths, n);
+
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_batch_archiver_reclaim_files(arch, marks, 1));
+
+    TEST_ASSERT_TRUE(batch_queue_file_present("payload_0_1"));
+    TEST_ASSERT_TRUE(batch_queue_file_present("payload_1_1"));
+
+    free(marks[0]);
+    mmapq_indexed_batch_archiver_close(arch);
+}
+
+/* B2 (twin of P2) */
+void test_batch_reclaim_relist_excludes_undo_restored_files(void)
+{
+    batch_single_lane_geometry();
+
+    MmapqIndexedBatchArchiver *arch = tiny_batch_archiver();
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_batch_archiver_archive_up_to_index(arch, 2));
+    TEST_ASSERT_EQUAL_INT64(4200, batch_arch_start_offset(arch, 0));
+
+    char *paths[64] = {0};
+    int n = mmapq_indexed_batch_archiver_archivable_files(arch, paths, 64);
+    TEST_ASSERT_EQUAL_INT(1, n);
+    char *marks[1] = { batch_mark_of(paths, n, "payload_0_0") };
+    TEST_ASSERT_NOT_NULL(marks[0]);
+    batch_free_paths(paths, n);
+
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_batch_archiver_archive_up_to_index(arch, 0));
+
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_batch_archiver_reclaim_files(arch, marks, 1));
+    TEST_ASSERT_EQUAL_INT(0, access(marks[0], F_OK));
+
+    free(marks[0]);
+    mmapq_indexed_batch_archiver_close(arch);
+}
+
+/* B4 (twin of P4) */
+void test_batch_reclaim_lock_is_shared(void)
+{
+    batch_single_lane_geometry();
+
+    MmapqIndexedBatchArchiver *arch = tiny_batch_archiver();
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_batch_archiver_archive_up_to_index(arch, 2));
+
+    char *paths[64] = {0};
+    int n = mmapq_indexed_batch_archiver_archivable_files(arch, paths, 64);
+    TEST_ASSERT_EQUAL_INT(1, n);
+    char *marks[1] = { batch_mark_of(paths, n, "payload_0_0") };
+    TEST_ASSERT_NOT_NULL(marks[0]);
+    batch_free_paths(paths, n);
+
+    char lockpath[512];
+    snprintf(lockpath, sizeof(lockpath), "%s/%s/archive.lock", DIR, QUEUE);
+    int fd = open(lockpath, O_RDWR);
+    TEST_ASSERT_GREATER_OR_EQUAL(0, fd);
+    TEST_ASSERT_EQUAL_INT(0, flock(fd, LOCK_SH));
+
+    B36Reclaim p = { .arch = arch, .marks = marks, .n_marks = 1,
+                     .done = 0, .rc = -999 };
+    pthread_t t;
+    TEST_ASSERT_EQUAL_INT(0, pthread_create(&t, NULL, b36_reclaim_main, &p));
+
+    if (!b36_wait(&p.done)) {
+        /* unblock the EX-blocked thread BEFORE joining, or the suite hangs */
+        flock(fd, LOCK_UN);
+        close(fd);
+        pthread_join(t, NULL);
+        free(marks[0]);
+        mmapq_indexed_batch_archiver_close(arch);
+        TEST_FAIL_MESSAGE("reclaim blocked behind a shared hold (lock taken EX?)");
+    }
+    TEST_ASSERT_EQUAL_INT(0, pthread_join(t, NULL));
+    TEST_ASSERT_EQUAL_INT(0, flock(fd, LOCK_UN));
+    close(fd);
+
+    TEST_ASSERT_EQUAL_INT(1, p.rc);
+    TEST_ASSERT_EQUAL_INT(-1, access(marks[0], F_OK));
+
+    free(marks[0]);
+    mmapq_indexed_batch_archiver_close(arch);
+}
+
+/* B6 (twin of P6 — B1 the blocking finding) */
+void test_batch_reclaim_relists_beyond_mark_capacity(void)
+{
+    batch_two_lane_geometry();
+
+    MmapqIndexedBatchArchiver *arch = tiny_batch_archiver();
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_batch_archiver_archive_up_to_index(arch, 4));
+
+    char *paths[64] = {0};
+    int n = mmapq_indexed_batch_archiver_archivable_files(arch, paths, 64);
+    TEST_ASSERT_EQUAL_INT(2, n);
+    char *marks[1] = { batch_mark_of(paths, n, "payload_1_0") };
+    TEST_ASSERT_NOT_NULL(marks[0]);
+    batch_free_paths(paths, n);
+
+    TEST_ASSERT_EQUAL_INT(1,
+        mmapq_indexed_batch_archiver_reclaim_files(arch, marks, 1));
+    TEST_ASSERT_EQUAL_INT(-1, access(marks[0], F_OK));
+    TEST_ASSERT_TRUE(batch_queue_file_present("payload_0_0"));
+
+    memset(paths, 0, sizeof(paths));
+    n = mmapq_indexed_batch_archiver_archivable_files(arch, paths, 64);
+    TEST_ASSERT_EQUAL_INT(1, n);
+    TEST_ASSERT_TRUE(batch_list_contains(paths, n, "payload_0_0"));
+    batch_free_paths(paths, n);
+
+    free(marks[0]);
+    mmapq_indexed_batch_archiver_close(arch);
+}
+
+#ifdef MMAPQ_TEST_HOOKS
+static _Atomic int b36_hook_fired, b36_hook_timed_out, b36_hook_release;
+
+static void b36_hold_hook(void)
+{
+    /* Bounded: a hook routing regression must fail the pin via the
+     * fired/timed_out assertions, never hang the suite. */
+    atomic_store_explicit(&b36_hook_fired, 1, memory_order_release);
+    for (int spins = 0; spins < 5000000; spins++) {
+        if (atomic_load_explicit(&b36_hook_release, memory_order_acquire)) return;
+        sched_yield();
+    }
+    atomic_store_explicit(&b36_hook_timed_out, 1, memory_order_release);
+}
+
+typedef struct {
+    MmapqIndexedBatchArchiver *arch;
+    int64_t                   index;
+    _Atomic int               done;
+    int                       rc;
+} B36Undo;
+
+static void *b36_undo_main(void *arg)
+{
+    B36Undo *p = arg;
+    p->rc = mmapq_indexed_batch_archiver_archive_up_to_index(p->arch, p->index);
+    atomic_store_explicit(&p->done, 1, memory_order_release);
+    return NULL;
+}
+#endif
+
+/* B3 (twin of P3) */
+void test_batch_reclaim_unlink_excludes_concurrent_undo(void)
+{
+#ifdef MMAPQ_TEST_HOOKS
+    batch_single_lane_geometry();
+
+    MmapqIndexedBatchArchiver *arch = tiny_batch_archiver();
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_batch_archiver_archive_up_to_index(arch, 2));
+
+    char *paths[64] = {0};
+    int n = mmapq_indexed_batch_archiver_archivable_files(arch, paths, 64);
+    TEST_ASSERT_EQUAL_INT(1, n);
+    char *marks[1] = { batch_mark_of(paths, n, "payload_0_0") };
+    TEST_ASSERT_NOT_NULL(marks[0]);
+    batch_free_paths(paths, n);
+
+    /* Second archiver instance for the undo — archivers are
+     * thread-confined. Capture into locals, assert after
+     * release+join+disarm. */
+    MmapqIndexedBatchArchiver *arch2 = tiny_batch_archiver();
+
+    atomic_store(&b36_hook_fired, 0);
+    atomic_store(&b36_hook_timed_out, 0);
+    atomic_store(&b36_hook_release, 0);
+    mmapq_test_hook_set_batch_reclaim_pre_unlink(b36_hold_hook);
+
+    B36Reclaim r = { .arch = arch, .marks = marks, .n_marks = 1,
+                     .done = 0, .rc = -999 };
+    pthread_t t1;
+    TEST_ASSERT_EQUAL_INT(0, pthread_create(&t1, NULL, b36_reclaim_main, &r));
+    if (!b36_wait(&b36_hook_fired)) {
+        atomic_store(&b36_hook_release, 1);
+        pthread_join(t1, NULL);
+        mmapq_test_hook_set_batch_reclaim_pre_unlink(NULL);
+        free(marks[0]);
+        mmapq_indexed_batch_archiver_close(arch);
+        mmapq_indexed_batch_archiver_close(arch2);
+        TEST_FAIL_MESSAGE("batch reclaim_pre_unlink never fired (hook routing regression?)");
+    }
+
+    B36Undo u = { .arch = arch2, .index = 0, .done = 0, .rc = -999 };
+    pthread_t t2;
+    int create2_rc = pthread_create(&t2, NULL, b36_undo_main, &u);
+
+    /* captured while threads are alive; asserted after release+join+disarm
+     * (F1). Short bounded window for the negative check. */
+    int undo_done_during_hold = -1;
+    if (create2_rc == 0) {
+        struct timespec ts = { .tv_sec = 0, .tv_nsec = 200000000 };
+        nanosleep(&ts, NULL);
+        undo_done_during_hold = atomic_load_explicit(&u.done, memory_order_acquire);
+    }
+
+    atomic_store_explicit(&b36_hook_release, 1, memory_order_release);
+    int join1_rc = pthread_join(t1, NULL);
+    int join2_rc = 0;
+    if (create2_rc == 0) {
+        b36_wait(&u.done);
+        join2_rc = pthread_join(t2, NULL);
+    }
+    mmapq_test_hook_set_batch_reclaim_pre_unlink(NULL);
+
+    TEST_ASSERT_EQUAL_INT(0, create2_rc);
+    TEST_ASSERT_EQUAL_INT(0, join1_rc);
+    TEST_ASSERT_EQUAL_INT(0, join2_rc);
+    TEST_ASSERT_FALSE_MESSAGE(undo_done_during_hold,
+        "undo completed while the reclaim held archive.lock SH");
+    TEST_ASSERT_TRUE_MESSAGE(atomic_load(&b36_hook_fired),
+        "batch reclaim_pre_unlink never fired");
+    TEST_ASSERT_FALSE_MESSAGE(atomic_load(&b36_hook_timed_out),
+        "batch reclaim_pre_unlink spin expired");
+    TEST_ASSERT_EQUAL_INT(1, r.rc);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ECORRUPT, u.rc);
+    TEST_ASSERT_EQUAL_INT(-1, access(marks[0], F_OK));
+
+    free(marks[0]);
+    mmapq_indexed_batch_archiver_close(arch);
+    mmapq_indexed_batch_archiver_close(arch2);
+#else
+    TEST_IGNORE_MESSAGE("needs MMAPQ_TEST_HOOKS (normal-loop build only)");
+#endif
+}
+
+/* B5 (twin of P5) */
+void test_batch_reclaim_tolerates_concurrent_unlink(void)
+{
+#ifdef MMAPQ_TEST_HOOKS
+    batch_single_lane_geometry();
+
+    MmapqIndexedBatchArchiver *arch = tiny_batch_archiver();
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_batch_archiver_archive_up_to_index(arch, 2));
+
+    char *paths[64] = {0};
+    int n = mmapq_indexed_batch_archiver_archivable_files(arch, paths, 64);
+    TEST_ASSERT_EQUAL_INT(1, n);
+    char *marks[1] = { batch_mark_of(paths, n, "payload_0_0") };
+    TEST_ASSERT_NOT_NULL(marks[0]);
+    batch_free_paths(paths, n);
+
+    atomic_store(&b36_hook_fired, 0);
+    atomic_store(&b36_hook_timed_out, 0);
+    atomic_store(&b36_hook_release, 0);
+    mmapq_test_hook_set_batch_reclaim_pre_unlink(b36_hold_hook);
+
+    B36Reclaim r = { .arch = arch, .marks = marks, .n_marks = 1,
+                     .done = 0, .rc = -999 };
+    pthread_t t1;
+    TEST_ASSERT_EQUAL_INT(0, pthread_create(&t1, NULL, b36_reclaim_main, &r));
+    if (!b36_wait(&b36_hook_fired)) {
+        atomic_store(&b36_hook_release, 1);
+        pthread_join(t1, NULL);
+        mmapq_test_hook_set_batch_reclaim_pre_unlink(NULL);
+        free(marks[0]);
+        mmapq_indexed_batch_archiver_close(arch);
+        TEST_FAIL_MESSAGE("batch reclaim_pre_unlink never fired (hook routing regression?)");
+    }
+
+    /* captured, asserted after join+disarm (F1) */
+    int unl_rc = unlink(marks[0]);
+
+    atomic_store_explicit(&b36_hook_release, 1, memory_order_release);
+    int join_rc = pthread_join(t1, NULL);
+    mmapq_test_hook_set_batch_reclaim_pre_unlink(NULL);
+
+    TEST_ASSERT_EQUAL_INT(0, unl_rc);
+    TEST_ASSERT_EQUAL_INT(0, join_rc);
+
+    TEST_ASSERT_TRUE_MESSAGE(atomic_load(&b36_hook_fired),
+        "batch reclaim_pre_unlink never fired");
+    TEST_ASSERT_FALSE_MESSAGE(atomic_load(&b36_hook_timed_out),
+        "batch reclaim_pre_unlink spin expired");
+    TEST_ASSERT_EQUAL_INT(0, r.rc);   /* ENOENT tolerated, not counted */
+
+    free(marks[0]);
+    mmapq_indexed_batch_archiver_close(arch);
+#else
+    TEST_IGNORE_MESSAGE("needs MMAPQ_TEST_HOOKS (normal-loop build only)");
+#endif
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -577,5 +1004,13 @@ int main(void)
     RUN_TEST(test_batch_appender_rejoin_over_abandoned_batch);
     RUN_TEST(test_batch_archiver_in_order_boundary_unchanged);
     RUN_TEST(test_batch_appender_rejoin_after_payload_file_deleted);
+
+    /* CAND-36 pins (batch) */
+    RUN_TEST(test_batch_reclaim_deletes_only_marked_still_archivable);
+    RUN_TEST(test_batch_reclaim_relist_excludes_undo_restored_files);
+    RUN_TEST(test_batch_reclaim_unlink_excludes_concurrent_undo);
+    RUN_TEST(test_batch_reclaim_lock_is_shared);
+    RUN_TEST(test_batch_reclaim_tolerates_concurrent_unlink);
+    RUN_TEST(test_batch_reclaim_relists_beyond_mark_capacity);
     return UNITY_END();
 }

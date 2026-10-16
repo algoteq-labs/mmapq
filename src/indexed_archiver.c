@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include <stdatomic.h>
 #include <unistd.h>
+#include <errno.h>
 
 #define OFFSET_NOT_SET ((int64_t)-1)
 
@@ -114,6 +115,8 @@ static int (*live_pass_hook)(void);
 void mmapq_test_hook_set_archiver_live_pass(int (*fn)(void)) { live_pass_hook = fn; }
 static void (*publish_pre_hook)(void);
 void mmapq_test_hook_set_archiver_publish_pre(void (*fn)(void)) { publish_pre_hook = fn; }
+static void (*reclaim_pre_unlink_hook)(void);
+void mmapq_test_hook_set_reclaim_pre_unlink(void (*fn)(void)) { reclaim_pre_unlink_hook = fn; }
 #endif
 
 /* ── Factory ─────────────────────────────────────────────────────────────── */
@@ -543,6 +546,95 @@ int mmapq_indexed_archiver_archivable_files(
     int n = archivable_files_locked(a, paths_out, max_paths);
     close(lock_fd);
     return n;
+}
+
+int mmapq_indexed_archiver_reclaim_files(
+    MmapqIndexedArchiver *a,
+    char                **marked_paths,
+    int                   n_marked)
+{
+    if (a == NULL || n_marked < 0 ||
+        (marked_paths == NULL && n_marked > 0))
+        return MMAPQ_EINVAL;
+
+    /* CAND-36: the re-list AND the unlink happen in ONE shared hold of
+     * archive.lock (the model's AtomicDelete). Undo takes the lock
+     * exclusively, so it cannot slip between the two steps and have its
+     * restored files deleted — the interleaving that made the hand
+     * protocol lose live data. SH (not EX): only the archiver must be
+     * excluded; concurrent listers/reclaimers are admitted, which is why
+     * ENOENT below is tolerated. The hold is bounded: a complete listing
+     * (meta reads + directory stats — nothing that blocks on another
+     * actor) plus at most |listed ∩ marked| unlink() calls. */
+    int lock_fd;
+    int lrc = mmapqi_archive_lock_acquire(a->directory, a->queue_name,
+                                          0, &lock_fd);
+    if (lrc == MMAPQ_EINVAL) return 0;
+    if (lrc != 0) return lrc;
+
+    if (n_marked == 0) {
+        close(lock_fd);
+        return 0;
+    }
+
+    /* The re-list must be COMPLETE: archivable_files_locked enumerates
+     * header files first, then payload lanes in appender-id order, and
+     * truncates at capacity — a listing capped at the mark count can
+     * starve a mark whose files sort after other lanes' (B1). Grow and
+     * re-list until nothing was truncated. Terminates: under this SH hold
+     * the listing can only shrink (commit re-checks lower start_offset
+     * without the lock; every raiser holds EX, excluded here). */
+    int cap = n_marked;
+    char **list = calloc((size_t)cap, sizeof *list);
+    if (list == NULL) {
+        close(lock_fd);
+        return MMAPQ_ENOMEM;
+    }
+    int n;
+    for (;;) {
+        n = archivable_files_locked(a, list, cap);
+        if (n < 0) {          /* listing frees its own partial strings */
+            free(list);
+            close(lock_fd);
+            return n;
+        }
+        if (n < cap) break;   /* complete */
+        for (int i = 0; i < n; i++) free(list[i]);
+        cap *= 2;
+        char **nl = realloc(list, (size_t)cap * sizeof *nl);
+        if (nl == NULL) {
+            free(list);
+            close(lock_fd);
+            return MMAPQ_ENOMEM;
+        }
+        list = nl;
+    }
+
+#ifdef MMAPQ_TEST_HOOKS
+    if (reclaim_pre_unlink_hook != NULL) reclaim_pre_unlink_hook();
+#endif
+
+    /* Unlink the overlap. Every unlink was validated by the in-hold
+     * re-list, so partial progress is safe: a retry re-lists and skips
+     * what is already gone. ENOENT means a concurrent reclaimer (SH)
+     * beat us to it — the goal is met; not counted, not an error. */
+    int deleted = 0;
+    int rc = 0;
+    for (int i = 0; i < n; i++) {
+        int marked = 0;
+        for (int k = 0; k < n_marked; k++)
+            if (strcmp(list[i], marked_paths[k]) == 0) { marked = 1; break; }
+        if (!marked) continue;
+        if (unlink(list[i]) == 0) { deleted++; continue; }
+        if (errno == ENOENT) continue;
+        rc = MMAPQ_EIO;
+        break;
+    }
+
+    for (int i = 0; i < n; i++) free(list[i]);
+    free(list);
+    close(lock_fd);
+    return rc != 0 ? rc : deleted;
 }
 
 static int64_t archiver_start_index_fn(void *ctx)

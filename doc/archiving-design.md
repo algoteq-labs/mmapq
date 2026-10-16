@@ -7,17 +7,19 @@ data. It is two separate things:
 
 1. **Logical archiving** moves the queue's `start_index`. Entries below it
    are *archived*: readers and pollers report them as unavailable.
-2. **Physical reclamation** is done by the caller, outside the library.
-   `archivable_files()` lists header and payload files that hold nothing the
-   queue still needs; the caller may delete, move or compress them. The
-   library never deletes files.
+2. **Physical reclamation** is offered by the library: `reclaim_files()`
+   (both archivers) deletes the caller's marked files that a fresh,
+   complete listing still reports, re-listing and unlinking in one shared
+   hold of `archive.lock` so an undo cannot slip between the two steps.
+   Callers may still delete, move or compress listed files themselves under
+   the "Deleting files" protocol below.
 
 This document defines when a file may be listed, and how a caller must
 delete, because that is the step that can lose data if it is wrong.
 
 A TLA+ model of this protocol (archive, commit, join, undo, deletion) lives
 in `doc/model/`; its README maps the model steps to the code. The model
-currently reports two open reclamation defects (CAND-35/36); see
+currently reports one open reclamation defect (CAND-35); see
 `doc/model/README.md`.
 
 ## The persistent fields
@@ -168,11 +170,25 @@ over a longer one leaves stale bytes that a later recovery would misread.
 - header files wholly below `start_index`;
 - payload files of each appender wholly below its `start_offset`.
 
-**Do not delete immediately.** Mark the listed files, wait, then delete
-only the files that a fresh `archivable_files()` call — taken *after* the
+The library path is **mark → wait → `reclaim_files(marks)`**. Mark the
+listed files, wait, then call `reclaim_files()`: it re-lists — completely,
+growing its scratch listing until nothing is truncated — and unlinks the
+overlap in a single shared hold of `archive.lock`, so an undo (which takes
+the lock exclusively) cannot slip between the re-list and the unlink and
+lose its restored files. Marks that dropped out of the re-list are
+skipped: they are live again (an undo ran before the hold) or already
+gone. A mark is a snapshot, not permission.
+
+**Do not delete immediately.** If you delete files yourself instead of
+calling `reclaim_files()`: mark the listed files, wait, then delete only
+the files that a fresh `archivable_files()` call — taken *after* the
 wait — still lists. The re-check is what closes I1's window: if a racing
-commit lowered `start_offset` after the first listing, its file drops out of
-the second. A mark is a snapshot, not permission.
+commit lowered `start_offset` after the first listing, its file drops out
+of the second. Additionally, no undo (`archive_up_to_index` to an index
+below `start_index`) may start between your second `archivable_files()`
+listing and your last `unlink()` of the files it returned. The wait before
+the second listing is still required. `reclaim_files()` enforces this for
+you by holding `archive.lock` shared across both steps.
 
 The wait only has to outlast a writer's stall between its CAS and its
 re-check — normally a few instructions — so seconds to minutes covers
@@ -190,6 +206,7 @@ Undo is possible only while the files it needs still exist.
 | Archiver | `start_offset` (CAS from the snapshot, acq_rel), `start_index` | live headers (acquire, after a seq_cst fence) |
 | Appender, slow-path commit | header (CAS) | `start_offset` (acquire, after a seq_cst fence) |
 | `archivable_files` | — | `start_index`, `start_offset`, under the shared lock |
+| `reclaim_files` | unlinks marked ∩ re-listed files | `start_index`, `start_offset` — under the shared lock, held across the unlink |
 
 The two seq_cst fences carry the argument; the accesses themselves need
 only release/acquire. Lowering is always an atomic-min loop; nothing stores
@@ -208,6 +225,8 @@ a queue only with all clients closed.
 - **Join:** one forward walk when the appender has no live entry.
 - **Archiver:** one validation read per archived message, plus one pass
   over all live headers per call. It runs off the hot path.
+- **Reclaim:** one complete listing plus at most |marked| `unlink()` calls,
+  under the shared lock; blocks archivers for the hold. Off the hot path.
 
 ## Java parity
 
@@ -222,7 +241,8 @@ Mixed C/Java queues are safe only when Java follows the same rules:
    `start_offset`, CAS, fence, re-check, lower if needed.
 6. Join: never read headers below `start_index`; with no own live entry,
    walk from `start_offset` to the end of the stream; never write at it.
-7. Deletion: mark, wait, re-validate, delete.
+7. Deletion: mark, wait, re-validate, delete — or the library reclaim call
+   where the implementation provides it.
 
 ## History
 

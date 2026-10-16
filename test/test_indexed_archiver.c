@@ -1732,6 +1732,429 @@ void test_archive_publish_cas_survives_racing_commit_min(void)
 #endif
 }
 
+/* ── CAND-36 pins: reclaim_files (re-list + unlink under archive.lock SH) ── */
+
+static int queue_file_present(const char *name)
+{
+    char path[512];
+    snprintf(path, sizeof(path), "%s/%s/%s", DIR, QUEUE, name);
+    return access(path, F_OK) == 0;
+}
+
+/* strdup the listing entry containing suffix; caller frees. */
+static char *mark_of(char **paths, int n, const char *suffix)
+{
+    for (int i = 0; i < n; i++)
+        if (strstr(paths[i], suffix)) return strdup(paths[i]);
+    return NULL;
+}
+
+/* Single-lane geometry: A 4000 @64 (idx 0, ends 4068), B 100 @4096 (idx 1,
+ * rolls, ends 4200). archive(2) -> start_offset 4200 -> payload_0_0 listed. */
+static void single_lane_geometry(void)
+{
+    char big[4000]; memset(big, 'G', sizeof(big));
+    char sm[100];   memset(sm, 's', sizeof(sm));
+    MmapqIndexedAppender *a = tiny_archivable_appender();
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_appender_append(a, big, (int32_t)sizeof(big)));
+    TEST_ASSERT_EQUAL_INT64(1, mmapq_indexed_appender_append(a, sm, (int32_t)sizeof(sm)));
+    mmapq_indexed_appender_close(a);
+    TEST_ASSERT_EQUAL_INT64(4068, record_end(INITIAL_PAYLOAD_POSITION, 4000));
+    TEST_ASSERT_EQUAL_INT64(4200, record_end(4096, 100));
+}
+
+/* B2 geometry (reviewer probe): two appenders, appends a0:4000, a1:4000,
+ * a0:100, a1:100 -> indices 0-3. Big payloads @64 end 4068; small payloads
+ * roll to @4096 end 4200. archive(4) -> 4200/4200, payload_0_0 and
+ * payload_1_0 listed. */
+static void two_lane_geometry(void)
+{
+    char big[4000]; memset(big, 'G', sizeof(big));
+    char sm[100];   memset(sm, 's', sizeof(sm));
+
+    char dir_path[512];
+    snprintf(dir_path, sizeof(dir_path), "%s/%s", DIR, QUEUE);
+    mkdir(dir_path, 0775);
+    QueueMeta *m = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapqi_queue_meta_open_rw(DIR, QUEUE, 0,
+        4096, 4096, /* archivable= */ 1, QUEUE_TYPE_NORMAL, &m));
+    mmapqi_queue_meta_close(m);
+
+    MmapqIndexedAppender *a0 = NULL, *a1 = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_appender_create_with_id(DIR, QUEUE,
+        4096, 4, 4096, TIMEOUT, 0, rt, 0, 0, &a0));
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_appender_create_with_id(DIR, QUEUE,
+        4096, 4, 4096, TIMEOUT, 0, rt, 1, 0, &a1));
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_appender_append(a0, big, (int32_t)sizeof(big)));
+    TEST_ASSERT_EQUAL_INT64(1, mmapq_indexed_appender_append(a1, big, (int32_t)sizeof(big)));
+    TEST_ASSERT_EQUAL_INT64(2, mmapq_indexed_appender_append(a0, sm, (int32_t)sizeof(sm)));
+    TEST_ASSERT_EQUAL_INT64(3, mmapq_indexed_appender_append(a1, sm, (int32_t)sizeof(sm)));
+    mmapq_indexed_appender_close(a0);
+    mmapq_indexed_appender_close(a1);
+
+    TEST_ASSERT_EQUAL_INT64(4068, record_end(INITIAL_PAYLOAD_POSITION, 4000));
+    TEST_ASSERT_EQUAL_INT64(4200, record_end(4096, 100));
+}
+
+/* Bounded main-side wait; 0 on timeout (caller disarms, joins, then fails). */
+static int c36_wait(_Atomic int *flag)
+{
+    for (int ms = 0; ms < 5000; ms++) {
+        if (atomic_load_explicit(flag, memory_order_acquire)) return 1;
+        struct timespec ts = { .tv_sec = 0, .tv_nsec = 1000000 };
+        nanosleep(&ts, NULL);
+    }
+    return 0;
+}
+
+typedef struct {
+    MmapqIndexedArchiver *arch;
+    char                **marks;
+    int                   n_marks;
+    _Atomic int           done;
+    int                   rc;
+} C36Reclaim;
+
+static void *c36_reclaim_main(void *arg)
+{
+    C36Reclaim *p = arg;
+    p->rc = mmapq_indexed_archiver_reclaim_files(p->arch, p->marks, p->n_marks);
+    atomic_store_explicit(&p->done, 1, memory_order_release);
+    return NULL;
+}
+
+/* P1: reclaim deletes exactly the marks that a fresh complete listing still
+ * reports — the unmarked lane's file survives and stays listed; a repeat
+ * reclaim with the same marks is a no-op. */
+void test_reclaim_deletes_only_marked_still_archivable(void)
+{
+    two_lane_geometry();
+
+    MmapqIndexedArchiver *arch = tiny_archiver();
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_archiver_archive_up_to_index(arch, 4));
+    TEST_ASSERT_EQUAL_INT64(4200, arch_start_offset(arch, 0));
+    TEST_ASSERT_EQUAL_INT64(4200, arch_start_offset(arch, 1));
+
+    char *paths[64] = {0};
+    int n = mmapq_indexed_archiver_archivable_files(arch, paths, 64);
+    TEST_ASSERT_EQUAL_INT(2, n);
+    TEST_ASSERT_TRUE(list_contains(paths, n, "payload_0_0"));
+    TEST_ASSERT_TRUE(list_contains(paths, n, "payload_1_0"));
+
+    char *marks[1] = { mark_of(paths, n, "payload_0_0") };
+    TEST_ASSERT_NOT_NULL(marks[0]);
+    free_paths(paths, n);
+
+    TEST_ASSERT_EQUAL_INT(1, mmapq_indexed_archiver_reclaim_files(arch, marks, 1));
+
+    TEST_ASSERT_EQUAL_INT(-1, access(marks[0], F_OK));
+    TEST_ASSERT_TRUE(queue_file_present("payload_1_0"));
+    memset(paths, 0, sizeof(paths));
+    n = mmapq_indexed_archiver_archivable_files(arch, paths, 64);
+    TEST_ASSERT_EQUAL_INT(1, n);
+    TEST_ASSERT_TRUE(list_contains(paths, n, "payload_1_0"));
+    free_paths(paths, n);
+
+    /* same marks again: the re-list no longer lists the gone file */
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_archiver_reclaim_files(arch, marks, 1));
+
+    /* live files intact */
+    TEST_ASSERT_TRUE(queue_file_present("payload_0_1"));
+    TEST_ASSERT_TRUE(queue_file_present("payload_1_1"));
+
+    free(marks[0]);
+    mmapq_indexed_archiver_close(arch);
+}
+
+/* P2: a mark that an undo restored drops out of the re-list and is NOT
+ * deleted — the re-list, not the mark, decides. */
+void test_reclaim_relist_excludes_undo_restored_files(void)
+{
+    single_lane_geometry();
+
+    MmapqIndexedArchiver *arch = tiny_archiver();
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_archiver_archive_up_to_index(arch, 2));
+    TEST_ASSERT_EQUAL_INT64(4200, arch_start_offset(arch, 0));
+
+    char *paths[64] = {0};
+    int n = mmapq_indexed_archiver_archivable_files(arch, paths, 64);
+    TEST_ASSERT_EQUAL_INT(1, n);
+    char *marks[1] = { mark_of(paths, n, "payload_0_0") };
+    TEST_ASSERT_NOT_NULL(marks[0]);
+    free_paths(paths, n);
+
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_archiver_archive_up_to_index(arch, 0));
+
+    /* start_index is back at 0: the re-list is empty, the mark drops out */
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_archiver_reclaim_files(arch, marks, 1));
+    TEST_ASSERT_EQUAL_INT(0, access(marks[0], F_OK));
+
+    free(marks[0]);
+    mmapq_indexed_archiver_close(arch);
+}
+
+/* P4: reclaim takes archive.lock SHARED — it proceeds while another holder
+ * keeps a shared flock (an EX implementation would block; P14 shape). */
+void test_reclaim_lock_is_shared(void)
+{
+    single_lane_geometry();
+
+    MmapqIndexedArchiver *arch = tiny_archiver();
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_archiver_archive_up_to_index(arch, 2));
+
+    char *paths[64] = {0};
+    int n = mmapq_indexed_archiver_archivable_files(arch, paths, 64);
+    TEST_ASSERT_EQUAL_INT(1, n);
+    char *marks[1] = { mark_of(paths, n, "payload_0_0") };
+    TEST_ASSERT_NOT_NULL(marks[0]);
+    free_paths(paths, n);
+
+    char lockpath[512];
+    snprintf(lockpath, sizeof(lockpath), "%s/%s/archive.lock", DIR, QUEUE);
+    int fd = open(lockpath, O_RDWR);
+    TEST_ASSERT_GREATER_OR_EQUAL(0, fd);
+    TEST_ASSERT_EQUAL_INT(0, flock(fd, LOCK_SH));
+
+    C36Reclaim p = { .arch = arch, .marks = marks, .n_marks = 1,
+                     .done = 0, .rc = -999 };
+    pthread_t t;
+    TEST_ASSERT_EQUAL_INT(0, pthread_create(&t, NULL, c36_reclaim_main, &p));
+
+    if (!c36_wait(&p.done)) {
+        /* unblock the EX-blocked thread BEFORE joining, or the suite hangs */
+        flock(fd, LOCK_UN);
+        close(fd);
+        pthread_join(t, NULL);
+        free(marks[0]);
+        mmapq_indexed_archiver_close(arch);
+        TEST_FAIL_MESSAGE("reclaim blocked behind a shared hold (lock taken EX?)");
+    }
+    TEST_ASSERT_EQUAL_INT(0, pthread_join(t, NULL));
+    TEST_ASSERT_EQUAL_INT(0, flock(fd, LOCK_UN));
+    close(fd);
+
+    TEST_ASSERT_EQUAL_INT(1, p.rc);
+    TEST_ASSERT_EQUAL_INT(-1, access(marks[0], F_OK));
+
+    free(marks[0]);
+    mmapq_indexed_archiver_close(arch);
+}
+
+/* P6 (B1): the re-list is COMPLETE — it grows past the mark count. The
+ * listing enumerates lane 0 first, so a listing truncated at the mark
+ * capacity returns payload_0_0 and the payload_1_0 mark never matches. */
+void test_reclaim_relists_beyond_mark_capacity(void)
+{
+    two_lane_geometry();
+
+    MmapqIndexedArchiver *arch = tiny_archiver();
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_archiver_archive_up_to_index(arch, 4));
+
+    char *paths[64] = {0};
+    int n = mmapq_indexed_archiver_archivable_files(arch, paths, 64);
+    TEST_ASSERT_EQUAL_INT(2, n);
+
+    char *marks[1] = { mark_of(paths, n, "payload_1_0") };
+    TEST_ASSERT_NOT_NULL(marks[0]);
+    free_paths(paths, n);
+
+    TEST_ASSERT_EQUAL_INT(1, mmapq_indexed_archiver_reclaim_files(arch, marks, 1));
+    TEST_ASSERT_EQUAL_INT(-1, access(marks[0], F_OK));
+    TEST_ASSERT_TRUE(queue_file_present("payload_0_0"));
+
+    memset(paths, 0, sizeof(paths));
+    n = mmapq_indexed_archiver_archivable_files(arch, paths, 64);
+    TEST_ASSERT_EQUAL_INT(1, n);
+    TEST_ASSERT_TRUE(list_contains(paths, n, "payload_0_0"));
+    free_paths(paths, n);
+
+    free(marks[0]);
+    mmapq_indexed_archiver_close(arch);
+}
+
+#ifdef MMAPQ_TEST_HOOKS
+static _Atomic int c36_hook_fired, c36_hook_timed_out, c36_hook_release;
+
+static void c36_hold_hook(void)
+{
+    /* Bounded: a hook routing regression must fail the pin via the
+     * fired/timed_out assertions, never hang the suite. */
+    atomic_store_explicit(&c36_hook_fired, 1, memory_order_release);
+    for (int spins = 0; spins < 5000000; spins++) {
+        if (atomic_load_explicit(&c36_hook_release, memory_order_acquire)) return;
+        sched_yield();
+    }
+    atomic_store_explicit(&c36_hook_timed_out, 1, memory_order_release);
+}
+
+typedef struct {
+    MmapqIndexedArchiver *arch;
+    int64_t              index;
+    _Atomic int          done;
+    int                  rc;
+} C36Undo;
+
+static void *c36_undo_main(void *arg)
+{
+    C36Undo *p = arg;
+    p->rc = mmapq_indexed_archiver_archive_up_to_index(p->arch, p->index);
+    atomic_store_explicit(&p->done, 1, memory_order_release);
+    return NULL;
+}
+#endif
+
+/* P3: the unlink happens INSIDE the SH hold — an undo started while a
+ * reclaim is parked between its re-list and its unlink blocks on EX, then
+ * fails its existence check (MMAPQ_ECORRUPT) because the file is gone.
+ * Mutant M1 (lock released before the unlink) lets the undo through. */
+void test_reclaim_unlink_excludes_concurrent_undo(void)
+{
+#ifdef MMAPQ_TEST_HOOKS
+    single_lane_geometry();
+
+    MmapqIndexedArchiver *arch = tiny_archiver();
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_archiver_archive_up_to_index(arch, 2));
+
+    char *paths[64] = {0};
+    int n = mmapq_indexed_archiver_archivable_files(arch, paths, 64);
+    TEST_ASSERT_EQUAL_INT(1, n);
+    char *marks[1] = { mark_of(paths, n, "payload_0_0") };
+    TEST_ASSERT_NOT_NULL(marks[0]);
+    free_paths(paths, n);
+
+    /* A second archiver instance for the undo — archivers are
+     * thread-confined. Both are created before any thread starts, and every
+     * result observed while a thread is held is captured into locals and
+     * asserted only after release+join+disarm (a Unity longjmp with a
+     * thread alive would orphan it with a pointer to a dead stack frame). */
+    MmapqIndexedArchiver *arch2 = tiny_archiver();
+
+    atomic_store(&c36_hook_fired, 0);
+    atomic_store(&c36_hook_timed_out, 0);
+    atomic_store(&c36_hook_release, 0);
+    mmapq_test_hook_set_reclaim_pre_unlink(c36_hold_hook);
+
+    C36Reclaim r = { .arch = arch, .marks = marks, .n_marks = 1,
+                     .done = 0, .rc = -999 };
+    pthread_t t1;
+    TEST_ASSERT_EQUAL_INT(0, pthread_create(&t1, NULL, c36_reclaim_main, &r));
+    if (!c36_wait(&c36_hook_fired)) {
+        atomic_store(&c36_hook_release, 1);
+        pthread_join(t1, NULL);
+        mmapq_test_hook_set_reclaim_pre_unlink(NULL);
+        free(marks[0]);
+        mmapq_indexed_archiver_close(arch);
+        mmapq_indexed_archiver_close(arch2);
+        TEST_FAIL_MESSAGE("reclaim_pre_unlink never fired (hook routing regression?)");
+    }
+
+    /* The reclaim is parked inside its SH hold; the undo must block on EX.
+     * Everything observed while a thread is alive is captured into locals
+     * and asserted only after release+join+disarm (F1). */
+    C36Undo u = { .arch = arch2, .index = 0, .done = 0, .rc = -999 };
+    pthread_t t2;
+    int create2_rc = pthread_create(&t2, NULL, c36_undo_main, &u);
+
+    int undo_done_during_hold = -1;
+    if (create2_rc == 0) {
+        /* short bounded window for the negative check — the 5 s bound is
+         * for things that must happen */
+        struct timespec ts = { .tv_sec = 0, .tv_nsec = 200000000 };
+        nanosleep(&ts, NULL);
+        undo_done_during_hold = atomic_load_explicit(&u.done, memory_order_acquire);
+    }
+
+    atomic_store_explicit(&c36_hook_release, 1, memory_order_release);
+    int join1_rc = pthread_join(t1, NULL);
+    int join2_rc = 0;
+    if (create2_rc == 0) {
+        c36_wait(&u.done);
+        join2_rc = pthread_join(t2, NULL);
+    }
+    mmapq_test_hook_set_reclaim_pre_unlink(NULL);
+
+    TEST_ASSERT_EQUAL_INT(0, create2_rc);
+    TEST_ASSERT_EQUAL_INT(0, join1_rc);
+    TEST_ASSERT_EQUAL_INT(0, join2_rc);
+    TEST_ASSERT_FALSE_MESSAGE(undo_done_during_hold,
+        "undo completed while the reclaim held archive.lock SH");
+    TEST_ASSERT_TRUE_MESSAGE(atomic_load(&c36_hook_fired),
+        "reclaim_pre_unlink never fired");
+    TEST_ASSERT_FALSE_MESSAGE(atomic_load(&c36_hook_timed_out),
+        "reclaim_pre_unlink spin expired");
+    TEST_ASSERT_EQUAL_INT(1, r.rc);
+    /* the undo's existence check fails: the restored file was reclaimed */
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ECORRUPT, u.rc);
+    TEST_ASSERT_EQUAL_INT(-1, access(marks[0], F_OK));
+
+    free(marks[0]);
+    mmapq_indexed_archiver_close(arch);
+    mmapq_indexed_archiver_close(arch2);
+#else
+    TEST_IGNORE_MESSAGE("needs MMAPQ_TEST_HOOKS (normal-loop build only)");
+#endif
+}
+
+/* P5: a file already unlinked by a concurrent reclaimer (SH admits them)
+ * is tolerated — ENOENT is neither counted nor an error. */
+void test_reclaim_tolerates_concurrent_unlink(void)
+{
+#ifdef MMAPQ_TEST_HOOKS
+    single_lane_geometry();
+
+    MmapqIndexedArchiver *arch = tiny_archiver();
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_archiver_archive_up_to_index(arch, 2));
+
+    char *paths[64] = {0};
+    int n = mmapq_indexed_archiver_archivable_files(arch, paths, 64);
+    TEST_ASSERT_EQUAL_INT(1, n);
+    char *marks[1] = { mark_of(paths, n, "payload_0_0") };
+    TEST_ASSERT_NOT_NULL(marks[0]);
+    free_paths(paths, n);
+
+    atomic_store(&c36_hook_fired, 0);
+    atomic_store(&c36_hook_timed_out, 0);
+    atomic_store(&c36_hook_release, 0);
+    mmapq_test_hook_set_reclaim_pre_unlink(c36_hold_hook);
+
+    C36Reclaim r = { .arch = arch, .marks = marks, .n_marks = 1,
+                     .done = 0, .rc = -999 };
+    pthread_t t1;
+    TEST_ASSERT_EQUAL_INT(0, pthread_create(&t1, NULL, c36_reclaim_main, &r));
+    if (!c36_wait(&c36_hook_fired)) {
+        atomic_store(&c36_hook_release, 1);
+        pthread_join(t1, NULL);
+        mmapq_test_hook_set_reclaim_pre_unlink(NULL);
+        free(marks[0]);
+        mmapq_indexed_archiver_close(arch);
+        TEST_FAIL_MESSAGE("reclaim_pre_unlink never fired (hook routing regression?)");
+    }
+
+    /* the reclaim is parked after its re-list; a concurrent reclaimer
+     * (or hand-deleter) unlinks the mark first. Captured, asserted after
+     * join+disarm (F1). */
+    int unl_rc = unlink(marks[0]);
+
+    atomic_store_explicit(&c36_hook_release, 1, memory_order_release);
+    int join_rc = pthread_join(t1, NULL);
+    mmapq_test_hook_set_reclaim_pre_unlink(NULL);
+
+    TEST_ASSERT_EQUAL_INT(0, unl_rc);
+    TEST_ASSERT_EQUAL_INT(0, join_rc);
+
+    TEST_ASSERT_TRUE_MESSAGE(atomic_load(&c36_hook_fired),
+        "reclaim_pre_unlink never fired");
+    TEST_ASSERT_FALSE_MESSAGE(atomic_load(&c36_hook_timed_out),
+        "reclaim_pre_unlink spin expired");
+    TEST_ASSERT_EQUAL_INT(0, r.rc);   /* ENOENT tolerated, not counted */
+
+    free(marks[0]);
+    mmapq_indexed_archiver_close(arch);
+#else
+    TEST_IGNORE_MESSAGE("needs MMAPQ_TEST_HOOKS (normal-loop build only)");
+#endif
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -1774,5 +2197,11 @@ int main(void)
     RUN_TEST(test_commit_racing_archive_lowers_boundary);
     RUN_TEST(test_archiver_live_pass_failure_restores_boundary);
     RUN_TEST(test_archive_publish_cas_survives_racing_commit_min);
+    RUN_TEST(test_reclaim_deletes_only_marked_still_archivable);
+    RUN_TEST(test_reclaim_relist_excludes_undo_restored_files);
+    RUN_TEST(test_reclaim_unlink_excludes_concurrent_undo);
+    RUN_TEST(test_reclaim_lock_is_shared);
+    RUN_TEST(test_reclaim_tolerates_concurrent_unlink);
+    RUN_TEST(test_reclaim_relists_beyond_mark_capacity);
     return UNITY_END();
 }

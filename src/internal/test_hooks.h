@@ -19,6 +19,9 @@
  * archiver_publish_pre: invoked once per archive_forward_variable call
  *   immediately before the publish loop — lets a pin park the archiver
  *   between its start_offset snapshot and the publish (CAND-37).
+ * reclaim_pre_unlink / batch twin: invoked once per reclaim_files call
+ *   immediately before the unlink loop, while archive.lock SH is held —
+ *   lets a pin park a reclaim mid-hold (CAND-36).
  * header_wrap_inject: substitutes the wrap result inside both
  *   mmapqi_header_read and mmapqi_header_read_checked while armed — so an
  *   injected timeout collapses to end-of-stream through the plain read but
@@ -31,6 +34,8 @@ void mmapq_test_hook_set_commit_min_pre(void (*fn)(void));
 void mmapq_test_hook_set_archiver_live_pass(int (*fn)(void));
 void mmapq_test_hook_set_batch_archiver_live_pass(int (*fn)(void));
 void mmapq_test_hook_set_archiver_publish_pre(void (*fn)(void));
+void mmapq_test_hook_set_reclaim_pre_unlink(void (*fn)(void));
+void mmapq_test_hook_set_batch_reclaim_pre_unlink(void (*fn)(void));
 void mmapq_test_hook_header_wrap_inject(int wrap_result);
 #endif
 

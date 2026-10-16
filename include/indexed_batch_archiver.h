@@ -14,22 +14,29 @@
  * the entire batch (all messages) to find nextPayloadPosition, whereas the
  * normal archiver reads a single length field after the committed position.
  *
- * The archiver does NOT delete files — archivable_files() returns the list
- * and the caller decides what to do with them. Callers must NOT delete
- * listed files immediately: mark, wait, then delete only files that a fresh
- * archivable_files() call taken after the wait still lists (see
- * doc/archiving-design.md, "Deleting files"). A mark is a snapshot, not
- * permission.
+ * Physical reclamation follows mark -> wait -> reclaim: archivable_files()
+ * returns the marks, the caller waits (outlasting a writer's commit/re-check
+ * window), then reclaim_files() deletes the marks that a fresh COMPLETE
+ * listing still reports — the re-list and the unlink happen in a single
+ * shared hold of archive.lock, so an undo cannot slip between them and lose
+ * its restored files (CAND-36; see doc/archiving-design.md, "Deleting
+ * files"). A mark is a snapshot, not permission. Callers who delete files
+ * themselves instead of calling reclaim_files() must follow the same
+ * mark/wait/re-list protocol by hand, and no undo (archive_up_to_index to
+ * an index below start_index) may start between their second
+ * archivable_files() listing and their last unlink() of the files it
+ * returned.
  *
  * The payload boundary is computed from headers — the end of the archived
  * batch with the maximum payload position, lowered below any live batch
  * that sits under it (see indexed_archiver.h for the full rule).
  *
  * Archiving is serialised per queue on <dir>/<queue>/archive.lock (flock):
- * archive_up_to_index holds it exclusively, archivable_files shared — a
- * listing never observes an archive in progress. The lock file is created
- * on first use, so archiving or listing a queue in a read-only directory
- * fails with MMAPQ_EIO.
+ * archive_up_to_index holds it exclusively, archivable_files and
+ * reclaim_files shared — a listing or reclaim never observes an archive in
+ * progress, and an archive or undo never runs while a reclaim holds the
+ * lock. The lock file is created on first use, so archiving or listing a
+ * queue in a read-only directory fails with MMAPQ_EIO.
  *
  * Archiving can move in two directions:
  *   Forward (index > current start_index): mark batches as archived.
@@ -149,6 +156,33 @@ int mmapq_indexed_batch_archiver_archivable_files(
     MmapqIndexedBatchArchiver *a,
     char                **paths_out,
     int                   max_paths);
+
+/**
+ * Delete the intersection of @p marked_paths with a fresh COMPLETE
+ * archivable listing, in a single shared hold of archive.lock (CAND-36).
+ *
+ * Batch twin of mmapq_indexed_archiver_reclaim_files — see
+ * indexed_archiver.h for the full contract (mark -> wait -> reclaim; the
+ * re-list and the unlink under one archive.lock SH hold so undo cannot
+ * interleave; the wait is the caller's, before this call; skipped marks
+ * are live again or already gone; ENOENT from a concurrent reclaimer is
+ * tolerated, not counted). Marks are matched by exact string comparison
+ * against the fresh listing — pass the path strings exactly as
+ * archivable_files() returned them (no relative paths, no patterns).
+ *
+ * a:            the archiver
+ * marked_paths: the marks — paths from an earlier archivable_files()
+ *               listing (the array and strings are only read)
+ * n_marked:     number of entries in marked_paths
+ * Returns: the number of files this call unlinked (>= 0), or a negative
+ *          MMAPQ_* code: MMAPQ_EINVAL (invalid arguments), MMAPQ_ENOMEM
+ *          (allocation failure), MMAPQ_EIO (lock or unlink failure).
+ *          A missing queue directory yields 0, mirroring archivable_files.
+ */
+int mmapq_indexed_batch_archiver_reclaim_files(
+    MmapqIndexedBatchArchiver *a,
+    char                **marked_paths,
+    int                   n_marked);
 
 /* ── Lifecycle ───────────────────────────────────────────────────────────── */
 

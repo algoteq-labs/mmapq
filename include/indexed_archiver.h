@@ -12,12 +12,18 @@
  * after archiving, and reports which files are now fully covered by the
  * archive boundary and can be safely deleted, moved, or compressed.
  *
- * The archiver does NOT delete files itself — that is the caller's
- * responsibility. archivable_files() returns the list; the caller decides
- * what to do with them. Callers must NOT delete listed files immediately:
- * mark, wait, then delete only files that a fresh archivable_files() call
- * taken after the wait still lists (see doc/archiving-design.md, "Deleting
- * files"). A mark is a snapshot, not permission.
+ * Physical reclamation follows mark -> wait -> reclaim: archivable_files()
+ * returns the marks, the caller waits (outlasting a writer's commit/re-check
+ * window), then reclaim_files() deletes the marks that a fresh COMPLETE
+ * listing still reports — the re-list and the unlink happen in a single
+ * shared hold of archive.lock, so an undo cannot slip between them and lose
+ * its restored files (CAND-36; see doc/archiving-design.md, "Deleting
+ * files"). A mark is a snapshot, not permission. Callers who delete files
+ * themselves instead of calling reclaim_files() must follow the same
+ * mark/wait/re-list protocol by hand, and no undo (archive_up_to_index to
+ * an index below start_index) may start between their second
+ * archivable_files() listing and their last unlink() of the files it
+ * returned.
  *
  * Commit order is not write order: append_uncommitted + commit lets an
  * application commit payloads in any order (UDP resequencing). The payload
@@ -27,10 +33,11 @@
  * can no longer be committed (commit returns MMAPQ_EINVAL).
  *
  * Archiving is serialised per queue on <dir>/<queue>/archive.lock (flock):
- * archive_up_to_index holds it exclusively, archivable_files shared — a
- * listing never observes an archive in progress. The lock file is created
- * on first use, so archiving or listing a queue in a read-only directory
- * fails with MMAPQ_EIO.
+ * archive_up_to_index holds it exclusively, archivable_files and
+ * reclaim_files shared — a listing or reclaim never observes an archive in
+ * progress, and an archive or undo never runs while a reclaim holds the
+ * lock. The lock file is created on first use, so archiving or listing a
+ * queue in a read-only directory fails with MMAPQ_EIO.
  *
  * Archiving can move in two directions:
  *   Forward (index > current start_index): mark entries as archived.
@@ -163,6 +170,42 @@ int mmapq_indexed_archiver_archivable_files(
     MmapqIndexedArchiver *a,
     char           **paths_out,
     int              max_paths);
+
+/**
+ * Delete the intersection of @p marked_paths with a fresh COMPLETE
+ * archivable listing, in a single shared hold of archive.lock (CAND-36).
+ *
+ * This is the deletion step of the mark -> wait -> reclaim protocol: mark
+ * the files from an archivable_files() listing, wait (the wait must outlast
+ * a writer's stall between publishing a commit and its boundary re-check —
+ * seconds to minutes; it is NOT inside this call), then pass the marks
+ * here. The re-list and the unlink happen under one archive.lock SH hold,
+ * so an undo (which takes the lock exclusively) cannot slip between them
+ * and have its restored files deleted. The re-list is complete: it grows
+ * until nothing was truncated, so a mark whose files sort after other
+ * appenders' in the enumeration is never starved.
+ *
+ * Marks that a fresh listing no longer reports are skipped — they are live
+ * again (an undo ran before the hold) or already gone. A file already
+ * unlinked by a concurrent reclaimer (the shared lock admits them) is
+ * tolerated, not counted. Marks are matched by exact string comparison
+ * against the fresh listing — pass the path strings exactly as
+ * archivable_files() returned them (no relative paths, no patterns).
+ *
+ * a:            the archiver
+ * marked_paths: the marks — paths from an earlier archivable_files()
+ *               listing (the array and strings are only read)
+ * n_marked:     number of entries in marked_paths
+ * Returns: the number of files this call unlinked (>= 0), or a negative
+ *          MMAPQ_* code: MMAPQ_EINVAL (invalid arguments), MMAPQ_ENOMEM
+ *          (allocation failure), MMAPQ_EIO (lock or unlink failure — files
+ *          unlinked so far stay unlinked; a retry re-lists and skips them).
+ *          A missing queue directory yields 0, mirroring archivable_files.
+ */
+int mmapq_indexed_archiver_reclaim_files(
+    MmapqIndexedArchiver *a,
+    char           **marked_paths,
+    int              n_marked);
 
 /**
  * Append a human-readable summary of the queue's file layout and index

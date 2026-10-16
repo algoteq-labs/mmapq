@@ -30,8 +30,9 @@ mismatch. TLC logs (with full counterexample traces) land in `out/`.
 **Expected-FAIL checks are deliberate.** `current` and the `cand3x_*`
 checks reproduce open defects. When a fix lands, its check's expectation
 flips to PASS in the same commit: CAS publish made `current_no_undo` pass
-(CAND-37); adding the reclaim call makes `current` pass (CAND-36,
-pending).
+(CAND-37); adding the reclaim call made `current` pass (CAND-36). The
+historical `cand36_undo_race` check keeps failing as the record of the
+defect.
 
 ## What is modelled
 
@@ -44,7 +45,8 @@ pending).
 | Crash | `Crash` at any appender step; pending payloads become dead | process death (kill -9) |
 | Forward archive | `ForwardStart` (validate, candidate = end of highest-position archived message, snapshot `old`), `Publish` (CAS from the snapshot per lane — CAND-37), `PublishSi`, `Fence`, `PassStep` (checked header read, atomic-min), `PassFail` (rollback to `old`), `Finish` | `archive_forward_variable` (publish via `appender_meta_start_offset_cas`), `rollback_start_offsets` in `indexed_archiver.c` |
 | Undo | `UndoStart` (check files exist, lower to lowest restored position), `UndoSi` | backward branch of `archive_up_to_index_locked` |
-| Listing / deletion | `List1` (mark), `List2` (re-list, intersect), `Delete` (unlink, outside the lock) | `archivable_files_locked` + the caller protocol in `archiving-design.md` "Deleting files" |
+| Listing / deletion | `List1` (mark), `List2`+`Delete` fused under `AtomicDelete=TRUE` (re-list, intersect, unlink in one step); unfused (`Delete` outside the lock) for the hand protocol | `archivable_files` (mark); `mmapq_indexed_archiver_reclaim_files` + batch twin (fused); the hand-deleter protocol in `archiving-design.md` "Deleting files" (unfused) |
+| Hand-deleter undo rule | `UndoStart` guard (`UndoRule`) | the hand-deleter paragraph in `archiving-design.md` "Deleting files" |
 | Memory | `Flush` drains the archiver's buffered `start_offset` stores | store buffer, closed by the archiver's seq_cst fence |
 
 **Abstractions.** Each appender owns a payload lane; a message occupies
@@ -81,7 +83,8 @@ positions (see Results) adds depth, not exhaustiveness.
 | Switch | Meaning |
 |---|---|
 | `PublishCAS` | Landed fix (CAND-37): publish raises `start_offset` only by a CAS from the snapshot value, so it never erases a concurrent commit's lowering. |
-| `AtomicDelete` | Candidate fix (CAND-36): re-list and unlink in one step under `archive.lock` SH (a library-side reclaim call), so undo cannot interleave. |
+| `AtomicDelete` | Landed fix (CAND-36): the reclaim call re-lists and unlinks in one `archive.lock` SH hold, so undo cannot interleave. |
+| `UndoRule` | Landed documented rule (CAND-36): for hand-deleters, undo never starts between the re-list and the unlink; `reclaim_files` enforces it by holding the lock across both steps. |
 | `ListingLivePass` | Candidate fix (CAND-35): listing caps each lane's boundary at the lowest live payload visible in the headers. |
 | `BoundedPass` | CAND-31 proposal: the live pass stops at the tail seen after the fence. |
 | `ArchFence`, `CommitFence` | The two seq_cst fences. |
@@ -93,7 +96,7 @@ positions (see Results) adds depth, not exhaustiveness.
 
 | Check | Expect | Result | Distinct states |
 |---|---|---|---|
-| `current` | FAIL | `NoLiveLoss` (CAND-36) | — |
+| `current` | PASS | pass | 44,590,581 |
 | `current_no_undo` | PASS | pass | 7,465,618 |
 | `current_no_undo_no_timeout` | PASS | pass | 4,979,768 |
 | `cand36_undo_race` | FAIL | `NoLiveLoss` | — |
@@ -109,6 +112,7 @@ positions (see Results) adds depth, not exhaustiveness.
 | `cand35_crash` | FAIL | `I1` | — |
 | `cand35_crash_listing_cap` | PASS | pass | 195,522,487 |
 | `cand35_no_wait_listing_cap` | FAIL | `NoLiveLoss` | — |
+| `hand_delete_undo_rule` | PASS | pass | 56,137,369 |
 
 **Random simulation at larger bounds** (6 header slots, 6 positions per
 lane, traces up to depth 120, TLC `-simulate`):
@@ -131,7 +135,7 @@ build (2026.10.13 nightly); the other results were re-run with the pinned
 Positions are lane-relative; "file 0" is positions 0–1. Every trace
 starts from an empty queue with appender 1 joined.
 
-### CAND-36: undo races deletion
+### CAND-36: undo races deletion (FIXED — library reclaim)
 
 1. Appender 1 appends X uncommitted at 0, then appends and commits Y at 1
    (index 0).
@@ -143,9 +147,11 @@ starts from an empty queue with appender 1 joined.
 5. Deleter unlinks file 0 (outside the lock). Y's bytes are gone.
    `NoLiveLoss` violated.
 
-Fix candidates: a reclaim call that re-lists and unlinks under
-`archive.lock` SH (`AtomicDelete`, passes in `fixed`); minimum: document
-that undo must not run while a reclamation is in flight.
+Fix (landed): the reclaim call (`mmapq_indexed_archiver_reclaim_files` and
+its batch twin) re-lists and unlinks in one `archive.lock` SH hold
+(`AtomicDelete`; `current` now passes with it). For hand-deleters, the
+documented rule — undo never starts between the re-list and the unlink —
+is modelled as `UndoRule` and passes in `hand_delete_undo_rule`.
 
 ### CAND-37: rollback restores a stale boundary (FIXED — CAS publish)
 
