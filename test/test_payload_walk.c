@@ -6,6 +6,7 @@
 #include "internal/region_ring_accessor.h"
 #include "runtime.h"
 #include "internal/header_codec.h"
+#include "mmap_platform.h"
 
 #include <unistd.h>
 #include <string.h>
@@ -182,7 +183,8 @@ void test_payload_walk_rejects_length_beyond_capacity(void)
 {
     /*
      * C-04: a corrupt on-disk length larger than the mapped region capacity
-     * must be rejected (-1), not trusted. Pre-fix the walk had no bound and
+     * must be rejected (MMAPQ_ECORRUPT since D8 — corrupt on-disk data, not a
+     * mapping timeout), not trusted. Pre-fix the walk had no bound and
      * returned the bogus length, publishing a message_buf that overruns the
      * region mapping (audit repro C-04: OOB read once a consumer reads the
      * declared capacity). A bare walk call returns the bogus length pre-fix —
@@ -196,7 +198,7 @@ void test_payload_walk_rejects_length_beyond_capacity(void)
     int64_t probing = INITIAL_PAYLOAD_POSITION;
     int64_t msg_off = -1;
     int32_t len = mmapqi_payload_walk_advance("test", &probing, &msg_off, acc, &buf);
-    TEST_ASSERT_EQUAL_INT32(-1, len);
+    TEST_ASSERT_EQUAL_INT32(MMAPQ_ECORRUPT, len);
 }
 
 void test_payload_walk_rejects_int32_min_length(void)
@@ -204,9 +206,9 @@ void test_payload_walk_rejects_int32_min_length(void)
     /*
      * C-04: a corrupt length of INT32_MIN takes the long-padding branch; the
      * skip computation must not negate INT32_MIN in int32 (signed-overflow UB).
-     * The runtime capacity check rejects it (-1). Pre-fix: UB in
-     * payload_long_padding_skip, then MMAP_ASSERT(capacity == skip) aborts
-     * (SIGABRT) in debug builds.
+     * The runtime capacity check rejects it (MMAPQ_ECORRUPT since D8 — corrupt
+     * on-disk data). Pre-fix: UB in payload_long_padding_skip, then
+     * MMAP_ASSERT(capacity == skip) aborts (SIGABRT) in debug builds.
      */
     Buffer buf = {0};
     TEST_ASSERT_EQUAL_INT(WRAP_SUCCESS, region_accessor_wrap(acc, INITIAL_PAYLOAD_POSITION, &buf));
@@ -216,7 +218,7 @@ void test_payload_walk_rejects_int32_min_length(void)
     int64_t probing = INITIAL_PAYLOAD_POSITION;
     int64_t msg_off = -1;
     int32_t len = mmapqi_payload_walk_advance("test", &probing, &msg_off, acc, &buf);
-    TEST_ASSERT_EQUAL_INT32(-1, len);
+    TEST_ASSERT_EQUAL_INT32(MMAPQ_ECORRUPT, len);
 }
 
 void test_probing_offset_advances_correctly(void)
@@ -234,6 +236,96 @@ void test_probing_offset_advances_correctly(void)
     TEST_ASSERT_EQUAL_INT64(expected, probing);
 }
 
+/* ── D8 test access: stub RegionAccessor ───────────────────────────────────
+ * Delegates to the real accessor except at one chosen position, where wrap
+ * returns a chosen WrapResult. All fast-path fields are zero, so the inline
+ * fast path never serves the stub and dispatch always reaches the function
+ * pointers (probe idiom: audit/claude-D8-pre/d8_probe.c). */
+typedef struct {
+    RegionAccessor  base;
+    RegionAccessor *real;
+    int64_t         fail_pos;
+    WrapResult      fail_with;
+} StubAccessor;
+
+static WrapResult stub_wrap(RegionAccessor *self, int64_t position, Buffer *buf)
+{
+    StubAccessor *s = (StubAccessor *)self;
+    if (position == s->fail_pos) return s->fail_with;
+    return s->real->wrap(s->real, position, buf);
+}
+
+static WrapResult stub_wrap_no_premap(RegionAccessor *self, int64_t position, Buffer *buf)
+{
+    StubAccessor *s = (StubAccessor *)self;
+    if (position == s->fail_pos) return s->fail_with;
+    return s->real->wrap_no_premap(s->real, position, buf);
+}
+
+static void stub_close(RegionAccessor *self) { (void)self;  /* not owned */ }
+
+static void stub_accessor_init(StubAccessor *s, RegionAccessor *real,
+                               int64_t fail_pos, WrapResult fail_with)
+{
+    memset(s, 0, sizeof(*s));
+    s->base.wrap           = stub_wrap;
+    s->base.wrap_no_premap = stub_wrap_no_premap;
+    s->base.close          = stub_close;
+    s->base.region_size    = real->region_size;
+    s->real                = real;
+    s->fail_pos            = fail_pos;
+    s->fail_with           = fail_with;
+}
+
+/* D8: at every wrap site the walk maps WRAP_MAP_TIMED_OUT to MMAPQ_ETIMEDOUT
+ * (numerically -1, unchanged) and every other wrap failure
+ * (FILE_NOT_FOUND / BEYOND_FILE_SIZE / UNWRAPPED — F1) to MMAPQ_ECORRUPT.
+ * Pre-fix all four collapsed to -1. */
+static void assert_walk_maps_wrap_result(int64_t probing_start, int64_t stub_pos)
+{
+    const struct { WrapResult w; int32_t expect; } cases[4] = {
+        { WRAP_MAP_TIMED_OUT,     MMAPQ_ETIMEDOUT },
+        { WRAP_FILE_NOT_FOUND,    MMAPQ_ECORRUPT  },
+        { WRAP_BEYOND_FILE_SIZE,  MMAPQ_ECORRUPT  },
+        { WRAP_UNWRAPPED,         MMAPQ_ECORRUPT  },
+    };
+    for (int i = 0; i < 4; i++) {
+        StubAccessor s;
+        stub_accessor_init(&s, acc, stub_pos, cases[i].w);
+        Buffer buf = {0};
+        int64_t probing = probing_start;
+        int64_t msg_off = -1;
+        int32_t len = mmapqi_payload_walk_advance("test", &probing, &msg_off,
+                                                  &s.base, &buf);
+        TEST_ASSERT_EQUAL_INT32(cases[i].expect, len);
+    }
+}
+
+/* Wrap site 1: the initial wrap at the probe position. */
+void test_payload_walk_wrap_result_at_probe(void)
+{
+    assert_walk_maps_wrap_result(INITIAL_PAYLOAD_POSITION, INITIAL_PAYLOAD_POSITION);
+}
+
+/* Wrap site 2: the re-wrap after a short-padding skip (capacity <= 4 at
+ * region end; the walk skips to the next region boundary). */
+void test_payload_walk_wrap_result_after_short_padding(void)
+{
+    assert_walk_maps_wrap_result(REGION_SIZE - PAYLOAD_LENGTH_SIZE, REGION_SIZE);
+}
+
+/* Wrap site 3: the re-wrap after a long-padding skip. Padding at
+ * REGION_SIZE-100 (capacity 100, skip lands on the next region boundary),
+ * same geometry as test_advance_long_padding. */
+void test_payload_walk_wrap_result_after_long_padding(void)
+{
+    Buffer buf = {0};
+    TEST_ASSERT_EQUAL_INT(WRAP_SUCCESS,
+                          region_accessor_wrap(acc, REGION_SIZE - 100, &buf));
+    write_long_padding(buf.data, 0, 100);
+    assert_walk_maps_wrap_result(REGION_SIZE - 100, REGION_SIZE);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -244,5 +336,8 @@ int main(void)
     RUN_TEST(test_payload_walk_rejects_length_beyond_capacity);
     RUN_TEST(test_payload_walk_rejects_int32_min_length);
     RUN_TEST(test_probing_offset_advances_correctly);
+    RUN_TEST(test_payload_walk_wrap_result_at_probe);
+    RUN_TEST(test_payload_walk_wrap_result_after_short_padding);
+    RUN_TEST(test_payload_walk_wrap_result_after_long_padding);
     return UNITY_END();
 }

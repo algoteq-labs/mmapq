@@ -126,7 +126,10 @@ int mmapqi_payload_iterator_advance(MmapqPayloadIterator *it)
         return 0;
     }
 
-    if (length <= 0) return 0;
+    /* D8: walk errors propagate — a transient timeout (MMAPQ_ETIMEDOUT) and
+     * corruption (MMAPQ_ECORRUPT) are NOT end of stream; their remedies are
+     * opposite. */
+    if (length < 0) return length;
 
     it->current_message_offset = message_offset;
     it->current_message_length = length;

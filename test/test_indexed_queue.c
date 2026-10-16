@@ -11,6 +11,7 @@
 #include "internal/uncommitted_payload_iterator.h"
 #include "indexed_batch_queue.h"
 #include "internal/queue_meta.h"
+#include "internal/test_hooks.h"
 #include <stdio.h>
 #include <time.h>
 
@@ -699,7 +700,10 @@ void test_uncommitted_iterator_finds_uncommitted(void)
     TEST_ASSERT_NOT_NULL(it);
 
     int found = 0;
-    while (mmapqi_uncommitted_iterator_advance(it)) {
+    /* D8: advance is three-way (1 message / 0 exhausted / negative MMAPQ_E*
+     * propagated error). A negative is truthy in C — `while (advance(...))`
+     * loops forever on a repeating error; compare against 1 explicitly. */
+    while (mmapqi_uncommitted_iterator_advance(it) == 1) {
         found++;
         Buffer *buf = mmapqi_uncommitted_iterator_current(it);
         TEST_ASSERT_EQUAL_INT32(11, buf->capacity);
@@ -714,7 +718,7 @@ void test_uncommitted_iterator_finds_uncommitted(void)
         a, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET);
     TEST_ASSERT_NOT_NULL(it);
     found = 0;
-    while (mmapqi_uncommitted_iterator_advance(it)) found++;
+    while (mmapqi_uncommitted_iterator_advance(it) == 1) found++;
     TEST_ASSERT_EQUAL_INT(0, found);
 
     mmapq_indexed_appender_close(a);
@@ -746,13 +750,474 @@ static void test_appender_iterator_out_of_range_offset_no_double_free(void)
     MmapqPayloadIterator *it =
         mmapq_indexed_appender_iterator(a, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET);
     TEST_ASSERT_NOT_NULL(it);
-    TEST_ASSERT_TRUE(mmapqi_payload_iterator_advance(it));
+    TEST_ASSERT_EQUAL_INT(1, mmapqi_payload_iterator_advance(it));
     Buffer *buf = mmapqi_payload_iterator_current(it);
     TEST_ASSERT_EQUAL_INT32(4, buf->capacity);
     TEST_ASSERT_EQUAL_MEMORY("data", buf->data, 4);
-    TEST_ASSERT_FALSE(mmapqi_payload_iterator_advance(it));
+    TEST_ASSERT_EQUAL_INT(0, mmapqi_payload_iterator_advance(it));
 
     mmapq_indexed_appender_close(a);
+}
+
+/* ── D8: walk-layer timeout/corruption distinction ─────────────────────────
+ * The payload walk used to collapse every failure — transient mapping
+ * timeout AND on-disk corruption — into -1, and each layer above collapsed
+ * further (iterator: error -> end-of-stream; scan/init/join: error ->
+ * ECORRUPT). Retry (timeout) and recreate (corruption) are opposite
+ * remedies, so these pins drive both codes through every fixed layer.
+ * Test access: a stub RegionAccessor delegating to the real one except at
+ * one chosen position (probe idiom, audit/claude-D8-pre/d8_probe.c); the
+ * join-layer pins use the site-selecting appender-walk hook instead
+ * (audit/D8-spec.md §4 pin 5). */
+
+typedef struct {
+    RegionAccessor  base;
+    RegionAccessor *real;
+    int64_t         fail_pos;
+    WrapResult      fail_with;
+    int             hits;
+} D8StubAccessor;
+
+static WrapResult d8_stub_wrap(RegionAccessor *self, int64_t position, Buffer *buf)
+{
+    D8StubAccessor *s = (D8StubAccessor *)self;
+    if (position == s->fail_pos) { s->hits++; return s->fail_with; }
+    return s->real->wrap(s->real, position, buf);
+}
+
+static WrapResult d8_stub_wrap_no_premap(RegionAccessor *self, int64_t position, Buffer *buf)
+{
+    D8StubAccessor *s = (D8StubAccessor *)self;
+    if (position == s->fail_pos) { s->hits++; return s->fail_with; }
+    return s->real->wrap_no_premap(s->real, position, buf);
+}
+
+static void d8_stub_close(RegionAccessor *self) { (void)self;  /* not owned */ }
+
+static void d8_stub_init(D8StubAccessor *s, RegionAccessor *real,
+                         int64_t fail_pos, WrapResult fail_with)
+{
+    memset(s, 0, sizeof(*s));
+    s->base.wrap           = d8_stub_wrap;
+    s->base.wrap_no_premap = d8_stub_wrap_no_premap;
+    s->base.close          = d8_stub_close;
+    s->base.region_size    = real->region_size;
+    s->real                = real;
+    s->fail_pos            = fail_pos;
+    s->fail_with           = fail_with;
+}
+
+/* Pin 2 (F2): a mapping TIMEOUT on the scan's header read must fail init
+ * with MMAPQ_ETIMEDOUT, not truncate the scan. Pre-fix the plain header
+ * read collapses the timeout to HEADER_NULL: the scan stops early, init
+ * returns 0, and committed messages past the timeout are misreported as
+ * uncommitted (probes P3/P4). */
+void test_uncommitted_scan_header_timeout_propagates(void)
+{
+    MmapqIndexedAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(q, &a));
+    for (int i = 0; i < 4; i++)
+        TEST_ASSERT_EQUAL_INT64(i, mmapq_indexed_appender_append(a, "c", 1));
+
+    MmapqUncommittedPayloadIterator *it =
+        mmapq_indexed_appender_uncommitted_iterator(
+            a, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET);
+    TEST_ASSERT_NOT_NULL(it);   /* clean init before the stub */
+
+    D8StubAccessor s;
+    d8_stub_init(&s, it->header_accessor, header_position(1), WRAP_MAP_TIMED_OUT);
+    it->header_accessor = &s.base;
+
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ETIMEDOUT,
+        mmapqi_uncommitted_iterator_init(it, PAYLOAD_ITERATOR_NOT_SET,
+                                         PAYLOAD_ITERATOR_NOT_SET));
+    TEST_ASSERT_EQUAL_INT(1, s.hits);
+    /* The public factory refuses on the same timeout (init failure -> NULL). */
+    TEST_ASSERT_NULL(mmapq_indexed_appender_uncommitted_iterator(
+        a, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET));
+
+    it->header_accessor = s.real;   /* restore before close */
+    mmapq_indexed_appender_close(a);
+}
+
+/* Pin 3 (probe P5 shape): a mapping TIMEOUT walking a committed header's
+ * payload during the scan must propagate out of init as MMAPQ_ETIMEDOUT.
+ * Pre-fix the walk's -1 collapsed to scan failure -> init MMAPQ_ECORRUPT. */
+void test_uncommitted_scan_payload_timeout_propagates(void)
+{
+    MmapqIndexedAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(q, &a));
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_appender_append(a, "c0", 2));
+
+    MmapqUncommittedPayloadIterator *it =
+        mmapq_indexed_appender_uncommitted_iterator(
+            a, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET);
+    TEST_ASSERT_NOT_NULL(it);
+
+    D8StubAccessor s;
+    d8_stub_init(&s, it->inner->payload_accessor, INITIAL_PAYLOAD_POSITION,
+                 WRAP_MAP_TIMED_OUT);
+    it->inner->payload_accessor = &s.base;
+
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ETIMEDOUT,
+        mmapqi_uncommitted_iterator_init(it, PAYLOAD_ITERATOR_NOT_SET,
+                                         PAYLOAD_ITERATOR_NOT_SET));
+    TEST_ASSERT_EQUAL_INT(1, s.hits);
+
+    it->inner->payload_accessor = s.real;   /* restore before close */
+    mmapq_indexed_appender_close(a);
+}
+
+/* Pin 4 (§1.2): the committed payload iterator is three-way — a mapping
+ * TIMEOUT mid-stream propagates as MMAPQ_ETIMEDOUT instead of collapsing
+ * to end-of-stream (pre-fix: advance == 0). The success path is guarded on
+ * both sides: 1 yields the message, 0 only at end of stream, and the
+ * iterator remains usable after a propagated error (timeout is retryable). */
+void test_payload_iterator_advance_timeout_propagates(void)
+{
+    MmapqIndexedAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(q, &a));
+    /* append() returns the index; the payload positions are 64 and 70. */
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_appender_append(a, "d0", 2));
+    TEST_ASSERT_EQUAL_INT64(1, mmapq_indexed_appender_append(a, "d1", 2));
+    const int64_t p1 = INITIAL_PAYLOAD_POSITION + 6;
+
+    MmapqPayloadIterator *it =
+        mmapq_indexed_appender_iterator(a, PAYLOAD_ITERATOR_NOT_SET,
+                                        PAYLOAD_ITERATOR_NOT_SET);
+    TEST_ASSERT_NOT_NULL(it);
+
+    TEST_ASSERT_EQUAL_INT(1, mmapqi_payload_iterator_advance(it));   /* d0 */
+    Buffer *buf = mmapqi_payload_iterator_current(it);
+    TEST_ASSERT_EQUAL_INT32(2, buf->capacity);
+    TEST_ASSERT_EQUAL_MEMORY("d0", buf->data, 2);
+
+    D8StubAccessor s;
+    d8_stub_init(&s, it->payload_accessor, p1, WRAP_MAP_TIMED_OUT);
+    it->payload_accessor = &s.base;
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ETIMEDOUT, mmapqi_payload_iterator_advance(it));
+    TEST_ASSERT_EQUAL_INT(1, s.hits);
+
+    /* Timeout is retryable: with the stub removed the same iterator advances. */
+    it->payload_accessor = s.real;
+    TEST_ASSERT_EQUAL_INT(1, mmapqi_payload_iterator_advance(it));   /* d1 */
+    buf = mmapqi_payload_iterator_current(it);
+    TEST_ASSERT_EQUAL_MEMORY("d1", buf->data, 2);
+    TEST_ASSERT_EQUAL_INT(0, mmapqi_payload_iterator_advance(it));   /* end of stream */
+
+    mmapq_indexed_appender_close(a);
+}
+
+/* Pin 6a (the :122 gap branch, probe S2 real-gap geometry): c0 committed,
+ * u1 uncommitted, c2 committed — the gap-resync advance walks u1. Pre-fix
+ * the swallow was harmless in outcome (init rc 0, 2 correct ranges);
+ * post-fix the timeout propagates. Behaviour change, stated: corrupt
+ * framing inside a gap now fails init with ECORRUPT; before, it was a
+ * silent gap and later a silent end of stream. */
+void test_uncommitted_scan_gap_branch_timeout_real_gap(void)
+{
+    MmapqIndexedAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(q, &a));
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_appender_append(a, "c0", 2));
+    int64_t u1 = mmapq_indexed_appender_append_uncommitted(a, "u1", 2);
+    TEST_ASSERT_EQUAL_INT64(INITIAL_PAYLOAD_POSITION + 6, u1);
+    TEST_ASSERT_EQUAL_INT64(1, mmapq_indexed_appender_append(a, "c2", 2));
+
+    MmapqUncommittedPayloadIterator *it =
+        mmapq_indexed_appender_uncommitted_iterator(
+            a, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET);
+    TEST_ASSERT_NOT_NULL(it);
+
+    D8StubAccessor s;
+    d8_stub_init(&s, it->inner->payload_accessor, u1, WRAP_MAP_TIMED_OUT);
+    it->inner->payload_accessor = &s.base;
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ETIMEDOUT,
+        mmapqi_uncommitted_iterator_init(it, PAYLOAD_ITERATOR_NOT_SET,
+                                         PAYLOAD_ITERATOR_NOT_SET));
+    TEST_ASSERT_EQUAL_INT(1, s.hits);
+
+    it->inner->payload_accessor = s.real;
+    mmapq_indexed_appender_close(a);
+}
+
+/* Pin 6b (the :122 gap branch, probe S2 contiguous geometry): c0, c1
+ * committed and contiguous — the resync advance walks c1 itself. Pre-fix:
+ * the gap branch's re-init advance hit the stub again and the scan failed,
+ * init MMAPQ_ECORRUPT (hits=2). Post-fix the first failure propagates as
+ * MMAPQ_ETIMEDOUT (hits=1). */
+void test_uncommitted_scan_gap_branch_timeout_contiguous(void)
+{
+    MmapqIndexedAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(q, &a));
+    /* append() returns the index; c1's payload position is 70. */
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_appender_append(a, "c0", 2));
+    TEST_ASSERT_EQUAL_INT64(1, mmapq_indexed_appender_append(a, "c1", 2));
+    const int64_t p1 = INITIAL_PAYLOAD_POSITION + 6;
+
+    MmapqUncommittedPayloadIterator *it =
+        mmapq_indexed_appender_uncommitted_iterator(
+            a, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET);
+    TEST_ASSERT_NOT_NULL(it);
+
+    D8StubAccessor s;
+    d8_stub_init(&s, it->inner->payload_accessor, p1, WRAP_MAP_TIMED_OUT);
+    it->inner->payload_accessor = &s.base;
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ETIMEDOUT,
+        mmapqi_uncommitted_iterator_init(it, PAYLOAD_ITERATOR_NOT_SET,
+                                         PAYLOAD_ITERATOR_NOT_SET));
+    TEST_ASSERT_EQUAL_INT(1, s.hits);
+
+    it->inner->payload_accessor = s.real;
+    mmapq_indexed_appender_close(a);
+}
+
+/* Pin 6c (the gap branch's RESYNC advance — the third inner-advance site;
+ * review catch, probe audit/claude-D8/claude-D8-review.zip resync.c):
+ * c0 committed, u1 uncommitted, c2 committed. The :122 advance walks u1
+ * (offset mismatch -> gap branch), the branch re-inits at c2, and the
+ * resync advance fires the stub there. Post-fix init propagates
+ * MMAPQ_ETIMEDOUT; pre-fix (and under mutant M9) the timeout collapses to
+ * MMAPQ_ECORRUPT — the exact collapse D8 exists to remove. Pins 6a/6b
+ * cover only the :122 condition advance. */
+void test_uncommitted_scan_gap_resync_timeout_propagates(void)
+{
+    MmapqIndexedAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(q, &a));
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_appender_append(a, "c0", 2));
+    int64_t u1 = mmapq_indexed_appender_append_uncommitted(a, "u1", 2);
+    TEST_ASSERT_EQUAL_INT64(INITIAL_PAYLOAD_POSITION + 6, u1);
+    TEST_ASSERT_EQUAL_INT64(1, mmapq_indexed_appender_append(a, "c2", 2));
+    const int64_t c2_pos = INITIAL_PAYLOAD_POSITION + 12;   /* 64 + 6 + 6 */
+
+    MmapqUncommittedPayloadIterator *it =
+        mmapq_indexed_appender_uncommitted_iterator(
+            a, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET);
+    TEST_ASSERT_NOT_NULL(it);   /* clean init before the stub */
+
+    D8StubAccessor s;
+    d8_stub_init(&s, it->inner->payload_accessor, c2_pos, WRAP_MAP_TIMED_OUT);
+    it->inner->payload_accessor = &s.base;
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ETIMEDOUT,
+        mmapqi_uncommitted_iterator_init(it, PAYLOAD_ITERATOR_NOT_SET,
+                                         PAYLOAD_ITERATOR_NOT_SET));
+    TEST_ASSERT_EQUAL_INT(1, s.hits);
+
+    it->inner->payload_accessor = s.real;   /* restore before close */
+    mmapq_indexed_appender_close(a);
+}
+
+/* Pin 7 (the OUTER advance, probe S1 geometry): the stub is swapped in only
+ * AFTER a clean init — a stub at a gap's first message would fail init
+ * instead, because the scan walks the first message of every gap. Post-fix
+ * the outer advance propagates MMAPQ_ETIMEDOUT; pre-fix it returned 0
+ * (timeout collapsed to end-of-stream). */
+void test_uncommitted_advance_timeout_propagates(void)
+{
+    MmapqIndexedAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(q, &a));
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_appender_append(a, "c0", 2));
+    int64_t u1 = mmapq_indexed_appender_append_uncommitted(a, "u1", 2);
+    TEST_ASSERT_EQUAL_INT64(INITIAL_PAYLOAD_POSITION + 6, u1);
+
+    MmapqUncommittedPayloadIterator *it =
+        mmapq_indexed_appender_uncommitted_iterator(
+            a, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET);
+    TEST_ASSERT_NOT_NULL(it);   /* init runs clean — no stub yet */
+
+    D8StubAccessor s;
+    d8_stub_init(&s, it->inner->payload_accessor, u1, WRAP_MAP_TIMED_OUT);
+    it->inner->payload_accessor = &s.base;
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ETIMEDOUT,
+                          mmapqi_uncommitted_iterator_advance(it));
+    TEST_ASSERT_EQUAL_INT(1, s.hits);
+
+    /* Retryable: with the stub removed the same iterator yields the tail. */
+    it->inner->payload_accessor = s.real;
+    TEST_ASSERT_EQUAL_INT(1, mmapqi_uncommitted_iterator_advance(it));
+    Buffer *buf = mmapqi_uncommitted_iterator_current(it);
+    TEST_ASSERT_EQUAL_INT32(2, buf->capacity);
+    TEST_ASSERT_EQUAL_MEMORY("u1", buf->data, 2);
+    TEST_ASSERT_EQUAL_INT(0, mmapqi_uncommitted_iterator_advance(it));
+
+    mmapq_indexed_appender_close(a);
+}
+
+/* Pin 8 (S3, owner-ruled; probe d8_spec32k.c migrated to the post-CAND-38
+ * 32 KB region floor): the uncommitted scan must start at the queue's start
+ * index, not header 0. After a legitimate header reclaim + rejoin, starting
+ * at 0 hits the reclaimed header file, stops, and misreports committed
+ * messages as uncommitted — re-observed pre-fix on dc58b23 at this exact
+ * geometry: 4,101 yielded (4,100 committed + the genuine tail). Post-fix:
+ * exactly 1. */
+void test_uncommitted_iterator_scan_starts_at_queue_start_index(void)
+{
+    const char *qn = "mmap_test_iq_d8_s3";
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd), "rm -rf %s/%s", DIR, qn);
+    if (system(cmd) != 0) { /* best-effort cleanup */ }
+    char qdir[256];
+    snprintf(qdir, sizeof(qdir), "%s/%s", DIR, qn);
+    mkdir(qdir, 0775);
+
+    /* max_file_size 32768 -> hif = 4096 headers per header file: archiving
+     * to index 4200 covers header_0 (indices 0..4095) completely. */
+    MmapqIndexedQueue *cq = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create(DIR, qn, REGION_SZ,
+        RING_SZ, 1, 32768LL, 0, TIMEOUT_NS, 1, rt, rt, &cq));
+    MmapqIndexedAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender_with_id(cq, 3, &a));
+    for (int i = 0; i < 8300; i++)
+        TEST_ASSERT_EQUAL_INT64(i, mmapq_indexed_appender_append(a, "cccc", 4));
+    TEST_ASSERT_EQUAL_INT64(INITIAL_PAYLOAD_POSITION + 8300 * 8,
+        mmapq_indexed_appender_append_uncommitted(a, "uuuu", 4));
+
+    MmapqIndexedArchiver *ar = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_archiver(cq, &ar));
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_archiver_archive_up_to_index(ar, 4200));
+    char *paths[256] = {0};
+    int n = mmapq_indexed_archiver_archivable_files(ar, paths, 256);
+    TEST_ASSERT_GREATER_OR_EQUAL(0, n);
+    if (n > 0)
+        TEST_ASSERT_EQUAL_INT(n, mmapq_indexed_archiver_reclaim_files(ar, paths, n));
+    for (int i = 0; i < n; i++) free(paths[i]);
+    mmapq_indexed_archiver_close(ar);
+    /* Non-vacuity: the covered header file is really gone. */
+    char h0[320];
+    snprintf(h0, sizeof(h0), "%s/header_0", qdir);
+    TEST_ASSERT_NOT_EQUAL(0, access(h0, F_OK));
+    mmapq_indexed_appender_close(a);
+
+    /* Rejoin with the same appender id, then iterate: only the genuine
+     * uncommitted tail may be yielded. */
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender_with_id(cq, 3, &a));
+    MmapqUncommittedPayloadIterator *it =
+        mmapq_indexed_appender_uncommitted_iterator(
+            a, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET);
+    TEST_ASSERT_NOT_NULL(it);
+    int found = 0;
+    while (mmapqi_uncommitted_iterator_advance(it) == 1) {
+        Buffer *buf = mmapqi_uncommitted_iterator_current(it);
+        TEST_ASSERT_EQUAL_INT32(4, buf->capacity);
+        TEST_ASSERT_EQUAL_MEMORY("uuuu", buf->data, 4);
+        found++;
+    }
+    TEST_ASSERT_EQUAL_INT(1, found);
+
+    mmapq_indexed_appender_close(a);
+    mmapq_indexed_queue_close(cq);
+    if (system(cmd) != 0) { /* best-effort cleanup */ }
+}
+
+/* Pin 5 (B3 — per join site, hook-selected). Each arms MMAPQ_ETIMEDOUT at
+ * one walk site of initialise_append_position and rejoins. Pre-fix the
+ * site's flatten returns MMAPQ_ECORRUPT; post-fix the timeout propagates.
+ * Each pin asserts the hook FIRED — a vacuous geometry fails the liveness
+ * assertion ([A1]). Geometries per the executed probe record
+ * (audit/claude-D8-v2/RESULTS-v2.txt): a truly empty queue and a
+ * never-written own lane are vacuous (the pre-wrap treats the missing
+ * payload file as end of stream before the walk runs), so site 0 requires
+ * this appender's own uncommitted payload on disk. */
+
+/* J0a: site 0 (walk_payload_to_end), empty-headers path that REACHES the
+ * walk — no committed headers, own uncommitted payload present. */
+void test_join_walk_to_end_timeout_no_committed_headers(void)
+{
+#ifdef MMAPQ_TEST_HOOKS
+    MmapqIndexedAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender_with_id(q, 3, &a));
+    TEST_ASSERT_EQUAL_INT64(INITIAL_PAYLOAD_POSITION,
+        mmapq_indexed_appender_append_uncommitted(a, "u0", 2));
+    mmapq_indexed_appender_close(a);
+
+    mmapq_test_hook_set_appender_walk_result(0, MMAPQ_ETIMEDOUT);
+    MmapqIndexedAppender *rej = NULL;
+    int rc = mmapq_indexed_queue_create_appender_with_id(q, 3, &rej);
+    int fired = mmapq_test_hook_appender_walk_fired();
+    mmapq_test_hook_set_appender_walk_result(-1, 0);
+
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ETIMEDOUT, rc);
+    TEST_ASSERT_EQUAL_INT(1, fired);
+    TEST_ASSERT_NULL(rej);
+#else
+    TEST_IGNORE_MESSAGE("needs MMAPQ_TEST_HOOKS (normal-loop build only)");
+#endif
+}
+
+/* J0b: site 0 (walk_payload_to_end), no-own-live-entry path — another
+ * appender has committed; this appender's own lane holds ONLY uncommitted
+ * data. */
+void test_join_walk_to_end_timeout_no_own_live_entry(void)
+{
+#ifdef MMAPQ_TEST_HOOKS
+    MmapqIndexedAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender_with_id(q, 3, &a));
+    TEST_ASSERT_EQUAL_INT64(INITIAL_PAYLOAD_POSITION,
+        mmapq_indexed_appender_append_uncommitted(a, "u0", 2));
+    mmapq_indexed_appender_close(a);
+    MmapqIndexedAppender *o = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender_with_id(q, 9, &o));
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_appender_append(o, "x", 1));
+    mmapq_indexed_appender_close(o);
+
+    mmapq_test_hook_set_appender_walk_result(0, MMAPQ_ETIMEDOUT);
+    MmapqIndexedAppender *rej = NULL;
+    int rc = mmapq_indexed_queue_create_appender_with_id(q, 3, &rej);
+    int fired = mmapq_test_hook_appender_walk_fired();
+    mmapq_test_hook_set_appender_walk_result(-1, 0);
+
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ETIMEDOUT, rc);
+    TEST_ASSERT_EQUAL_INT(1, fired);
+    TEST_ASSERT_NULL(rej);
+#else
+    TEST_IGNORE_MESSAGE("needs MMAPQ_TEST_HOOKS (normal-loop build only)");
+#endif
+}
+
+/* J1: site 1 (the committed-entry walk) — own committed entry present. */
+void test_join_committed_walk_timeout_propagates(void)
+{
+#ifdef MMAPQ_TEST_HOOKS
+    MmapqIndexedAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender_with_id(q, 3, &a));
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_appender_append(a, "c0", 2));
+    mmapq_indexed_appender_close(a);
+
+    mmapq_test_hook_set_appender_walk_result(1, MMAPQ_ETIMEDOUT);
+    MmapqIndexedAppender *rej = NULL;
+    int rc = mmapq_indexed_queue_create_appender_with_id(q, 3, &rej);
+    int fired = mmapq_test_hook_appender_walk_fired();
+    mmapq_test_hook_set_appender_walk_result(-1, 0);
+
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ETIMEDOUT, rc);
+    TEST_ASSERT_EQUAL_INT(1, fired);
+    TEST_ASSERT_NULL(rej);
+#else
+    TEST_IGNORE_MESSAGE("needs MMAPQ_TEST_HOOKS (normal-loop build only)");
+#endif
+}
+
+/* J2: site 2 (the tail walk) — no special geometry needed: site 2 fires on
+ * any rejoin with an own committed entry, even with no uncommitted tail. */
+void test_join_tail_walk_timeout_propagates(void)
+{
+#ifdef MMAPQ_TEST_HOOKS
+    MmapqIndexedAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender_with_id(q, 3, &a));
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_appender_append(a, "c0", 2));
+    mmapq_indexed_appender_close(a);
+
+    mmapq_test_hook_set_appender_walk_result(2, MMAPQ_ETIMEDOUT);
+    MmapqIndexedAppender *rej = NULL;
+    int rc = mmapq_indexed_queue_create_appender_with_id(q, 3, &rej);
+    int fired = mmapq_test_hook_appender_walk_fired();
+    mmapq_test_hook_set_appender_walk_result(-1, 0);
+
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ETIMEDOUT, rc);
+    TEST_ASSERT_EQUAL_INT(1, fired);
+    TEST_ASSERT_NULL(rej);
+#else
+    TEST_IGNORE_MESSAGE("needs MMAPQ_TEST_HOOKS (normal-loop build only)");
+#endif
 }
 
 /* ── Reader entry_status ─────────────────────────────────────────────────── */
@@ -2480,6 +2945,18 @@ int main(void)
     RUN_TEST(test_uncommitted_append_and_commit);
     RUN_TEST(test_uncommitted_iterator_finds_uncommitted);
     RUN_TEST(test_appender_iterator_out_of_range_offset_no_double_free);
+    RUN_TEST(test_uncommitted_scan_header_timeout_propagates);
+    RUN_TEST(test_uncommitted_scan_payload_timeout_propagates);
+    RUN_TEST(test_payload_iterator_advance_timeout_propagates);
+    RUN_TEST(test_uncommitted_scan_gap_branch_timeout_real_gap);
+    RUN_TEST(test_uncommitted_scan_gap_branch_timeout_contiguous);
+    RUN_TEST(test_uncommitted_scan_gap_resync_timeout_propagates);
+    RUN_TEST(test_uncommitted_advance_timeout_propagates);
+    RUN_TEST(test_uncommitted_iterator_scan_starts_at_queue_start_index);
+    RUN_TEST(test_join_walk_to_end_timeout_no_committed_headers);
+    RUN_TEST(test_join_walk_to_end_timeout_no_own_live_entry);
+    RUN_TEST(test_join_committed_walk_timeout_propagates);
+    RUN_TEST(test_join_tail_walk_timeout_propagates);
     RUN_TEST(test_reader_entry_status);
     RUN_TEST(test_poller_exists);
     

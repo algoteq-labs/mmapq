@@ -1,5 +1,6 @@
 #include "internal/payload_walk.h"
 #include "internal/mmap_assert.h"
+#include "mmap_platform.h"
 
 #include <string.h>
 
@@ -16,6 +17,10 @@
  *   return > 0: *message_offset_out = position of length prefix
  *               *probing_offset     = position after message (next probe)
  *   return == 0: end of stream, neither output modified meaningfully
+ *   return < 0: MMAPQ_ETIMEDOUT on a transient mapping timeout (retryable),
+ *               MMAPQ_ECORRUPT on corrupt on-disk data or any other mapping
+ *               failure (D8 — the two causes have opposite remedies and are
+ *               never collapsed)
  */
 int32_t mmapqi_payload_walk_advance(
     const char     *queue_name,
@@ -30,7 +35,7 @@ int32_t mmapqi_payload_walk_advance(
     /* ── Map current position ────────────────────────────────────────────── */
     WrapResult r = region_accessor_wrap(payload_accessor, position, payload_buf);
     if (r != WRAP_SUCCESS) {
-        return -1;
+        return r == WRAP_MAP_TIMED_OUT ? MMAPQ_ETIMEDOUT : MMAPQ_ECORRUPT;
     }
 
     int32_t capacity = payload_buf->capacity;
@@ -43,7 +48,7 @@ int32_t mmapqi_payload_walk_advance(
 
         r = region_accessor_wrap(payload_accessor, position, payload_buf);
         if (r != WRAP_SUCCESS) {
-            return -1;
+            return r == WRAP_MAP_TIMED_OUT ? MMAPQ_ETIMEDOUT : MMAPQ_ECORRUPT;
         }
     }
 
@@ -59,7 +64,7 @@ int32_t mmapqi_payload_walk_advance(
          * so a mismatch means the on-disk length is corrupt — a runtime check,
          * not an assert, because the value is on-disk data (see AGENTS.md). */
         int64_t skip = -(int64_t)length + PAYLOAD_LENGTH_SIZE;
-        if ((int64_t)payload_buf->capacity != skip) return -1;
+        if ((int64_t)payload_buf->capacity != skip) return MMAPQ_ECORRUPT;
 
         position += skip;
         *message_offset_out = position;
@@ -67,7 +72,7 @@ int32_t mmapqi_payload_walk_advance(
 
         r = region_accessor_wrap(payload_accessor, position, payload_buf);
         if (r != WRAP_SUCCESS) {
-            return -1;
+            return r == WRAP_MAP_TIMED_OUT ? MMAPQ_ETIMEDOUT : MMAPQ_ECORRUPT;
         }
 
         /* Re-read length at new position */
@@ -85,7 +90,7 @@ int32_t mmapqi_payload_walk_advance(
      * capacity - PAYLOAD_LENGTH_SIZE. Runtime check — length is on-disk data. */
     if (length <= 0 ||
         (int64_t)length > (int64_t)payload_buf->capacity - PAYLOAD_LENGTH_SIZE)
-        return -1;
+        return MMAPQ_ECORRUPT;
 
     *message_offset_out = position;
     *probing_offset     = position + PAYLOAD_LENGTH_SIZE + length;

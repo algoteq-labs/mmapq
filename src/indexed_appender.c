@@ -240,8 +240,21 @@ static int commit_header(MmapqIndexedAppender *a, int64_t payload_offset, int64_
  * start_offset — bytes there may belong to a dead payload, and writing a
  * shorter message over a longer one leaves stale bytes a later recovery
  * would misread). A position with no file yet, or beyond a file's end, is
- * the end of the stream. The pre-wrap is required: payload_walk collapses
- * "no file" into -1 (D8). */
+ * the end of the stream. The pre-wrap is required: post-D8 the walk maps a
+ * missing or too-short file at a wrap site to MMAPQ_ECORRUPT (F1) — only
+ * this pre-wrap makes "no file" the end of the stream here. */
+#ifdef MMAPQ_TEST_HOOKS
+static int     appender_walk_site = -1;
+static int32_t appender_walk_rc;
+static int     appender_walk_fired;
+void mmapq_test_hook_set_appender_walk_result(int site, int32_t rc)
+{ appender_walk_site = site; appender_walk_rc = rc; appender_walk_fired = 0; }
+int mmapq_test_hook_appender_walk_fired(void) { return appender_walk_fired; }
+#define WALK_HOOK(site, v) do { if (appender_walk_site == (site)) { (v) = appender_walk_rc; appender_walk_fired++; } } while (0)
+#else
+#define WALK_HOOK(site, v) do { } while (0)
+#endif
+
 static int walk_payload_to_end(MmapqIndexedAppender *a, int64_t from,
                                int64_t *out_end)
 {
@@ -261,8 +274,9 @@ static int walk_payload_to_end(MmapqIndexedAppender *a, int64_t from,
         int32_t len = mmapqi_payload_walk_advance(a->queue_name, &probing,
                                                   &msg_off,
                                                   ro_payload, &a->ro_buf);
+        WALK_HOOK(0, len);
         if (len == 0) break;
-        if (len < 0) return MMAPQ_ECORRUPT;
+        if (len < 0) return len;   /* D8: timeout vs corruption propagates */
     }
     *out_end = probing;
     return 0;
@@ -338,7 +352,10 @@ static int initialise_append_position(MmapqIndexedAppender *a, int64_t start_ind
             int32_t len = mmapqi_payload_walk_advance(a->queue_name,
                                                 &probing, &msg_off,
                                                 ro_payload, ro_buf);
-            if (len <= 0) {
+            WALK_HOOK(1, len);
+            if (len < 0) return len;   /* D8: timeout vs corruption propagates */
+            if (len == 0) {
+                /* End of stream where a committed message must exist */
                 return MMAPQ_ECORRUPT;
             }
 
@@ -350,11 +367,13 @@ static int initialise_append_position(MmapqIndexedAppender *a, int64_t start_ind
                                                           &next_probing,
                                                           &next_msg_off,
                                                           ro_payload, ro_buf);
+                WALK_HOOK(2, next_len);
                 if (next_len == 0) break;
                 /* A walk error leaves probing unadvanced; without this the loop
-                 * would spin forever on a corrupt tail. Matches the first walk's
-                 * len <= 0 mapping at MMAPQ_ECORRUPT above. */
-                if (next_len < 0) return MMAPQ_ECORRUPT;
+                 * would spin forever on a corrupt tail. D8: the walk's code
+                 * propagates verbatim (timeout is retryable, corruption is
+                 * not), matching the first walk's propagation above. */
+                if (next_len < 0) return next_len;
                 probing = next_probing;
             }
 
@@ -731,6 +750,8 @@ MmapqUncommittedPayloadIterator *mmapq_indexed_appender_uncommitted_iterator(
             a,
             a->header_acc,
             a->uncommitted_inner,
+            appender_start_index_from_meta,   /* D8/S3: header scan floor */
+            a->queue_meta,
             &a->uncommitted_iter);
     }
 

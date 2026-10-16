@@ -43,9 +43,13 @@
  * Returns:
  *   > 0  : message payload length (bytes, excluding 4-byte length prefix)
  *   == 0 : end of stream at probing_offset
- *   -1   : error — corrupt on-disk length/padding or region mapping failure.
- *          A transient mapping timeout is NOT distinguished from corruption
- *          at this layer (both collapse to -1).
+ *   < 0  : MMAPQ_ETIMEDOUT on a transient mapping timeout (retryable);
+ *          MMAPQ_ECORRUPT on a corrupt on-disk length/padding or any other
+ *          mapping failure — including a missing or too-short file at a
+ *          wrap site (F1). Timeout and corruption are never collapsed into
+ *          one value: their remedies (retry vs recreate) are opposite.
+ *          Same convention as the batch payload iterator's last_error
+ *          channel (batch_payload_iterator.c).
  */
 int32_t mmapqi_payload_walk_advance(
     const char     *queue_name,

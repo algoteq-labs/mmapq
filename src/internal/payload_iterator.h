@@ -109,8 +109,14 @@ int mmapqi_payload_iterator_init(
 /**
  * mmapqi_payload_iterator_advance — move to the next message in the stream.
  *
- * Returns 1 if a message is available (current_message_length > 0).
- * Returns 0 if end of stream reached.
+ * Three-way contract (D8):
+ *   Returns 1 if a message is available (current_message_length > 0).
+ *   Returns 0 if end of stream reached.
+ *   Returns a negative MMAPQ_E* code propagated from the payload walk —
+ *   MMAPQ_ETIMEDOUT on a transient mapping timeout (retryable; the iterator
+ *   state is unchanged and the next advance() retries the same position),
+ *   MMAPQ_ECORRUPT on corrupt on-disk data. A negative is truthy in C:
+ *   callers must compare explicitly, never `if (advance(...))`.
  *
  * After a successful advance():
  *   mmapqi_payload_iterator_current() returns the message buffer.

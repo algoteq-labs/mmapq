@@ -19,7 +19,9 @@
  *
  * ALGORITHM:
  *   At init():
- *     1. Scan the header from index 0 forward.
+ *     1. Scan the header from the queue's start index forward (D8/S3 —
+ *        entries below it are archived by definition and their files may
+ *        have been reclaimed).
  *     2. For each header entry matching this appender_id, decode payloadPosition.
  *     3. Walk the payload stream to build contiguous committed RANGES:
  *        [start_offset, end_offset) where all bytes are part of committed messages.
@@ -67,6 +69,11 @@ typedef struct MmapqUncommittedPayloadIterator {
     int64_t       (*end_of_stream_offset)(void *ctx);
     void           *stream_ctx;
 
+    /* Queue start index supplier (D8/S3): the header scan's floor. One
+     * acquire load per scan — the archiver may advance it between scans. */
+    int64_t       (*queue_start_index)(void *ctx);
+    void           *queue_start_index_ctx;
+
     /* Header accessors for committed range detection */
     RegionAccessor *header_accessor;
     Buffer          header_buf;
@@ -102,6 +109,13 @@ typedef struct MmapqUncommittedPayloadIterator {
  * header_accessor:         RO accessor for the queue header file
  * inner:                   MmapqPayloadIterator for gap traversal (ownership NOT taken;
  *                          caller must keep it alive for the iterator's lifetime)
+ * queue_start_index:       callback returning the queue's current start index —
+ *                          the header scan's floor (D8/S3)
+ * queue_start_index_ctx:   context for queue_start_index
+ *
+ * Retry note (D8): after a FAILED init (e.g. a transient MMAPQ_ETIMEDOUT),
+ * rewind() returns MMAPQ_EINVAL — the retry path is a NEW factory call
+ * (mmapq_indexed_appender_uncommitted_iterator), not rewind.
  */
 int mmapqi_uncommitted_iterator_create(
     const char     *queue_name,
@@ -111,6 +125,8 @@ int mmapqi_uncommitted_iterator_create(
     void           *stream_ctx,
     RegionAccessor *header_accessor,
     MmapqPayloadIterator *inner,
+    int64_t       (*queue_start_index)(void *ctx),
+    void           *queue_start_index_ctx,
     MmapqUncommittedPayloadIterator **out);
 
 /**
@@ -123,12 +139,12 @@ int mmapqi_uncommitted_iterator_create(
  * calling init() again with the same parameters.
  *
  * Returns 0 on success; MMAPQ_EINVAL if it is NULL or an explicit offset
- * is below start_of_stream_offset(); MMAPQ_ECORRUPT if the header scan was
- * truncated (offset mismatch at a committed header, or mapping failure —
- * the walk layer does not distinguish transient timeout from corruption;
- * see the TODO in uncommitted_payload_iterator.c). On failure the iterator
- * is left uninitialised; the caller-owned inner iterator is never freed
- * and remains valid.
+ * is below start_of_stream_offset(); MMAPQ_ETIMEDOUT on a transient mapping
+ * timeout during the scan (retryable — via a NEW factory call, see create);
+ * MMAPQ_ECORRUPT if the header scan was genuinely truncated (a committed
+ * header whose payload would not walk for a non-timeout reason). On failure
+ * the iterator is left uninitialised; the caller-owned inner iterator is
+ * never freed and remains valid.
  */
 int mmapqi_uncommitted_iterator_init(
     MmapqUncommittedPayloadIterator *it,
@@ -138,7 +154,14 @@ int mmapqi_uncommitted_iterator_init(
 /**
  * mmapqi_uncommitted_iterator_advance — move to the next uncommitted message.
  *
- * Returns 1 if an uncommitted message is available, 0 if exhausted.
+ * Three-way contract (D8):
+ *   Returns 1 if an uncommitted message is available.
+ *   Returns 0 if exhausted (no more gaps).
+ *   Returns a negative MMAPQ_E* code propagated from the inner payload
+ *   iterator — MMAPQ_ETIMEDOUT on a transient mapping timeout (retryable:
+ *   iterator state is unchanged, the next advance() retries), or
+ *   MMAPQ_ECORRUPT. A negative is truthy in C: callers must compare
+ *   explicitly, never `while (advance(...))`.
  *
  * After a successful advance():
  *   mmapqi_uncommitted_iterator_current() returns the message buffer.
@@ -164,7 +187,10 @@ Buffer *mmapqi_uncommitted_iterator_current(MmapqUncommittedPayloadIterator *it)
  * mmapqi_uncommitted_iterator_rewind — re-init with same parameters.
  *
  * Returns 0 on success; MMAPQ_EINVAL if it is NULL or not yet initialised;
- * otherwise the result of the re-run init().
+ * otherwise the result of the re-run init(). After a FAILED init the
+ * iterator is not initialised, so rewind returns MMAPQ_EINVAL — retry
+ * after a transient MMAPQ_ETIMEDOUT via a NEW factory call, not rewind
+ * (D8, probe P5).
  */
 int mmapqi_uncommitted_iterator_rewind(MmapqUncommittedPayloadIterator *it);
 

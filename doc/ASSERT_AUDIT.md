@@ -105,9 +105,10 @@ Lines 55, 88. Internal dispatch null checks.
 
 ### payload_iterator.c — 4 (all I)
 
-Lines 97, 110, 145-146. Internal dispatch null checks. (A5/CAND-22: init
+Lines 97, 110, 148-149. Internal dispatch null checks. (A5/CAND-22: init
 and rewind gained `int` return channels; their NULL/not-initialised checks
-became MMAPQ_EINVAL returns.)
+became MMAPQ_EINVAL returns. D8: advance gained the three-way error
+propagation — comment lines only above the catalogued sites.)
 
 ### queue_meta.h — 1 (all I)
 
@@ -149,8 +150,10 @@ room for giving up.)
 
 ### uncommitted_payload_iterator.c — 5 (all I)
 
-Lines 30, 348, 362, 381, 397. Internal dispatch null checks. (A5/CAND-22:
-init and rewind NULL checks became MMAPQ_EINVAL returns.)
+Lines 30, 376, 397, 416, 432. Internal dispatch null checks. (A5/CAND-22:
+init and rewind NULL checks became MMAPQ_EINVAL returns. D8: scan floor,
+checked header read, and three-way advance propagation shifted the
+catalogued sites.)
 
 ## Pending V-class conversions
 

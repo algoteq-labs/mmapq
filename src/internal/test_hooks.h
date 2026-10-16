@@ -1,6 +1,8 @@
 #ifndef TEST_HOOKS_H
 #define TEST_HOOKS_H
 
+#include <stdint.h>
+
 /**
  * Test-only hooks (CAND-30 pins P9/P15). Compiled only with
  * -DMMAPQ_TEST_HOOKS — never in release builds or the shipped library
@@ -38,6 +40,12 @@
  *   geometry checks (region_size % page_size == 0) — the only way to pin
  *   16/64 KB-page host behaviour on a 4 KB-page host (CAND-38 P4).
  *   0 disarms.
+ * set_appender_walk_result: arms ONE appender-join walk site (D8) —
+ *   0 = walk_payload_to_end, 1 = the committed-entry walk, 2 = the tail
+ *   walk; while armed, that site behaves as if its walk returned rc.
+ *   -1 disarms. appender_walk_fired returns how many times the armed site
+ *   fired since the last setter call — the liveness assertion against
+ *   vacuous pin geometries.
  */
 #ifdef MMAPQ_TEST_HOOKS
 void mmapq_test_hook_set_commit_pre(void (*fn)(void));
@@ -52,6 +60,8 @@ void mmapq_test_hook_set_archiver_listing_scan(int (*fn)(void));
 void mmapq_test_hook_set_batch_archiver_listing_scan(int (*fn)(void));
 void mmapq_test_hook_header_wrap_inject(int wrap_result);
 void mmapq_test_hook_set_page_size(long page_size);
+void mmapq_test_hook_set_appender_walk_result(int site, int32_t rc);
+int  mmapq_test_hook_appender_walk_fired(void);
 #endif
 
 #endif /* TEST_HOOKS_H */

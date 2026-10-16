@@ -73,9 +73,16 @@ static int scan_committed_ranges(MmapqUncommittedPayloadIterator *it)
 {
     ranges_clear(it);
 
-    int64_t header_index  = 0;
+    /* S3 (D8): never scan headers below the queue's start index — those
+     * files may have been reclaimed, and entries below start_of_stream are
+     * archived by definition, never uncommitted. One acquire load at scan
+     * start; a concurrent archive advancing it further is covered by the
+     * deletion protocol (archiving-design.md), mirroring the appender
+     * join's scan_floor. */
+    int64_t header_index  = it->queue_start_index(it->queue_start_index_ctx);
     int64_t current_start = PAYLOAD_ITERATOR_NOT_SET;
     int64_t current_end   = PAYLOAD_ITERATOR_NOT_SET;
+    int arc;
 
     /*
      * We need a separate MmapqPayloadIterator for walking payload within each
@@ -89,9 +96,13 @@ static int scan_committed_ranges(MmapqUncommittedPayloadIterator *it)
         return 0;
 
     while (1) {
-        /* Read header at header_index */
-        uint64_t header = mmapqi_header_read(it->header_accessor, &it->header_buf,
-                                       header_index, it->queue_name);
+        /* Read header at header_index — checked (F2): a mapping failure
+         * fails the scan with its code instead of looking like end of
+         * committed headers. */
+        uint64_t header;
+        int hrc = mmapqi_header_read_checked(it->header_accessor, &it->header_buf,
+                                             header_index, &header);
+        if (hrc != 0) return hrc;
 
         if (header == HEADER_NULL) break;  /* end of committed headers */
 
@@ -114,19 +125,28 @@ static int scan_committed_ranges(MmapqUncommittedPayloadIterator *it)
             if (mmapqi_payload_iterator_init(it->inner, header_offset, PAYLOAD_ITERATOR_NOT_SET) != 0)
                 return 0;
 
-            if (!mmapqi_payload_iterator_advance(it->inner)) return 0;
+            /* D8: the inner advance is three-way — a negative error
+             * propagates; 0 (end of stream) or an offset mismatch is a
+             * truncated committed span — scan failure. */
+            arc = mmapqi_payload_iterator_advance(it->inner);
+            if (arc < 0) return arc;
+            if (arc == 0) return 0;
             if (it->inner->current_message_offset != header_offset) return 0;
             current_start = header_offset;
             current_end   = it->inner->next_probing_offset;
 
-        } else if (!mmapqi_payload_iterator_advance(it->inner) ||
+        } else if ((arc = mmapqi_payload_iterator_advance(it->inner)) < 0) {
+            return arc;
+        } else if (arc == 0 ||
                    it->inner->current_message_offset != header_offset) {
             /* ── Gap detected: flush current range, start new one ────────── */
             ranges_insert(it, current_start, current_end);
 
             if (mmapqi_payload_iterator_init(it->inner, header_offset, PAYLOAD_ITERATOR_NOT_SET) != 0)
                 return 0;
-            if (!mmapqi_payload_iterator_advance(it->inner)) return 0;
+            arc = mmapqi_payload_iterator_advance(it->inner);
+            if (arc < 0) return arc;
+            if (arc == 0) return 0;
             if (it->inner->current_message_offset != header_offset) return 0;
 
             current_start = header_offset;
@@ -236,8 +256,9 @@ static int switch_to_next_gap(MmapqUncommittedPayloadIterator *it)
 
     /* committed_end and gap_end derive from ranges built only from
      * non-archived entries, so they are >= start_of_stream by construction.
-     * An init failure collapses to exhaustion, matching advance()'s
-     * error-as-end-of-iteration convention. */
+     * An init failure here collapses to exhaustion (0): the arguments are
+     * valid by construction, so a failure indicates a broken invariant, not
+     * a transient condition the caller can retry. */
     if (mmapqi_payload_iterator_init(it->inner, committed_end, gap_end) != 0)
         return 0;
     return 1;
@@ -253,6 +274,8 @@ int mmapqi_uncommitted_iterator_create(
     void            *stream_ctx,
     RegionAccessor  *header_accessor,
     MmapqPayloadIterator *inner,
+    int64_t        (*queue_start_index)(void *ctx),
+    void            *queue_start_index_ctx,
     MmapqUncommittedPayloadIterator **out)
 {
     if (out == NULL) return MMAPQ_EINVAL;
@@ -262,6 +285,7 @@ int mmapqi_uncommitted_iterator_create(
     if (end_of_stream_offset == NULL) return MMAPQ_EINVAL;
     if (header_accessor == NULL) return MMAPQ_EINVAL;
     if (inner == NULL) return MMAPQ_EINVAL;
+    if (queue_start_index == NULL) return MMAPQ_EINVAL;
 
     MmapqUncommittedPayloadIterator *it = calloc(1, sizeof(MmapqUncommittedPayloadIterator));
     if (it == NULL) return MMAPQ_ENOMEM;
@@ -273,6 +297,8 @@ int mmapqi_uncommitted_iterator_create(
     it->stream_ctx              = stream_ctx;
     it->header_accessor         = header_accessor;
     it->inner                   = inner;
+    it->queue_start_index       = queue_start_index;
+    it->queue_start_index_ctx   = queue_start_index_ctx;
 
     it->init_start_offset       = PAYLOAD_ITERATOR_NOT_SET;
     it->init_end_offset         = PAYLOAD_ITERATOR_NOT_SET;
@@ -315,16 +341,18 @@ int mmapqi_uncommitted_iterator_init(
         ? stream_start
         : start_offset;
 
-    /* Scan headers to build committed ranges */
-    if (!scan_committed_ranges(it)) {
+    /* Scan headers to build committed ranges. Three-way (D8): a negative
+     * code propagates verbatim (MMAPQ_ETIMEDOUT is transient — retry with a
+     * NEW factory call, not rewind, which returns EINVAL after a failed
+     * init); 0 is genuine truncation — a committed header's payload would
+     * not walk for a non-timeout reason — and stays MMAPQ_ECORRUPT. */
+    int src = scan_committed_ranges(it);
+    if (src < 0) {
         it->initialised = 0;
-        /* Scan truncation: a committed header's payload would not walk.
-         * Genuine corruption OR a transient mapping timeout — the walk
-         * layer collapses both to -1 (payload_walk.c), so the distinction
-         * cannot be recovered here; ECORRUPT subsumes transient mapping
-         * failure until the walk layer separates them.
-         * TODO: walk-layer timeout/corruption distinction (filed in
-         * audit/fix_plan.md as a follow-up item). */
+        return src;
+    }
+    if (src == 0) {
+        it->initialised = 0;
         return MMAPQ_ECORRUPT;
     }
 
@@ -349,7 +377,14 @@ int mmapqi_uncommitted_iterator_advance(MmapqUncommittedPayloadIterator *it)
     if (!it->initialised) return 0;
 
     while (1) {
-        if (mmapqi_payload_iterator_advance(it->inner)) {
+        /* D8: three-way — a negative error from the inner advance
+         * propagates; 0 means the current gap is exhausted. A negative is
+         * truthy in C: `if (advance(...))` here would report an error as a
+         * found message (stale buffer), and the `while (advance(...))`
+         * test idiom would loop forever on a repeating error. */
+        int r = mmapqi_payload_iterator_advance(it->inner);
+        if (r < 0) return r;
+        if (r == 1) {
             int64_t msg_end = it->inner->next_probing_offset;
 
             /*

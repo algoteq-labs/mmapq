@@ -573,14 +573,16 @@ void test_uncommitted_iterator_after_archive_no_use_after_free(void)
         mmapq_indexed_appender_uncommitted_iterator(
             a, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET);
     TEST_ASSERT_NOT_NULL(it);
-    /* All four messages are committed: nothing uncommitted remains. */
-    TEST_ASSERT_FALSE(mmapqi_uncommitted_iterator_advance(it));
+    /* All four messages are committed: nothing uncommitted remains.
+     * (D8: advance is three-way — a negative error is truthy; compare
+     * against 0/1 explicitly, here and below.) */
+    TEST_ASSERT_EQUAL_INT(0, mmapqi_uncommitted_iterator_advance(it));
 
     /* A second call must not compound the damage. */
     it = mmapq_indexed_appender_uncommitted_iterator(
         a, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET);
     TEST_ASSERT_NOT_NULL(it);
-    TEST_ASSERT_FALSE(mmapqi_uncommitted_iterator_advance(it));
+    TEST_ASSERT_EQUAL_INT(0, mmapqi_uncommitted_iterator_advance(it));
 
     /* Pre-fix this double-frees uncommitted_inner. */
     mmapq_indexed_appender_close(a);
@@ -618,7 +620,7 @@ void test_uncommitted_iterator_rewind_after_archive(void)
     /* Pre-fix this re-runs the scan and reads freed memory. Post-fix the
      * re-scan succeeds against the advanced start_offset. */
     TEST_ASSERT_EQUAL_INT(0, mmapqi_uncommitted_iterator_rewind(u));
-    TEST_ASSERT_FALSE(mmapqi_uncommitted_iterator_advance(u));
+    TEST_ASSERT_EQUAL_INT(0, mmapqi_uncommitted_iterator_advance(u));
 
     mmapq_indexed_appender_close(a);
 }
@@ -654,7 +656,7 @@ void test_uncommitted_iterator_skips_archived_entries(void)
     TEST_ASSERT_NOT_NULL(it);
 
     int found = 0;
-    while (mmapqi_uncommitted_iterator_advance(it)) {
+    while (mmapqi_uncommitted_iterator_advance(it) == 1) {
         found++;
         Buffer *buf = mmapqi_uncommitted_iterator_current(it);
         TEST_ASSERT_EQUAL_INT32(4, buf->capacity);
@@ -702,7 +704,7 @@ void test_payload_iterator_init_rejects_out_of_range(void)
     TEST_ASSERT_EQUAL_INT(0,
         mmapqi_payload_iterator_init(
             it, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET));
-    TEST_ASSERT_TRUE(mmapqi_payload_iterator_advance(it));
+    TEST_ASSERT_EQUAL_INT(1, mmapqi_payload_iterator_advance(it));
     Buffer *buf = mmapqi_payload_iterator_current(it);
     TEST_ASSERT_EQUAL_INT32(4, buf->capacity);
     TEST_ASSERT_EQUAL_MEMORY("msg2", buf->data, 4);
