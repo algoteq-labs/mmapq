@@ -22,6 +22,10 @@ int32_t mmapq_batch_iterator_read_message_count(MmapqBatchPayloadIterator *it, i
         return MMAPQ_ECORRUPT;
     int32_t count;
     memcpy(&count, it->payload_buf.data + MMAPQ_BATCH_MSG_COUNT_OFFSET, sizeof(int32_t));
+    /* No upper bound by design: a valid batch may span multiple payload
+     * files, so no capacity-derived bound exists. An over-stated count
+     * is caught downstream — the walk fails ECORRUPT when the framing
+     * stops parsing. Nothing allocates proportional to the count. */
     if (count < 0) return MMAPQ_ECORRUPT;
     return count;
 }
@@ -51,6 +55,7 @@ MmapqBatchPayloadIterator *mmapq_batch_iterator_init(
     int32_t               message_count,
     int32_t               start_msg_index)
 {
+    if (it == NULL) return NULL;
     it->last_error = 0;
     if (message_count < 0) {
         message_count = mmapq_batch_iterator_read_message_count(it, batch_offset);

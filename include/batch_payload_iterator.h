@@ -50,9 +50,10 @@ typedef struct MmapqBatchPayloadIterator MmapqBatchPayloadIterator;
  *
  * it:              the iterator to initialise
  * batch_offset:    absolute payload offset where the batch begins
- * message_count:   total messages in the batch; pass -1 to read from disk
+ * message_count:   total messages in the batch; pass -1 to read from disk;
+ *                  trusted as written — see mmapq_batch_iterator_read_message_count
  * start_msg_index: zero-based message index to start iteration from
- * Returns: @p it (for chaining)
+ * Returns: it (for chaining); NULL if it is NULL
  */
 MmapqBatchPayloadIterator *mmapq_batch_iterator_init(
     MmapqBatchPayloadIterator *it,
@@ -66,6 +67,11 @@ MmapqBatchPayloadIterator *mmapq_batch_iterator_init(
  * Used during initialisation when the count is not already known (e.g.
  * in the reader after looking up the header entry).
  *
+ * The count is trusted as written: deliberately no bound against region
+ * capacity — a valid batch may span multiple payload files. Nothing
+ * allocates proportional to the count; an over-stated count terminates
+ * iteration with MMAPQ_ECORRUPT when the framing stops parsing.
+ *
  * it:          the iterator (payload_acc must be set)
  * batch_offset: absolute payload offset of the batch to probe
  * Returns: the message count, or -1 if the region cannot be mapped
@@ -77,6 +83,12 @@ int32_t mmapq_batch_iterator_read_message_count(MmapqBatchPayloadIterator *it, i
  *
  * Used during initialisation of the append position on restart to locate
  * the last committed batch without scanning all headers.
+ *
+ * Heuristic, not validation: the check reads 4 bytes and tests
+ * count > 0 — a message length prefix and a batch message-count are
+ * both positive int32 at a 4-byte boundary, indistinguishable. A false
+ * positive is caught downstream: iteration fails with MMAPQ_ECORRUPT
+ * when the framing stops parsing.
  *
  * it:     the iterator
  * offset: payload offset to probe

@@ -1684,6 +1684,94 @@ void test_c38_batch_create_accepts_non_pow2_file_multiple(void)
     c32_cleanup("mmap_test_ibq_c38_ok");
 }
 
+/* ── CAND-23 pins ── */
+void test_batch_iterator_init_null_returns_null(void)
+{
+    TEST_ASSERT_NULL(mmapq_batch_iterator_init(NULL, 0, 1, 0));
+}
+
+void test_batch_iterator_huge_count_walks_to_ecorrupt(void)
+{
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
+    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    mmapq_mutable_batch_append(b, "first0", 6);
+    mmapq_mutable_batch_append(b, "second0", 7);
+    mmapq_mutable_batch_append(b, "third0", 6);
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_batch_appender_commit_batch(a, mmapq_mutable_batch_complete(b)));
+    MmapqIndexedBatchReader *r = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_reader(q, &r));
+    MmapqBatchReadingContext ctx;
+    mmapq_indexed_batch_reader_read(r, 0, &ctx);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_BATCH_ENTRY_AVAILABLE, ctx.status);
+    mmapq_batch_iterator_init(ctx.iterator, ctx.iterator->batch_offset, 2147483632, 0);
+    int ok = 0, iters = 0, ended = 0;
+    for (; iters < 64; iters++) { if (!mmapq_batch_iterator_advance(ctx.iterator)) { ended = 1; break; } ok++; }
+    TEST_ASSERT_EQUAL_INT(1, ended);
+    TEST_ASSERT_EQUAL_INT(3, ok);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ECORRUPT, ctx.iterator->last_error);
+    mmapq_indexed_batch_reader_close(r);
+    mmapq_indexed_batch_appender_close(a);
+}
+
+static MmapqNextMove span_handler(int64_t bi, MmapqBatchReadingContext *ctx, void *u)
+{
+    (void)bi; int *bad = (int *)u; int k = 0;
+    while (mmapq_batch_iterator_advance(ctx->iterator)) {
+        if (batch_iterator_current_length(ctx->iterator) != 1 ||
+            *(const uint8_t *)batch_iterator_current_data(ctx->iterator) != (uint8_t)(k & 0xFF)) (*bad)++;
+        k++;
+    }
+    if (k != 6553 || ctx->iterator->last_error != 0) (*bad)++;
+    return MMAPQ_NEXT_ADVANCE;
+}
+
+void test_batch_spanning_regions_commits_polls_recovers(void)
+{
+    const char *SQ = "mmap_test_ibq_span";
+    char cmd[512]; snprintf(cmd, sizeof cmd, "rm -rf %s/%s", DIR, SQ); int rc0 = system(cmd); (void)rc0;
+    MmapqIndexedBatchQueue *sq = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create(DIR, SQ, 32768, RING_SZ, 1, (int64_t)32768 * 64, 0, TIMEOUT, 0, rt, rt, &sq));
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(sq, &a));
+    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    for (int i = 0; i < 6553; i++) { uint8_t x = (uint8_t)(i & 0xFF); TEST_ASSERT_EQUAL_INT(i, mmapq_mutable_batch_append(b, &x, 1)); }
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_batch_appender_commit_batch(a, mmapq_mutable_batch_complete(b)));
+    MmapqIndexedBatchPoller *p = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_poller(sq, &p));
+    int bad = 0;
+    TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_ADVANCED, mmapq_indexed_batch_poller_poll(p, span_handler, &bad));
+    TEST_ASSERT_EQUAL_INT(0, bad);
+    mmapq_indexed_batch_poller_close(p);
+    mmapq_indexed_batch_appender_close(a);
+    mmapq_indexed_batch_queue_close(sq); sq = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create(DIR, SQ, 32768, RING_SZ, 1, (int64_t)32768 * 64, 0, TIMEOUT, 0, rt, rt, &sq));
+    MmapqIndexedBatchReader *r = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_reader(sq, &r));
+    MmapqBatchReadingContext ctx;
+    mmapq_indexed_batch_reader_read(r, 0, &ctx);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_BATCH_ENTRY_AVAILABLE, ctx.status);
+    bad = 0; span_handler(0, &ctx, &bad);
+    TEST_ASSERT_EQUAL_INT(0, bad);
+    /* appender recovery on reopen walks the batch via probe_batch + init(-1) + exhaust */
+    a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(sq, &a));
+    b = mmapq_indexed_batch_appender_start_batch(a);
+    TEST_ASSERT_NOT_NULL(b);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(b, "z", 1));
+    TEST_ASSERT_EQUAL_INT64(1, mmapq_indexed_batch_appender_commit_batch(a, mmapq_mutable_batch_complete(b)));
+    mmapq_indexed_batch_reader_read(r, 1, &ctx);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_BATCH_ENTRY_AVAILABLE, ctx.status);
+    TEST_ASSERT_EQUAL_INT(1, ctx.message_count);
+    mmapq_indexed_batch_reader_read(r, 0, &ctx);
+    bad = 0; span_handler(0, &ctx, &bad);
+    TEST_ASSERT_EQUAL_INT(0, bad);
+    mmapq_indexed_batch_appender_close(a);
+    mmapq_indexed_batch_reader_close(r);
+    mmapq_indexed_batch_queue_close(sq);
+    rc0 = system(cmd); (void)rc0;
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -1732,5 +1820,8 @@ int main(void)
     RUN_TEST(test_c32_batch_p9_commit_batch_above_last_written_refused);
     RUN_TEST(test_c38_batch_create_refuses_region_below_header_block);
     RUN_TEST(test_c38_batch_create_accepts_non_pow2_file_multiple);
+    RUN_TEST(test_batch_iterator_init_null_returns_null);
+    RUN_TEST(test_batch_iterator_huge_count_walks_to_ecorrupt);
+    RUN_TEST(test_batch_spanning_regions_commits_polls_recovers);
     return UNITY_END();
 }
