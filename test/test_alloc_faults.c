@@ -58,10 +58,13 @@
 #include <stdatomic.h>
 #include <stddef.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 
 extern void *__real_calloc(size_t, size_t);
 
@@ -347,14 +350,17 @@ static int async_create_armed_size(size_t sz, long nth, MmapqRuntime *rt,
 
 void test_async_ring_impl_calloc_fail_no_uaf(void)
 {
-    /* First size-32 calloc in async_create = AsyncRingImpl. Pre-fix it sat
-     * AFTER mmapq_runtime_register: the failure freed mapping_impl while the
-     * runtime thread held it — 5/5 aborts (ASan heap-use-after-free in
-     * async_mapping_execute region_ring.c:103 on T1, or SEGV). Post-fix it
-     * precedes registration: plain ENOMEM, no thread involvement. */
+    /* AsyncRingImpl's calloc in async_create — CAND-24 added timeout_ns,
+     * growing it 32 → 40 bytes: it is now the SECOND size-40 calloc
+     * (mapping_impl's is the first; sizeofs verified via gdb). Pre-fix it
+     * sat AFTER mmapq_runtime_register: the failure freed mapping_impl
+     * while the runtime thread held it — 5/5 aborts (ASan
+     * heap-use-after-free in async_mapping_execute region_ring.c:103 on
+     * T1, or SEGV). Post-fix it precedes registration: plain ENOMEM, no
+     * thread involvement. */
     MmapqRuntime *rt = new_runtime();
     RegionRing *ring;
-    int rc = async_create_armed_size(32, 1, rt, &ring);
+    int rc = async_create_armed_size(40, 2, rt, &ring);
     mmapq_runtime_close(rt);
     mmapq_runtime_destroy(rt);
     if (ring) mmapqi_region_ring_destroy(ring);
@@ -364,10 +370,12 @@ void test_async_ring_impl_calloc_fail_no_uaf(void)
 
 void test_async_ring_ring_calloc_fail_no_uaf(void)
 {
-    /* Second size-32 calloc = RegionRing — same pre-fix UAF window. */
+    /* RegionRing's calloc = the only size-32 calloc in async_create
+     * (CAND-24: AsyncRingImpl grew to 40 bytes) — same pre-fix UAF
+     * window. */
     MmapqRuntime *rt = new_runtime();
     RegionRing *ring;
-    int rc = async_create_armed_size(32, 2, rt, &ring);
+    int rc = async_create_armed_size(32, 1, rt, &ring);
     mmapq_runtime_close(rt);
     mmapq_runtime_destroy(rt);
     if (ring) mmapqi_region_ring_destroy(ring);
@@ -628,15 +636,66 @@ void test_waiting_deregister_alloc_fail_close_completes(void)
         RING_SIZE, REGION_SIZE, fm, TIMEOUT_NS, rt, &ring));
     TEST_ASSERT_NOT_NULL(ring);
 
-    /* close path: the main thread registers wait_impl (3 callocs: ExecList
-     * node, items, FreeNode); the runtime thread's first unregister (the
-     * mapping exec) follows — fail its remove-node calloc (#4) */
-    arm(4);
+    /* close path: since CAND-24 the main thread allocates the wait_impl
+     * heap block first (calloc #1), then registers it (3 callocs: #2
+     * ExecList node, #3 items, #4 FreeNode); the runtime thread's first
+     * unregister (the mapping exec) follows — fail its remove-node
+     * calloc (#5) */
+    arm(5);
     mmapqi_region_ring_destroy(ring);   /* must complete, not hang */
     disarm();
 
     mmapq_runtime_close(rt);
     mmapq_runtime_destroy(rt);
+}
+
+/* CAND-24: the close path's register can also fail on ALLOCATION on a
+ * LIVE runtime (fail the FreeNode calloc, #4). Register returning 0 there
+ * must take the mapper_detached leak path — freeing mapping_impl under
+ * the live runtime thread is a use-after-free (the thread dies in
+ * async_mapping_execute). Pre-branch-fix this exact shape segfaulted
+ * (observed via the test above before its arm count tracked the new
+ * wait_impl calloc). Forked child + _exit: the leak is deliberate and
+ * bounded (LSan must not see it); ASan still reports any UAF before the
+ * exit. */
+static void child_register_alloc_fail_close_leaks_safely(void)
+{
+    MmapqIdleStrategy *idle = NULL;
+    if (mmapq_idle_strategy_busy_spin_create(&idle) != 0) _exit(2);
+    MmapqRuntime *rt = NULL;
+    if (mmapq_runtime_create("alloc-faults", idle,
+                             MMAPQ_RUNTIME_DEFAULT_CLOSE_TIMEOUT_NS,
+                             NULL, NULL, &rt) != 0)
+        _exit(2);
+
+    FileMapper *fm = NULL;
+    if (mmapqi_file_mapper_rolled_create(
+            DIR "/payload_10", MAX_FILE, REGION_SIZE,
+            mmapqi_file_init_none, NULL, MAP_MODE_READ_WRITE, 6, 1, &fm) != 0)
+        _exit(2);
+    RegionRing *ring = NULL;
+    if (mmapqi_region_ring_async_create(RING_SIZE, REGION_SIZE, fm,
+                                        TIMEOUT_NS, rt, &ring) != 0)
+        _exit(2);
+
+    arm(4);   /* the register's FreeNode calloc fails → register returns 0 */
+    mmapqi_region_ring_destroy(ring);   /* leak path; must complete */
+    disarm();
+
+    mmapq_runtime_close(rt);    /* joins; the drain unmanages the leaked regions */
+    mmapq_runtime_destroy(rt);
+    _exit(0);
+}
+
+void test_waiting_deregister_register_alloc_fail_leaks_safely(void)
+{
+    pid_t pid = fork();
+    TEST_ASSERT(pid >= 0);
+    if (pid == 0) child_register_alloc_fail_close_leaks_safely();
+    int status = 0;
+    TEST_ASSERT_EQUAL_INT(pid, waitpid(pid, &status, 0));
+    TEST_ASSERT(WIFEXITED(status));
+    TEST_ASSERT_EQUAL_INT(0, WEXITSTATUS(status));
 }
 
 /* unregister_and_wait site (runtime.c): the helper's registration failure is
@@ -714,6 +773,7 @@ int main(void)
     RUN_TEST(test_unregister_freenode_calloc_fail_noops_slot);
     RUN_TEST(test_loop_unregister_alloc_fail_noops_slot);
     RUN_TEST(test_waiting_deregister_alloc_fail_close_completes);
+    RUN_TEST(test_waiting_deregister_register_alloc_fail_leaks_safely);
     RUN_TEST(test_unregister_and_wait_alloc_fail_retries);
     RUN_TEST(test_ring_create_caller_error_eINVAL_consumes_mapper);
     return UNITY_END();

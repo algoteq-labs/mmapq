@@ -1,5 +1,6 @@
 #include "unity.h"
 #include "runtime.h"
+#include "mmap_platform.h"
 
 #include <stdint.h>
 #include <unistd.h>
@@ -7,6 +8,7 @@
 #include <stdlib.h>
 #include <signal.h>
 #include <sched.h>
+#include <pthread.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 
@@ -170,6 +172,27 @@ void test_runtime_multiple_executables(void)
     mmapq_runtime_destroy(rt);
     rt = NULL;
     free(ce1); free(ce2); free(ce3);
+}
+
+/* CAND-24: close reports its outcome. Healthy close joins and returns
+ * exactly 0; a sequential repeat close reports the same; NULL is EINVAL.
+ * (The ETIMEDOUT path is asserted in the C-02 fork children above —
+ * exact values, not loose bounds.) */
+void test_runtime_close_status_values(void)
+{
+    MmapqIdleStrategy *idle = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_idle_strategy_busy_spin_create(&idle));
+
+    MmapqRuntime *crt = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_runtime_create("status-rt", idle, 1000000000ULL, NULL, NULL, &crt));
+    TEST_ASSERT_NOT_NULL(crt);
+
+    TEST_ASSERT_EQUAL_INT(0, mmapq_runtime_close(crt));
+    TEST_ASSERT_EQUAL_INT(0, mmapq_runtime_close(crt));   /* sequential repeat */
+    mmapq_runtime_destroy(crt);
+
+    TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL, mmapq_runtime_close(NULL));
 }
 
 void test_runtime_is_closed_after_close(void)
@@ -375,8 +398,10 @@ static void child_close_with_wedged_executable(void)
     static WedgedExec we;
     MmapqRuntime *crt = child_runtime_with_wedged_exec("wedged-rt", wedged_execute, &we);
 
-    mmapq_runtime_close(crt);   /* pre-fix: never returns */
-    _exit(0);                   /* the detached wedged thread dies with the process */
+    int rc = mmapq_runtime_close(crt);   /* pre-C-02: never returns */
+    /* CAND-24: the wedged thread exhausts the budget and detaches —
+     * close reports exactly MMAPQ_ETIMEDOUT. */
+    _exit(rc == MMAPQ_ETIMEDOUT ? 0 : 3);
 }
 
 /* Child body: close detaches the thread (200 ms budget vs a slow
@@ -389,7 +414,10 @@ static void child_destroy_after_detach(void)
     static WedgedExec we;
     MmapqRuntime *crt = child_runtime_with_wedged_exec("slow-rt", slow_execute, &we);
 
-    mmapq_runtime_close(crt);    /* budget exhausts; thread detached */
+    int rc = mmapq_runtime_close(crt);    /* budget exhausts; thread detached */
+    if (rc != MMAPQ_ETIMEDOUT) _exit(3);  /* CAND-24: exact status */
+    /* CAND-24: a sequential repeat close reports the first close's outcome */
+    if (mmapq_runtime_close(crt) != MMAPQ_ETIMEDOUT) _exit(3);
     mmapq_runtime_destroy(crt);  /* guarded: leaks crt; unguarded: frees it */
 
     atomic_store_explicit(&we.release, 1, memory_order_release);
@@ -440,6 +468,116 @@ void test_runtime_destroy_after_detach_no_uaf(void)
     if (pid == 0) child_destroy_after_detach();
     assert_child_exits_zero(pid);
 }
+
+/* ── CAND-24 5(b): unregister_and_wait racing a joined close ──────────────── */
+
+static int trivial_execute(MmapqExecutable *self)
+{
+    (void)self;
+    return 0;
+}
+
+typedef struct {
+    MmapqRuntime   *rt;
+    WedgedExec      target;  /* T: trivial execute, close records it ran */
+    WedgedExec      wedge;   /* G: slow — holds the runtime thread */
+    atomic_int      waiter_returned;
+    atomic_int      waiter_saw_target_closed;
+} UwRace;
+
+static void *unregister_waiter(void *arg)
+{
+    UwRace *s = (UwRace *)arg;
+    mmapq_runtime_unregister_and_wait(s->rt, &s->target.exec);
+    /* The drain closes in list order and T registered before the helper,
+     * so on the joined path T's close() must have run before the waiter
+     * returns — this load is the pin's ordering assertion. */
+    atomic_store_explicit(&s->waiter_saw_target_closed,
+        atomic_load_explicit(&s->target.closed, memory_order_acquire),
+        memory_order_release);
+    atomic_store_explicit(&s->waiter_returned, 1, memory_order_release);
+    return NULL;
+}
+
+static void *release_wedge_after_300ms(void *arg)
+{
+    usleep(300000);
+    atomic_store_explicit(&((WedgedExec *)arg)->release, 1, memory_order_release);
+    return NULL;
+}
+
+/* Child body (CAND-24 P4 — the reviewer's c24_5b B2 shape, executed on the
+ * baseline): the unregister helper registers while the runtime thread is
+ * wedged in G; the runtime close then JOINS (3 s budget, wedge lifted
+ * 300 ms in). Pre-fix the helper never runs and the drain's
+ * unregister_wait_close is a no-op — done is never set and the waiter
+ * spins forever (parent watchdog kills the child). Post-fix the drain's
+ * close sets done and the waiter returns. Exit codes: 0 = waiter
+ * returned with T's close already run; 2 = setup failed;
+ * 3 = the close did not join (rc != 0); 4 = waiter returned before T's
+ * close ran. */
+static void child_unregister_and_wait_joined_close(void)
+{
+    static UwRace s;   /* static: shared with the waiter/releaser threads */
+
+    MmapqIdleStrategy *idle = NULL;
+    if (mmapq_idle_strategy_busy_spin_create(&idle) != 0) _exit(2);
+    if (mmapq_runtime_create("c24-uw-rt", idle, 3000000000ULL,
+                             NULL, NULL, &s.rt) != 0) _exit(2);
+
+    atomic_store(&s.target.closed, 0);
+    s.target.exec.execute = trivial_execute;
+    s.target.exec.close   = wedged_close;
+    s.target.exec.ctx     = &s.target;
+    if (mmapq_runtime_register(s.rt, &s.target.exec) != 1) _exit(2);
+
+    atomic_store(&s.wedge.entered, 0);
+    atomic_store(&s.wedge.release, 0);
+    atomic_store(&s.wedge.closed,  0);
+    s.wedge.exec.execute = slow_execute;
+    s.wedge.exec.close   = wedged_close;
+    s.wedge.exec.ctx     = &s.wedge;
+    if (mmapq_runtime_register(s.rt, &s.wedge.exec) != 1) _exit(2);
+
+    /* Wait until the thread is observably inside G's execute() — without
+     * the handshake the helper could register before the wedge and the
+     * test would exercise nothing. */
+    int entered = 0;
+    for (int i = 0; i < 5000; i++) {
+        if (atomic_load_explicit(&s.wedge.entered, memory_order_acquire)) { entered = 1; break; }
+        usleep(1000);
+    }
+    if (!entered) _exit(2);
+
+    atomic_store(&s.waiter_returned, 0);
+    atomic_store(&s.waiter_saw_target_closed, 0);
+    pthread_t w;
+    if (pthread_create(&w, NULL, unregister_waiter, &s) != 0) _exit(2);
+    usleep(100000);   /* helper registers while the thread is wedged (c24_5b timing) */
+
+    pthread_t r;
+    if (pthread_create(&r, NULL, release_wedge_after_300ms, &s.wedge) != 0) _exit(2);
+    pthread_detach(r);
+
+    /* 3 s budget, wedge lifted 300 ms in: must JOIN — exact status
+     * (spec §6 P4). This also proves the test exercises a joined close. */
+    if (mmapq_runtime_close(s.rt) != 0) _exit(3);
+
+    pthread_join(w, NULL);          /* pre-fix: never returns — watchdog kills */
+    if (!atomic_load_explicit(&s.waiter_saw_target_closed, memory_order_acquire))
+        _exit(4);
+
+    mmapq_runtime_destroy(s.rt);
+    _exit(0);
+}
+
+void test_unregister_and_wait_returns_after_joined_close(void)
+{
+    pid_t pid = fork();
+    TEST_ASSERT(pid >= 0);
+    if (pid == 0) child_unregister_and_wait_joined_close();
+    assert_child_exits_zero(pid);
+}
 #endif /* __SANITIZE_THREAD__ */
 
 /* ── main ────────────────────────────────────────────────────────────────── */
@@ -454,6 +592,7 @@ int main(void)
     RUN_TEST(test_runtime_register_after_close_returns_false);
     RUN_TEST(test_runtime_multiple_executables);
     RUN_TEST(test_runtime_is_closed_after_close);
+    RUN_TEST(test_runtime_close_status_values);
     RUN_TEST(test_idle_strategy_busy_spin);
     RUN_TEST(test_idle_strategy_yield);
     RUN_TEST(test_idle_strategy_backoff);
@@ -463,6 +602,7 @@ int main(void)
 #ifndef __SANITIZE_THREAD__
     RUN_TEST(test_runtime_close_with_wedged_executable_returns);
     RUN_TEST(test_runtime_destroy_after_detach_no_uaf);
+    RUN_TEST(test_unregister_and_wait_returns_after_joined_close);
 #endif
     return UNITY_END();
 }

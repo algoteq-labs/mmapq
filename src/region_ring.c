@@ -6,6 +6,7 @@
 
 #include <stdlib.h>
 #include <stdatomic.h>
+#include <stdio.h>
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * Sync RegionRing
@@ -145,6 +146,7 @@ typedef struct {
     AsyncMappingImpl *mapping_impl;
     atomic_int        closed;
     int               mapper_detached;  /* set/read on the closing thread only */
+    uint64_t          timeout_ns;       /* mapping/deregister wait budget, from create */
 } AsyncRingImpl;
 
 /**
@@ -208,22 +210,39 @@ static void async_ring_close(RegionRing *self)
      *
      * Step 3: Close the file mapper — all regions are unmapped.
      *
-     * WaitingDeregisterImpl is stack-allocated — safe because we spin until
-     * done==1 before leaving this scope.
+     * WaitingDeregisterImpl is heap-allocated (CAND-24): on the deadline
+     * path below the registered deregistration executable may still run
+     * on the live runtime thread AFTER this function returns — it writes
+     * wait_impl->done and frees mapping_impl via target_ctx_to_free. A
+     * stack wait_impl would be gone by then; the deadline fix would
+     * introduce the very use-after-free class it is filed against.
      */
-    WaitingDeregisterImpl wait_impl = {
-        .runtime            = impl->runtime,
-        .target             = &impl->mapping_impl->exec,
-        .target_ctx_to_free = impl->mapping_impl,
-    };
-    atomic_store(&wait_impl.done, 0);
-    wait_impl.self_exec.execute = waiting_deregister_execute;
-    wait_impl.self_exec.close   = waiting_deregister_close;
-    wait_impl.self_exec.ctx     = &wait_impl;
+    WaitingDeregisterImpl *wait_impl = calloc(1, sizeof *wait_impl);
+    if (wait_impl == NULL) {
+        /*
+         * Allocation failure on a close path must not hang: the dereg
+         * executable was never registered and mapping_impl stays
+         * registered on a possibly-live thread — take the leak path
+         * exactly like a deadline expiry (Steps 2-3 skipped, destroy
+         * skips the region/file-mapper teardown via mapper_detached).
+         */
+        impl->mapper_detached = 1;
+        return;
+    }
+    wait_impl->runtime            = impl->runtime;
+    wait_impl->target             = &impl->mapping_impl->exec;
+    wait_impl->target_ctx_to_free = impl->mapping_impl;
+    atomic_store(&wait_impl->done, 0);
+    wait_impl->self_exec.execute = waiting_deregister_execute;
+    wait_impl->self_exec.close   = waiting_deregister_close;
+    wait_impl->self_exec.ctx     = wait_impl;
 
-    if (mmapq_runtime_register(impl->runtime, &wait_impl.self_exec)) {
+    if (mmapq_runtime_register(impl->runtime, &wait_impl->self_exec)) {
         uint64_t spins = 0;
-        while (!atomic_load_explicit(&wait_impl.done, memory_order_acquire)) {
+        uint64_t start = mmapq_monotonic_nanos();
+        for (;;) {
+            if (atomic_load_explicit(&wait_impl->done, memory_order_acquire))
+                break;
             mmapq_spin_hint();
             /*
              * Yield periodically: on a 1-vCPU/oversubscribed host a pure
@@ -234,10 +253,26 @@ static void async_ring_close(RegionRing *self)
             if (++spins >= 1000) {
                 spins = 0;
                 sched_yield();
+                if (mmapq_monotonic_nanos() - start >= impl->timeout_ns) {
+                    /*
+                     * CAND-24: the runtime thread is wedged or slow (the
+                     * opposite ordering of C-02) — stop waiting. The
+                     * registered dereg executable may still run on the
+                     * live thread, so wait_impl is LEAKED, never freed
+                     * here, and Steps 2-3 are skipped via mapper_detached
+                     * exactly like the detached-runtime path below.
+                     * Bounded leak on a degenerate path.
+                     */
+                    impl->mapper_detached = 1;
+                    fprintf(stderr,
+                        "mmapq region_ring: deregister wait timed out; leaking mapper state (runtime thread may still be live)\n");
+                    return;
+                }
             }
         }
         /* Mapper thread has confirmed it is done. mapping_impl is freed by
          * waiting_deregister_execute via target_ctx_to_free. */
+        free(wait_impl);
     } else if (mmapqi_runtime_thread_detached(impl->runtime)) {
         /*
          * The runtime is closed AND its thread was detached after a join
@@ -249,13 +284,29 @@ static void async_ring_close(RegionRing *self)
          * Bounded leak on a degenerate path; the thread exits once its
          * executable returns, or at process exit.
          */
+        free(wait_impl);   /* never registered — the dereg exec cannot run */
+        impl->mapper_detached = 1;
+        return;
+    } else if (!mmapq_runtime_is_closed(impl->runtime)) {
+        /*
+         * Register failed on ALLOCATION, not on a closed runtime (CAND-24;
+         * the branch below once assumed a closed runtime was register's
+         * only failure mode — stale since register's ENOMEM returns).
+         * The dereg executable was never registered and the mapping
+         * executable is still registered on the LIVE runtime thread:
+         * freeing mapping_impl or closing the regions/file mapper would
+         * be a use-after-free it can still reach. Take the leak path
+         * exactly like a deadline expiry. Bounded leak on a degenerate
+         * path.
+         */
+        free(wait_impl);   /* never registered — as above */
         impl->mapper_detached = 1;
         return;
     } else {
         /*
-         * The runtime is already closed (register's only failure mode with
-         * non-NULL arguments), so the dereg executable will never run and
-         * waiting on it would spin forever (audit C-01). Reached
+         * The runtime is already closed (the detached and alloc-failure
+         * cases are handled above), so the dereg executable will never
+         * run and waiting on it would spin forever (audit C-01). Reached
          * sequentially with a JOINED runtime thread, this means
          * mmapq_runtime_close() has returned after joining it, and the
          * shutdown drain has already run async_mapping_close() on our
@@ -267,6 +318,7 @@ static void async_ring_close(RegionRing *self)
          * thread remains a contract violation.
          */
         free(impl->mapping_impl);
+        free(wait_impl);   /* never registered — as above */
     }
     impl->mapping_impl = NULL;
 
@@ -348,6 +400,7 @@ int mmapqi_region_ring_async_create(
     impl->file_mapper   = file_mapper;
     impl->runtime       = runtime;
     impl->mapping_impl  = mapping_impl;
+    impl->timeout_ns    = timeout_ns;
     atomic_store(&impl->closed, 0);
 
     RegionRing *ring = calloc(1, sizeof(RegionRing));

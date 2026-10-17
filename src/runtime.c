@@ -643,13 +643,16 @@ int mmapqi_runtime_thread_detached(const MmapqRuntime *rt)
     return atomic_load_explicit(&rt->thread_detached, memory_order_acquire);
 }
 
-void mmapq_runtime_close(MmapqRuntime *rt)
+int mmapq_runtime_close(MmapqRuntime *rt)
 {
-    if (rt == NULL) return;
+    if (rt == NULL) return MMAPQ_EINVAL;
 
     if (!atomic_compare_exchange_strong(&rt->closed,
                                          &(int){0}, 1)) {
-        return;  /* already closed */
+        /* Already closed (CAND-24): a SEQUENTIAL repeat close reports the
+         * first close's outcome. Concurrent closes race — a concurrent
+         * second close can still observe 0 while the first is waiting. */
+        return mmapqi_runtime_thread_detached(rt) ? MMAPQ_ETIMEDOUT : 0;
     }
 
     /* Wait for runtime thread to finish */
@@ -683,6 +686,7 @@ void mmapq_runtime_close(MmapqRuntime *rt)
      * (thread_detached; destroy's close is also a no-op via the closed
      * CAS above, so it never rejoins).
      */
+    int joined = 0;
     {
         /*
          * pthread_timedjoin_np has no clock selection and always uses
@@ -693,7 +697,6 @@ void mmapq_runtime_close(MmapqRuntime *rt)
          * instantly, detaching healthy threads.
          */
         uint64_t now = mmapq_monotonic_nanos();
-        int joined = 0;
         if (atomic_load(&rt->thread_done)) {
             /* The drain finished while we were waiting: the thread only
              * unlocks close_mutex and returns from here, so this join is
@@ -734,6 +737,11 @@ void mmapq_runtime_close(MmapqRuntime *rt)
     if (rt->on_close != NULL) {
         rt->on_close(rt, rt->on_close_ctx);
     }
+
+    /* CAND-24: report the outcome. A close from the runtime thread itself
+     * lands here too: it cannot join itself, so the budget exhausts and
+     * it self-detaches — ETIMEDOUT, by design. */
+    return joined ? 0 : MMAPQ_ETIMEDOUT;
 }
 
 int mmapq_runtime_clone(MmapqRuntime *rt, MmapqRuntime **out)
@@ -758,7 +766,7 @@ void mmapq_runtime_destroy(MmapqRuntime *rt)
     if (    atomic_fetch_sub_explicit(&rt->refcount, 1, memory_order_acq_rel) > 1) {
         return;  /* other references still alive */
     }
-    mmapq_runtime_close(rt);
+    (void)mmapq_runtime_close(rt);   /* the thread_detached check below decides the leak */
 
     if (atomic_load_explicit(&rt->thread_detached, memory_order_acquire)) {
         /*
@@ -875,7 +883,20 @@ static int unregister_wait_execute(MmapqExecutable *self)
 
 static void unregister_wait_close(MmapqExecutable *self)
 {
-    (void)self;  /* impl is stack/caller-owned — do not free */
+    UnregisterWaitImpl *impl = (UnregisterWaitImpl *)self->ctx;
+    /*
+     * Drain path (CAND-24 5(b)): the helper never ran — the runtime was
+     * closed first. Wake the waiter instead of letting it spin forever.
+     * Free-safety on the joined path: the drain closes executables in
+     * list order and the target was registered before this helper, so
+     * the target's close() has already run when done is observed — the
+     * "caller may safely free" guarantee holds. On the detached path the
+     * header's post-close rules apply (do not free after a timed-out
+     * close). impl stays stack/caller-owned — still not freed here.
+     * release pairs the waiter's acquire load, as in
+     * unregister_wait_execute.
+     */
+    atomic_store_explicit(&impl->done, 1, memory_order_release);
 }
 
 void mmapq_runtime_unregister_and_wait(MmapqRuntime *rt, MmapqExecutable *exec)

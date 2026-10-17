@@ -37,6 +37,8 @@
  *   owners must not free state the runtime thread can still reach.
  *   destroy() after such a detach deliberately leaks the runtime rather
  *   than freeing it.
+ *   close() returns MMAPQ_ETIMEDOUT on that path, so callers can tell
+ *   the detach happened; 0 guarantees the thread was joined.
  */
 
 /* ── MmapqExecutable ──────────────────────────────────────────────────────────── */
@@ -198,7 +200,15 @@ int mmapq_runtime_unregister(MmapqRuntime *rt, MmapqExecutable *exec);
  * This is the safe public API for cross-thread lifecycle management.
  * Prefer this over raw mmapq_runtime_unregister() for any external caller.
  *
- * Aborts if rt is closed or exec is not registered.
+ * If rt is already closed, returns immediately WITHOUT effect: the
+ * target may still be registered. If the runtime's close timed out
+ * (mmapq_runtime_close returned MMAPQ_ETIMEDOUT), the detached runtime
+ * thread may still drain and call close() on registered executables —
+ * the "caller may safely free" guarantee above does NOT hold on that
+ * path; do not free exec or its ctx after a timed-out close. On that
+ * path this function may also block for as long as the stuck executable
+ * runs: the wait completes only when the detached thread resumes and
+ * drains.
  */
 void mmapq_runtime_unregister_and_wait(MmapqRuntime *rt, MmapqExecutable *exec);
 
@@ -231,8 +241,20 @@ int mmapq_runtime_is_closed(const MmapqRuntime *rt);
  * a detach leaks the runtime instead of freeing it.
  *
  * Safe to call from any thread. Idempotent.
+ *
+ * Returns: 0 if the runtime thread stopped and was joined;
+ * MMAPQ_ETIMEDOUT if the close budget was exhausted and the thread was
+ * detached (leaked) — on that path callers must not free registered
+ * executables or their ctx (see Shutdown above); MMAPQ_EINVAL for NULL.
+ * A repeat close on an already-closed runtime returns the first close's
+ * outcome. That guarantee is for SEQUENTIAL calls only: concurrent
+ * closes race, and a concurrent second close can observe 0 while the
+ * first is still waiting. Calling close from the runtime thread itself
+ * (an executable closing its own runtime) returns MMAPQ_ETIMEDOUT: the
+ * thread cannot join itself, so the budget exhausts and it
+ * self-detaches.
  */
-void mmapq_runtime_close(MmapqRuntime *rt);
+int mmapq_runtime_close(MmapqRuntime *rt);
 
 /**
  * Clone a MmapqRuntime, incrementing its internal reference count.

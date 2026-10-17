@@ -131,7 +131,8 @@ Lines 216, 297-298, 328, 373, 386, 401, 411. Internal dispatch null checks.
 
 ### region_ring.c — 2 (all I)
 
-Lines 20, 187. Internal dispatch null checks.
+Lines 21, 189. Internal dispatch null checks. (CAND-24: shifted — the
+stdio include and AsyncRingImpl's timeout_ns field.)
 
 ### region_ring_accessor.c — 5 (all I)
 
