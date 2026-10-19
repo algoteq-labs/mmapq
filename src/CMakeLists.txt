@@ -20,6 +20,8 @@ add_library(mmapq STATIC
     header_reader.c
     payload_walk.c
     payload_iterator.c
+    committed_ranges.c
+    offset_set.c
     uncommitted_payload_iterator.c
     indexed_appender.c
     indexed_poller.c

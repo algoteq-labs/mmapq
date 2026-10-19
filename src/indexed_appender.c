@@ -7,6 +7,7 @@
 #include "internal/header_codec.h"
 #include "internal/payload_walk.h"
 #include "internal/payload_iterator.h"
+#include "internal/offset_set.h"
 #include "internal/uncommitted_payload_iterator.h"
 #include "internal/test_hooks.h"
 #include "internal/mmap_assert.h"
@@ -56,6 +57,15 @@ struct MmapqIndexedAppender {
     MmapqUncommittedPayloadIterator *uncommitted_iter;
 
     int closed;
+
+    /* Outstanding-offset tracking (CAND-49 §3.3): the commit-validation
+     * gate. The latest uncommitted offset is flag-tracked in
+     * last_pending_offset (never in the set); earlier ones live in the set,
+     * refilled by the uncommitted iterator on yield. At the END of the
+     * struct so existing field offsets (and the hot paths' object code)
+     * are unchanged. */
+    OffsetSet            outstanding;
+    int64_t              last_pending_offset;  /* PAYLOAD_ITERATOR_NOT_SET when none */
 };
 
 /* ── Stream offset callbacks ─────────────────────────────────────────────── */
@@ -72,6 +82,24 @@ static int64_t appender_end_of_stream(void *ctx)
     return a->current_payload_position;
 }
 
+/* Archive line supplier for the uncommitted iterator (CAND-49 §3.9). */
+static int64_t appender_archive_offset(void *ctx)
+{
+    MmapqIndexedAppender *a = (MmapqIndexedAppender *)ctx;
+    return appender_meta_archive_offset(a->appender_meta);
+}
+
+/* Refill helper (CAND-49 §3.3): make an iterator-yielded offset
+ * committable. Skips the flag-tracked tail (already committable via the
+ * fast path) — the skip rule; idempotent add is the backstop for
+ * everything else. */
+static int appender_refill_uncommitted(void *ctx, int64_t off)
+{
+    MmapqIndexedAppender *a = (MmapqIndexedAppender *)ctx;
+    if (off == a->last_pending_offset) return 0;
+    return mmapqi_offset_set_add(&a->outstanding, off);
+}
+
 /* ── Start index suppliers for header search ──────────────────────────────── */
 
 static int64_t appender_start_index_from_meta(void *ctx)
@@ -81,7 +109,10 @@ static int64_t appender_start_index_from_meta(void *ctx)
 
 /* ── Write padding at region boundary ───────────────────────────────────── */
 
-static int write_padding_if_needed(MmapqIndexedAppender *a, int32_t length)
+/* always_inline: same §9.1 anchor as write_payload — keep the shipped
+ * hot-path inlining shape under the CAND-49 TU growth. */
+static __attribute__((always_inline)) inline int write_padding_if_needed(
+    MmapqIndexedAppender *a, int32_t length)
 {
     WrapResult r = region_accessor_wrap(a->payload_acc,
                                          a->current_payload_position,
@@ -121,8 +152,14 @@ static int write_padding_if_needed(MmapqIndexedAppender *a, int32_t length)
 
 /* ── Write payload bytes ─────────────────────────────────────────────────── */
 
-static int write_payload(MmapqIndexedAppender *a, const void *data, int32_t length,
-                          int64_t *out_offset)
+/* always_inline: preserves the shipped hot-path object code exactly — with
+ * the CAND-49 append_uncommitted growth in the same TU, gcc -O3 otherwise
+ * flips write_payload from inlined (into append/append_uncommitted) to
+ * outlined, a silent hot-path change (§9.1 byte identity). Semantics
+ * unchanged. */
+static __attribute__((always_inline)) inline int write_payload(
+    MmapqIndexedAppender *a, const void *data, int32_t length,
+    int64_t *out_offset)
 {
     MMAP_ASSERT(length + PAYLOAD_LENGTH_SIZE <= queue_meta_region_size(a->queue_meta),
         "write_payload: message too large — must fit within one region. "
@@ -427,6 +464,21 @@ static int appender_create_internal(
     a->current_header_position = MMAPQ_INDEXED_APPENDER_NOT_INITIALISED;
     a->current_payload_position = MMAPQ_INDEXED_APPENDER_NOT_INITIALISED;
 
+    /* CAND-49 §3.3: the outstanding-offset set is allocated at create
+     * (initial capacity 16 slots = 15 + the standing spare), so the
+     * deferred-path adds never allocate. Pure memory — unwind before the
+     * queue meta open keeps the existing error paths unchanged. */
+    mmapqi_offset_set_init(&a->outstanding);
+    a->last_pending_offset = PAYLOAD_ITERATOR_NOT_SET;
+    if (mmapqi_offset_set_reserve(&a->outstanding, OFFSET_SET_INITIAL_CAPACITY - 1) != 0) {
+        mmapqi_appender_id_pool_release(a->id_pool, a->appender_id);
+        mmapqi_appender_id_pool_close(a->id_pool);
+        free(a->directory);
+        free(a->queue_name);
+        free(a);
+        return MMAPQ_ENOMEM;
+    }
+
     /*
      * Open (or create) the queue meta file.
      */
@@ -437,6 +489,7 @@ static int appender_create_internal(
                                  QUEUE_TYPE_NORMAL,
                                  &a->queue_meta);
     if (rc != 0) {
+        mmapqi_offset_set_destroy(&a->outstanding);
         mmapqi_appender_id_pool_release(a->id_pool, a->appender_id);
         mmapqi_appender_id_pool_close(a->id_pool);
         free(a->directory);
@@ -452,6 +505,7 @@ static int appender_create_internal(
     /* Open appender meta (creates file if new) */
     rc = mmapqi_appender_meta_open_rw(directory, queue_name, appender_id, &a->appender_meta);
     if (rc != 0) {
+        mmapqi_offset_set_destroy(&a->outstanding);
         if (a->queue_meta) mmapqi_queue_meta_close(a->queue_meta);
         mmapqi_appender_id_pool_release(a->id_pool, a->appender_id);
         mmapqi_appender_id_pool_close(a->id_pool);
@@ -468,6 +522,7 @@ static int appender_create_internal(
         reconciled_max_file_size, timeout_ns, runtime, appender_id,
         &a->rw_acc);
     if (rc != 0) {
+        mmapqi_offset_set_destroy(&a->outstanding);
         mmapqi_appender_meta_close(a->appender_meta);
         if (a->queue_meta) mmapqi_queue_meta_close(a->queue_meta);
         mmapqi_appender_id_pool_release(a->id_pool, a->appender_id);
@@ -489,6 +544,7 @@ static int appender_create_internal(
         reconciled_max_file_size, timeout_ns, runtime,
         &a->ro_acc);
     if (rc != 0) {
+        mmapqi_offset_set_destroy(&a->outstanding);
         mmapqi_queue_region_accessor_close(a->rw_acc);
         mmapqi_appender_meta_close(a->appender_meta);
         if (a->queue_meta) mmapqi_queue_meta_close(a->queue_meta);
@@ -504,6 +560,7 @@ static int appender_create_internal(
     /* Find where to resume appending */
     int init_rc = initialise_append_position(a, start_index);
     if (init_rc != 0) {
+        mmapqi_offset_set_destroy(&a->outstanding);
         mmapqi_queue_region_accessor_close(a->ro_acc);
         mmapqi_queue_region_accessor_close(a->rw_acc);
         mmapqi_appender_meta_close(a->appender_meta);
@@ -619,8 +676,22 @@ int64_t mmapq_indexed_appender_append_uncommitted(
     if (a->closed) return MMAPQ_ECLOSED;
     if (length > queue_meta_region_size(a->queue_meta) - PAYLOAD_LENGTH_SIZE) return MMAPQ_EINVAL;
 
+    /* CAND-49 §3.3: the latest uncommitted offset is flag-tracked; the
+     * previous flag-tracked offset (if any) moves into the outstanding set.
+     * Ensure the set's spare slot BEFORE the write — ENOMEM means nothing
+     * is written (ruling 5). One compare when the spare exists (the normal
+     * case), a grow attempt otherwise. */
+    int64_t prev = a->last_pending_offset;
+    if (prev != PAYLOAD_ITERATOR_NOT_SET &&
+        mmapqi_offset_set_reserve(&a->outstanding, 1) != 0)
+        return MMAPQ_ENOMEM;
+
     int64_t payload_offset;
     if (write_payload(a, data, length, &payload_offset)) return -1;
+
+    if (prev != PAYLOAD_ITERATOR_NOT_SET)
+        (void)mmapqi_offset_set_add(&a->outstanding, prev);  /* cannot allocate: spare ensured above */
+    a->last_pending_offset = payload_offset;
     return payload_offset;
 }
 
@@ -642,53 +713,79 @@ int64_t mmapq_indexed_appender_commit(
     if (a == NULL) return MMAPQ_EINVAL;
     if (a->closed) return MMAPQ_ECLOSED;
     if (payload_offset <= 0) return MMAPQ_EINVAL;
-    /* CAND-32 C3: an offset above this appender's last written start was
-     * never written by it — caller error. last_appended is calloc-zeroed
-     * at create and set only in the write path, so a post-rejoin commit of
-     * a pre-rejoin offset is refused here too. */
-    if (payload_offset > a->last_appended) return MMAPQ_EINVAL;
 
-    /* Fast path — the payload this appender appended most recently (the
-     * normal in-sequence case): no shared loads. Keyed on the last APPENDED
-     * offset; "greater than the last committed" is not safe under
+    /* Fast path — the flag-tracked tail, no set access, no shared loads.
+     * Proof obligation (CAND-49 §3.4): the flag-tracked offset was written
+     * by this incarnation's most recent append_uncommitted and is the
+     * lane's tail; every committed payload of the lane sits below it, so
+     * the archiver's boundary (end of the highest-position ARCHIVED =
+     * committed message of the lane) can never reach it. The CAND-30
+     * check is unreachable-unnecessary here, not skipped. Keyed on the last
+     * APPENDED offset; "greater than the last committed" is not safe under
      * resequencing (a gap-fill payload below the last committed one would
      * skip the check entirely). */
-    if (payload_offset != a->last_appended) {
-        /* Slow path (gap fill). CAND-30: a payload overtaken by archiving
-         * can never become live — its file may already be listed. */
-        if (payload_offset < appender_meta_start_offset(a->appender_meta))
-            return MMAPQ_EINVAL;
-#ifdef MMAPQ_TEST_HOOKS
-        if (commit_pre_hook) commit_pre_hook();
-#endif
+    if (payload_offset == a->last_appended &&
+        payload_offset == a->last_pending_offset) {
         int64_t committed;
         int crc = commit_header(a, payload_offset, &committed);
-        if (crc != 0) return crc;
-#ifdef MMAPQ_TEST_HOOKS
-        /* CAND-35 pin: kill -9 between the CAS and the fence + re-check */
-        if (commit_post_cas_hook) commit_post_cas_hook();
-#endif
-        /* Race with an archive that published a higher boundary between the
-         * pre-check and the CAS: the archiver stores start_offset, fences,
-         * then reads headers; this commit stored its header, fences, then
-         * reads start_offset — with seq_cst fences on both sides at least
-         * one side observes the other, so one of them lowers the boundary
-         * below this payload. */
-        atomic_thread_fence(memory_order_seq_cst);
-        if (payload_offset < appender_meta_start_offset(a->appender_meta)) {
-#ifdef MMAPQ_TEST_HOOKS
-            /* CAND-37 pin: hold the commit between the archiver's snapshot
-             * and its publish, just before the lowering min */
-            if (commit_min_pre_hook) commit_min_pre_hook();
-#endif
-            appender_meta_start_offset_min(a->appender_meta, payload_offset);
-        }
+        if (crc != 0) return crc;   /* flag unchanged — retryable */
+        a->last_pending_offset = PAYLOAD_ITERATOR_NOT_SET;
         return committed;
     }
 
+    /* Slow path (gap fill / iterated offsets). Membership is the gate
+     * (CAND-49 §3.4, supersedes the CAND-32 C3 line, which is REMOVED):
+     * above-last-written, double commit, mid-message, never-written are all
+     * non-members. Members: the flag-tracked tail or a set offset (staged
+     * by append_uncommitted's move or refilled by the uncommitted
+     * iterator). */
+    int flagged = (payload_offset == a->last_pending_offset);
+    if (!flagged &&
+        !mmapqi_offset_set_contains(&a->outstanding, payload_offset))
+        return MMAPQ_EINVAL;
+
+    /* CAND-30 protocol UNCHANGED: pre-check, CAS, seq_cst fence, re-check,
+     * min; hooks commit_pre / commit_post_cas / commit_min_pre keep
+     * position. A payload overtaken by archiving can never become live —
+     * its file may already be listed. */
+    if (payload_offset < appender_meta_start_offset(a->appender_meta)) {
+        /* overtaken — final: drop tracking (flag or set) */
+        if (flagged) a->last_pending_offset = PAYLOAD_ITERATOR_NOT_SET;
+        else mmapqi_offset_set_remove(&a->outstanding, payload_offset);
+        return MMAPQ_EINVAL;
+    }
+#ifdef MMAPQ_TEST_HOOKS
+    if (commit_pre_hook) commit_pre_hook();
+#endif
     int64_t committed;
     int crc = commit_header(a, payload_offset, &committed);
     if (crc != 0) return crc;
+    /* flag and set UNCHANGED on failure — a transient (ETIMEDOUT) failure
+     * is retryable (CAND-49 delta-review fix 1: clearing the flag before
+     * the CAS would make the retry EINVAL — neither flagged nor a member —
+     * and the payload committable again only after a re-scan). */
+#ifdef MMAPQ_TEST_HOOKS
+    /* CAND-35 pin: kill -9 between the CAS and the fence + re-check */
+    if (commit_post_cas_hook) commit_post_cas_hook();
+#endif
+    /* Race with an archive that published a higher boundary between the
+     * pre-check and the CAS: the archiver stores start_offset, fences,
+     * then reads headers; this commit stored its header, fences, then
+     * reads start_offset — with seq_cst fences on both sides at least
+     * one side observes the other, so one of them lowers the boundary
+     * below this payload. */
+    atomic_thread_fence(memory_order_seq_cst);
+    if (payload_offset < appender_meta_start_offset(a->appender_meta)) {
+#ifdef MMAPQ_TEST_HOOKS
+        /* CAND-37 pin: hold the commit between the archiver's snapshot
+         * and its publish, just before the lowering min */
+        if (commit_min_pre_hook) commit_min_pre_hook();
+#endif
+        /* lowers start_offset only; never archive_offset (CAND-49 §3.9) */
+        appender_meta_start_offset_min(a->appender_meta, payload_offset);
+    }
+    if (flagged) a->last_pending_offset = PAYLOAD_ITERATOR_NOT_SET;
+    else mmapqi_offset_set_remove(&a->outstanding, payload_offset);
     return committed;
 }
 
@@ -722,16 +819,19 @@ MmapqPayloadIterator *mmapq_indexed_appender_iterator(
     return a->payload_iter;
 }
 
-MmapqUncommittedPayloadIterator *mmapq_indexed_appender_uncommitted_iterator(
+int mmapq_indexed_appender_uncommitted_iterator_checked(
     MmapqIndexedAppender *a,
     int64_t          start_offset,
-    int64_t          end_offset)
+    int64_t          end_offset,
+    MmapqUncommittedPayloadIterator **out)
 {
-    if (a == NULL) return NULL;
+    if (out == NULL) return MMAPQ_EINVAL;
+    *out = NULL;
+    if (a == NULL) return MMAPQ_EINVAL;
 
     /* Create inner iterator with fixed end-of-stream */
     if (a->uncommitted_inner == NULL) {
-        mmapqi_payload_iterator_create(
+        int rc = mmapqi_payload_iterator_create(
             a->queue_name,
             a->payload_acc,
             appender_start_of_stream,
@@ -739,25 +839,56 @@ MmapqUncommittedPayloadIterator *mmapq_indexed_appender_uncommitted_iterator(
             a,
             1, /* fix end-of-stream at init time */
             &a->uncommitted_inner);
+        if (rc != 0) return rc;
     }
 
     if (a->uncommitted_iter == NULL) {
-        mmapqi_uncommitted_iterator_create(
+        int rc = mmapqi_uncommitted_iterator_create(
             a->queue_name,
             a->appender_id,
             appender_start_of_stream,
             appender_end_of_stream,
             a,
+            appender_archive_offset,          /* CAND-49 §3.9: the archive line */
             a->header_acc,
             a->uncommitted_inner,
             appender_start_index_from_meta,   /* D8/S3: header scan floor */
             a->queue_meta,
+            appender_refill_uncommitted,      /* CAND-49 §3.3: refill on yield */
+            a,
             &a->uncommitted_iter);
+        if (rc != 0) return rc;
     }
 
-    if (mmapqi_uncommitted_iterator_init(a->uncommitted_iter, start_offset, end_offset) != 0)
-        return NULL;
-    return a->uncommitted_iter;
+    int rc = mmapqi_uncommitted_iterator_init(a->uncommitted_iter, start_offset, end_offset);
+    if (rc != 0) return rc;
+    *out = a->uncommitted_iter;
+    return 0;
+}
+
+int mmapq_uncommitted_iterator_next(
+    MmapqUncommittedPayloadIterator *it,
+    const void **data,
+    int32_t     *length,
+    int64_t     *offset)
+{
+    if (it == NULL || data == NULL || length == NULL || offset == NULL)
+        return MMAPQ_EINVAL;
+
+    int r = mmapqi_uncommitted_iterator_advance(it);
+    if (r != 1) {
+        /* Exhausted (0) or a negative MMAPQ_E* — outputs cleared either way. */
+        *data   = NULL;
+        *length = 0;
+        *offset = MMAPQ_PAYLOAD_ITERATOR_NOT_SET;
+        return r;
+    }
+
+    Buffer *b = mmapqi_uncommitted_iterator_current(it);
+    *data   = b->data;
+    *length = b->capacity;
+    *offset = it->inner->current_message_offset;   /* record start (length-prefix position) */
+    return 1;
 }
 
 /* ── Metadata ─────────────────────────────────────────────────────────────── */
@@ -786,6 +917,8 @@ void mmapq_indexed_appender_close(MmapqIndexedAppender *a)
 {
     if (a == NULL || a->closed) return;
     a->closed = 1;
+
+    mmapqi_offset_set_destroy(&a->outstanding);
 
     if (a->uncommitted_iter != NULL) {
         mmapqi_uncommitted_iterator_destroy(a->uncommitted_iter);

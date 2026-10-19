@@ -267,6 +267,14 @@ static int archive_forward_variable(MmapqIndexedArchiver *a,
         if (m == NULL) return MMAPQ_ECORRUPT;
         if (ends[aid] > old[aid])
             (void)appender_meta_start_offset_cas(m, old[aid], ends[aid]);
+        /* CAND-49 §3.9 (D-G): the archive line takes the same candidate as
+         * a max with its current value — never lowered, and nothing else
+         * ever writes it (not the commit re-check min, not the rollback
+         * below, not undo). Relaxed store: single writer under archive.lock
+         * EX (I6). Ordered before the si release store, so an iterator that
+         * acquire-loads si first and then the line can never pair the new
+         * si with the old line (doc/design/archive-boundaries.md). */
+        appender_meta_archive_offset_store(m, ends[aid]);
     }
     queue_meta_set_start_index(rwm, index);
 

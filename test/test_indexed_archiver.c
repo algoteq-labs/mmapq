@@ -569,9 +569,9 @@ void test_uncommitted_iterator_after_archive_no_use_after_free(void)
     mmapq_indexed_archiver_close(arch);
 
     /* Pre-fix this reads freed memory inside scan_committed_ranges. */
-    MmapqUncommittedPayloadIterator *it =
-        mmapq_indexed_appender_uncommitted_iterator(
-            a, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET);
+    MmapqUncommittedPayloadIterator *it = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_appender_uncommitted_iterator_checked(
+        a, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET, &it));
     TEST_ASSERT_NOT_NULL(it);
     /* All four messages are committed: nothing uncommitted remains.
      * (D8: advance is three-way — a negative error is truthy; compare
@@ -579,8 +579,8 @@ void test_uncommitted_iterator_after_archive_no_use_after_free(void)
     TEST_ASSERT_EQUAL_INT(0, mmapqi_uncommitted_iterator_advance(it));
 
     /* A second call must not compound the damage. */
-    it = mmapq_indexed_appender_uncommitted_iterator(
-        a, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_appender_uncommitted_iterator_checked(
+        a, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET, &it));
     TEST_ASSERT_NOT_NULL(it);
     TEST_ASSERT_EQUAL_INT(0, mmapqi_uncommitted_iterator_advance(it));
 
@@ -605,9 +605,9 @@ void test_uncommitted_iterator_rewind_after_archive(void)
             mmapq_indexed_appender_append(a, buf, (int32_t)strlen(buf)));
     }
 
-    MmapqUncommittedPayloadIterator *u =
-        mmapq_indexed_appender_uncommitted_iterator(
-            a, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET);
+    MmapqUncommittedPayloadIterator *u = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_appender_uncommitted_iterator_checked(
+        a, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET, &u));
     TEST_ASSERT_NOT_NULL(u);
 
     MmapqIndexedArchiver *arch = NULL;
@@ -650,9 +650,9 @@ void test_uncommitted_iterator_skips_archived_entries(void)
     TEST_ASSERT_EQUAL_INT64(96,
         mmapq_indexed_appender_append_uncommitted(a, "late", 4));
 
-    MmapqUncommittedPayloadIterator *it =
-        mmapq_indexed_appender_uncommitted_iterator(
-            a, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET);
+    MmapqUncommittedPayloadIterator *it = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_appender_uncommitted_iterator_checked(
+        a, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET, &it));
     TEST_ASSERT_NOT_NULL(it);
 
     int found = 0;
@@ -664,6 +664,332 @@ void test_uncommitted_iterator_skips_archived_entries(void)
     }
     TEST_ASSERT_EQUAL_INT(1, found);
 
+    mmapq_indexed_appender_close(a);
+}
+
+/* ── CAND-49 §7.12: D-G pins (the archive line) ────────────────────────────
+ * Each pin names the path it guards and cites doc/design/archive-boundaries.md;
+ * every pin asserts the EXACT yielded set (offsets + terminal next == 0) —
+ * the completeness direction included, because TLC cannot catch an iterator
+ * that yields too little (the model's refill set is the definition).
+ * Geometry: tiny archivable (32 KiB regions/files), 4-byte payloads, stride
+ * 8 — message k at 64 + 8k. Fail-first evidence (standalone, both configs,
+ * e5f07b7): audit/claude-CAND-49/transcript-ff49-e5f07b7.txt. */
+
+static MmapqIndexedAppender *tiny_archivable_appender(void);
+static MmapqIndexedArchiver *tiny_archiver(void);
+
+static void dg_msg(char *buf, int k) { snprintf(buf, 8, "m%dxx", k); }
+static int64_t dg_stage(MmapqIndexedAppender *a, int k)
+{
+    char b[8]; dg_msg(b, k);
+    return mmapq_indexed_appender_append_uncommitted(a, b, 4);
+}
+static int64_t dg_commit_at(MmapqIndexedAppender *a, int k)
+{
+    char b[8]; dg_msg(b, k);
+    return mmapq_indexed_appender_append(a, b, 4);
+}
+static void dg_assert_yields(MmapqIndexedAppender *a, int64_t start,
+                             const int64_t *want, int n)
+{
+    MmapqUncommittedPayloadIterator *it = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_appender_uncommitted_iterator_checked(
+        a, start, PAYLOAD_ITERATOR_NOT_SET, &it));
+    TEST_ASSERT_NOT_NULL(it);
+    for (int i = 0; i < n; i++) {
+        const void *data = NULL; int32_t len = -1; int64_t off = -1;
+        TEST_ASSERT_EQUAL_INT(1, mmapq_uncommitted_iterator_next(it, &data, &len, &off));
+        TEST_ASSERT_EQUAL_INT64(want[i], off);
+        TEST_ASSERT_EQUAL_INT32(4, len);
+        char b[8]; dg_msg(b, (int)((want[i] - INITIAL_PAYLOAD_POSITION) / 8));
+        TEST_ASSERT_EQUAL_MEMORY(b, data, 4);
+    }
+    const void *data = (const void *)1; int32_t len = -1; int64_t off = 0;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_uncommitted_iterator_next(it, &data, &len, &off));
+    TEST_ASSERT_NULL(data);
+    TEST_ASSERT_EQUAL_INT64(MMAPQ_PAYLOAD_ITERATOR_NOT_SET, off);
+}
+static int64_t dg_meta_field(int32_t field_offset)
+{
+    AppenderMeta *m = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapqi_appender_meta_open_ro(DIR, QUEUE, 0, &m));
+    int64_t v;
+    if (field_offset == APPENDER_META_ARCHIVE_OFFSET_OFFSET)
+        v = appender_meta_archive_offset(m);
+    else
+        v = appender_meta_start_offset(m);
+    mmapqi_appender_meta_close(m);
+    return v;
+}
+static void dg_pwrite_meta(int32_t field_offset, int64_t val)
+{
+    char meta[512];
+    snprintf(meta, sizeof meta, "%s/%s/appender_meta_0", DIR, QUEUE);
+    int fd = open(meta, O_WRONLY);
+    TEST_ASSERT_GREATER_THAN_INT(0, fd);
+    TEST_ASSERT_EQUAL_INT(8, (int)pwrite(fd, &val, 8, field_offset));
+    close(fd);
+}
+
+/* D-G path 1 (race): the iterator pre-fix read start_offset before si,
+ * pairing the new si with the old boundary. Constructed deterministically:
+ * archive, then pwrite start_offset back to the pre-archive value — si
+ * published, the lane's boundary store "pending". With the §3.9 read order
+ * (acquire si first, then the archive line) the snapshot is consistent:
+ * yields exactly u2 above the line. */
+void test_uncommitted_dg_race_window(void)
+{
+    MmapqIndexedAppender *a = tiny_archivable_appender();
+    TEST_ASSERT_EQUAL_INT64(0, dg_commit_at(a, 0));   /* c0 @64 */
+    TEST_ASSERT_EQUAL_INT64(1, dg_commit_at(a, 1));   /* c1 @72 */
+    TEST_ASSERT_EQUAL_INT64(80, dg_stage(a, 2));      /* u2 @80 */
+    MmapqIndexedArchiver *ar = tiny_archiver();
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_archiver_archive_up_to_index(ar, 2));
+    mmapq_indexed_archiver_close(ar);
+    TEST_ASSERT_EQUAL_INT64(80, dg_meta_field(APPENDER_META_ARCHIVE_OFFSET_OFFSET));
+    dg_pwrite_meta(APPENDER_META_START_OFFSET_OFFSET, INITIAL_PAYLOAD_POSITION);
+
+    const int64_t want[] = { 80 };
+    dg_assert_yields(a, PAYLOAD_ITERATOR_NOT_SET, want, 1);
+    mmapq_indexed_appender_close(a);
+}
+
+/* D-G path 2 (commit re-check min, steady state): a slow commit's CAND-30
+ * atomic-min lowers start_offset below its own just-archived header. The
+ * line does not follow: yields exactly u1; the chopped committed u0 is never
+ * yielded. Fail-first: pre-fix the walk from start_offset yields u0. */
+#ifdef MMAPQ_TEST_HOOKS
+static int dg_inject_timeout(void) { return MMAPQ_ETIMEDOUT; }  /* live-pass injection */
+static _Atomic int dg_fired, dg_release;
+static void dg_hold_hook(void)
+{
+    atomic_store_explicit(&dg_fired, 1, memory_order_release);
+    for (long s = 0; s < 50000000; s++) {   /* bounded — never hang the suite */
+        if (atomic_load_explicit(&dg_release, memory_order_acquire)) return;
+        sched_yield();
+    }
+}
+typedef struct { MmapqIndexedAppender *a; int64_t off; int64_t rc; } DgCommit;
+static void *dg_commit_main(void *p)
+{
+    DgCommit *j = p;
+    j->rc = mmapq_indexed_appender_commit(j->a, j->off);
+    return NULL;
+}
+static void dg_park_commit(MmapqIndexedAppender *a, int64_t off, int which_hook,
+                           DgCommit *j, pthread_t *t)
+{
+    atomic_store(&dg_fired, 0); atomic_store(&dg_release, 0);
+    if (which_hook == 0) mmapq_test_hook_set_commit_pre(dg_hold_hook);
+    else                 mmapq_test_hook_set_commit_post_cas(dg_hold_hook);
+    j->a = a; j->off = off; j->rc = -999;
+    TEST_ASSERT_EQUAL_INT(0, pthread_create(t, NULL, dg_commit_main, j));
+    int waited = 0;
+    while (!atomic_load_explicit(&dg_fired, memory_order_acquire)) {
+        struct timespec ts = { .tv_sec = 0, .tv_nsec = 1000000 };
+        nanosleep(&ts, NULL);
+        if (++waited > 5000) {
+            atomic_store_explicit(&dg_release, 1, memory_order_release);
+            pthread_join(*t, NULL);
+            mmapq_test_hook_set_commit_pre(NULL);
+            mmapq_test_hook_set_commit_post_cas(NULL);
+            TEST_FAIL_MESSAGE("commit hook never fired (slow-path routing regression?)");
+        }
+    }
+}
+static void dg_release_commit(pthread_t t)
+{
+    atomic_store_explicit(&dg_release, 1, memory_order_release);
+    TEST_ASSERT_EQUAL_INT(0, pthread_join(t, NULL));
+    mmapq_test_hook_set_commit_pre(NULL);
+    mmapq_test_hook_set_commit_post_cas(NULL);
+}
+#endif
+
+void test_uncommitted_dg_commit_min_below_line(void)
+{
+#ifdef MMAPQ_TEST_HOOKS
+    MmapqIndexedAppender *a = tiny_archivable_appender();
+    TEST_ASSERT_EQUAL_INT64(64, dg_stage(a, 0));    /* u0 @64 */
+    TEST_ASSERT_EQUAL_INT64(72, dg_stage(a, 1));    /* u1 @72 */
+
+    /* Slow-path commit(u0) parked between the CAS and the re-check. */
+    DgCommit j; pthread_t t;
+    dg_park_commit(a, 64, 1, &j, &t);
+    MmapqIndexedArchiver *ar = tiny_archiver();
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_archiver_archive_up_to_index(ar, 1));
+    mmapq_indexed_archiver_close(ar);
+    dg_release_commit(t);
+    TEST_ASSERT_EQUAL_INT64(0, j.rc);
+
+    /* The re-check lowered start_offset below u0's archived header; the
+     * archive line stands. */
+    TEST_ASSERT_EQUAL_INT64(64, dg_meta_field(APPENDER_META_START_OFFSET_OFFSET));
+    TEST_ASSERT_EQUAL_INT64(72, dg_meta_field(APPENDER_META_ARCHIVE_OFFSET_OFFSET));
+
+    const int64_t want[] = { 72 };
+    dg_assert_yields(a, PAYLOAD_ITERATOR_NOT_SET, want, 1);
+    TEST_ASSERT_EQUAL_INT64(1, mmapq_indexed_appender_commit(a, 72));
+    mmapq_indexed_appender_close(a);
+#else
+    TEST_IGNORE_MESSAGE("needs MMAPQ_TEST_HOOKS (normal-loop build only)");
+#endif
+}
+
+/* D-G path 3 (rollback): a live-pass read failure rolls the boundaries back
+ * while si stands; the archive line is never rolled back. Yields exactly u2
+ * above the line — the chopped committed c0 is never yielded. */
+void test_uncommitted_dg_rollback_below_line(void)
+{
+#ifdef MMAPQ_TEST_HOOKS
+    MmapqIndexedAppender *a = tiny_archivable_appender();
+    TEST_ASSERT_EQUAL_INT64(0, dg_commit_at(a, 0));   /* c0 @64 */
+    TEST_ASSERT_EQUAL_INT64(1, dg_commit_at(a, 1));   /* c1 @72 */
+    TEST_ASSERT_EQUAL_INT64(80, dg_stage(a, 2));      /* u2 @80 */
+
+    MmapqIndexedArchiver *ar = tiny_archiver();
+    mmapq_test_hook_set_archiver_live_pass(dg_inject_timeout);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ETIMEDOUT,
+        mmapq_indexed_archiver_archive_up_to_index(ar, 1));
+    mmapq_test_hook_set_archiver_live_pass(NULL);
+
+    /* The logical archive stands; the boundary rolled back; the line stood. */
+    TEST_ASSERT_EQUAL_INT64(1, mmapq_indexed_archiver_start_index(ar));
+    mmapq_indexed_archiver_close(ar);
+    TEST_ASSERT_EQUAL_INT64(64, dg_meta_field(APPENDER_META_START_OFFSET_OFFSET));
+    TEST_ASSERT_EQUAL_INT64(72, dg_meta_field(APPENDER_META_ARCHIVE_OFFSET_OFFSET));
+
+    const int64_t want[] = { 80 };
+    dg_assert_yields(a, PAYLOAD_ITERATOR_NOT_SET, want, 1);
+    mmapq_indexed_appender_close(a);
+#else
+    TEST_IGNORE_MESSAGE("needs MMAPQ_TEST_HOOKS (normal-loop build only)");
+#endif
+}
+
+/* D-G path 4 (undo): undo lowers the boundaries and restores headers; the
+ * archive line is never lowered, so the restored-committed positions below
+ * the line are never yielded and the chopped uncommitted u1 stays chopped. */
+void test_uncommitted_dg_undo_keeps_line(void)
+{
+    MmapqIndexedAppender *a = tiny_archivable_appender();
+    TEST_ASSERT_EQUAL_INT64(64, dg_stage(a, 0));
+    TEST_ASSERT_EQUAL_INT64(72, dg_stage(a, 1));
+    TEST_ASSERT_EQUAL_INT64(80, dg_stage(a, 2));
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_appender_commit(a, 64));  /* c0 */
+    TEST_ASSERT_EQUAL_INT64(1, mmapq_indexed_appender_commit(a, 80));  /* c2 */
+
+    MmapqIndexedArchiver *ar = tiny_archiver();
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_archiver_archive_up_to_index(ar, 2));
+    TEST_ASSERT_EQUAL_INT64(88, dg_meta_field(APPENDER_META_ARCHIVE_OFFSET_OFFSET));
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_archiver_archive_up_to_index(ar, 0));  /* undo */
+    /* The undo lowered start_offset; the line is unchanged (exact value). */
+    TEST_ASSERT_EQUAL_INT64(64, dg_meta_field(APPENDER_META_START_OFFSET_OFFSET));
+    TEST_ASSERT_EQUAL_INT64(88, dg_meta_field(APPENDER_META_ARCHIVE_OFFSET_OFFSET));
+    mmapq_indexed_archiver_close(ar);
+
+    dg_assert_yields(a, PAYLOAD_ITERATOR_NOT_SET, NULL, 0);
+    mmapq_indexed_appender_close(a);
+}
+
+/* D-G completeness direction: out-of-order commits across an archive
+ * boundary (commit the higher m1, archive, then the lower m0's parked commit
+ * lands and its re-check lowers start_offset), then a fresh staged u2. The
+ * iterator yields exactly the genuinely uncommitted message above the line —
+ * nothing chopped, nothing missing. Dies if the line over-approximates. */
+void test_uncommitted_dg_out_of_order_completeness(void)
+{
+#ifdef MMAPQ_TEST_HOOKS
+    MmapqIndexedAppender *a = tiny_archivable_appender();
+    TEST_ASSERT_EQUAL_INT64(64, dg_stage(a, 0));      /* m0 @64 */
+    TEST_ASSERT_EQUAL_INT64(72, dg_stage(a, 1));      /* m1 @72 */
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_appender_commit(a, 72));  /* m1 first */
+
+    DgCommit j; pthread_t t;
+    dg_park_commit(a, 64, 0, &j, &t);                 /* m0 parked pre-CAS */
+    MmapqIndexedArchiver *ar = tiny_archiver();
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_archiver_archive_up_to_index(ar, 1));
+    mmapq_indexed_archiver_close(ar);
+    dg_release_commit(t);
+    TEST_ASSERT_EQUAL_INT64(1, j.rc);
+
+    TEST_ASSERT_EQUAL_INT64(80, dg_stage(a, 2));      /* u2 @80, above the line */
+    TEST_ASSERT_EQUAL_INT64(80, dg_meta_field(APPENDER_META_ARCHIVE_OFFSET_OFFSET));
+
+    const int64_t want[] = { 80 };
+    dg_assert_yields(a, PAYLOAD_ITERATOR_NOT_SET, want, 1);
+    mmapq_indexed_appender_close(a);
+#else
+    TEST_IGNORE_MESSAGE("needs MMAPQ_TEST_HOOKS (normal-loop build only)");
+#endif
+}
+
+/* §3.9 legacy ruling: a zero archive line (< INITIAL_PAYLOAD_POSITION) means
+ * a pre-0.2.0 file — the factory refuses with exactly MMAPQ_ECORRUPT
+ * (recreate the queue; CAND-32 range-check precedent). */
+void test_uncommitted_zero_archive_offset_refused(void)
+{
+    MmapqIndexedAppender *a = tiny_archivable_appender();
+    TEST_ASSERT_EQUAL_INT64(0, dg_commit_at(a, 0));
+    TEST_ASSERT_EQUAL_INT64(72, dg_stage(a, 1));
+
+    dg_pwrite_meta(APPENDER_META_ARCHIVE_OFFSET_OFFSET, 0);
+
+    MmapqUncommittedPayloadIterator *it = NULL;
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ECORRUPT,
+        mmapq_indexed_appender_uncommitted_iterator_checked(
+            a, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET, &it));
+    TEST_ASSERT_NULL(it);
+    mmapq_indexed_appender_close(a);
+}
+
+/* §3.9 clamp rule: a caller start_offset >= start-of-stream but below the
+ * archive line clamps up to the line — the yielded set is identical to the
+ * no-argument call. State via archive + undo (start_offset lowered by the
+ * undo, the line standing). */
+void test_uncommitted_dg_caller_below_line_clamps(void)
+{
+    MmapqIndexedAppender *a = tiny_archivable_appender();
+    TEST_ASSERT_EQUAL_INT64(64, dg_stage(a, 0));
+    TEST_ASSERT_EQUAL_INT64(72, dg_stage(a, 1));
+    TEST_ASSERT_EQUAL_INT64(80, dg_stage(a, 2));
+    TEST_ASSERT_EQUAL_INT64(88, dg_stage(a, 3));
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_appender_commit(a, 64));  /* c0 */
+    TEST_ASSERT_EQUAL_INT64(1, mmapq_indexed_appender_commit(a, 80));  /* c2 */
+
+    MmapqIndexedArchiver *ar = tiny_archiver();
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_archiver_archive_up_to_index(ar, 2));
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_archiver_archive_up_to_index(ar, 0));  /* undo */
+    mmapq_indexed_archiver_close(ar);
+    /* start_offset 64 (lowered by the undo), line 88 (standing). */
+    TEST_ASSERT_EQUAL_INT64(64, dg_meta_field(APPENDER_META_START_OFFSET_OFFSET));
+    TEST_ASSERT_EQUAL_INT64(88, dg_meta_field(APPENDER_META_ARCHIVE_OFFSET_OFFSET));
+
+    const int64_t want[] = { 88 };
+    dg_assert_yields(a, PAYLOAD_ITERATOR_NOT_SET, want, 1);   /* no-arg */
+    dg_assert_yields(a, INITIAL_PAYLOAD_POSITION, want, 1);   /* clamps up */
+    mmapq_indexed_appender_close(a);
+}
+
+/* §3.9 max rule (mutant M18): after an undo, a shorter forward archive
+ * computes a candidate below the current line — the max-store keeps the
+ * line; a plain store would lower it and reopen D-G. */
+void test_archive_offset_not_lowered_by_shorter_forward(void)
+{
+    MmapqIndexedAppender *a = tiny_archivable_appender();
+    for (int i = 0; i < 4; i++)
+        TEST_ASSERT_EQUAL_INT64(i, dg_commit_at(a, i));   /* c0..c3 @64..88 */
+
+    MmapqIndexedArchiver *ar = tiny_archiver();
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_archiver_archive_up_to_index(ar, 3));
+    TEST_ASSERT_EQUAL_INT64(88, dg_meta_field(APPENDER_META_ARCHIVE_OFFSET_OFFSET));
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_archiver_archive_up_to_index(ar, 0));  /* undo */
+    /* Shorter forward: candidate = end of c1 = 80 < 88. */
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_archiver_archive_up_to_index(ar, 2));
+    TEST_ASSERT_EQUAL_INT64(88, dg_meta_field(APPENDER_META_ARCHIVE_OFFSET_OFFSET));
+    TEST_ASSERT_EQUAL_INT64(2, mmapq_indexed_archiver_start_index(ar));
+    mmapq_indexed_archiver_close(ar);
     mmapq_indexed_appender_close(a);
 }
 
@@ -2582,6 +2908,14 @@ int main(void)
     RUN_TEST(test_uncommitted_iterator_after_archive_no_use_after_free);
     RUN_TEST(test_uncommitted_iterator_rewind_after_archive);
     RUN_TEST(test_uncommitted_iterator_skips_archived_entries);
+    RUN_TEST(test_uncommitted_dg_race_window);
+    RUN_TEST(test_uncommitted_dg_commit_min_below_line);
+    RUN_TEST(test_uncommitted_dg_rollback_below_line);
+    RUN_TEST(test_uncommitted_dg_undo_keeps_line);
+    RUN_TEST(test_uncommitted_dg_out_of_order_completeness);
+    RUN_TEST(test_uncommitted_zero_archive_offset_refused);
+    RUN_TEST(test_uncommitted_dg_caller_below_line_clamps);
+    RUN_TEST(test_archive_offset_not_lowered_by_shorter_forward);
     RUN_TEST(test_payload_iterator_init_rejects_out_of_range);
     RUN_TEST(test_file_index_set_overflow_returns_zero);
     RUN_TEST(test_archiver_undo_one_index_at_header_file_4096);

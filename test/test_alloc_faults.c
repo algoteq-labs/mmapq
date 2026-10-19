@@ -746,6 +746,111 @@ void test_ring_create_caller_error_eINVAL_consumes_mapper(void)
     /* fm1/fm2 destroyed by the creates — LSan verifies */
 }
 
+/* ── CAND-49 §7.10: the outstanding-offset set's allocations ──────────────
+ * The set is allocated at appender create (16 slots = 15 + the standing
+ * spare; one calloc of 16×8 early in appender_create_internal — no existing
+ * ordinal above covers the appender-create path, so no ordinal moved) and
+ * grows eagerly (doubling, calloc+memcpy+free) when an add would consume
+ * the last slot. The growth calloc is the only calloc in the armed windows
+ * below (the payload region is already mapped — the wrap fast path). */
+
+void test_alloc_faults_uncommitted_set_grow(void)
+{
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd), "rm -rf %s/q && mkdir -p %s", DIR, DIR);
+    if (system(cmd) != 0) { /* best-effort */ }
+
+    MmapqIndexedQueue *q = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create(
+        DIR, "q", REGION_SIZE, RING_SIZE, 1, MAX_FILE, 0,
+        TIMEOUT_NS, 0, NULL, NULL, &q));
+    MmapqIndexedAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(q, &a));
+
+    /* Stage 16 without committing: 15 set adds (count 15, cap 16) + the
+     * flag-tracked tail. */
+    for (int k = 0; k < 16; k++) {
+        char b[8]; snprintf(b, sizeof b, "m%dxx", k);
+        TEST_ASSERT_EQUAL_INT64(64 + 8 * k,
+            mmapq_indexed_appender_append_uncommitted(a, b, 4));
+    }
+
+    /* The 17th stage's pre-write reserve must grow (cap 16 -> 32): arm that
+     * calloc — ENOMEM and NOTHING is written (ruling 5). */
+    arm(1);
+    char b[8]; snprintf(b, sizeof b, "m16x");
+    TEST_ASSERT_EQUAL_INT64(MMAPQ_ENOMEM,
+        mmapq_indexed_appender_append_uncommitted(a, b, 4));
+    disarm();
+
+    /* The payload position is unchanged: the retry lands at the same
+     * offset, and the set is intact (a staged member still commits). */
+    snprintf(b, sizeof b, "m16x");
+    TEST_ASSERT_EQUAL_INT64(64 + 8 * 16,
+        mmapq_indexed_appender_append_uncommitted(a, b, 4));
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_appender_commit(a, 64));
+
+    mmapq_indexed_appender_close(a);
+    mmapq_indexed_queue_close(q);
+    if (system(cmd) != 0) { /* best-effort */ }
+}
+
+void test_alloc_faults_uncommitted_refill_growth(void)
+{
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd), "rm -rf %s/q && mkdir -p %s", DIR, DIR);
+    if (system(cmd) != 0) { /* best-effort */ }
+
+    MmapqIndexedQueue *q = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create(
+        DIR, "q", REGION_SIZE, RING_SIZE, 1, MAX_FILE, 0,
+        TIMEOUT_NS, 0, NULL, NULL, &q));
+    MmapqIndexedAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(q, &a));
+
+    /* Stage 17, close, rejoin: the fresh set is empty (cap 16). */
+    for (int k = 0; k < 17; k++) {
+        char b[8]; snprintf(b, sizeof b, "m%dxx", k);
+        TEST_ASSERT_EQUAL_INT64(64 + 8 * k,
+            mmapq_indexed_appender_append_uncommitted(a, b, 4));
+    }
+    mmapq_indexed_appender_close(a);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(q, &a));
+
+    MmapqUncommittedPayloadIterator *it = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_appender_uncommitted_iterator_checked(
+        a, MMAPQ_PAYLOAD_ITERATOR_NOT_SET, MMAPQ_PAYLOAD_ITERATOR_NOT_SET, &it));
+    TEST_ASSERT_NOT_NULL(it);
+
+    /* 15 yields refill the set to count 15 (cap 16). */
+    const void *data; int32_t len; int64_t off;
+    for (int k = 0; k < 15; k++) {
+        TEST_ASSERT_EQUAL_INT(1, mmapq_uncommitted_iterator_next(it, &data, &len, &off));
+        TEST_ASSERT_EQUAL_INT64(64 + 8 * k, off);
+    }
+
+    /* The 16th refill add must grow: arm its calloc — next returns ENOMEM
+     * with the iterator state unchanged (parked at the same message). */
+    arm(1);
+    data = (const void *)1; len = -1; off = 0;
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ENOMEM, mmapq_uncommitted_iterator_next(it, &data, &len, &off));
+    TEST_ASSERT_NULL(data);
+    TEST_ASSERT_EQUAL_INT32(0, len);
+    TEST_ASSERT_EQUAL_INT64(MMAPQ_PAYLOAD_ITERATOR_NOT_SET, off);
+    disarm();
+
+    /* The next next re-yields the same message; the walk then completes. */
+    TEST_ASSERT_EQUAL_INT(1, mmapq_uncommitted_iterator_next(it, &data, &len, &off));
+    TEST_ASSERT_EQUAL_INT64(64 + 8 * 15, off);
+    TEST_ASSERT_EQUAL_INT(1, mmapq_uncommitted_iterator_next(it, &data, &len, &off));
+    TEST_ASSERT_EQUAL_INT64(64 + 8 * 16, off);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_uncommitted_iterator_next(it, &data, &len, &off));
+
+    mmapq_indexed_appender_close(a);
+    mmapq_indexed_queue_close(q);
+    if (system(cmd) != 0) { /* best-effort */ }
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -776,5 +881,7 @@ int main(void)
     RUN_TEST(test_waiting_deregister_register_alloc_fail_leaks_safely);
     RUN_TEST(test_unregister_and_wait_alloc_fail_retries);
     RUN_TEST(test_ring_create_caller_error_eINVAL_consumes_mapper);
+    RUN_TEST(test_alloc_faults_uncommitted_set_grow);
+    RUN_TEST(test_alloc_faults_uncommitted_refill_growth);
     return UNITY_END();
 }

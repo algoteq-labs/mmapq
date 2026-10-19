@@ -695,8 +695,9 @@ void test_uncommitted_iterator_finds_uncommitted(void)
     int64_t uncommitted_off = mmapq_indexed_appender_append_uncommitted(a, "uncommitted", 11);
 
     /* The uncommitted iterator should find exactly one message */
-    MmapqUncommittedPayloadIterator *it =
-        mmapq_indexed_appender_uncommitted_iterator(a, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET);
+    MmapqUncommittedPayloadIterator *it = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_appender_uncommitted_iterator_checked(
+        a, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET, &it));
     TEST_ASSERT_NOT_NULL(it);
 
     int found = 0;
@@ -714,8 +715,8 @@ void test_uncommitted_iterator_finds_uncommitted(void)
     /* Now commit and check again — should find nothing */
     mmapq_indexed_appender_commit(a, uncommitted_off);
 
-    it = mmapq_indexed_appender_uncommitted_iterator(
-        a, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_appender_uncommitted_iterator_checked(
+        a, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET, &it));
     TEST_ASSERT_NOT_NULL(it);
     found = 0;
     while (mmapqi_uncommitted_iterator_advance(it) == 1) found++;
@@ -819,9 +820,9 @@ void test_uncommitted_scan_header_timeout_propagates(void)
     for (int i = 0; i < 4; i++)
         TEST_ASSERT_EQUAL_INT64(i, mmapq_indexed_appender_append(a, "c", 1));
 
-    MmapqUncommittedPayloadIterator *it =
-        mmapq_indexed_appender_uncommitted_iterator(
-            a, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET);
+    MmapqUncommittedPayloadIterator *it = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_appender_uncommitted_iterator_checked(
+        a, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET, &it));
     TEST_ASSERT_NOT_NULL(it);   /* clean init before the stub */
 
     D8StubAccessor s;
@@ -832,9 +833,12 @@ void test_uncommitted_scan_header_timeout_propagates(void)
         mmapqi_uncommitted_iterator_init(it, PAYLOAD_ITERATOR_NOT_SET,
                                          PAYLOAD_ITERATOR_NOT_SET));
     TEST_ASSERT_EQUAL_INT(1, s.hits);
-    /* The public factory refuses on the same timeout (init failure -> NULL). */
-    TEST_ASSERT_NULL(mmapq_indexed_appender_uncommitted_iterator(
-        a, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET));
+    /* The public factory refuses on the same timeout (rc pin, CAND-49). */
+    MmapqUncommittedPayloadIterator *it2 = NULL;
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ETIMEDOUT,
+        mmapq_indexed_appender_uncommitted_iterator_checked(
+            a, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET, &it2));
+    TEST_ASSERT_NULL(it2);
 
     it->header_accessor = s.real;   /* restore before close */
     mmapq_indexed_appender_close(a);
@@ -849,9 +853,9 @@ void test_uncommitted_scan_payload_timeout_propagates(void)
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(q, &a));
     TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_appender_append(a, "c0", 2));
 
-    MmapqUncommittedPayloadIterator *it =
-        mmapq_indexed_appender_uncommitted_iterator(
-            a, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET);
+    MmapqUncommittedPayloadIterator *it = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_appender_uncommitted_iterator_checked(
+        a, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET, &it));
     TEST_ASSERT_NOT_NULL(it);
 
     D8StubAccessor s;
@@ -923,9 +927,9 @@ void test_uncommitted_scan_gap_branch_timeout_real_gap(void)
     TEST_ASSERT_EQUAL_INT64(INITIAL_PAYLOAD_POSITION + 6, u1);
     TEST_ASSERT_EQUAL_INT64(1, mmapq_indexed_appender_append(a, "c2", 2));
 
-    MmapqUncommittedPayloadIterator *it =
-        mmapq_indexed_appender_uncommitted_iterator(
-            a, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET);
+    MmapqUncommittedPayloadIterator *it = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_appender_uncommitted_iterator_checked(
+        a, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET, &it));
     TEST_ASSERT_NOT_NULL(it);
 
     D8StubAccessor s;
@@ -954,9 +958,9 @@ void test_uncommitted_scan_gap_branch_timeout_contiguous(void)
     TEST_ASSERT_EQUAL_INT64(1, mmapq_indexed_appender_append(a, "c1", 2));
     const int64_t p1 = INITIAL_PAYLOAD_POSITION + 6;
 
-    MmapqUncommittedPayloadIterator *it =
-        mmapq_indexed_appender_uncommitted_iterator(
-            a, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET);
+    MmapqUncommittedPayloadIterator *it = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_appender_uncommitted_iterator_checked(
+        a, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET, &it));
     TEST_ASSERT_NOT_NULL(it);
 
     D8StubAccessor s;
@@ -989,9 +993,9 @@ void test_uncommitted_scan_gap_resync_timeout_propagates(void)
     TEST_ASSERT_EQUAL_INT64(1, mmapq_indexed_appender_append(a, "c2", 2));
     const int64_t c2_pos = INITIAL_PAYLOAD_POSITION + 12;   /* 64 + 6 + 6 */
 
-    MmapqUncommittedPayloadIterator *it =
-        mmapq_indexed_appender_uncommitted_iterator(
-            a, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET);
+    MmapqUncommittedPayloadIterator *it = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_appender_uncommitted_iterator_checked(
+        a, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET, &it));
     TEST_ASSERT_NOT_NULL(it);   /* clean init before the stub */
 
     D8StubAccessor s;
@@ -1019,9 +1023,9 @@ void test_uncommitted_advance_timeout_propagates(void)
     int64_t u1 = mmapq_indexed_appender_append_uncommitted(a, "u1", 2);
     TEST_ASSERT_EQUAL_INT64(INITIAL_PAYLOAD_POSITION + 6, u1);
 
-    MmapqUncommittedPayloadIterator *it =
-        mmapq_indexed_appender_uncommitted_iterator(
-            a, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET);
+    MmapqUncommittedPayloadIterator *it = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_appender_uncommitted_iterator_checked(
+        a, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET, &it));
     TEST_ASSERT_NOT_NULL(it);   /* init runs clean — no stub yet */
 
     D8StubAccessor s;
@@ -1090,9 +1094,9 @@ void test_uncommitted_iterator_scan_starts_at_queue_start_index(void)
     /* Rejoin with the same appender id, then iterate: only the genuine
      * uncommitted tail may be yielded. */
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender_with_id(cq, 3, &a));
-    MmapqUncommittedPayloadIterator *it =
-        mmapq_indexed_appender_uncommitted_iterator(
-            a, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET);
+    MmapqUncommittedPayloadIterator *it = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_appender_uncommitted_iterator_checked(
+        a, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET, &it));
     TEST_ASSERT_NOT_NULL(it);
     int found = 0;
     while (mmapqi_uncommitted_iterator_advance(it) == 1) {
@@ -1106,6 +1110,560 @@ void test_uncommitted_iterator_scan_starts_at_queue_start_index(void)
     mmapq_indexed_appender_close(a);
     mmapq_indexed_queue_close(cq);
     if (system(cmd) != 0) { /* best-effort cleanup */ }
+}
+
+/* ── CAND-49 pins (single-message) ─────────────────────────────────────────
+ * Geometry for the exact-offset pins: 4-byte payloads ("m0xx" style), stride
+ * 8 — message k at payload offset 64 + 8k (INITIAL_PAYLOAD_POSITION = 64).
+ * Fail-first evidence (standalone, both configs, at e5f07b7):
+ * audit/claude-CAND-49/transcript-uwalk-e5f07b7.txt (S2/S3/S4/S5/S7 shapes)
+ * and transcript-ff49-e5f07b7.txt (the rest). */
+
+static void make_msg(char *buf, int k) { snprintf(buf, 8, "m%dxx", k); }
+
+static int64_t stage_msg(MmapqIndexedAppender *a, int k)
+{
+    char b[8]; make_msg(b, k);
+    return mmapq_indexed_appender_append_uncommitted(a, b, 4);
+}
+
+static int64_t commit_msg(MmapqIndexedAppender *a, int k)
+{
+    char b[8]; make_msg(b, k);
+    return mmapq_indexed_appender_append(a, b, 4);
+}
+
+/* Assert the exact remaining yield sequence via the public next(): the
+ * offsets in want[] in order, then a terminal 0 with cleared outputs. */
+static void assert_exact_yields(MmapqIndexedAppender *a, const int64_t *want, int n)
+{
+    MmapqUncommittedPayloadIterator *it = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_appender_uncommitted_iterator_checked(
+        a, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET, &it));
+    TEST_ASSERT_NOT_NULL(it);
+    for (int i = 0; i < n; i++) {
+        const void *data = NULL; int32_t len = -1; int64_t off = -1;
+        TEST_ASSERT_EQUAL_INT(1, mmapq_uncommitted_iterator_next(it, &data, &len, &off));
+        TEST_ASSERT_EQUAL_INT64(want[i], off);
+        TEST_ASSERT_EQUAL_INT32(4, len);
+        char b[8]; make_msg(b, (int)((want[i] - INITIAL_PAYLOAD_POSITION) / 8));
+        TEST_ASSERT_EQUAL_MEMORY(b, data, 4);
+    }
+    const void *data = (const void *)1; int32_t len = -1; int64_t off = 0;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_uncommitted_iterator_next(it, &data, &len, &off));
+    TEST_ASSERT_NULL(data);
+    TEST_ASSERT_EQUAL_INT32(0, len);
+    TEST_ASSERT_EQUAL_INT64(MMAPQ_PAYLOAD_ITERATOR_NOT_SET, off);
+}
+
+/* §7.1 D-A: leading gap (S2: ucc) — the committed message at the gap's end
+ * must NOT be yielded. Pre-fix: debug SIGABRT at :397; release yields u0 c1. */
+void test_uncommitted_leading_gap_exact(void)
+{
+    MmapqIndexedAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(q, &a));
+    TEST_ASSERT_EQUAL_INT64(64, stage_msg(a, 0));            /* u0 @64 */
+    TEST_ASSERT_EQUAL_INT64(0, commit_msg(a, 1));            /* c1 @72 */
+    TEST_ASSERT_EQUAL_INT64(1, commit_msg(a, 2));            /* c2 @80 */
+    const int64_t want[] = { 64 };
+    assert_exact_yields(a, want, 1);
+    mmapq_indexed_appender_close(a);
+}
+
+/* §7.1 D-A: bounded gap (S3: cuc). Pre-fix: debug SIGABRT; release yields u1 c2. */
+void test_uncommitted_bounded_gap_exact(void)
+{
+    MmapqIndexedAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(q, &a));
+    TEST_ASSERT_EQUAL_INT64(0, commit_msg(a, 0));            /* c0 @64 */
+    TEST_ASSERT_EQUAL_INT64(72, stage_msg(a, 1));            /* u1 @72 */
+    TEST_ASSERT_EQUAL_INT64(1, commit_msg(a, 2));            /* c2 @80 */
+    const int64_t want[] = { 72 };
+    assert_exact_yields(a, want, 1);
+    mmapq_indexed_appender_close(a);
+}
+
+/* §7.1 D-A: two gaps (S4: cucuc). Pre-fix: debug SIGABRT; release yields
+ * u1 c2 u3 c4. */
+void test_uncommitted_two_gaps_exact(void)
+{
+    MmapqIndexedAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(q, &a));
+    TEST_ASSERT_EQUAL_INT64(0, commit_msg(a, 0));            /* c0 @64 */
+    TEST_ASSERT_EQUAL_INT64(72, stage_msg(a, 1));            /* u1 @72 */
+    TEST_ASSERT_EQUAL_INT64(1, commit_msg(a, 2));            /* c2 @80 */
+    TEST_ASSERT_EQUAL_INT64(88, stage_msg(a, 3));            /* u3 @88 */
+    TEST_ASSERT_EQUAL_INT64(2, commit_msg(a, 4));            /* c4 @96 */
+    const int64_t want[] = { 72, 88 };
+    assert_exact_yields(a, want, 2);
+    mmapq_indexed_appender_close(a);
+}
+
+/* §7.1 D-A: bounded gap survives a rejoin (S7: cuc + close + rejoin same id). */
+void test_uncommitted_gap_after_rejoin(void)
+{
+    MmapqIndexedAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(q, &a));
+    TEST_ASSERT_EQUAL_INT64(0, commit_msg(a, 0));
+    TEST_ASSERT_EQUAL_INT64(72, stage_msg(a, 1));
+    TEST_ASSERT_EQUAL_INT64(1, commit_msg(a, 2));
+    mmapq_indexed_appender_close(a);
+
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(q, &a));
+    const int64_t want[] = { 72 };
+    assert_exact_yields(a, want, 1);
+    mmapq_indexed_appender_close(a);
+}
+
+/* §7.2 D-B: out-of-order commits corrupt the committed-range set pre-fix
+ * (S5: uuu, commit #2, commit #0). Pre-fix release yields u0 u1 u2. */
+void test_uncommitted_out_of_order_commit_ranges(void)
+{
+    MmapqIndexedAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(q, &a));
+    TEST_ASSERT_EQUAL_INT64(64, stage_msg(a, 0));
+    TEST_ASSERT_EQUAL_INT64(72, stage_msg(a, 1));
+    TEST_ASSERT_EQUAL_INT64(80, stage_msg(a, 2));
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_appender_commit(a, 80));  /* u2 first */
+    TEST_ASSERT_EQUAL_INT64(1, mmapq_indexed_appender_commit(a, 64));  /* u0 second */
+    const int64_t want[] = { 72 };
+    assert_exact_yields(a, want, 1);
+    mmapq_indexed_appender_close(a);
+}
+
+/* §7.4: a zero length-prefix inside a bounded gap is torn framing —
+ * MMAPQ_ECORRUPT (previously a silent end of stream: pre-fix yields [] rc 0). */
+void test_uncommitted_gap_undershoot_is_corrupt(void)
+{
+    MmapqIndexedAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(q, &a));
+    TEST_ASSERT_EQUAL_INT64(0, commit_msg(a, 0));
+    TEST_ASSERT_EQUAL_INT64(72, stage_msg(a, 1));
+    TEST_ASSERT_EQUAL_INT64(1, commit_msg(a, 2));
+    mmapq_indexed_appender_close(a);
+
+    int fd = open("/tmp/mmap_test_iq/payload_0_0", O_WRONLY);
+    TEST_ASSERT_GREATER_THAN_INT(0, fd);
+    int32_t zero = 0;
+    TEST_ASSERT_EQUAL_INT(sizeof(zero), pwrite(fd, &zero, sizeof(zero), 72));
+    close(fd);
+
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(q, &a));
+    MmapqUncommittedPayloadIterator *it = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_appender_uncommitted_iterator_checked(
+        a, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET, &it));
+    const void *data = NULL; int32_t len = -1; int64_t off = -1;
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ECORRUPT,
+        mmapq_uncommitted_iterator_next(it, &data, &len, &off));
+    mmapq_indexed_appender_close(a);
+}
+
+/* §7.4: an inflated length whose end passes the committed range's start is
+ * MMAPQ_ECORRUPT (pre-fix: debug SIGABRT at :397; release yields u1). */
+void test_uncommitted_gap_overshoot_is_corrupt(void)
+{
+    MmapqIndexedAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(q, &a));
+    TEST_ASSERT_EQUAL_INT64(0, commit_msg(a, 0));
+    TEST_ASSERT_EQUAL_INT64(72, stage_msg(a, 1));
+    TEST_ASSERT_EQUAL_INT64(1, commit_msg(a, 2));
+    mmapq_indexed_appender_close(a);
+
+    int fd = open("/tmp/mmap_test_iq/payload_0_0", O_WRONLY);
+    TEST_ASSERT_GREATER_THAN_INT(0, fd);
+    int32_t inflated = 100;
+    TEST_ASSERT_EQUAL_INT(sizeof(inflated), pwrite(fd, &inflated, sizeof(inflated), 72));
+    close(fd);
+
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(q, &a));
+    MmapqUncommittedPayloadIterator *it = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_appender_uncommitted_iterator_checked(
+        a, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET, &it));
+    const void *data = NULL; int32_t len = -1; int64_t off = -1;
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ECORRUPT,
+        mmapq_uncommitted_iterator_next(it, &data, &len, &off));
+    mmapq_indexed_appender_close(a);
+}
+
+/* §7.5 D-C: the second commit of one offset is exactly EINVAL, and the
+ * poller sees the message exactly once. Pre-fix: indices 0 and 1, two polls. */
+void test_commit_double_commit_rejected(void)
+{
+    MmapqIndexedAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(q, &a));
+    MmapqIndexedPoller *p = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_poller(q, &p));
+
+    int64_t u0 = stage_msg(a, 0);
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_appender_commit(a, u0));
+    TEST_ASSERT_EQUAL_INT64(MMAPQ_EINVAL, mmapq_indexed_appender_commit(a, u0));
+
+    PollCapture cap = { .directive = MMAPQ_NEXT_ADVANCE };
+    TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_ADVANCED, mmapq_indexed_poller_poll(p, capture_handler, &cap));
+    TEST_ASSERT_EQUAL_INT64(0, cap.index);
+    TEST_ASSERT_EQUAL_INT32(4, cap.length);
+    TEST_ASSERT_EQUAL_MEMORY("m0xx", cap.data, 4);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_END_OF_STREAM, mmapq_indexed_poller_poll(p, capture_handler, &cap));
+
+    mmapq_indexed_appender_close(a);
+    mmapq_indexed_poller_close(p);
+}
+
+/* §7.5 D-C: a mid-message offset is exactly EINVAL. Pre-fix: commits
+ * (readers then ENTRY_ERROR — transcript poll rc 6). */
+void test_commit_mid_message_offset_rejected(void)
+{
+    MmapqIndexedAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(q, &a));
+    TEST_ASSERT_EQUAL_INT64(64, stage_msg(a, 0));
+    TEST_ASSERT_EQUAL_INT64(72, stage_msg(a, 1));
+    TEST_ASSERT_EQUAL_INT64(MMAPQ_EINVAL, mmapq_indexed_appender_commit(a, 64 + 2));
+    mmapq_indexed_appender_close(a);
+}
+
+/* §7.5 D-C: double commit of the flag-tracked tail is exactly EINVAL
+ * (the fast path requires the flag; the first commit cleared it). */
+void test_commit_last_pending_double_rejected(void)
+{
+    MmapqIndexedAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(q, &a));
+    int64_t u0 = stage_msg(a, 0);
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_appender_commit(a, u0));
+    TEST_ASSERT_EQUAL_INT64(MMAPQ_EINVAL, mmapq_indexed_appender_commit(a, u0));
+    mmapq_indexed_appender_close(a);
+}
+
+/* §7.5: staging u2 moves u1 from the flag into the set — the set member
+ * commits at its exact index. */
+void test_commit_flag_tracked_via_set(void)
+{
+    MmapqIndexedAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(q, &a));
+    TEST_ASSERT_EQUAL_INT64(64, stage_msg(a, 1));
+    TEST_ASSERT_EQUAL_INT64(72, stage_msg(a, 2));
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_appender_commit(a, 64));
+    mmapq_indexed_appender_close(a);
+}
+
+/* §7.5 (delta-review fix 1): a transient header-wrap timeout on the slow
+ * commit path leaves the tracking untouched — the retry commits at the exact
+ * index. Injection: one-shot vtable patch on the appender's shared header
+ * accessor (reached via the iterator's header_accessor field — the same
+ * object), the D8 stub idiom adapted; no new hooks, runs in both configs.
+ * Dies on the clear-before-CAS mutant (§8 M17). */
+static WrapResult (*oneshot_real_wrap)(RegionAccessor *, int64_t, Buffer *);
+static int64_t oneshot_pos;
+static int     oneshot_hits;
+static WrapResult oneshot_wrap(RegionAccessor *self, int64_t position, Buffer *buf)
+{
+    if (position == oneshot_pos) {
+        oneshot_hits++;
+        self->wrap = oneshot_real_wrap;   /* one-shot: restore in place */
+        return WRAP_MAP_TIMED_OUT;
+    }
+    return oneshot_real_wrap(self, position, buf);
+}
+
+void test_commit_slow_path_timeout_retryable(void)
+{
+    MmapqIndexedAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(q, &a));
+    int64_t x = stage_msg(a, 0);                       /* flag-tracked */
+    TEST_ASSERT_EQUAL_INT64(64, x);
+    TEST_ASSERT_EQUAL_INT64(0, commit_msg(a, 1));      /* atomic append: last_appended moves past X */
+
+    /* Reach the appender's header accessor (shared with the iterator). */
+    MmapqUncommittedPayloadIterator *it = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_appender_uncommitted_iterator_checked(
+        a, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET, &it));
+    TEST_ASSERT_NOT_NULL(it);
+    RegionAccessor *acc = it->header_accessor;
+    oneshot_real_wrap = acc->wrap;
+    oneshot_pos = header_position(1);   /* the commit's header slot (idx 1) */
+    oneshot_hits = 0;
+    acc->wrap = oneshot_wrap;
+    region_accessor_invalidate_fast_path(acc);   /* force the vtable path */
+
+    /* Slow path (X != last_appended, flagged): the injected timeout fails
+     * the CAS — exactly MMAPQ_ETIMEDOUT, flag NOT cleared. */
+    TEST_ASSERT_EQUAL_INT64(MMAPQ_ETIMEDOUT, mmapq_indexed_appender_commit(a, x));
+    TEST_ASSERT_EQUAL_INT(1, oneshot_hits);
+
+    /* Retry succeeds at the exact index (the vtable restored itself). */
+    TEST_ASSERT_EQUAL_INT64(1, mmapq_indexed_appender_commit(a, x));
+    mmapq_indexed_appender_close(a);
+}
+
+/* §7.7 D-D (the uit.c shape): commit-after-rejoin of a found offset succeeds
+ * at the exact index. Pre-fix: -2 (transcript rejoincommit). */
+void test_uncommitted_commit_after_rejoin(void)
+{
+    MmapqIndexedAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(q, &a));
+    TEST_ASSERT_EQUAL_INT64(64, stage_msg(a, 0));
+    TEST_ASSERT_EQUAL_INT64(72, stage_msg(a, 1));
+    TEST_ASSERT_EQUAL_INT64(80, stage_msg(a, 2));
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_appender_commit(a, 64));  /* c0 */
+    TEST_ASSERT_EQUAL_INT64(1, mmapq_indexed_appender_commit(a, 80));  /* c2 */
+    mmapq_indexed_appender_close(a);
+
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(q, &a));
+    const int64_t want[] = { 72 };
+    assert_exact_yields(a, want, 1);
+    TEST_ASSERT_EQUAL_INT64(2, mmapq_indexed_appender_commit(a, 72));  /* u1 */
+
+    MmapqIndexedPoller *p = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_poller(q, &p));
+    PollCapture cap = { .directive = MMAPQ_NEXT_ADVANCE };
+    TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_ADVANCED, mmapq_indexed_poller_poll(p, capture_handler, &cap));
+    TEST_ASSERT_EQUAL_INT64(0, cap.index);
+    TEST_ASSERT_EQUAL_MEMORY("m0xx", cap.data, 4);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_ADVANCED, mmapq_indexed_poller_poll(p, capture_handler, &cap));
+    TEST_ASSERT_EQUAL_INT64(1, cap.index);
+    TEST_ASSERT_EQUAL_MEMORY("m2xx", cap.data, 4);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_ADVANCED, mmapq_indexed_poller_poll(p, capture_handler, &cap));
+    TEST_ASSERT_EQUAL_INT64(2, cap.index);
+    TEST_ASSERT_EQUAL_INT32(4, cap.length);
+    TEST_ASSERT_EQUAL_MEMORY("m1xx", cap.data, 4);   /* u1 byte-exact at index 2 */
+    TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_END_OF_STREAM, mmapq_indexed_poller_poll(p, capture_handler, &cap));
+    mmapq_indexed_appender_close(a);
+    mmapq_indexed_poller_close(p);
+}
+
+/* §7.7: staged messages survive a crash; the rejoining owner iterates and
+ * commits any subset in any order; skipped messages stay. Pre-fix: commits
+ * after rejoin return -2 (transcript crashe2e). */
+void test_uncommitted_crash_recovery_end_to_end(void)
+{
+    MmapqIndexedAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(q, &a));
+    TEST_ASSERT_EQUAL_INT64(64, stage_msg(a, 0));
+    TEST_ASSERT_EQUAL_INT64(72, stage_msg(a, 1));
+    TEST_ASSERT_EQUAL_INT64(80, stage_msg(a, 2));
+    mmapq_indexed_appender_close(a);   /* "crash" — nothing committed */
+
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(q, &a));
+    const int64_t want[] = { 64, 72, 80 };
+    assert_exact_yields(a, want, 3);
+
+    /* Commit u2 then u0, skip u1. */
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_appender_commit(a, 80));
+    TEST_ASSERT_EQUAL_INT64(1, mmapq_indexed_appender_commit(a, 64));
+
+    MmapqIndexedPoller *p = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_poller(q, &p));
+    PollCapture cap = { .directive = MMAPQ_NEXT_ADVANCE };
+    TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_ADVANCED, mmapq_indexed_poller_poll(p, capture_handler, &cap));
+    TEST_ASSERT_EQUAL_INT64(0, cap.index);
+    TEST_ASSERT_EQUAL_MEMORY("m2xx", cap.data, 4);   /* u2 at 0 */
+    TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_ADVANCED, mmapq_indexed_poller_poll(p, capture_handler, &cap));
+    TEST_ASSERT_EQUAL_INT64(1, cap.index);
+    TEST_ASSERT_EQUAL_MEMORY("m0xx", cap.data, 4);   /* u0 at 1 */
+    TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_END_OF_STREAM, mmapq_indexed_poller_poll(p, capture_handler, &cap));
+
+    /* A second scan yields only the skipped u2. */
+    const int64_t want2[] = { 72 };
+    assert_exact_yields(a, want2, 1);
+
+    mmapq_indexed_appender_close(a);
+    mmapq_indexed_poller_close(p);
+}
+
+/* §7.7: commit each offset as yielded against the frozen snapshot — the walk
+ * is undisturbed; committing the flag-tracked tail leaves no stale set entry
+ * (the §3.3 skip rule; commit it again ⇒ EINVAL; mutant M7). */
+void test_uncommitted_iterate_and_commit_in_one_pass(void)
+{
+    MmapqIndexedAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(q, &a));
+    TEST_ASSERT_EQUAL_INT64(64, stage_msg(a, 0));
+    TEST_ASSERT_EQUAL_INT64(72, stage_msg(a, 1));
+    TEST_ASSERT_EQUAL_INT64(80, stage_msg(a, 2));
+
+    MmapqUncommittedPayloadIterator *it = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_appender_uncommitted_iterator_checked(
+        a, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET, &it));
+    const void *data; int32_t len; int64_t off;
+    for (int64_t i = 0; i < 3; i++) {
+        TEST_ASSERT_EQUAL_INT(1, mmapq_uncommitted_iterator_next(it, &data, &len, &off));
+        TEST_ASSERT_EQUAL_INT64(64 + 8 * i, off);
+        TEST_ASSERT_EQUAL_INT64(i, mmapq_indexed_appender_commit(a, off));
+    }
+    TEST_ASSERT_EQUAL_INT(0, mmapq_uncommitted_iterator_next(it, &data, &len, &off));
+
+    /* The tail (80) was committed via the fast path; the refill skip rule
+     * left no stale set entry — a second commit is exactly EINVAL. */
+    TEST_ASSERT_EQUAL_INT64(MMAPQ_EINVAL, mmapq_indexed_appender_commit(a, 80));
+    mmapq_indexed_appender_close(a);
+}
+
+/* §3.3 idempotent-add pin (mutant M10): refill from two full scans must not
+ * duplicate set entries — a duplicate would survive remove-on-commit and
+ * resurrect a double commit. */
+void test_uncommitted_refill_idempotent_double_commit_rejected(void)
+{
+    MmapqIndexedAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(q, &a));
+    TEST_ASSERT_EQUAL_INT64(64, stage_msg(a, 0));
+    TEST_ASSERT_EQUAL_INT64(72, stage_msg(a, 1));
+    TEST_ASSERT_EQUAL_INT64(80, stage_msg(a, 2));
+    TEST_ASSERT_EQUAL_INT64(88, stage_msg(a, 3));
+
+    /* Two full scans before any commit: refill of u0..u2 runs twice
+     * (u3 is the flag-tracked tail — skipped). */
+    const int64_t want[] = { 64, 72, 80, 88 };
+    assert_exact_yields(a, want, 4);
+    assert_exact_yields(a, want, 4);
+
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_appender_commit(a, 80));  /* u2, set member */
+    TEST_ASSERT_EQUAL_INT64(MMAPQ_EINVAL, mmapq_indexed_appender_commit(a, 80));
+    mmapq_indexed_appender_close(a);
+}
+
+/* ── §7.8 regression/control pins (pass today, must keep passing) ────────── */
+
+/* S6: trailing gap after rejoin (ccu + close + rejoin same id). */
+void test_uncommitted_trailing_after_rejoin(void)
+{
+    MmapqIndexedAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(q, &a));
+    TEST_ASSERT_EQUAL_INT64(0, commit_msg(a, 0));
+    TEST_ASSERT_EQUAL_INT64(1, commit_msg(a, 1));
+    TEST_ASSERT_EQUAL_INT64(80, stage_msg(a, 2));
+    mmapq_indexed_appender_close(a);
+
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(q, &a));
+    const int64_t want[] = { 80 };
+    assert_exact_yields(a, want, 1);
+    mmapq_indexed_appender_close(a);
+}
+
+/* Per-pin archivable queue (the shared q is not archivable; the pin-8
+ * pattern). Caller closes via arch_queue_close. */
+static MmapqIndexedQueue *arch_queue(const char *qn)
+{
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd), "rm -rf %s/%s", DIR, qn);
+    if (system(cmd) != 0) { /* best-effort cleanup */ }
+    char qdir[256];
+    snprintf(qdir, sizeof(qdir), "%s/%s", DIR, qn);
+    mkdir(qdir, 0775);
+    MmapqIndexedQueue *cq = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create(DIR, qn, REGION_SZ,
+        RING_SZ, 1, MAX_FILE, 0, TIMEOUT_NS, 1, rt, rt, &cq));
+    TEST_ASSERT_NOT_NULL(cq);
+    return cq;
+}
+
+static void arch_queue_close(MmapqIndexedQueue *cq, const char *qn)
+{
+    mmapq_indexed_queue_close(cq);
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd), "rm -rf %s/%s", DIR, qn);
+    if (system(cmd) != 0) { /* best-effort cleanup */ }
+}
+
+static void arch_to(MmapqIndexedQueue *cq, int64_t idx)
+{
+    MmapqIndexedArchiver *ar = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_archiver(cq, &ar));
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_archiver_archive_up_to_index(ar, idx));
+    mmapq_indexed_archiver_close(ar);
+}
+
+/* S9: the archive line is a record boundary (ccu + archive(2)) — yields
+ * exactly u2, and commit(u2) succeeds via the fast path (the §3.4 proof
+ * instance: the boundary can never reach the flag-tracked tail). */
+void test_uncommitted_archive_boundary_is_record_boundary(void)
+{
+    const char *qn = "mmap_test_iq_c49_s9";
+    MmapqIndexedQueue *cq = arch_queue(qn);
+    MmapqIndexedAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(cq, &a));
+    TEST_ASSERT_EQUAL_INT64(0, commit_msg(a, 0));
+    TEST_ASSERT_EQUAL_INT64(1, commit_msg(a, 1));
+    TEST_ASSERT_EQUAL_INT64(80, stage_msg(a, 2));
+
+    arch_to(cq, 2);   /* boundary + archive line: end of c1 = 80 */
+
+    const int64_t want[] = { 80 };
+    assert_exact_yields(a, want, 1);
+    TEST_ASSERT_EQUAL_INT64(2, mmapq_indexed_appender_commit(a, 80));
+
+    mmapq_indexed_appender_close(a);
+    arch_queue_close(cq, qn);
+}
+
+/* S8: archiving past a gap chops the uncommitted message in it (cucc A2) —
+ * nothing is yielded; committing the chopped offset is exactly EINVAL
+ * (same-session: the CAND-30 overtaken check on a flag-tracked member —
+ * the M5 kill). */
+void test_uncommitted_archived_gap_yields_nothing(void)
+{
+    const char *qn = "mmap_test_iq_c49_s8";
+    MmapqIndexedQueue *cq = arch_queue(qn);
+    MmapqIndexedAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(cq, &a));
+    TEST_ASSERT_EQUAL_INT64(0, commit_msg(a, 0));
+    TEST_ASSERT_EQUAL_INT64(72, stage_msg(a, 1));
+    TEST_ASSERT_EQUAL_INT64(1, commit_msg(a, 2));
+    TEST_ASSERT_EQUAL_INT64(2, commit_msg(a, 3));
+
+    arch_to(cq, 2);   /* chops c0 (idx 0) and c2 (idx 1); u1 @72 is below */
+
+    assert_exact_yields(a, NULL, 0);
+    TEST_ASSERT_EQUAL_INT64(MMAPQ_EINVAL, mmapq_indexed_appender_commit(a, 72));
+    /* Still nothing after the overtaken rejection dropped the tracking. */
+    assert_exact_yields(a, NULL, 0);
+
+    mmapq_indexed_appender_close(a);
+    arch_queue_close(cq, qn);
+}
+
+/* S10: archiving past a leading uncommitted message (ucc A2) — nothing is
+ * yielded; commit of the chopped offset is exactly EINVAL. */
+void test_uncommitted_archived_leading_yields_nothing(void)
+{
+    const char *qn = "mmap_test_iq_c49_s10";
+    MmapqIndexedQueue *cq = arch_queue(qn);
+    MmapqIndexedAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(cq, &a));
+    TEST_ASSERT_EQUAL_INT64(64, stage_msg(a, 0));
+    TEST_ASSERT_EQUAL_INT64(0, commit_msg(a, 1));
+    TEST_ASSERT_EQUAL_INT64(1, commit_msg(a, 2));
+
+    arch_to(cq, 2);   /* line = end of c2 = 88; u0 @64 is below */
+
+    assert_exact_yields(a, NULL, 0);
+    TEST_ASSERT_EQUAL_INT64(MMAPQ_EINVAL, mmapq_indexed_appender_commit(a, 64));
+
+    mmapq_indexed_appender_close(a);
+    arch_queue_close(cq, qn);
+}
+
+/* S11: archived gap after rejoin (cucc A2 + close + rejoin) — nothing is
+ * yielded; commit of the chopped offset is exactly EINVAL (non-membership:
+ * the rejoined appender never staged it and no scan refilled it). */
+void test_uncommitted_archived_after_rejoin_yields_nothing(void)
+{
+    const char *qn = "mmap_test_iq_c49_s11";
+    MmapqIndexedQueue *cq = arch_queue(qn);
+    MmapqIndexedAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(cq, &a));
+    TEST_ASSERT_EQUAL_INT64(0, commit_msg(a, 0));
+    TEST_ASSERT_EQUAL_INT64(72, stage_msg(a, 1));
+    TEST_ASSERT_EQUAL_INT64(1, commit_msg(a, 2));
+    TEST_ASSERT_EQUAL_INT64(2, commit_msg(a, 3));
+    mmapq_indexed_appender_close(a);
+
+    arch_to(cq, 2);
+
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(cq, &a));
+    assert_exact_yields(a, NULL, 0);
+    TEST_ASSERT_EQUAL_INT64(MMAPQ_EINVAL, mmapq_indexed_appender_commit(a, 72));
+
+    mmapq_indexed_appender_close(a);
+    arch_queue_close(cq, qn);
 }
 
 /* Pin 5 (B3 — per join site, hook-selected). Each arms MMAPQ_ETIMEDOUT at
@@ -2953,6 +3511,27 @@ int main(void)
     RUN_TEST(test_uncommitted_scan_gap_resync_timeout_propagates);
     RUN_TEST(test_uncommitted_advance_timeout_propagates);
     RUN_TEST(test_uncommitted_iterator_scan_starts_at_queue_start_index);
+    RUN_TEST(test_uncommitted_leading_gap_exact);
+    RUN_TEST(test_uncommitted_bounded_gap_exact);
+    RUN_TEST(test_uncommitted_two_gaps_exact);
+    RUN_TEST(test_uncommitted_gap_after_rejoin);
+    RUN_TEST(test_uncommitted_out_of_order_commit_ranges);
+    RUN_TEST(test_uncommitted_gap_undershoot_is_corrupt);
+    RUN_TEST(test_uncommitted_gap_overshoot_is_corrupt);
+    RUN_TEST(test_commit_double_commit_rejected);
+    RUN_TEST(test_commit_mid_message_offset_rejected);
+    RUN_TEST(test_commit_last_pending_double_rejected);
+    RUN_TEST(test_commit_flag_tracked_via_set);
+    RUN_TEST(test_commit_slow_path_timeout_retryable);
+    RUN_TEST(test_uncommitted_commit_after_rejoin);
+    RUN_TEST(test_uncommitted_crash_recovery_end_to_end);
+    RUN_TEST(test_uncommitted_iterate_and_commit_in_one_pass);
+    RUN_TEST(test_uncommitted_refill_idempotent_double_commit_rejected);
+    RUN_TEST(test_uncommitted_trailing_after_rejoin);
+    RUN_TEST(test_uncommitted_archive_boundary_is_record_boundary);
+    RUN_TEST(test_uncommitted_archived_gap_yields_nothing);
+    RUN_TEST(test_uncommitted_archived_leading_yields_nothing);
+    RUN_TEST(test_uncommitted_archived_after_rejoin_yields_nothing);
     RUN_TEST(test_join_walk_to_end_timeout_no_committed_headers);
     RUN_TEST(test_join_walk_to_end_timeout_no_own_live_entry);
     RUN_TEST(test_join_committed_walk_timeout_propagates);

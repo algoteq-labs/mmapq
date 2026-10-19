@@ -15,9 +15,10 @@
  * Size: APPENDER_META_ENCODED_LENGTH (64 bytes, one cache line)
  *
  * Layout (byte offsets):
- *   0  : start_offset  (int64, volatile — read/written with atomic ops)
- *   8  : appender_id   (int16)
- *   10 : padding to 64 bytes
+ *   0  : start_offset   (int64, volatile — read/written with atomic ops)
+ *   8  : appender_id    (int16)
+ *   16 : archive_offset (int64, volatile — read/written with atomic ops)
+ *   24 : padding to 64 bytes
  *
  * start_offset:
  *   The per-appender deletion boundary: payload files wholly below it may
@@ -30,6 +31,15 @@
  *   joining appender with no live entry walks forward from — never a write
  *   position. Read with acquire, written by CAS/atomic-min — safe
  *   across processes.
+ *
+ * archive_offset (CAND-49 §3.9, D-G):
+ *   The archive line: how far the archive has gone — the uncommitted
+ *   iterator's snapshot floor. Initialised to INITIAL_PAYLOAD_POSITION at
+ *   creation. Monotonic: only a forward archive moves it, raising it to the
+ *   same candidate value computed for start_offset, stored as
+ *   max(current, candidate). NOTHING else writes it — not the commit
+ *   re-check min, not rollback_start_offsets, not undo. Do not merge with
+ *   start_offset; see doc/design/archive-boundaries.md.
  */
 
 /*
@@ -38,6 +48,7 @@
 #define APPENDER_META_ENCODED_LENGTH ((int32_t)64)
 #define APPENDER_META_START_OFFSET_OFFSET  ((int32_t)0)
 #define APPENDER_META_APPENDER_ID_OFFSET   ((int32_t)8)
+#define APPENDER_META_ARCHIVE_OFFSET_OFFSET ((int32_t)16)
 
 /**
  * AppenderMeta — in-memory view of a single appender's persistent metadata.
@@ -103,6 +114,39 @@ static inline void appender_meta_start_offset_min(AppenderMeta *m, int64_t offse
                                                   memory_order_acq_rel,
                                                   memory_order_acquire)) {
     }
+}
+
+/**
+ * appender_meta_archive_offset — read the archive line with acquire
+ * semantics (CAND-49 §3.9). The uncommitted iterator reads it AFTER the
+ * queue start index (acquire) — that pairing is the D-G publication rule;
+ * reading the line before si is the defect. See doc/design/archive-boundaries.md.
+ */
+static inline int64_t appender_meta_archive_offset(const AppenderMeta *m)
+{
+    const _Atomic int64_t *p =
+        (const _Atomic int64_t *)(m->base + APPENDER_META_ARCHIVE_OFFSET_OFFSET);
+    return atomic_load_explicit(p, memory_order_acquire);
+}
+
+/**
+ * appender_meta_archive_offset_store — raise the archive line to
+ * max(current, candidate) (CAND-49 §3.9): a load, compare and RELAXED
+ * atomic store. Single writer — archive operations are mutually exclusive
+ * per queue under archive.lock EX (I6), and nothing else ever writes the
+ * field — so no CAS is needed (contrast start_offset's CAND-37 CAS: the
+ * commit min is a second writer there). The max is load-bearing: after an
+ * undo, a later forward archive can compute a candidate below the current
+ * line; a plain store would lower it and reopen D-G. Called by both
+ * archivers' forward step before the queue-meta si release store, which
+ * publishes it.
+ */
+static inline void appender_meta_archive_offset_store(AppenderMeta *m, int64_t candidate)
+{
+    _Atomic int64_t *p = (_Atomic int64_t *)(m->base + APPENDER_META_ARCHIVE_OFFSET_OFFSET);
+    int64_t cur = atomic_load_explicit(p, memory_order_relaxed);
+    if (candidate > cur)
+        atomic_store_explicit(p, candidate, memory_order_relaxed);
 }
 
 static inline uint8_t appender_meta_appender_id(const AppenderMeta *m)

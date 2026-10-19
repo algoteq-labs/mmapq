@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include "internal/region_accessor.h"
+#include "internal/committed_ranges.h"
 #include "payload_iterator.h"
 #include "header_codec.h"
 #include "mmap_assert.h"
@@ -19,43 +20,55 @@
  *
  * ALGORITHM:
  *   At init():
- *     1. Scan the header from the queue's start index forward (D8/S3 —
+ *     1. Acquire-load the queue's start index FIRST, then the appender's
+ *        archive line (appender_meta archive_offset) — the D-G publication
+ *        rule (CAND-49 §3.9; doc/design/archive-boundaries.md). Reading the
+ *        line before si is the defect. A zero line (< INITIAL_PAYLOAD_POSITION)
+ *        is a pre-0.2.0 file: init refuses with MMAPQ_ECORRUPT (recreate the
+ *        queue).
+ *     2. Scan the header from the frozen start index forward (D8/S3 —
  *        entries below it are archived by definition and their files may
  *        have been reclaimed).
- *     2. For each header entry matching this appender_id, decode payloadPosition.
- *     3. Walk the payload stream to build contiguous committed RANGES:
+ *     3. For each header entry matching this appender_id, decode payloadPosition.
+ *     4. Walk the payload stream to measure contiguous committed RANGES:
  *        [start_offset, end_offset) where all bytes are part of committed messages.
- *     4. Committed ranges are stored in a sorted array (by start_offset).
- *     5. The inner MmapqPayloadIterator traverses GAPS between committed ranges.
+ *        Spans are appended raw (header order is commit order — D-B), then
+ *        sort+merged once (mmapqi_ranges_sort_merge).
+ *     5. The inner MmapqPayloadIterator traverses GAPS between committed ranges,
+ *        starting at the archive line (never below it — a caller-supplied
+ *        start_offset below the line clamps up to the line).
  *
  *   At advance():
- *     1. Try to advance the inner MmapqPayloadIterator in the current gap.
- *     2. If the message end reaches the next committed range start, skip
- *        past that range (and any adjacent ranges) to the next gap.
- *     3. Return 1 if an uncommitted message was found, 0 if exhausted.
+ *     1. Bounded-gap pre-check: next_probing_offset == current_gap_end means
+ *        the gap is exhausted — switch gaps without probing at the committed
+ *        range's start (D-A).
+ *     2. Try to advance the inner MmapqPayloadIterator in the current gap.
+ *     3. A yielded message must sit cleanly before the next committed range
+ *        (overshoot or overlap is MMAPQ_ECORRUPT — stricter than Java, which
+ *        silently skips); a bounded gap that ends short of current_gap_end
+ *        is torn framing, also MMAPQ_ECORRUPT (previously silent EOS).
+ *     4. On a yield, refill the owning appender's outstanding set via the
+ *        refill callback (the appender-level helper skips the flag-tracked
+ *        tail, §3.3). ENOMEM leaves the iterator parked at the same message:
+ *        the next advance re-walks and re-yields it (ruling 5).
+ *     5. Return 1 if an uncommitted message was found, 0 if exhausted.
  *
  * FROZEN STATE:
- *   end_of_stream is captured at init() time. New appends or commits after
- *   init() are NOT visible. This ensures deterministic recovery behaviour.
+ *   end_of_stream, the queue start index, and the archive line are captured
+ *   at init() time. New appends or commits after init() are NOT visible.
+ *   This ensures deterministic recovery behaviour.
  *
  * COMMITTED RANGE STRUCTURE:
- *   Simple dynamic array of (start, end) pairs, sorted by start.
- *   Adjacent ranges are merged during the header scan.
- *   Pairs with end <= start_offset are pruned at init time.
+ *   Dynamic array of (start, end) pairs (CommittedRanges, shared with the
+ *   batch walker), sorted ascending by start after the init-time
+ *   sort+merge. Pairs with end <= effective start are pruned at init time.
  *
  * CONTRACT:
- *   No message may OVERLAP a committed span. If encountered, abort.
- *   (This would indicate corruption.)
+ *   No message may OVERLAP a committed span. If encountered, return
+ *   MMAPQ_ECORRUPT (both build configs — a runtime check, not an assert).
  *
  * Thread confinement: not thread-safe. One iterator per thread.
  */
-
-/* ── Committed range entry ────────────────────────────────────────────────── */
-
-typedef struct {
-    int64_t start;  /* first byte of committed region (inclusive) */
-    int64_t end;    /* first byte AFTER committed region (exclusive) */
-} CommittedRange;
 
 /* ── MmapqUncommittedPayloadIterator ──────────────────────────────────────────── */
 /* Completes the forward declaration from include/indexed_appender.h */
@@ -69,10 +82,20 @@ typedef struct MmapqUncommittedPayloadIterator {
     int64_t       (*end_of_stream_offset)(void *ctx);
     void           *stream_ctx;
 
-    /* Queue start index supplier (D8/S3): the header scan's floor. One
-     * acquire load per scan — the archiver may advance it between scans. */
+    /* Archive line supplier (CAND-49 §3.9): appender_meta archive_offset.
+     * Read at init AFTER queue_start_index — the D-G publication rule. */
+    int64_t       (*archive_offset)(void *ctx);
+
+    /* Queue start index supplier (D8/S3): the header scan's floor. Read once
+     * per init, BEFORE archive_offset, and frozen into the scan. */
     int64_t       (*queue_start_index)(void *ctx);
     void           *queue_start_index_ctx;
+
+    /* Refill callback (CAND-49 §3.3): invoked with each yielded offset to
+     * make it committable; 0 or MMAPQ_ENOMEM. NULL-agnostic (create
+     * validates). */
+    int           (*refill)(void *ctx, int64_t offset);
+    void           *refill_ctx;
 
     /* Header accessors for committed range detection */
     RegionAccessor *header_accessor;
@@ -81,11 +104,17 @@ typedef struct MmapqUncommittedPayloadIterator {
     /* Inner iterator — walks gaps between committed ranges */
     MmapqPayloadIterator *inner;
 
-    /* Committed ranges — sorted ascending by start */
-    CommittedRange *ranges;
-    int             range_count;
-    int             range_capacity;
-    int             current_range;  /* index into ranges[] of next committed span */
+    /* Committed ranges — sorted ascending by start (sort+merged at init) */
+    CommittedRanges ranges;
+    int             current_range;  /* index into ranges.v[] of next committed span */
+
+    /* Explicit bounded-gap boundary (CAND-49 §3.2): the exclusive end of the
+     * current gap; PAYLOAD_ITERATOR_NOT_SET for the trailing gap (ends at
+     * fixed_end_of_stream). The inner iterator never probes at this offset. */
+    int64_t         current_gap_end;
+
+    /* Snapshot of the archive line at init() — the gap walk's floor */
+    int64_t         archive_line;
 
     /* Snapshot of end-of-stream at init() */
     int64_t         fixed_end_of_stream;
@@ -105,17 +134,23 @@ typedef struct MmapqUncommittedPayloadIterator {
  * appender_id:             which appender's committed spans to skip
  * start_of_stream_offset:  callback returning earliest valid payload offset
  * end_of_stream_offset:    callback returning current append position
- * stream_ctx:              context for both callbacks
+ * stream_ctx:              context for both callbacks and archive_offset
+ * archive_offset:          callback returning the appender's archive line
+ *                          (appender_meta archive_offset, CAND-49 §3.9)
  * header_accessor:         RO accessor for the queue header file
  * inner:                   MmapqPayloadIterator for gap traversal (ownership NOT taken;
  *                          caller must keep it alive for the iterator's lifetime)
  * queue_start_index:       callback returning the queue's current start index —
  *                          the header scan's floor (D8/S3)
  * queue_start_index_ctx:   context for queue_start_index
+ * refill:                  callback making a yielded offset committable
+ *                          (0 or MMAPQ_ENOMEM); the appender-level helper
+ *                          skips the flag-tracked tail (§3.3)
+ * refill_ctx:              context for refill
  *
  * Retry note (D8): after a FAILED init (e.g. a transient MMAPQ_ETIMEDOUT),
  * rewind() returns MMAPQ_EINVAL — the retry path is a NEW factory call
- * (mmapq_indexed_appender_uncommitted_iterator), not rewind.
+ * (mmapq_indexed_appender_uncommitted_iterator_checked), not rewind.
  */
 int mmapqi_uncommitted_iterator_create(
     const char     *queue_name,
@@ -123,10 +158,13 @@ int mmapqi_uncommitted_iterator_create(
     int64_t       (*start_of_stream_offset)(void *ctx),
     int64_t       (*end_of_stream_offset)(void *ctx),
     void           *stream_ctx,
+    int64_t       (*archive_offset)(void *ctx),
     RegionAccessor *header_accessor,
     MmapqPayloadIterator *inner,
     int64_t       (*queue_start_index)(void *ctx),
     void           *queue_start_index_ctx,
+    int           (*refill)(void *ctx, int64_t offset),
+    void           *refill_ctx,
     MmapqUncommittedPayloadIterator **out);
 
 /**
@@ -135,14 +173,21 @@ int mmapqi_uncommitted_iterator_create(
  * start_offset: payload start, or PAYLOAD_ITERATOR_NOT_SET
  * end_offset:   payload end (inclusive), or PAYLOAD_ITERATOR_NOT_SET
  *
+ * Snapshot discipline (D-G, CAND-49 §3.9): acquire-loads the queue start
+ * index FIRST, then reads the archive line (never start_offset); the gap
+ * walk starts at the archive line — a caller-supplied start_offset below
+ * the line clamps up to the line.
+ *
  * Performs the full header scan at each call. Rewind is equivalent to
  * calling init() again with the same parameters.
  *
- * Returns 0 on success; MMAPQ_EINVAL if it is NULL or an explicit offset
- * is below start_of_stream_offset(); MMAPQ_ETIMEDOUT on a transient mapping
+ * Returns 0 on success; MMAPQ_EINVAL if it is NULL, an explicit offset
+ * is below start_of_stream_offset(), or start_offset > end_offset when both
+ * are set (Java init parity); MMAPQ_ETIMEDOUT on a transient mapping
  * timeout during the scan (retryable — via a NEW factory call, see create);
  * MMAPQ_ECORRUPT if the header scan was genuinely truncated (a committed
- * header whose payload would not walk for a non-timeout reason). On failure
+ * header whose payload would not walk for a non-timeout reason) or the
+ * archive line is zero (a pre-0.2.0 file — recreate the queue). On failure
  * the iterator is left uninitialised; the caller-owned inner iterator is
  * never freed and remains valid.
  */
@@ -159,9 +204,12 @@ int mmapqi_uncommitted_iterator_init(
  *   Returns 0 if exhausted (no more gaps).
  *   Returns a negative MMAPQ_E* code propagated from the inner payload
  *   iterator — MMAPQ_ETIMEDOUT on a transient mapping timeout (retryable:
- *   iterator state is unchanged, the next advance() retries), or
- *   MMAPQ_ECORRUPT. A negative is truthy in C: callers must compare
- *   explicitly, never `while (advance(...))`.
+ *   iterator state is unchanged, the next advance() retries), MMAPQ_ENOMEM
+ *   on a refill allocation failure (state unchanged: the next advance()
+ *   re-yields the same message), or MMAPQ_ECORRUPT on gap-boundary
+ *   corruption (overshoot, overlap, or torn framing — CAND-49 §3.2).
+ *   A negative is truthy in C: callers must compare explicitly, never
+ *   `while (advance(...))`.
  *
  * After a successful advance():
  *   mmapqi_uncommitted_iterator_current() returns the message buffer.

@@ -1,6 +1,9 @@
 # ASSERT_AUDIT.md — MMAP_ASSERT Inventory
 
-**71 asserts across 18 files** (15 src/*.c, 3 src/internal/*.h). Generated from source.
+**70 asserts across 19 files** (16 src/*.c, 3 src/internal/*.h). Generated from source.
+(CAND-49: the overlap assert in mmapqi_uncommitted_iterator_advance became a
+runtime MMAPQ_ECORRUPT return (spec §3.2); the ranges_insert assert moved to
+committed_ranges.c with the extracted helpers.)
 Last verified: 2026-10-15 (CAND-32 — the header_encode 56-bit field check
 (:113) is now guarded by MMAPQ_ECORRUPT runtime checks at both append
 commit paths and the appender_meta open-time start_offset validation, and
@@ -34,10 +37,10 @@ rationale — the setter is called by both archivers).
 
 | Disposition | Count |
 |---|---|
-| I (stays, re-verified) | 71 |
+| I (stays, re-verified) | 70 |
 | V (pending conversion) | 0 |
 | (converted from V in Phase 16e) | 2 |
-| **Total** | **71** |
+| **Total** | **70** |
 
 ## Per-file inventory
 
@@ -89,7 +92,7 @@ Lines 55, 88. Internal dispatch null checks.
 
 | Line | Disposition | Verified |
 |---|---|---|
-| 127 length + 4 > region_size | I | Phase 6a converted. Guarded by EINVAL checks at public entry points. |
+| 164 length + 4 > region_size | I | Phase 6a converted. Guarded by EINVAL checks at public entry points. (CAND-49: line moved, site unchanged.) |
 
 ### indexed_poller.c — 1 (1 I)
 
@@ -149,12 +152,20 @@ unregister_and_wait helper-registration assert became a retry loop —
 allocation failure is transient and the function's contract leaves no
 room for giving up.)
 
-### uncommitted_payload_iterator.c — 5 (all I)
+### uncommitted_payload_iterator.c — 3 (all I)
 
-Lines 30, 376, 397, 416, 432. Internal dispatch null checks. (A5/CAND-22:
+Lines 364, 434, 450. Internal dispatch null checks. (A5/CAND-22:
 init and rewind NULL checks became MMAPQ_EINVAL returns. D8: scan floor,
 checked header read, and three-way advance propagation shifted the
-catalogued sites.)
+catalogued sites. CAND-49: the gap-overlap MMAP_ASSERT(0) became a runtime
+MMAPQ_ECORRUPT return (spec §3.2 — the exact-gap-end contract); the
+ranges_insert start < end assert moved to committed_ranges.c.)
+
+### committed_ranges.c — 1 (1 I)
+
+| Line | Disposition | Verified |
+|---|---|---|
+| 32 start < end | I | Internal: raw-span append precondition; callers build spans from walked messages. (Moved from uncommitted_payload_iterator.c by CAND-49 §3.1.) |
 
 ## Pending V-class conversions
 

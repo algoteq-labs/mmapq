@@ -42,7 +42,12 @@ from `start_offset`. It never *writes* at `start_offset`.
 |---|---|---|
 | **Archived** | Referenced by a header with index < `start_index` | No |
 | **Live** | Referenced by a header with index ≥ `start_index` | **Yes** |
-| **Uncommitted** | Referenced by no header — pending (current appender incarnation) or dead (a previous incarnation; discarded on restart by contract) | No — and once below `start_offset` it can no longer be committed |
+| **Uncommitted** | Referenced by no header — pending (current appender incarnation) or orphaned (a previous incarnation; recoverable by the rejoining lane owner via the uncommitted iterator until archiving passes it*) | No — and once below `start_offset` it can no longer be committed |
+
+\* Iteration starts at `appender_meta.archive_offset` (the archive line —
+see `doc/design/archive-boundaries.md`), never below it; archiving may chop
+uncommitted payloads, even after an undo. The iterator is a tool for
+application recovery, not the queue's own recovery.
 
 Commit order is not write order. `append_uncommitted` + `commit` lets an
 application commit payloads in any order (UDP resequencing: append packets

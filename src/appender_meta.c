@@ -39,6 +39,9 @@ static int appender_meta_file_init(int fd, size_t size, void *ctx)
                APPENDER_META_START_OFFSET_OFFSET) < 0) return -1;
     if (pwrite(fd, &appender_id,  sizeof(appender_id),
                APPENDER_META_APPENDER_ID_OFFSET)  < 0) return -1;
+    /* archive line (CAND-49 §3.9): INITIAL_PAYLOAD_POSITION at creation */
+    if (pwrite(fd, &start_offset, sizeof(start_offset),
+               APPENDER_META_ARCHIVE_OFFSET_OFFSET) < 0) return -1;
 
     return 0;
 }
