@@ -49,7 +49,9 @@
 #include "internal/file_initialiser.h"
 #include "internal/region_ring.h"
 #include "internal/queue_meta.h"
+#include "internal/offset_set.h"
 #include "indexed_queue.h"
+#include "indexed_batch_queue.h"
 #include "indexed_appender.h"
 #include "indexed_reader.h"
 #include "mmap_platform.h"
@@ -822,15 +824,22 @@ void test_alloc_faults_uncommitted_refill_growth(void)
         a, MMAPQ_PAYLOAD_ITERATOR_NOT_SET, MMAPQ_PAYLOAD_ITERATOR_NOT_SET, &it));
     TEST_ASSERT_NOT_NULL(it);
 
-    /* 15 yields refill the set to count 15 (cap 16). */
+    /* The first 15 yields refill the set to count 15 (cap 16); the 16th
+     * yield's add inserts into the standing spare (below). */
     const void *data; int32_t len; int64_t off;
     for (int k = 0; k < 15; k++) {
         TEST_ASSERT_EQUAL_INT(1, mmapq_uncommitted_iterator_next(it, &data, &len, &off));
         TEST_ASSERT_EQUAL_INT64(64 + 8 * k, off);
     }
 
-    /* The 16th refill add must grow: arm its calloc — next returns ENOMEM
-     * with the iterator state unchanged (parked at the same message). */
+    /* The 16th yield's add uses the standing spare: it CANNOT fail (the
+     * commit-3 reviewer fix). Arm the restore's grow — the yield succeeds. */
+    arm(1);
+    TEST_ASSERT_EQUAL_INT(1, mmapq_uncommitted_iterator_next(it, &data, &len, &off));
+    TEST_ASSERT_EQUAL_INT64(64 + 8 * 15, off);
+
+    /* The 17th yield's add has no spare: it grows first and fails — next
+     * returns ENOMEM with the iterator state unchanged (parked). */
     arm(1);
     data = (const void *)1; len = -1; off = 0;
     TEST_ASSERT_EQUAL_INT(MMAPQ_ENOMEM, mmapq_uncommitted_iterator_next(it, &data, &len, &off));
@@ -841,14 +850,95 @@ void test_alloc_faults_uncommitted_refill_growth(void)
 
     /* The next next re-yields the same message; the walk then completes. */
     TEST_ASSERT_EQUAL_INT(1, mmapq_uncommitted_iterator_next(it, &data, &len, &off));
-    TEST_ASSERT_EQUAL_INT64(64 + 8 * 15, off);
-    TEST_ASSERT_EQUAL_INT(1, mmapq_uncommitted_iterator_next(it, &data, &len, &off));
     TEST_ASSERT_EQUAL_INT64(64 + 8 * 16, off);
     TEST_ASSERT_EQUAL_INT(0, mmapq_uncommitted_iterator_next(it, &data, &len, &off));
 
     mmapq_indexed_appender_close(a);
     mmapq_indexed_queue_close(q);
     if (system(cmd) != 0) { /* best-effort */ }
+}
+
+/* §7.10 batch twin: arm the ensure-spare grow inside complete_uncommitted
+ * ⇒ MMAPQ_ENOMEM, the count is NOT stored, the handle stays open. The batch
+ * appender's set is allocated at create (16 slots) — 15 staged batches fill
+ * it to count 15; the 16th's reserve must grow. The growth calloc is the
+ * only calloc in the armed window (the payload region is already mapped). */
+void test_alloc_faults_batch_complete_uncommitted_grow(void)
+{
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd), "rm -rf %s/q && mkdir -p %s", DIR, DIR);
+    if (system(cmd) != 0) { /* best-effort */ }
+
+    MmapqIndexedBatchQueue *bq = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create(
+        DIR, "q", REGION_SIZE, RING_SIZE, 1, MAX_FILE, 0,
+        TIMEOUT_NS, 0, NULL, NULL, &bq));
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(bq, &a));
+
+    int64_t offs[16];
+    for (int k = 0; k < 15; k++) {
+        MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+        TEST_ASSERT_NOT_NULL(b);
+        TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(b, "data", 4));
+        offs[k] = mmapq_mutable_batch_complete_uncommitted(b);
+        TEST_ASSERT_EQUAL_INT64(64 + 12 * k, offs[k]);
+    }
+
+    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    TEST_ASSERT_NOT_NULL(b);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(b, "data", 4));
+    arm(1);
+    TEST_ASSERT_EQUAL_INT64(MMAPQ_ENOMEM, mmapq_mutable_batch_complete_uncommitted(b));
+    disarm();
+
+    /* Nothing stored: the offset is not committable, and the handle stayed
+     * open (discard works). The set is intact: a staged member commits. */
+    TEST_ASSERT_EQUAL_INT64(MMAPQ_EINVAL,
+        mmapq_indexed_batch_appender_commit_batch(a, 64 + 12 * 15));
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_discard(b));
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_batch_appender_commit_batch(a, offs[0]));
+
+    mmapq_indexed_batch_appender_close(a);
+    mmapq_indexed_batch_queue_close(bq);
+    if (system(cmd) != 0) { /* best-effort */ }
+}
+
+/* §7.10 + the commit-3 review blocker: an add that uses the standing spare
+ * must NOT allocate — the insert cannot fail. Stage to count = cap − 1 via
+ * the unit API, arm calloc: the add succeeds and the offset is contained
+ * (the best-effort spare restore fails silently); the NEXT add has no spare
+ * and must grow first — that ENOMEM leaves the set unchanged. Fail-first:
+ * the pre-fix add grew before consuming the last slot (reviewer probe at the
+ * commit-3 tree: add → -9, contains → 0). */
+void test_alloc_faults_offset_set_spare_add_never_fails(void)
+{
+    OffsetSet s;
+    TEST_ASSERT_EQUAL_INT(0, mmapqi_offset_set_init(&s));
+    TEST_ASSERT_EQUAL_INT(0, mmapqi_offset_set_reserve(&s, 15));   /* cap 16 */
+    for (int64_t i = 0; i < 15; i++)
+        TEST_ASSERT_EQUAL_INT(0, mmapqi_offset_set_add(&s, 64 + 8 * i));
+    TEST_ASSERT_EQUAL_INT(15, s.count);
+    TEST_ASSERT_EQUAL_INT(16, s.cap);
+
+    arm(1);   /* the best-effort spare-restore grow fails */
+    TEST_ASSERT_EQUAL_INT(0, mmapqi_offset_set_add(&s, 64 + 8 * 15));
+    disarm();
+    TEST_ASSERT_EQUAL_INT(1, mmapqi_offset_set_contains(&s, 64 + 8 * 15));
+    TEST_ASSERT_EQUAL_INT(16, s.count);
+    TEST_ASSERT_EQUAL_INT(16, s.cap);   /* no spare now */
+
+    arm(1);   /* no spare: the add grows first and fails */
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ENOMEM, mmapqi_offset_set_add(&s, 64 + 8 * 16));
+    disarm();
+    TEST_ASSERT_EQUAL_INT(0, mmapqi_offset_set_contains(&s, 64 + 8 * 16));
+    TEST_ASSERT_EQUAL_INT(16, s.count);
+
+    /* The unarmed retry grows and inserts. */
+    TEST_ASSERT_EQUAL_INT(0, mmapqi_offset_set_add(&s, 64 + 8 * 16));
+    TEST_ASSERT_EQUAL_INT(1, mmapqi_offset_set_contains(&s, 64 + 8 * 16));
+    TEST_ASSERT_EQUAL_INT(17, s.count);
+    mmapqi_offset_set_destroy(&s);
 }
 
 int main(void)
@@ -883,5 +973,7 @@ int main(void)
     RUN_TEST(test_ring_create_caller_error_eINVAL_consumes_mapper);
     RUN_TEST(test_alloc_faults_uncommitted_set_grow);
     RUN_TEST(test_alloc_faults_uncommitted_refill_growth);
+    RUN_TEST(test_alloc_faults_offset_set_spare_add_never_fails);
+    RUN_TEST(test_alloc_faults_batch_complete_uncommitted_grow);
     return UNITY_END();
 }

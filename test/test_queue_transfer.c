@@ -183,8 +183,7 @@ static MmapqIndexedBatchQueue *create_batch_queue(const char *name, const char *
         for (int m = 0; m < batch_sizes[b]; m++) {
             mmapq_mutable_batch_append(mb, batches[b][m], (int32_t)strlen(batches[b][m]) + 1);
         }
-        int64_t off = mmapq_mutable_batch_complete(mb);
-        mmapq_indexed_batch_appender_commit_batch(a, off);
+        mmapq_mutable_batch_complete(mb);   /* CAND-49: complete publishes */
     }
     mmapq_indexed_batch_appender_close(a);
     return q;
@@ -1696,8 +1695,7 @@ void test_copy_batch_to_normal_preserve_nonzero(void)
     TEST_ASSERT_NOT_NULL(ba);
     MmapqMutableBatch *mb = mmapq_indexed_batch_appender_start_batch(ba);
     mmapq_mutable_batch_append(mb, "hello", 6);
-    int64_t off = mmapq_mutable_batch_complete(mb);
-    mmapq_indexed_batch_appender_commit_batch(ba, off);
+    mmapq_mutable_batch_complete(mb);   /* CAND-49: complete publishes */
     mmapq_indexed_batch_appender_close(ba);
 
     MmapqIndexedBatchReader *br = NULL;
@@ -1756,8 +1754,7 @@ void test_import_batch_stream_preserve_nonzero(void)
     TEST_ASSERT_NOT_NULL(ba);
     MmapqMutableBatch *mb = mmapq_indexed_batch_appender_start_batch(ba);
     mmapq_mutable_batch_append(mb, "test", 5);
-    int64_t batch_off = mmapq_mutable_batch_complete(mb);
-    mmapq_indexed_batch_appender_commit_batch(ba, batch_off);
+    mmapq_mutable_batch_complete(mb);   /* CAND-49: complete publishes */
     mmapq_indexed_batch_appender_close(ba);
 
     MmapqIndexedBatchReader *br = NULL;
@@ -1851,11 +1848,11 @@ void test_batch_import_preserves_appender_ids(void)
 
     MmapqMutableBatch *mb = mmapq_indexed_batch_appender_start_batch(a0);
     mmapq_mutable_batch_append(mb, "a0-msg", 7);
-    mmapq_indexed_batch_appender_commit_batch(a0, mmapq_mutable_batch_complete(mb));
+    mmapq_mutable_batch_complete(mb);   /* CAND-49: complete publishes */
 
     mb = mmapq_indexed_batch_appender_start_batch(a1);
     mmapq_mutable_batch_append(mb, "a1-msg", 7);
-    mmapq_indexed_batch_appender_commit_batch(a1, mmapq_mutable_batch_complete(mb));
+    mmapq_mutable_batch_complete(mb);   /* CAND-49: complete publishes */
 
     mmapq_indexed_batch_appender_close(a0);
     mmapq_indexed_batch_appender_close(a1);

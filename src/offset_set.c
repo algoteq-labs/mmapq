@@ -65,20 +65,28 @@ int mmapqi_offset_set_add(OffsetSet *s, int64_t off)
     if (idx >= 0) return 0;   /* idempotent: already present */
     int ins = -1 - idx;
 
-    /* Grow BEFORE the insert when it would consume the last slot — the
-     * standing spare-slot invariant (count < cap after every successful
-     * add). ENOMEM leaves the set unchanged. */
-    if (s->count + 1 >= s->cap) {
+    if (s->count == s->cap) {
+        /* No spare: grow first (may fail — ENOMEM leaves the set
+         * unchanged). */
         int rc = offset_set_grow(s, s->count + 2);
         if (rc != 0) return rc;
     }
 
-    /* O(1) tail append for the common ascending flow; memmove otherwise. */
+    /* A slot exists: the insert cannot fail. O(1) tail append for the
+     * common ascending flow; memmove otherwise. */
     if (ins < s->count)
         memmove(s->v + ins + 1, s->v + ins,
                 (size_t)(s->count - ins) * sizeof(int64_t));
     s->v[ins] = off;
     s->count++;
+
+    /* Restore the standing spare best-effort when the insert consumed it.
+     * A failure here is NOT an error — the element is in; the spare is
+     * restored by the next reserve or the next add's grow-first path. This
+     * is what makes the guaranteed-spare adds (complete's publish-failure
+     * add, join completion) never allocate: the insert never does. */
+    if (s->count == s->cap)
+        (void)offset_set_grow(s, s->count + 1);
     return 0;
 }
 

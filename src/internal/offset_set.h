@@ -11,14 +11,18 @@
  * offsets the iterator refilled or append staged (plus the flag-tracked
  * tail, which never enters the set — spec §3.3).
  *
- * STANDING SPARE-SLOT INVARIANT: count < cap after every successful add.
- * The set is allocated at appender create (initial capacity 16 slots) and
- * any add whose insert would consume the last slot grows FIRST (ENOMEM
- * leaves the set unchanged), so the deferred-path adds that must not
- * allocate (commit-failure staging, join completion) never do. The
- * pre-write ensure in append_uncommitted / complete_uncommitted is one
- * compare when the spare exists (the normal case), a grow attempt
- * otherwise (ENOMEM ⇒ nothing written — owner ruling 5).
+ * STANDING SPARE-SLOT DISCIPLINE (reviewer-corrected at CAND-49 commit 3):
+ * a slot always exists when count < cap. An add with a spare INSERTS FIRST
+ * (it cannot fail or allocate), then restores the spare with a best-effort
+ * grow whose failure is ignored (the spare is restored by the next reserve
+ * or the next add). Only an add with no spare (count == cap) grows first —
+ * that ENOMEM leaves the set unchanged. So the deferred-path adds that must
+ * not allocate (complete's publish-failure add, join completion) never do:
+ * the insert never allocates. Callers that need a guaranteed spare call
+ * reserve() before their add (the pre-write ensure in append_uncommitted /
+ * complete_uncommitted — one compare when the spare exists, a grow attempt
+ * otherwise; ENOMEM ⇒ nothing written — owner ruling 5).
+ * The set is allocated at appender create (initial capacity 16 slots).
  *
  * Ordering discipline: real flows add in ascending order (lane-end appends,
  * ascending refill) → O(1) tail append when off > last, sorted-insert
@@ -55,7 +59,8 @@ int  mmapqi_offset_set_reserve(OffsetSet *s, int extra);
 
 /**
  * mmapqi_offset_set_add — insert off; no-op if already present.
- * Grows (doubling) when the insert would consume the last slot.
+ * With a spare slot the insert cannot fail or allocate (the spare is then
+ * restored best-effort); with no spare the grow may fail.
  * Returns 0, or MMAPQ_ENOMEM with the set unchanged.
  */
 int  mmapqi_offset_set_add(OffsetSet *s, int64_t off);

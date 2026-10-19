@@ -2250,8 +2250,7 @@ void test_reader_last_error_reports_eschema(void)
     MmapqMutableBatch *mb = mmapq_indexed_batch_appender_start_batch(ba);
     TEST_ASSERT_NOT_NULL(mb);
     mmapq_mutable_batch_append(mb, "x", 1);
-    int64_t off = mmapq_mutable_batch_complete(mb);
-    mmapq_indexed_batch_appender_commit_batch(ba, off);
+    mmapq_mutable_batch_complete(mb);   /* CAND-49: complete publishes */
     mmapq_indexed_batch_appender_close(ba);
     mmapq_indexed_batch_queue_close(bq);
 

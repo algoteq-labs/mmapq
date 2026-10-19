@@ -35,6 +35,7 @@ add_library(mmapq STATIC
     # Batch queue layer
     batch_payload_iterator.c
     batch_queue_latency_probe.c
+    uncommitted_batch_iterator.c
     indexed_batch_appender.c
     indexed_batch_poller.c
     indexed_batch_reader.c

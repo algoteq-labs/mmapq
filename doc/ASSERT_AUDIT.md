@@ -1,6 +1,6 @@
 # ASSERT_AUDIT.md — MMAP_ASSERT Inventory
 
-**70 asserts across 19 files** (16 src/*.c, 3 src/internal/*.h). Generated from source.
+**71 asserts across 20 files** (17 src/*.c, 3 src/internal/*.h). Generated from source.
 (CAND-49: the overlap assert in mmapqi_uncommitted_iterator_advance became a
 runtime MMAPQ_ECORRUPT return (spec §3.2); the ranges_insert assert moved to
 committed_ranges.c with the extracted helpers.)
@@ -37,10 +37,10 @@ rationale — the setter is called by both archivers).
 
 | Disposition | Count |
 |---|---|
-| I (stays, re-verified) | 70 |
+| I (stays, re-verified) | 71 |
 | V (pending conversion) | 0 |
 | (converted from V in Phase 16e) | 2 |
-| **Total** | **70** |
+| **Total** | **71** |
 
 ## Per-file inventory
 
@@ -160,6 +160,12 @@ checked header read, and three-way advance propagation shifted the
 catalogued sites. CAND-49: the gap-overlap MMAP_ASSERT(0) became a runtime
 MMAPQ_ECORRUPT return (spec §3.2 — the exact-gap-end contract); the
 ranges_insert start < end assert moved to committed_ranges.c.)
+
+### uncommitted_batch_iterator.c — 1 (1 I)
+
+| Line | Disposition | Verified |
+|---|---|---|
+| 226 next: it NULL check | I | Internal dispatch null check. (CAND-49 §3.6 unit.) |
 
 ### committed_ranges.c — 1 (1 I)
 

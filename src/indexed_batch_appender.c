@@ -5,6 +5,10 @@
 #include "internal/appender_id_pool.h"
 #include "internal/header_reader.h"
 #include "internal/header_codec.h"
+#include "internal/payload_iterator.h"
+#include "internal/payload_walk.h"
+#include "internal/offset_set.h"
+#include "internal/uncommitted_batch_iterator.h"
 #include "batch_payload_iterator.h"
 #include "internal/batch_payload_iterator_internal.h"
 #include "internal/mmap_assert.h"
@@ -45,7 +49,28 @@ struct MmapqIndexedBatchAppender {
     MmapqBatchPayloadIterator batch_iterator;
 
     int closed;
+
+    /* CAND-49 (§3.3/§3.5/§3.7) — at the END of the struct so existing field
+     * offsets (and the hot paths' object code) are unchanged:
+     *  - outstanding: the commit_batch validation gate; complete_uncommitted
+     *    and the uncommitted-batches walker (refill) add batch offsets.
+     *  - batch_state: NONE / OPEN (after start_batch) / ORPHANED (set ONLY by
+     *    discard's pre-store failure; start_batch recovers it, §3.7).
+     *  - join completion: a trailing open batch completed to staged at rejoin
+     *    or by the start_batch orphan recovery (§3.7), read-and-clear via
+     *    mmapq_indexed_batch_appender_join_completed_open_batch().
+     *  - uncommitted_batches: the §3.6 walker, created lazily. */
+    OffsetSet            outstanding;
+    int                  batch_state;
+    int                  join_completed_flag;
+    int64_t              join_completed_offset;
+    MmapqUncommittedBatchIterator *uncommitted_batches;
 };
+
+/* §3.7 batch state machine values (batch_state). */
+#define BATCH_STATE_NONE      0
+#define BATCH_STATE_OPEN      1
+#define BATCH_STATE_ORPHANED  2
 
 /* ── Internal Helpers ────────────────────────────────────────────────────── */
 
@@ -85,20 +110,101 @@ static int write_padding_if_needed(MmapqIndexedBatchAppender *a, int32_t length)
     return 0;
 }
 
+/* §3.7 join completion of a trailing open batch (D-E fix), shared by rejoin
+ * and the start_batch ORPHANED recovery. Walks messages from just past the
+ * count slot at `p` until a zero length (end of stream), applying the
+ * padding/region-skip rules (payload_walk; a misfit positive length is
+ * external corruption — ECORRUPT, never a crash artifact: append rejects
+ * length > region_size − 4 before storing anything and pads first, so a
+ * crash can only leave a length that fits).
+ *
+ * If at least one message was walked: the count is stored into the mapped
+ * region as the LAST step (idempotent if interrupted), the position moves
+ * to EOS, join_completed_open_batch is set with the batch offset, and the
+ * offset joins the outstanding set (commit_batch works before any scan; a
+ * later refill is an idempotent no-op). If the first length is already 0
+ * (empty open batch): nothing is written; the position stays at `p` — the
+ * next batch overwrites the slot. */
+static int recover_open_batch(MmapqIndexedBatchAppender *a, int64_t p, int64_t *out_pos)
+{
+    int64_t probing = p + MMAPQ_BATCH_MSG_COUNT_SIZE;
+    int32_t walked = 0;
+    while (1) {
+        int64_t msg_off = PAYLOAD_ITERATOR_NOT_SET;
+        int32_t len = mmapqi_payload_walk_advance(a->queue_name, &probing, &msg_off,
+                                                  a->payload_acc, &a->payload_buf);
+        if (len < 0) return len;   /* D8: timeout (retryable) vs corruption propagates */
+        if (len == 0) break;       /* end of stream */
+        walked++;
+    }
+
+    if (walked == 0) {
+        *out_pos = p;
+        return 0;
+    }
+
+    if (wrap_payload_or_fail(a, p) != 0) return -1;
+    memcpy(a->payload_buf.data + MMAPQ_BATCH_MSG_COUNT_OFFSET, &walked, sizeof(int32_t));
+    a->join_completed_flag   = 1;
+    a->join_completed_offset = p;
+    (void)mmapqi_offset_set_add(&a->outstanding, p);  /* the standing spare: never allocates */
+    *out_pos = probing;
+    return 0;
+}
+
+/* Forward-only end-of-stream walk. probe_batch is NOT used: its single
+ * INVALID return cannot distinguish a wrap failure from a count-0 record,
+ * and the §3.7 join completion needs that distinction. The §3.8 boundary
+ * padding-marker rule (D-F) applies at every count slot here. */
 static int skip_to_end_of_stream(MmapqIndexedBatchAppender *a, int64_t offset,
                                  int64_t *out_end)
 {
     int64_t end_of_stream = offset;
     while (1) {
-        int64_t batch_off = mmapq_batch_iterator_probe_batch(&a->batch_iterator, end_of_stream);
-        if (batch_off == MMAPQ_BATCH_ITERATOR_INVALID_POSITION) break;
+        WrapResult wr = region_accessor_wrap(a->payload_acc, end_of_stream,
+                                             &a->payload_buf);
+        /* A position with no file yet, or beyond a file's end, is the end
+         * of the stream; a timeout is transient (retryable) and corruption
+         * is not — the D8 join contract, never collapsed. */
+        if (wr == WRAP_FILE_NOT_FOUND || wr == WRAP_BEYOND_FILE_SIZE) break;
+        if (wr == WRAP_MAP_TIMED_OUT) return MMAPQ_ETIMEDOUT;
+        if (wr != WRAP_SUCCESS) return MMAPQ_ECORRUPT;
 
-        mmapq_batch_iterator_init(&a->batch_iterator, batch_off, -1, 0);
+        int32_t cap = a->payload_buf.capacity;
+        /* Batch headers never occupy a < 4-byte region tail
+         * (ensure_space_for_batch_header rule) — skip to the next region. */
+        if (cap < MMAPQ_BATCH_MSG_COUNT_SIZE) {
+            end_of_stream += cap;
+            continue;
+        }
+
+        int32_t count;
+        memcpy(&count, a->payload_buf.data + MMAPQ_BATCH_MSG_COUNT_OFFSET, sizeof(int32_t));
+
+        if (count < 0) {
+            /* §3.8 boundary padding marker (D-F): legal region-skip iff its
+             * extent is exactly the rest of the region, else ECORRUPT. */
+            int64_t skip = -(int64_t)count + MMAPQ_BATCH_MSG_COUNT_SIZE;
+            if (skip != cap) return MMAPQ_ECORRUPT;
+            end_of_stream += cap;
+            continue;
+        }
+
+        if (count == 0) {
+            /* Trailing open batch (a crash between start_batch and
+             * complete) — complete it to staged (§3.7). */
+            int rc = recover_open_batch(a, end_of_stream, &end_of_stream);
+            if (rc != 0) return rc;
+            break;
+        }
+
+        /* A real batch: walk past it. A partial scan is not an end of
+         * stream. Accepting it would place the append position inside
+         * committed data (short) or past it in unreachable space (long).
+         * Matches indexed_batch_archiver.c and indexed_appender.c, both of
+         * which refuse here. */
+        mmapq_batch_iterator_init(&a->batch_iterator, end_of_stream, count, 0);
         mmapq_batch_iterator_exhaust(&a->batch_iterator);
-        /* A partial scan is not an end of stream. Accepting it would place
-         * the append position inside committed data (short) or past it in
-         * unreachable space (long). Matches indexed_batch_archiver.c and
-         * indexed_appender.c, both of which refuse here. */
         if (a->batch_iterator.last_error != 0) return a->batch_iterator.last_error;
         end_of_stream = a->batch_iterator.next_message_position;
     }
@@ -109,6 +215,35 @@ static int skip_to_end_of_stream(MmapqIndexedBatchAppender *a, int64_t offset,
 static int64_t appender_start_index_from_meta(void *ctx)
 {
     return queue_meta_start_index((const QueueMeta *)ctx);
+}
+
+/* ── Uncommitted-batches walker callbacks (CAND-49 §3.6) ─────────────────── */
+
+static int64_t batch_appender_start_of_stream(void *ctx)
+{
+    MmapqIndexedBatchAppender *a = (MmapqIndexedBatchAppender *)ctx;
+    return appender_meta_start_offset(a->appender_meta);
+}
+
+static int64_t batch_appender_end_of_stream(void *ctx)
+{
+    MmapqIndexedBatchAppender *a = (MmapqIndexedBatchAppender *)ctx;
+    return a->current_payload_position;
+}
+
+/* Archive line supplier (CAND-49 §3.9). */
+static int64_t batch_appender_archive_offset(void *ctx)
+{
+    MmapqIndexedBatchAppender *a = (MmapqIndexedBatchAppender *)ctx;
+    return appender_meta_archive_offset(a->appender_meta);
+}
+
+/* Refill helper (§3.3): make a walker-yielded batch offset committable.
+ * Batch has no flag-tracked tail — every staged batch is a set member. */
+static int batch_appender_refill(void *ctx, int64_t off)
+{
+    MmapqIndexedBatchAppender *a = (MmapqIndexedBatchAppender *)ctx;
+    return mmapqi_offset_set_add(&a->outstanding, off);
 }
 
 static int initialise_append_position(MmapqIndexedBatchAppender *a, int64_t start_index)
@@ -199,8 +334,23 @@ static int batch_appender_create_internal(
     a->id_pool      = pool;
     a->appender_id  = appender_id;
 
+    /* CAND-49 §3.3: the outstanding-offset set is allocated at create
+     * (initial capacity 16 slots = 15 + the standing spare), so the
+     * deferred-path adds never allocate. Pure memory — unwind before the
+     * queue meta open keeps the existing error paths unchanged. */
+    mmapqi_offset_set_init(&a->outstanding);
+    if (mmapqi_offset_set_reserve(&a->outstanding, OFFSET_SET_INITIAL_CAPACITY - 1) != 0) {
+        mmapqi_appender_id_pool_release(a->id_pool, a->appender_id);
+        mmapqi_appender_id_pool_close(a->id_pool);
+        free(a->directory);
+        free(a->queue_name);
+        free(a);
+        return MMAPQ_ENOMEM;
+    }
+
     int rc = mmapqi_queue_meta_open_rw(directory, queue_name, start_index, region_size, max_file_size, archivable, QUEUE_TYPE_BATCH, &a->queue_meta);
     if (rc != 0) {
+        mmapqi_offset_set_destroy(&a->outstanding);
         mmapqi_appender_id_pool_release(a->id_pool, a->appender_id);
         mmapqi_appender_id_pool_close(a->id_pool);
         free(a->directory);
@@ -213,6 +363,7 @@ static int batch_appender_create_internal(
 
     rc = mmapqi_appender_meta_open_rw(directory, queue_name, a->appender_id, &a->appender_meta);
     if (rc != 0) {
+        mmapqi_offset_set_destroy(&a->outstanding);
         if (a->queue_meta) mmapqi_queue_meta_close(a->queue_meta);
         mmapqi_appender_id_pool_release(a->id_pool, a->appender_id);
         mmapqi_appender_id_pool_close(a->id_pool);
@@ -223,6 +374,7 @@ static int batch_appender_create_internal(
     }
     rc = mmapqi_queue_region_accessor_create_rw(directory, queue_name, rec_reg, ring_size, 1, rec_max, timeout_ns, runtime, a->appender_id, &a->rw_acc);
     if (rc != 0) {
+        mmapqi_offset_set_destroy(&a->outstanding);
         mmapqi_appender_meta_close(a->appender_meta);
         if (a->queue_meta) mmapqi_queue_meta_close(a->queue_meta);
         mmapqi_appender_id_pool_release(a->id_pool, a->appender_id);
@@ -244,6 +396,7 @@ static int batch_appender_create_internal(
         rec_max, timeout_ns, runtime,
         &a->ro_acc);
     if (rc != 0) {
+        mmapqi_offset_set_destroy(&a->outstanding);
         mmapqi_queue_region_accessor_close(a->rw_acc);
         mmapqi_appender_meta_close(a->appender_meta);
         if (a->queue_meta) mmapqi_queue_meta_close(a->queue_meta);
@@ -258,6 +411,7 @@ static int batch_appender_create_internal(
 
     int init_rc = initialise_append_position(a, start_index);
     if (init_rc != 0) {
+        mmapqi_offset_set_destroy(&a->outstanding);
         mmapqi_queue_region_accessor_close(a->ro_acc);
         mmapqi_queue_region_accessor_close(a->rw_acc);
         mmapqi_appender_meta_close(a->appender_meta);
@@ -348,12 +502,29 @@ int mmapq_indexed_batch_appender_start_batch_checked(
     *out = NULL;
     if (appender == NULL) return MMAPQ_EINVAL;
     if (appender->closed) return MMAPQ_ECLOSED;
+
+    /* §3.7 batch state machine: an OPEN batch means caller misuse (a C
+     * caller dropped an open handle without discarding; Rust/Python cannot
+     * reach this); an ORPHANED batch (discard's pre-store failure) is
+     * recovered to staged first. */
+    if (appender->batch_state == BATCH_STATE_OPEN) return MMAPQ_EINVAL;
+    if (appender->batch_state == BATCH_STATE_ORPHANED) {
+        int64_t new_pos;
+        int rc = recover_open_batch(appender, appender->current_batch.batch_offset,
+                                    &new_pos);
+        if (rc != 0) return rc;   /* starts nothing */
+        appender->current_payload_position = new_pos;
+        appender->batch_state = BATCH_STATE_NONE;
+    }
+
     int result = ensure_space_for_batch_header(appender);
     if (result != 0) return result;
     appender->current_batch.appender = appender;
     appender->current_batch.batch_offset = appender->current_payload_position;
     appender->current_batch.message_count = 0;
+    appender->current_batch.consumed = 0;
     appender->current_payload_position += MMAPQ_BATCH_MSG_COUNT_SIZE;
+    appender->batch_state = BATCH_STATE_OPEN;
     *out = &appender->current_batch;
     return 0;
 }
@@ -363,15 +534,6 @@ MmapqMutableBatch *mmapq_indexed_batch_appender_start_batch(MmapqIndexedBatchApp
     MmapqMutableBatch *batch = NULL;
     mmapq_indexed_batch_appender_start_batch_checked(a, &batch);
     return batch;
-}
-
-int64_t mmapq_mutable_batch_complete(MmapqMutableBatch *b)
-{
-    if (b == NULL) return MMAPQ_EINVAL;
-    MmapqIndexedBatchAppender *a = b->appender;
-    if (wrap_payload_or_fail(a, b->batch_offset)) return -1;
-    memcpy(a->payload_buf.data + MMAPQ_BATCH_MSG_COUNT_OFFSET, &b->message_count, sizeof(int32_t));
-    return b->batch_offset;
 }
 
 static int move_to_last_header(MmapqIndexedBatchAppender *a)
@@ -413,13 +575,13 @@ static int move_to_last_header(MmapqIndexedBatchAppender *a)
     return 0;
 }
 
-int64_t mmapq_indexed_batch_appender_commit_batch(MmapqIndexedBatchAppender *a, int64_t batch_offset)
+/* batch_publish — the encode + wrap + CAS + move_to_last_header body,
+ * extracted verbatim from the pre-reshape commit_batch (incl. the 56-bit
+ * ECORRUPT guard). Shared by the complete() hot path (membership by
+ * construction — never touches the set on the success path) and by the
+ * validated commit_batch(). */
+static int64_t batch_publish(MmapqIndexedBatchAppender *a, int64_t batch_offset)
 {
-    /* CAND-32 C3: an offset above the last started batch's start was never
-     * written by this appender — caller error. current_batch.batch_offset
-     * is calloc-zeroed at create and set only by start_batch. */
-    if (batch_offset > a->current_batch.batch_offset) return MMAPQ_EINVAL;
-
     /* Encoded positions are STARTS — limited to the 56-bit field (2^56−1),
      * one tighter than the start_offset open check (CAND-32 spec §2). */
     if (batch_offset < INITIAL_PAYLOAD_POSITION ||
@@ -447,14 +609,140 @@ int64_t mmapq_indexed_batch_appender_commit_batch(MmapqIndexedBatchAppender *a, 
     return idx;
 }
 
-void mmapq_indexed_batch_appender_discard_batch(MmapqIndexedBatchAppender *a, int64_t batch_offset)
+/* Shared finalize step: store the count into the mapped region. The count
+ * store is what consumes the handle (§3.5) and PRECEDES any header CAS
+ * (acq_rel) — invariant. Returns 0 with the handle consumed and the
+ * appender state back to NONE; pre-store failures leave the handle open. */
+static int batch_store_count(MmapqMutableBatch *b)
 {
-    WrapResult r = region_accessor_wrap(a->payload_acc, batch_offset, &a->payload_buf);
-    if (r != WRAP_SUCCESS) return;  /* cannot rollback on timeout */
+    MmapqIndexedBatchAppender *a = b->appender;
+    if (wrap_payload_or_fail(a, b->batch_offset) != 0) return -1;
+    memcpy(a->payload_buf.data + MMAPQ_BATCH_MSG_COUNT_OFFSET, &b->message_count, sizeof(int32_t));
+    b->consumed = 1;
+    a->batch_state = BATCH_STATE_NONE;
+    return 0;
+}
 
-    int32_t zero = 0;
-    memcpy(a->payload_buf.data + MMAPQ_BATCH_MSG_COUNT_OFFSET, &zero, sizeof(int32_t));
-    a->current_payload_position = batch_offset;
+int64_t mmapq_mutable_batch_complete(MmapqMutableBatch *b)
+{
+    if (b == NULL) return MMAPQ_EINVAL;
+    MmapqIndexedBatchAppender *a = b->appender;
+    if (a->closed) return MMAPQ_ECLOSED;
+    /* Consumed handle / empty batch: EINVAL and the handle STAYS OPEN
+     * (an empty complete publishes nothing — discard instead). */
+    if (b->consumed) return MMAPQ_EINVAL;
+    if (b->message_count == 0) return MMAPQ_EINVAL;
+
+    if (batch_store_count(b) != 0) return -1;
+
+    /* complete = finalize + PUBLISH (CAND-49 §3.5). */
+    int64_t idx = batch_publish(a, b->batch_offset);
+    if (idx < 0) {
+        /* Publish failed after the count store: the batch is staged and its
+         * offset joins the outstanding set immediately — the spare-slot
+         * invariant (§3.3) guarantees this add needs no allocation, so
+         * complete performs no reserve and no set work on its success
+         * path. */
+        (void)mmapqi_offset_set_add(&a->outstanding, b->batch_offset);
+    }
+    return idx;
+}
+
+int64_t mmapq_mutable_batch_complete_uncommitted(MmapqMutableBatch *b)
+{
+    if (b == NULL) return MMAPQ_EINVAL;
+    MmapqIndexedBatchAppender *a = b->appender;
+    if (a->closed) return MMAPQ_ECLOSED;
+    if (b->consumed) return MMAPQ_EINVAL;
+    if (b->message_count == 0) return MMAPQ_EINVAL;   /* handle stays open */
+
+    /* Stage (CAND-49 §3.5): ensure the set's spare slot BEFORE the count
+     * store — ENOMEM means nothing is stored and the handle stays open
+     * (ruling 5). One compare when the spare exists (the normal case). */
+    if (mmapqi_offset_set_reserve(&a->outstanding, 1) != 0) return MMAPQ_ENOMEM;
+
+    if (batch_store_count(b) != 0) return -1;
+
+    (void)mmapqi_offset_set_add(&a->outstanding, b->batch_offset);  /* spare ensured */
+    return b->batch_offset;
+}
+
+int mmapq_mutable_batch_discard(MmapqMutableBatch *b)
+{
+    if (b == NULL) return MMAPQ_EINVAL;
+    MmapqIndexedBatchAppender *a = b->appender;
+    if (a->closed) return MMAPQ_ECLOSED;
+    if (b->consumed) return MMAPQ_EINVAL;
+
+    if (b->message_count > 0) {
+        /* Option A (owner ruling 8): store the count — the batch becomes a
+         * staged-record-that-is-never-committed. The position is already
+         * past it: NO reset, NO set add — in-session commit_batch of its
+         * offset returns EINVAL; discard is final. After a restart the
+         * walker reports it and refill makes it committable; the app
+         * decides. */
+        if (batch_store_count(b) != 0) {
+            /* Pre-store failure: the handle stays OPEN-ORPHANED (§3.7) —
+             * the next start_batch recovers it to staged. */
+            a->batch_state = BATCH_STATE_ORPHANED;
+            return -1;
+        }
+        return 0;
+    }
+
+    /* Empty batch: nothing but the untouched count slot lies between —
+     * reset the write position to the batch start; the next batch
+     * overwrites the slot. */
+    a->current_payload_position = b->batch_offset;
+    b->consumed = 1;
+    a->batch_state = BATCH_STATE_NONE;
+    return 0;
+}
+
+int64_t mmapq_indexed_batch_appender_commit_batch(MmapqIndexedBatchAppender *a, int64_t batch_offset)
+{
+    if (a == NULL) return MMAPQ_EINVAL;
+    if (a->closed) return MMAPQ_ECLOSED;
+
+    /* Membership is the gate (CAND-49 §3.5; supersedes the CAND-32 C3 line,
+     * which is removed): double commit, stale-after-discard,
+     * never-completed, above-last-started are all non-members. Members are
+     * staged batches (complete_uncommitted / a failed publish in complete /
+     * join completion / a walker refill). */
+    if (!mmapqi_offset_set_contains(&a->outstanding, batch_offset))
+        return MMAPQ_EINVAL;
+
+    /* A batch overtaken by archiving can never become live (CAND-30 batch
+     * analogue). The most recently started batch is exempt: it is the
+     * lane's tail — every committed batch sits below it, so the archiver's
+     * boundary can never reach it (the §3.4 fast-path proof's batch form).
+     * §4.5: a batch commit racing an archive past the check lands a live
+     * header below the boundary; the CAND-35 listing cap then protects its
+     * file from deletion and undo can lower the boundary. */
+    if (batch_offset != a->current_batch.batch_offset &&
+        batch_offset < appender_meta_start_offset(a->appender_meta)) {
+        mmapqi_offset_set_remove(&a->outstanding, batch_offset);
+        return MMAPQ_EINVAL;   /* overtaken — final */
+    }
+
+    int64_t idx = batch_publish(a, batch_offset);
+    if (idx >= 0)
+        mmapqi_offset_set_remove(&a->outstanding, batch_offset);
+    return idx;
+}
+
+int mmapq_indexed_batch_appender_join_completed_open_batch(
+    MmapqIndexedBatchAppender *a, int64_t *offset)
+{
+    if (a == NULL || offset == NULL) return MMAPQ_EINVAL;
+    if (a->closed) return MMAPQ_ECLOSED;
+    /* Read-and-clear, once per join-completion event. The batch was
+     * completed by the queue, not the app: it may lack messages the app
+     * intended; the last counted message may have partial content. */
+    if (!a->join_completed_flag) return 0;
+    *offset = a->join_completed_offset;
+    a->join_completed_flag = 0;
+    return 1;
 }
 
 int64_t mmapq_indexed_batch_appender_append_and_commit(MmapqIndexedBatchAppender *a, const void *data, int32_t length)
@@ -463,9 +751,61 @@ int64_t mmapq_indexed_batch_appender_append_and_commit(MmapqIndexedBatchAppender
     if (!b) return -1;
     int append_rc = mmapq_mutable_batch_append(b, data, length);
     if (append_rc < 0) return append_rc;
-    int64_t off = mmapq_mutable_batch_complete(b);
-    if (off < 0) return -1;
-    return mmapq_indexed_batch_appender_commit_batch(a, off);
+    return mmapq_mutable_batch_complete(b);   /* complete = publish (§3.5) */
+}
+
+/* ── Uncommitted batches (CAND-49 §3.6/§5.2) ─────────────────────────────── */
+
+int mmapq_indexed_batch_appender_uncommitted_batches_checked(
+    MmapqIndexedBatchAppender *a,
+    MmapqUncommittedBatchIterator **out)
+{
+    if (out == NULL) return MMAPQ_EINVAL;
+    *out = NULL;
+    if (a == NULL) return MMAPQ_EINVAL;
+
+    if (a->uncommitted_batches == NULL) {
+        int rc = mmapqi_uncommitted_batch_iterator_create(
+            a->queue_name,
+            a->appender_id,
+            batch_appender_start_of_stream,
+            batch_appender_end_of_stream,
+            a,
+            batch_appender_archive_offset,   /* §3.9: the archive line */
+            a->header_acc,
+            a->payload_acc,
+            appender_start_index_from_meta,  /* D8/S3: header scan floor */
+            a->queue_meta,
+            batch_appender_refill,           /* §3.3: refill on yield */
+            a,
+            &a->uncommitted_batches);
+        if (rc != 0) return rc;
+    }
+
+    int rc = mmapqi_uncommitted_batch_iterator_init(a->uncommitted_batches);
+    if (rc != 0) return rc;
+    *out = a->uncommitted_batches;
+    return 0;
+}
+
+int mmapq_uncommitted_batch_next(
+    MmapqUncommittedBatchIterator *it,
+    int64_t     *batch_offset,
+    int32_t     *message_count,
+    MmapqBatchPayloadIterator **msgs)
+{
+    if (it == NULL || batch_offset == NULL || message_count == NULL || msgs == NULL)
+        return MMAPQ_EINVAL;
+
+    int r = mmapqi_uncommitted_batch_iterator_next(it, batch_offset, message_count, msgs);
+    if (r != 1) {
+        /* Exhausted (0) or a negative MMAPQ_E* — outputs cleared either way. */
+        *batch_offset  = PAYLOAD_ITERATOR_NOT_SET;
+        *message_count = 0;
+        *msgs          = NULL;
+        return r;
+    }
+    return 1;
 }
 
 int32_t mmapq_mutable_batch_append(MmapqMutableBatch *b, const void *data, int32_t length)
@@ -533,6 +873,11 @@ void mmapq_indexed_batch_appender_close(MmapqIndexedBatchAppender *a)
 {
     if (!a || a->closed) return;
     a->closed = 1;
+    mmapqi_offset_set_destroy(&a->outstanding);
+    if (a->uncommitted_batches != NULL) {
+        mmapqi_uncommitted_batch_iterator_destroy(a->uncommitted_batches);
+        a->uncommitted_batches = NULL;
+    }
     mmapqi_appender_meta_close(a->appender_meta);
     mmapqi_queue_meta_close(a->queue_meta);
     if (a->rw_acc) {

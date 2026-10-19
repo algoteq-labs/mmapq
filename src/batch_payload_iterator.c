@@ -46,6 +46,21 @@ int64_t mmapq_batch_iterator_probe_batch(MmapqBatchPayloadIterator *it, int64_t 
 
     int32_t count;
     memcpy(&count, it->payload_buf.data + MMAPQ_BATCH_MSG_COUNT_OFFSET, sizeof(int32_t));
+
+    /* D-F (CAND-49 §3.8): a negative count at a batch boundary is a
+     * long-padding marker — a legal region-skip iff its extent (-(value)+4)
+     * is exactly the remaining region capacity; re-probe at the next
+     * region. Any other negative value is invalid. */
+    while (count < 0) {
+        int64_t skip = -(int64_t)count + MMAPQ_BATCH_MSG_COUNT_SIZE;
+        if (skip != it->payload_buf.capacity)
+            return MMAPQ_BATCH_ITERATOR_INVALID_POSITION;
+        offset += it->payload_buf.capacity;
+        r = region_accessor_wrap(it->payload_acc, offset, &it->payload_buf);
+        if (r != WRAP_SUCCESS || it->payload_buf.capacity < MMAPQ_BATCH_MSG_COUNT_SIZE)
+            return MMAPQ_BATCH_ITERATOR_INVALID_POSITION;
+        memcpy(&count, it->payload_buf.data + MMAPQ_BATCH_MSG_COUNT_OFFSET, sizeof(int32_t));
+    }
     return count > 0 ? offset : MMAPQ_BATCH_ITERATOR_INVALID_POSITION;
 }
 

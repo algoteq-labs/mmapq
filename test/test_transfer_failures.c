@@ -11,7 +11,7 @@
 #include <stdlib.h>
 #include <sys/stat.h>
 
-enum Fault { NO_FAULT, APPEND, START, COMPLETE, COMMIT, FACTORY, SOURCE, SOURCE_GONE };
+enum Fault { NO_FAULT, APPEND, START, COMPLETE, FACTORY, SOURCE, SOURCE_GONE };  /* CAND-49: COMMIT removed — complete is the one-call publish (§3.5) */
 static enum Fault fault;
 static int calls;
 static int target;
@@ -75,11 +75,6 @@ int64_t fault_batch_complete(MmapqMutableBatch *batch)
 {
     if (inject(COMPLETE)) return MMAPQ_ETIMEDOUT;
     return mmapq_mutable_batch_complete(batch);
-}
-int64_t fault_batch_commit(MmapqIndexedBatchAppender *appender, int64_t offset)
-{
-    if (inject(COMMIT)) return MMAPQ_EIO;
-    return mmapq_indexed_batch_appender_commit_batch(appender, offset);
 }
 int fault_create(MmapqIndexedQueue *queue, uint8_t appender_id, MmapqIndexedAppender **out)
 {
@@ -153,7 +148,7 @@ static void exercise(int batch_source, int batch_destination, enum Fault selecte
         result = mmapq_queue_transfer_copy(normal_reader, directory, "destination", 0, 2, 0, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, MMAPQ_CONFLICT_AUTO);
     if (stream) TEST_ASSERT_EQUAL_INT(0, fclose(stream));
     fault = NO_FAULT;
-    int expected = selected == COMPLETE || selected == SOURCE ? MMAPQ_ETIMEDOUT : selected == COMMIT ? MMAPQ_EIO : MMAPQ_ENOMEM;
+    int expected = selected == COMPLETE || selected == SOURCE ? MMAPQ_ETIMEDOUT : MMAPQ_ENOMEM;
     TEST_ASSERT_EQUAL_INT64(expected, result);
     TEST_ASSERT_EQUAL_INT(1, consumed);
     TEST_ASSERT_EQUAL_INT(fail_at, calls);
@@ -281,8 +276,7 @@ static void exercise_export_counts(int batch_source, int chunked, int mode)
             TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(appender, &pending));
             TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(pending, "data", 4));
             if (mode >= 3) TEST_ASSERT_EQUAL_INT(1, mmapq_mutable_batch_append(pending, "more", 4));
-            int64_t offset = mmapq_mutable_batch_complete(pending);
-            TEST_ASSERT_EQUAL_INT64(index, mmapq_indexed_batch_appender_commit_batch(appender, offset));
+            TEST_ASSERT_EQUAL_INT64(index, mmapq_mutable_batch_complete(pending));
         }
         mmapq_indexed_batch_appender_close(appender);
         TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_reader(batch, &batch_reader));

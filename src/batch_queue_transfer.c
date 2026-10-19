@@ -462,9 +462,9 @@ int64_t mmapq_batch_queue_transfer_import(
             if (appended < 0) { error = (int)appended; goto failed; }
 
         }
-        int64_t offset = mmapq_mutable_batch_complete(batch);
-        if (offset < 0) { error = (int)offset; goto failed; }
-        int64_t committed = mmapq_indexed_batch_appender_commit_batch(appender, offset);
+        /* CAND-49 §3.5: complete is the one-call publish (was
+         * complete + commit_batch). */
+        int64_t committed = mmapq_mutable_batch_complete(batch);
         if (committed < 0) { error = (int)committed; goto failed; }
         imported++;
     }
@@ -561,9 +561,9 @@ int64_t mmapq_batch_queue_transfer_import_flat_stream(
             if (appended < 0) { error = (int)appended; goto failed; }
 
         }
-        int64_t offset = mmapq_mutable_batch_complete(batch);
-        if (offset < 0) { error = (int)offset; goto failed; }
-        int64_t committed = mmapq_indexed_batch_appender_commit_batch(appender, offset);
+        /* CAND-49 §3.5: complete is the one-call publish (was
+         * complete + commit_batch). */
+        int64_t committed = mmapq_mutable_batch_complete(batch);
         if (committed < 0) { error = (int)committed; goto failed; }
         imported++;
     }
@@ -675,9 +675,8 @@ int64_t mmapq_batch_queue_transfer_copy(
         if (bctx.iterator->last_error != 0) { appender_cache_cleanup(&ac); mmapq_indexed_batch_queue_close(q); return bctx.iterator->last_error; }
 
         if (batch_has_msgs) {
-            int64_t off = mmapq_mutable_batch_complete(mb);
-            if (off < 0) { appender_cache_cleanup(&ac); mmapq_indexed_batch_queue_close(q); return off; }
-            int64_t committed = mmapq_indexed_batch_appender_commit_batch(a, off);
+            /* CAND-49 §3.5: complete is the one-call publish. */
+            int64_t committed = mmapq_mutable_batch_complete(mb);
             if (committed < 0) { appender_cache_cleanup(&ac); mmapq_indexed_batch_queue_close(q); return committed; }
             copied++;
         }
@@ -775,9 +774,8 @@ int64_t mmapq_batch_queue_transfer_copy_normal_to_batch(
         if (started != 0) { appender_cache_cleanup(&ac); mmapq_indexed_batch_queue_close(q); return started; }
         int appended = mmapq_mutable_batch_append(mb, rc.data, rc.length);
         if (appended < 0) { appender_cache_cleanup(&ac); mmapq_indexed_batch_queue_close(q); return appended; }
-        int64_t off = mmapq_mutable_batch_complete(mb);
-        if (off < 0) { appender_cache_cleanup(&ac); mmapq_indexed_batch_queue_close(q); return off; }
-        int64_t committed = mmapq_indexed_batch_appender_commit_batch(a, off);
+        /* CAND-49 §3.5: complete is the one-call publish. */
+        int64_t committed = mmapq_mutable_batch_complete(mb);
         if (committed < 0) { appender_cache_cleanup(&ac); mmapq_indexed_batch_queue_close(q); return committed; }
         copied++;
     }

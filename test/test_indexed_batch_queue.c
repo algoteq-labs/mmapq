@@ -137,7 +137,7 @@ void test_batch_poll_single_batch(void)
     mmapq_mutable_batch_append(b, "msg0", 4);
     mmapq_mutable_batch_append(b, "msg1", 4);
     mmapq_mutable_batch_append(b, "msg2", 4);
-    int64_t off = mmapq_mutable_batch_complete(b);
+    int64_t off = mmapq_mutable_batch_complete_uncommitted(b);
     mmapq_indexed_batch_appender_commit_batch(a, off);
 
     BatchPollCapture cap = { .directive = MMAPQ_NEXT_ADVANCE };
@@ -173,11 +173,11 @@ void test_batch_poll_multiple_batches(void)
     MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
     mmapq_mutable_batch_append(b, "b0m0", 4);
     mmapq_mutable_batch_append(b, "b0m1", 4);
-    mmapq_indexed_batch_appender_commit_batch(a, mmapq_mutable_batch_complete(b));
+    mmapq_mutable_batch_complete(b);
 
     b = mmapq_indexed_batch_appender_start_batch(a);
     mmapq_mutable_batch_append(b, "b1m0", 4);
-    mmapq_indexed_batch_appender_commit_batch(a, mmapq_mutable_batch_complete(b));
+    mmapq_mutable_batch_complete(b);
 
     BatchPollCapture cap = { .directive = MMAPQ_NEXT_ADVANCE };
 
@@ -219,7 +219,7 @@ void test_batch_poll_advance_all_messages(void)
     mmapq_mutable_batch_append(b, "m0", 2);
     mmapq_mutable_batch_append(b, "m1", 2);
     mmapq_mutable_batch_append(b, "m2", 2);
-    mmapq_indexed_batch_appender_commit_batch(a, mmapq_mutable_batch_complete(b));
+    mmapq_mutable_batch_complete(b);
 
     int msg_count = 0;
     BatchPollResult pr = mmapq_indexed_batch_poller_poll(p, advance_all_handler, &msg_count);
@@ -247,7 +247,7 @@ void test_batch_poll_stop(void)
 
     MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
     mmapq_mutable_batch_append(b, "msg", 3);
-    mmapq_indexed_batch_appender_commit_batch(a, mmapq_mutable_batch_complete(b));
+    mmapq_mutable_batch_complete(b);
 
     BatchPollCapture cap = { .directive = MMAPQ_NEXT_STOP };
     BatchPollResult pr = mmapq_indexed_batch_poller_poll(p, capture_handler, &cap);
@@ -275,11 +275,11 @@ void test_batch_poll_retreat(void)
 
     MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
     mmapq_mutable_batch_append(b, "batch0", 6);
-    mmapq_indexed_batch_appender_commit_batch(a, mmapq_mutable_batch_complete(b));
+    mmapq_mutable_batch_complete(b);
 
     b = mmapq_indexed_batch_appender_start_batch(a);
     mmapq_mutable_batch_append(b, "batch1", 6);
-    mmapq_indexed_batch_appender_commit_batch(a, mmapq_mutable_batch_complete(b));
+    mmapq_mutable_batch_complete(b);
 
     BatchPollCapture cap = { .directive = MMAPQ_NEXT_ADVANCE };
     mmapq_indexed_batch_poller_poll(p, capture_handler, &cap);
@@ -318,7 +318,7 @@ void test_batch_poll_retreat_at_start(void)
 
     MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
     mmapq_mutable_batch_append(b, "msg", 3);
-    mmapq_indexed_batch_appender_commit_batch(a, mmapq_mutable_batch_complete(b));
+    mmapq_mutable_batch_complete(b);
 
     BatchPollCapture cap = { .directive = MMAPQ_NEXT_RETREAT };
     BatchPollResult pr = mmapq_indexed_batch_poller_poll(p, capture_handler, &cap);
@@ -347,7 +347,7 @@ void test_batch_poller_exists(void)
 
     MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
     mmapq_mutable_batch_append(b, "x", 1);
-    mmapq_indexed_batch_appender_commit_batch(a, mmapq_mutable_batch_complete(b));
+    mmapq_mutable_batch_complete(b);
 
     TEST_ASSERT_TRUE(mmapq_indexed_batch_poller_exists(p, 0));
     TEST_ASSERT_FALSE(mmapq_indexed_batch_poller_exists(p, 1));
@@ -375,11 +375,11 @@ void test_batch_poller_move_to_last_existing(void)
 
     MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
     mmapq_mutable_batch_append(b, "first", 5);
-    mmapq_indexed_batch_appender_commit_batch(a, mmapq_mutable_batch_complete(b));
+    mmapq_mutable_batch_complete(b);
 
     b = mmapq_indexed_batch_appender_start_batch(a);
     mmapq_mutable_batch_append(b, "second", 6);
-    mmapq_indexed_batch_appender_commit_batch(a, mmapq_mutable_batch_complete(b));
+    mmapq_mutable_batch_complete(b);
 
     TEST_ASSERT_TRUE(mmapq_indexed_batch_poller_move_to_last_existing_batch(p));
     TEST_ASSERT_EQUAL_INT64(1, mmapq_indexed_batch_poller_current_batch_index(p));
@@ -408,13 +408,13 @@ void test_reader_read_by_index(void)
     MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
     mmapq_mutable_batch_append(b, "first0", 6);
     mmapq_mutable_batch_append(b, "second0", 7);
-    mmapq_indexed_batch_appender_commit_batch(a, mmapq_mutable_batch_complete(b));
+    mmapq_mutable_batch_complete(b);
 
     b = mmapq_indexed_batch_appender_start_batch(a);
     mmapq_mutable_batch_append(b, "first1", 6);
     mmapq_mutable_batch_append(b, "second1", 7);
     mmapq_mutable_batch_append(b, "third1", 6);
-    mmapq_indexed_batch_appender_commit_batch(a, mmapq_mutable_batch_complete(b));
+    mmapq_mutable_batch_complete(b);
 
     MmapqBatchReadingContext ctx = {0};
 
@@ -465,12 +465,12 @@ void test_reader_read_first_and_last(void)
 
     MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
     mmapq_mutable_batch_append(b, "only", 4);
-    mmapq_indexed_batch_appender_commit_batch(a, mmapq_mutable_batch_complete(b));
+    mmapq_mutable_batch_complete(b);
 
     b = mmapq_indexed_batch_appender_start_batch(a);
     mmapq_mutable_batch_append(b, "last_a", 6);
     mmapq_mutable_batch_append(b, "last_b", 6);
-    mmapq_indexed_batch_appender_commit_batch(a, mmapq_mutable_batch_complete(b));
+    mmapq_mutable_batch_complete(b);
 
     MmapqBatchReadingContext ctx = {0};
 
@@ -527,7 +527,7 @@ void test_reader_has_entry(void)
 
     MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
     mmapq_mutable_batch_append(b, "x", 1);
-    mmapq_indexed_batch_appender_commit_batch(a, mmapq_mutable_batch_complete(b));
+    mmapq_mutable_batch_complete(b);
 
     TEST_ASSERT_TRUE(mmapq_indexed_batch_reader_has_entry(r, 0));
     TEST_ASSERT_FALSE(mmapq_indexed_batch_reader_has_entry(r, 1));
@@ -554,7 +554,7 @@ void test_batch_append_rejects_zero_length(void)
     int32_t next = mmapq_mutable_batch_append(b, "also-ok", 7);
     TEST_ASSERT_EQUAL_INT(1, next);
 
-    mmapq_indexed_batch_appender_commit_batch(a, mmapq_mutable_batch_complete(b));
+    mmapq_mutable_batch_complete(b);
     mmapq_indexed_batch_appender_close(a);
 }
 
@@ -578,7 +578,7 @@ void test_batch_append_rejects_oversized_message(void)
     TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL, bad);
 
     /* Batch is partially populated — must discard, not commit */
-    mmapq_indexed_batch_appender_discard_batch(a, b->batch_offset);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_discard(b));
     mmapq_indexed_batch_appender_close(a);
 }
 
@@ -591,7 +591,7 @@ void test_open_batch_as_normal_refused(void)
 
     MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
     mmapq_mutable_batch_append(b, "msg", 3);
-    mmapq_indexed_batch_appender_commit_batch(a, mmapq_mutable_batch_complete(b));
+    mmapq_mutable_batch_complete(b);
     mmapq_indexed_batch_appender_close(a);
 
     /* Attempt to create a normal participant on the same queue */
@@ -618,7 +618,7 @@ void test_batch_roundtrip_type_stamped(void)
 
     MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
     mmapq_mutable_batch_append(b, "x", 1);
-    mmapq_indexed_batch_appender_commit_batch(a, mmapq_mutable_batch_complete(b));
+    mmapq_mutable_batch_complete(b);
     mmapq_indexed_batch_appender_close(a);
 
     /* Verify byte at offset 25 == 2 (QUEUE_TYPE_BATCH) */
@@ -670,7 +670,7 @@ static void test_batch_poll_detects_corrupt_payload(void)
     TEST_ASSERT_NOT_NULL(mb);
     int32_t r = mmapq_mutable_batch_append(mb, "hello", 5);
     TEST_ASSERT(r >= 0);
-    int64_t off = mmapq_mutable_batch_complete(mb);
+    int64_t off = mmapq_mutable_batch_complete_uncommitted(mb);
     TEST_ASSERT(off >= 0);
     int64_t idx = mmapq_indexed_batch_appender_commit_batch(a, off);
     TEST_ASSERT(idx >= 0);
@@ -740,7 +740,7 @@ static void rec_append_two_batches(MmapqIndexedBatchAppender *a)
             snprintf(buf, sizeof(buf), "b%lld-m%d-padding", (long long)b, i);
             TEST_ASSERT_EQUAL_INT(i, mmapq_mutable_batch_append(mb, buf, (int32_t)strlen(buf)));
         }
-        off = mmapq_mutable_batch_complete(mb);
+        off = mmapq_mutable_batch_complete_uncommitted(mb);
         TEST_ASSERT_EQUAL_INT64(64 + 55 * b, off);
         TEST_ASSERT_EQUAL_INT64(b, mmapq_indexed_batch_appender_commit_batch(a, off));
     }
@@ -814,7 +814,7 @@ static int64_t rec_complete_third_batch(MmapqIndexedBatchAppender *a)
     MmapqMutableBatch *mb = mmapq_indexed_batch_appender_start_batch(a);
     TEST_ASSERT_NOT_NULL(mb);
     TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(mb, "AFTER-RECOVERY", 14));
-    int64_t off = mmapq_mutable_batch_complete(mb);
+    int64_t off = mmapq_mutable_batch_complete_uncommitted(mb);
     TEST_ASSERT_GREATER_OR_EQUAL_INT64(0, off);
     return off;
 }
@@ -949,7 +949,8 @@ static void test_batch_reader_rejects_zero_message_count(void)
     MmapqMutableBatch *batch = mmapq_indexed_batch_appender_start_batch(appender);
     TEST_ASSERT_NOT_NULL(batch);
     TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(batch, "message", 7));
-    int64_t offset = mmapq_mutable_batch_complete(batch);
+    int64_t offset = mmapq_mutable_batch_complete_uncommitted(batch);
+    TEST_ASSERT_EQUAL_INT64(INITIAL_PAYLOAD_POSITION, offset);
     TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_batch_appender_commit_batch(appender, offset));
     mmapq_indexed_batch_appender_close(appender);
     char path[512];
@@ -1072,8 +1073,7 @@ static void test_checked_batch_step_skips_short_and_long_padding(void)
         int32_t first_length = REGION_SZ - 64 - 4 - 4 - remaining[index];
         TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(batch, payload, first_length));
         TEST_ASSERT_EQUAL_INT(1, mmapq_mutable_batch_append(batch, payload, 256));
-        int64_t offset = mmapq_mutable_batch_complete(batch);
-        TEST_ASSERT_EQUAL_INT64((int64_t)index, mmapq_indexed_batch_appender_commit_batch(appender, offset));
+        TEST_ASSERT_EQUAL_INT64((int64_t)index, mmapq_mutable_batch_complete(batch));
         MmapqBatchReadingContext context = {0};
         mmapq_indexed_batch_reader_read(reader, (int64_t)index, &context);
         TEST_ASSERT_EQUAL_INT(MMAPQ_BATCH_ENTRY_AVAILABLE, context.status);
@@ -1104,7 +1104,7 @@ static void d3_commit_one_batch(MmapqIndexedBatchAppender **out)
     MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(*out);
     mmapq_mutable_batch_append(b, "d3-batch0", 9);
     TEST_ASSERT_EQUAL_INT64(0,
-        mmapq_indexed_batch_appender_commit_batch(*out, mmapq_mutable_batch_complete(b)));
+        mmapq_mutable_batch_complete(b));
 }
 
 void test_batch_poller_rejects_absurd_index(void)
@@ -1313,14 +1313,14 @@ static int c32_rejoin(const char *qname, MmapqIndexedBatchQueue **out_q,
     return mmapq_indexed_batch_queue_create_appender_with_id(*out_q, 0, out_a);
 }
 
-/* One-message batch "HELLO": start, append, complete; returns the batch
- * offset for commit_batch. */
+/* One-message batch "HELLO": start, append, complete_uncommitted; returns
+ * the batch offset for commit_batch. */
 static int64_t c32_complete_hello_batch(MmapqIndexedBatchAppender *a)
 {
     MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
     TEST_ASSERT_NOT_NULL(b);
     TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(b, "HELLO", 5));
-    return mmapq_mutable_batch_complete(b);
+    return mmapq_mutable_batch_complete_uncommitted(b);
 }
 
 /* Batch index 0 must have no committed entry. */
@@ -1518,7 +1518,7 @@ void test_c32_batch_p8_region_boundary_end_offset_legitimate(void)
     TEST_ASSERT_NOT_NULL(b);
     TEST_ASSERT_EQUAL_INT(0,
         mmapq_mutable_batch_append(b, msg, (int32_t)sizeof(msg)));
-    int64_t off = mmapq_mutable_batch_complete(b);
+    int64_t off = mmapq_mutable_batch_complete_uncommitted(b);
     TEST_ASSERT_EQUAL_INT64(C32_POS_LIMIT - C32_REGION_SIZE, off);
     TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_batch_appender_commit_batch(a, off));
 
@@ -1582,7 +1582,7 @@ void test_c32_batch_p7_commit_batch_2pow57_refused(void)
     MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
     TEST_ASSERT_NOT_NULL(b);
     TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(b, "small", 5));
-    int64_t off = mmapq_mutable_batch_complete(b);
+    int64_t off = mmapq_mutable_batch_complete_uncommitted(b);
     TEST_ASSERT_EQUAL_INT64(INITIAL_PAYLOAD_POSITION, off);
 
     TEST_ASSERT_EQUAL_INT64(MMAPQ_EINVAL,
@@ -1622,7 +1622,7 @@ void test_c32_batch_p9_commit_batch_above_last_written_refused(void)
     MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
     TEST_ASSERT_NOT_NULL(b);
     TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(b, "small", 5));
-    int64_t off = mmapq_mutable_batch_complete(b);
+    int64_t off = mmapq_mutable_batch_complete_uncommitted(b);
     TEST_ASSERT_EQUAL_INT64(INITIAL_PAYLOAD_POSITION, off);
 
     TEST_ASSERT_EQUAL_INT64(MMAPQ_EINVAL,
@@ -1698,7 +1698,7 @@ void test_batch_iterator_huge_count_walks_to_ecorrupt(void)
     mmapq_mutable_batch_append(b, "first0", 6);
     mmapq_mutable_batch_append(b, "second0", 7);
     mmapq_mutable_batch_append(b, "third0", 6);
-    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_batch_appender_commit_batch(a, mmapq_mutable_batch_complete(b)));
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_mutable_batch_complete(b));
     MmapqIndexedBatchReader *r = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_reader(q, &r));
     MmapqBatchReadingContext ctx;
@@ -1736,7 +1736,7 @@ void test_batch_spanning_regions_commits_polls_recovers(void)
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(sq, &a));
     MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
     for (int i = 0; i < 6553; i++) { uint8_t x = (uint8_t)(i & 0xFF); TEST_ASSERT_EQUAL_INT(i, mmapq_mutable_batch_append(b, &x, 1)); }
-    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_batch_appender_commit_batch(a, mmapq_mutable_batch_complete(b)));
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_mutable_batch_complete(b));
     MmapqIndexedBatchPoller *p = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_poller(sq, &p));
     int bad = 0;
@@ -1759,7 +1759,7 @@ void test_batch_spanning_regions_commits_polls_recovers(void)
     b = mmapq_indexed_batch_appender_start_batch(a);
     TEST_ASSERT_NOT_NULL(b);
     TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(b, "z", 1));
-    TEST_ASSERT_EQUAL_INT64(1, mmapq_indexed_batch_appender_commit_batch(a, mmapq_mutable_batch_complete(b)));
+    TEST_ASSERT_EQUAL_INT64(1, mmapq_mutable_batch_complete(b));
     mmapq_indexed_batch_reader_read(r, 1, &ctx);
     TEST_ASSERT_EQUAL_INT(MMAPQ_BATCH_ENTRY_AVAILABLE, ctx.status);
     TEST_ASSERT_EQUAL_INT(1, ctx.message_count);
@@ -1770,6 +1770,809 @@ void test_batch_spanning_regions_commits_polls_recovers(void)
     mmapq_indexed_batch_reader_close(r);
     mmapq_indexed_batch_queue_close(sq);
     rc0 = system(cmd); (void)rc0;
+}
+
+/* ── CAND-49 batch pins (§7.3–§7.7, §7.12) ─────────────────────────────────
+ * One-message batches with 4-byte payloads ("m0xx" style): a batch is 12
+ * bytes (4-byte count + 8-byte message); batch k at 64 + 12k. The D-E pins
+ * use the pack's geometry (A = 3×200-byte messages: [64, 680); B/C = one
+ * 1-byte message: [680, 689)). Fail-first evidence (standalone, both
+ * configs, 231025d): audit/claude-CAND-49/transcript-ff49b-231025d.txt and
+ * transcript-protrude-231025d.txt; the walker pins' pre-fix record is the
+ * compile-error precedent (the walker does not exist pre-fix) plus the
+ * single-message D-A/D-B evidence (§7.3). Every pin ends with the §7.9 lane
+ * validator (write position computed exactly from the stated geometry). */
+
+#include "batch_lane_validator.h"
+#include "internal/appender_meta.h"
+
+static void bq_msg(char *buf, int k) { snprintf(buf, 8, "m%dxx", k); }
+
+static int64_t bq_stage(MmapqIndexedBatchAppender *a, int k)   /* returns the offset */
+{
+    char b[8]; bq_msg(b, k);
+    MmapqMutableBatch *mb = mmapq_indexed_batch_appender_start_batch(a);
+    TEST_ASSERT_NOT_NULL(mb);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(mb, b, 4));
+    return mmapq_mutable_batch_complete_uncommitted(mb);
+}
+
+static int64_t bq_publish(MmapqIndexedBatchAppender *a, int k)  /* returns the index */
+{
+    char b[8]; bq_msg(b, k);
+    MmapqMutableBatch *mb = mmapq_indexed_batch_appender_start_batch(a);
+    TEST_ASSERT_NOT_NULL(mb);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(mb, b, 4));
+    return mmapq_mutable_batch_complete(mb);
+}
+
+/* Assert the exact remaining batch sequence via the public next(): the
+ * offsets in want[] in order (count 1, exact bytes), then a terminal 0 with
+ * cleared outputs. */
+static void bq_assert_batches(MmapqIndexedBatchAppender *a, const int64_t *want, int n)
+{
+    MmapqUncommittedBatchIterator *it = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_batch_appender_uncommitted_batches_checked(a, &it));
+    TEST_ASSERT_NOT_NULL(it);
+    for (int i = 0; i < n; i++) {
+        int64_t off = -1; int32_t count = -1; MmapqBatchPayloadIterator *msgs = NULL;
+        TEST_ASSERT_EQUAL_INT(1, mmapq_uncommitted_batch_next(it, &off, &count, &msgs));
+        TEST_ASSERT_EQUAL_INT64(want[i], off);
+        TEST_ASSERT_EQUAL_INT32(1, count);
+        TEST_ASSERT_NOT_NULL(msgs);
+        const void *data = NULL; int32_t len = 0;
+        TEST_ASSERT_EQUAL_INT(1, mmapq_batch_iterator_next(msgs, &data, &len));
+        TEST_ASSERT_EQUAL_INT32(4, len);
+        char b[8]; bq_msg(b, (int)((want[i] - INITIAL_PAYLOAD_POSITION) / 12));
+        TEST_ASSERT_EQUAL_MEMORY(b, data, 4);
+    }
+    int64_t off = 0; int32_t count = -1; MmapqBatchPayloadIterator *msgs = (void *)1;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_uncommitted_batch_next(it, &off, &count, &msgs));
+    TEST_ASSERT_EQUAL_INT64(MMAPQ_PAYLOAD_ITERATOR_NOT_SET, off);
+    TEST_ASSERT_EQUAL_INT32(0, count);
+    TEST_ASSERT_NULL(msgs);
+}
+
+/* §7.3: bounded gap — B0 committed / B1 staged / B2 committed ⇒ only B1. */
+void test_batch_uncommitted_bounded_gap_exact(void)
+{
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
+    TEST_ASSERT_EQUAL_INT64(0, bq_publish(a, 0));            /* B0 @64 idx 0 */
+    TEST_ASSERT_EQUAL_INT64(76, bq_stage(a, 1));             /* B1 @76 */
+    TEST_ASSERT_EQUAL_INT64(1, bq_publish(a, 2));            /* B2 @88 idx 1 */
+
+    const int64_t want[] = { 76 };
+    bq_assert_batches(a, want, 1);
+    assert_batch_lane(DIR, QUEUE, 0, 100);
+    mmapq_indexed_batch_appender_close(a);
+}
+
+/* §7.3: out-of-order batch commits — stage B0 B1 B2, commit B2, commit B0
+ * ⇒ only B1 (the raw spans sort+merge; the D-B batch analogue). */
+void test_batch_uncommitted_out_of_order_ranges(void)
+{
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
+    TEST_ASSERT_EQUAL_INT64(64, bq_stage(a, 0));
+    TEST_ASSERT_EQUAL_INT64(76, bq_stage(a, 1));
+    TEST_ASSERT_EQUAL_INT64(88, bq_stage(a, 2));
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_batch_appender_commit_batch(a, 88));
+    TEST_ASSERT_EQUAL_INT64(1, mmapq_indexed_batch_appender_commit_batch(a, 64));
+
+    const int64_t want[] = { 76 };
+    bq_assert_batches(a, want, 1);
+    assert_batch_lane(DIR, QUEUE, 0, 100);
+    mmapq_indexed_batch_appender_close(a);
+}
+
+/* §7.4 batch twin: a zeroed message length inside the gap's batch — the
+ * batch walk stops short of the gap end — is MMAPQ_ECORRUPT. The corrupt
+ * batch is yielded first (the walk past it is the deferred advance); the
+ * NEXT next() reports the corruption. */
+void test_batch_uncommitted_gap_undershoot_is_corrupt(void)
+{
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
+    TEST_ASSERT_EQUAL_INT64(0, bq_publish(a, 0));
+    TEST_ASSERT_EQUAL_INT64(76, bq_stage(a, 1));             /* B1 @76, 1 msg @80 */
+    TEST_ASSERT_EQUAL_INT64(1, bq_publish(a, 2));            /* B2 @88 */
+    mmapq_indexed_batch_appender_close(a);
+
+    int fd = open("/tmp/mmap_test_ibq/payload_0_0", O_WRONLY);
+    TEST_ASSERT_GREATER_THAN_INT(0, fd);
+    int32_t zero = 0;
+    TEST_ASSERT_EQUAL_INT(sizeof(zero), pwrite(fd, &zero, sizeof(zero), 80));
+    close(fd);
+
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
+    MmapqUncommittedBatchIterator *it = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_batch_appender_uncommitted_batches_checked(a, &it));
+    int64_t off = -1; int32_t count = -1; MmapqBatchPayloadIterator *msgs = NULL;
+    TEST_ASSERT_EQUAL_INT(1, mmapq_uncommitted_batch_next(it, &off, &count, &msgs));
+    TEST_ASSERT_EQUAL_INT64(76, off);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ECORRUPT, mmapq_uncommitted_batch_next(it, &off, &count, &msgs));
+    mmapq_indexed_batch_appender_close(a);
+}
+
+/* §7.4 batch twin: an inflated message length whose batch walk passes the
+ * gap end — MMAPQ_ECORRUPT (the deferred advance's overshoot check). */
+void test_batch_uncommitted_gap_overshoot_is_corrupt(void)
+{
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
+    TEST_ASSERT_EQUAL_INT64(0, bq_publish(a, 0));
+    TEST_ASSERT_EQUAL_INT64(76, bq_stage(a, 1));
+    TEST_ASSERT_EQUAL_INT64(1, bq_publish(a, 2));
+    mmapq_indexed_batch_appender_close(a);
+
+    int fd = open("/tmp/mmap_test_ibq/payload_0_0", O_WRONLY);
+    TEST_ASSERT_GREATER_THAN_INT(0, fd);
+    int32_t inflated = 100;
+    TEST_ASSERT_EQUAL_INT(sizeof(inflated), pwrite(fd, &inflated, sizeof(inflated), 80));
+    close(fd);
+
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
+    MmapqUncommittedBatchIterator *it = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_batch_appender_uncommitted_batches_checked(a, &it));
+    int64_t off = -1; int32_t count = -1; MmapqBatchPayloadIterator *msgs = NULL;
+    TEST_ASSERT_EQUAL_INT(1, mmapq_uncommitted_batch_next(it, &off, &count, &msgs));
+    TEST_ASSERT_EQUAL_INT64(76, off);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ECORRUPT, mmapq_uncommitted_batch_next(it, &off, &count, &msgs));
+    mmapq_indexed_batch_appender_close(a);
+}
+
+/* §7.5: the second commit_batch of one offset is exactly EINVAL; the batch
+ * is polled exactly once. Pre-fix: indices 0 and 1, polled twice. */
+void test_batch_commit_double_rejected(void)
+{
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
+    int64_t off = bq_stage(a, 0);
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_batch_appender_commit_batch(a, off));
+    TEST_ASSERT_EQUAL_INT64(MMAPQ_EINVAL, mmapq_indexed_batch_appender_commit_batch(a, off));
+
+    MmapqIndexedBatchPoller *p = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_poller(q, &p));
+    BatchPollCapture cap = { .directive = MMAPQ_NEXT_ADVANCE };
+    TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_ADVANCED, mmapq_indexed_batch_poller_poll(p, capture_handler, &cap));
+    TEST_ASSERT_EQUAL_INT64(0, cap.captured_batch_index);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_END_OF_STREAM, mmapq_indexed_batch_poller_poll(p, capture_handler, &cap));
+    mmapq_indexed_batch_poller_close(p);
+    mmapq_indexed_batch_appender_close(a);
+}
+
+/* §7.5: commit_batch of a never-staged offset (an open batch) ⇒ EINVAL.
+ * Pre-fix: commits a count-0 batch; the poller treats it as CORRUPT. */
+void test_batch_commit_never_staged_rejected(void)
+{
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
+    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    TEST_ASSERT_NOT_NULL(b);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(b, "m0xx", 4));
+    TEST_ASSERT_EQUAL_INT64(INITIAL_PAYLOAD_POSITION, b->batch_offset);
+    TEST_ASSERT_EQUAL_INT64(MMAPQ_EINVAL,
+        mmapq_indexed_batch_appender_commit_batch(a, b->batch_offset));
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_discard(b));
+    mmapq_indexed_batch_appender_close(a);
+}
+
+/* §7.5: the multi-batch out-of-order shape stays legal (the CAND-35 shape):
+ * stage A, stage B, commit B, commit A ⇒ exact indices 0 and 1. */
+void test_batch_commit_out_of_order_multi_legal(void)
+{
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
+    int64_t off_a = bq_stage(a, 0);
+    int64_t off_b = bq_stage(a, 1);
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_batch_appender_commit_batch(a, off_b));
+    TEST_ASSERT_EQUAL_INT64(1, mmapq_indexed_batch_appender_commit_batch(a, off_a));
+    mmapq_indexed_batch_appender_close(a);
+}
+
+/* §7.5: empty complete ⇒ EINVAL, the handle stays open — then discard
+ * succeeds. */
+void test_batch_complete_empty_rejected(void)
+{
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
+    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    TEST_ASSERT_NOT_NULL(b);
+    TEST_ASSERT_EQUAL_INT64(MMAPQ_EINVAL, mmapq_mutable_batch_complete(b));
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_discard(b));
+    mmapq_indexed_batch_appender_close(a);
+}
+
+/* §7.5: empty complete_uncommitted ⇒ EINVAL, the handle stays open — then
+ * discard succeeds. */
+void test_batch_complete_uncommitted_empty_rejected(void)
+{
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
+    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    TEST_ASSERT_NOT_NULL(b);
+    TEST_ASSERT_EQUAL_INT64(MMAPQ_EINVAL, mmapq_mutable_batch_complete_uncommitted(b));
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_discard(b));
+    mmapq_indexed_batch_appender_close(a);
+}
+
+/* §7.5: a second complete on the consumed handle ⇒ EINVAL. */
+void test_batch_complete_twice_rejected(void)
+{
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
+    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(b, "m0xx", 4));
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_mutable_batch_complete(b));
+    TEST_ASSERT_EQUAL_INT64(MMAPQ_EINVAL, mmapq_mutable_batch_complete(b));
+    mmapq_indexed_batch_appender_close(a);
+}
+
+/* §7.5: discard after complete (consumed) ⇒ EINVAL. */
+void test_batch_discard_after_complete_rejected(void)
+{
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
+    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(b, "m0xx", 4));
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_mutable_batch_complete(b));
+    TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL, mmapq_mutable_batch_discard(b));
+    mmapq_indexed_batch_appender_close(a);
+}
+
+/* §7.5 (correction-(a)): a staged batch can never be discarded ⇒ EINVAL. */
+void test_batch_discard_after_complete_uncommitted_rejected(void)
+{
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
+    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(b, "m0xx", 4));
+    TEST_ASSERT_EQUAL_INT64(64, mmapq_mutable_batch_complete_uncommitted(b));
+    TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL, mmapq_mutable_batch_discard(b));
+    mmapq_indexed_batch_appender_close(a);
+}
+
+/* §7.5: in-session discard is final — commit_batch of the discarded batch's
+ * offset ⇒ EINVAL. */
+void test_batch_discard_in_session_is_final(void)
+{
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
+    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(b, "m0xx", 4));
+    TEST_ASSERT_EQUAL_INT(1, mmapq_mutable_batch_append(b, "m1xx", 4));
+    int64_t off = b->batch_offset;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_discard(b));
+    TEST_ASSERT_EQUAL_INT64(MMAPQ_EINVAL, mmapq_indexed_batch_appender_commit_batch(a, off));
+    mmapq_indexed_batch_appender_close(a);
+}
+
+/* §7.5: an empty open batch discarded (position reset) — its would-be
+ * offset was never a set member: commit_batch ⇒ EINVAL. */
+void test_batch_commit_after_open_discard_rejected(void)
+{
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
+    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    TEST_ASSERT_EQUAL_INT64(INITIAL_PAYLOAD_POSITION, b->batch_offset);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_discard(b));
+    TEST_ASSERT_EQUAL_INT64(MMAPQ_EINVAL,
+        mmapq_indexed_batch_appender_commit_batch(a, INITIAL_PAYLOAD_POSITION));
+    mmapq_indexed_batch_appender_close(a);
+}
+
+/* §7.5/§3.7: start_batch while one is open ⇒ EINVAL (the D-E count-0 hole
+ * is refused). C-level misuse; the wrappers can't reach it. */
+void test_batch_start_while_open_rejected(void)
+{
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
+    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    TEST_ASSERT_NOT_NULL(b);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(b, "m0xx", 4));
+    MmapqMutableBatch *b2 = NULL;
+    TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL,
+        mmapq_indexed_batch_appender_start_batch_checked(a, &b2));
+    TEST_ASSERT_NULL(b2);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_discard(b));
+    mmapq_indexed_batch_appender_close(a);
+}
+
+/* §7.7 batch D-D twin: commit_batch after rejoin of a found offset succeeds
+ * at the exact index. Pre-fix: -2 (transcript rejoincommit). */
+void test_batch_uncommitted_commit_after_rejoin(void)
+{
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
+    TEST_ASSERT_EQUAL_INT64(64, bq_stage(a, 0));
+    mmapq_indexed_batch_appender_close(a);
+
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
+    const int64_t want[] = { 64 };
+    bq_assert_batches(a, want, 1);
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_batch_appender_commit_batch(a, 64));
+
+    MmapqIndexedBatchPoller *p = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_poller(q, &p));
+    BatchPollCapture cap = { .directive = MMAPQ_NEXT_ADVANCE };
+    TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_ADVANCED, mmapq_indexed_batch_poller_poll(p, capture_handler, &cap));
+    TEST_ASSERT_EQUAL_INT64(0, cap.captured_batch_index);
+    TEST_ASSERT_EQUAL_MEMORY("m0xx", cap.captured_first_msg, 4);
+    mmapq_indexed_batch_poller_close(p);
+    mmapq_indexed_batch_appender_close(a);
+}
+
+/* §7.7 batch: staged batches survive a crash; commit any subset in any
+ * order; the skipped batch stays. Pre-fix: commits after rejoin return -2
+ * (transcript crashe2e). */
+void test_batch_uncommitted_crash_recovery_end_to_end(void)
+{
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
+    TEST_ASSERT_EQUAL_INT64(64, bq_stage(a, 0));
+    TEST_ASSERT_EQUAL_INT64(76, bq_stage(a, 1));
+    TEST_ASSERT_EQUAL_INT64(88, bq_stage(a, 2));
+    mmapq_indexed_batch_appender_close(a);   /* "crash" — nothing committed */
+
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
+    const int64_t want[] = { 64, 76, 88 };
+    bq_assert_batches(a, want, 3);
+
+    /* Commit B2 then B0, skip B1. */
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_batch_appender_commit_batch(a, 88));
+    TEST_ASSERT_EQUAL_INT64(1, mmapq_indexed_batch_appender_commit_batch(a, 64));
+
+    MmapqIndexedBatchPoller *p = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_poller(q, &p));
+    BatchPollCapture cap = { .directive = MMAPQ_NEXT_ADVANCE };
+    TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_ADVANCED, mmapq_indexed_batch_poller_poll(p, capture_handler, &cap));
+    TEST_ASSERT_EQUAL_INT64(0, cap.captured_batch_index);
+    TEST_ASSERT_EQUAL_MEMORY("m2xx", cap.captured_first_msg, 4);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_ADVANCED, mmapq_indexed_batch_poller_poll(p, capture_handler, &cap));
+    TEST_ASSERT_EQUAL_INT64(1, cap.captured_batch_index);
+    TEST_ASSERT_EQUAL_MEMORY("m0xx", cap.captured_first_msg, 4);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_END_OF_STREAM, mmapq_indexed_batch_poller_poll(p, capture_handler, &cap));
+    mmapq_indexed_batch_poller_close(p);
+
+    /* A second scan yields only the skipped B1. */
+    const int64_t want2[] = { 76 };
+    bq_assert_batches(a, want2, 1);
+    mmapq_indexed_batch_appender_close(a);
+}
+
+/* §7.7 D-E mode 1 (discard overlay): A (3×200 B) discarded open — the count
+ * is stored, no reset — B committed; close; rejoin rc 0; poll B exact; the
+ * walker yields the discarded A (ruling 8's reappearance contract).
+ * Pre-fix: rejoin -4 (protrude mode 1). */
+void test_batch_de_mode1_discard_overlay(void)
+{
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
+    char big[200]; memset(big, 'A', sizeof big);
+    MmapqMutableBatch *ba = mmapq_indexed_batch_appender_start_batch(a);
+    for (int i = 0; i < 3; i++)
+        TEST_ASSERT_EQUAL_INT(i, mmapq_mutable_batch_append(ba, big, 200));
+    TEST_ASSERT_EQUAL_INT64(64, ba->batch_offset);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_discard(ba));   /* staged-discarded */
+
+    MmapqMutableBatch *bb = mmapq_indexed_batch_appender_start_batch(a);
+    TEST_ASSERT_EQUAL_INT64(680, bb->batch_offset);   /* forward-only: no reset */
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(bb, "y", 1));
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_mutable_batch_complete(bb));
+    mmapq_indexed_batch_appender_close(a);
+
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
+    assert_batch_lane(DIR, QUEUE, 0, 689);
+
+    MmapqIndexedBatchPoller *p = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_poller(q, &p));
+    BatchPollCapture cap = { .directive = MMAPQ_NEXT_ADVANCE };
+    TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_ADVANCED, mmapq_indexed_batch_poller_poll(p, capture_handler, &cap));
+    TEST_ASSERT_EQUAL_INT64(0, cap.captured_batch_index);
+    TEST_ASSERT_EQUAL_INT32(1, cap.captured_message_count);
+    TEST_ASSERT_EQUAL_MEMORY("y", cap.captured_first_msg, 1);
+    mmapq_indexed_batch_poller_close(p);
+
+    /* The walker yields the discarded A: count 3, exact bytes. */
+    MmapqUncommittedBatchIterator *it = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_batch_appender_uncommitted_batches_checked(a, &it));
+    int64_t off = -1; int32_t count = -1; MmapqBatchPayloadIterator *msgs = NULL;
+    TEST_ASSERT_EQUAL_INT(1, mmapq_uncommitted_batch_next(it, &off, &count, &msgs));
+    TEST_ASSERT_EQUAL_INT64(64, off);
+    TEST_ASSERT_EQUAL_INT32(3, count);
+    const void *data; int32_t len;
+    for (int i = 0; i < 3; i++) {
+        TEST_ASSERT_EQUAL_INT(1, mmapq_batch_iterator_next(msgs, &data, &len));
+        TEST_ASSERT_EQUAL_INT32(200, len);
+        TEST_ASSERT_EQUAL_MEMORY(big, data, 200);
+    }
+    TEST_ASSERT_EQUAL_INT(0, mmapq_uncommitted_batch_next(it, &off, &count, &msgs));
+    mmapq_indexed_batch_appender_close(a);
+}
+
+/* §7.7 D-E mode 2: a trailing open batch (3 msgs, never completed) is
+ * completed to staged at the rejoin; the position moves past it.
+ * Pre-fix: the second rejoin is -4 (protrude mode 2). */
+void test_batch_de_mode2_rejoin_completes_open_batch(void)
+{
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
+    char big[200]; memset(big, 'A', sizeof big);
+    MmapqMutableBatch *ba = mmapq_indexed_batch_appender_start_batch(a);
+    for (int i = 0; i < 3; i++)
+        TEST_ASSERT_EQUAL_INT(i, mmapq_mutable_batch_append(ba, big, 200));
+    mmapq_indexed_batch_appender_close(a);   /* "crash" with A open */
+
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
+    int64_t joined = -1;
+    TEST_ASSERT_EQUAL_INT(1, mmapq_indexed_batch_appender_join_completed_open_batch(a, &joined));
+    TEST_ASSERT_EQUAL_INT64(64, joined);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_join_completed_open_batch(a, &joined));  /* read-and-clear */
+    /* The position is after A: the next batch starts at 680. */
+    MmapqMutableBatch *bb = mmapq_indexed_batch_appender_start_batch(a);
+    TEST_ASSERT_EQUAL_INT64(680, bb->batch_offset);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(bb, "y", 1));
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_mutable_batch_complete(bb));
+    mmapq_indexed_batch_appender_close(a);
+
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
+    assert_batch_lane(DIR, QUEUE, 0, 689);
+
+    MmapqIndexedBatchPoller *p = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_poller(q, &p));
+    BatchPollCapture cap = { .directive = MMAPQ_NEXT_ADVANCE };
+    TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_ADVANCED, mmapq_indexed_batch_poller_poll(p, capture_handler, &cap));
+    TEST_ASSERT_EQUAL_MEMORY("y", cap.captured_first_msg, 1);
+    mmapq_indexed_batch_poller_close(p);
+
+    /* The walker yields the join-completed A (count 3, exact bytes). */
+    MmapqUncommittedBatchIterator *it = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_batch_appender_uncommitted_batches_checked(a, &it));
+    int64_t off = -1; int32_t count = -1; MmapqBatchPayloadIterator *msgs = NULL;
+    TEST_ASSERT_EQUAL_INT(1, mmapq_uncommitted_batch_next(it, &off, &count, &msgs));
+    TEST_ASSERT_EQUAL_INT64(64, off);
+    TEST_ASSERT_EQUAL_INT32(3, count);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_uncommitted_batch_next(it, &off, &count, &msgs));
+    mmapq_indexed_batch_appender_close(a);
+}
+
+/* §7.7 D-E mode 2 (empty): an open batch with zero messages — discard
+ * resets the position (nothing written) OR the rejoin leaves the position
+ * at the slot; the next batch overwrites it; join_completed_open_batch
+ * returns 0. The in-session half (no rejoin) is the M12 kill: an empty
+ * discard that stores a count-0 record leaves it mid-lane. */
+void test_batch_de_mode2_empty_open_batch(void)
+{
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
+    MmapqMutableBatch *ba = mmapq_indexed_batch_appender_start_batch(a);
+    TEST_ASSERT_EQUAL_INT64(64, ba->batch_offset);
+
+    /* In-session: discard resets the position to the batch start — the next
+     * batch overwrites the slot (mutant M12: a stored count-0 record leaves
+     * the position past the slot, and the validator's count-0 rule fires). */
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_discard(ba));
+    MmapqMutableBatch *bb = mmapq_indexed_batch_appender_start_batch(a);
+    TEST_ASSERT_EQUAL_INT64(64, bb->batch_offset);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(bb, "y", 1));
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_mutable_batch_complete(bb));
+    assert_batch_lane(DIR, QUEUE, 0, 73);
+    mmapq_indexed_batch_appender_close(a);
+
+    /* Rejoin half: an empty open batch abandoned by a "crash" — the
+     * position stays at the slot; the next batch overwrites it. */
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
+    MmapqMutableBatch *bc = mmapq_indexed_batch_appender_start_batch(a);
+    TEST_ASSERT_EQUAL_INT64(73, bc->batch_offset);
+    mmapq_indexed_batch_appender_close(a);   /* "crash" with an empty open batch */
+
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
+    int64_t joined = -1;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_join_completed_open_batch(a, &joined));
+    MmapqMutableBatch *bd = mmapq_indexed_batch_appender_start_batch(a);
+    TEST_ASSERT_EQUAL_INT64(73, bd->batch_offset);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(bd, "z", 1));
+    TEST_ASSERT_EQUAL_INT64(1, mmapq_mutable_batch_complete(bd));
+    assert_batch_lane(DIR, QUEUE, 0, 82);
+    mmapq_indexed_batch_appender_close(a);
+}
+
+/* §7.7 D-E mode 4 (reshaped — the pack's start-B-while-open is illegal
+ * post-fix; fail-first record: the pack transcript, RESULTS-protrude
+ * mode 4): start while open ⇒ EINVAL; discard(A) stages it; staged B
+ * survives; rejoin rc 0; the walker yields BOTH A and B staged. */
+void test_batch_de_mode4_count0_hole(void)
+{
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
+    char big[200]; memset(big, 'A', sizeof big);
+    MmapqMutableBatch *ba = mmapq_indexed_batch_appender_start_batch(a);
+    for (int i = 0; i < 3; i++)
+        TEST_ASSERT_EQUAL_INT(i, mmapq_mutable_batch_append(ba, big, 200));
+
+    MmapqMutableBatch *bb = NULL;
+    TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL,
+        mmapq_indexed_batch_appender_start_batch_checked(a, &bb));   /* the refusal */
+    TEST_ASSERT_NULL(bb);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_discard(ba));       /* A staged-discarded */
+
+    bb = mmapq_indexed_batch_appender_start_batch(a);
+    TEST_ASSERT_EQUAL_INT64(680, bb->batch_offset);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(bb, "y", 1));
+    TEST_ASSERT_EQUAL_INT64(680, mmapq_mutable_batch_complete_uncommitted(bb));  /* B staged */
+    mmapq_indexed_batch_appender_close(a);
+
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
+    assert_batch_lane(DIR, QUEUE, 0, 689);
+
+    /* The walker yields both A and B, staged, exact bytes and offsets. */
+    MmapqUncommittedBatchIterator *it = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_batch_appender_uncommitted_batches_checked(a, &it));
+    int64_t off = -1; int32_t count = -1; MmapqBatchPayloadIterator *msgs = NULL;
+    TEST_ASSERT_EQUAL_INT(1, mmapq_uncommitted_batch_next(it, &off, &count, &msgs));
+    TEST_ASSERT_EQUAL_INT64(64, off);
+    TEST_ASSERT_EQUAL_INT32(3, count);
+    const void *data; int32_t len;
+    TEST_ASSERT_EQUAL_INT(1, mmapq_batch_iterator_next(msgs, &data, &len));
+    TEST_ASSERT_EQUAL_INT32(200, len);
+    TEST_ASSERT_EQUAL_MEMORY(big, data, 200);
+    TEST_ASSERT_EQUAL_INT(1, mmapq_uncommitted_batch_next(it, &off, &count, &msgs));
+    TEST_ASSERT_EQUAL_INT64(680, off);
+    TEST_ASSERT_EQUAL_INT32(1, count);
+    TEST_ASSERT_EQUAL_INT(1, mmapq_batch_iterator_next(msgs, &data, &len));
+    TEST_ASSERT_EQUAL_MEMORY("y", data, 1);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_uncommitted_batch_next(it, &off, &count, &msgs));
+    mmapq_indexed_batch_appender_close(a);
+}
+
+/* One-shot wrap-failure injection on the batch appender's payload accessor
+ * (the D8 stub idiom, adapted: the shared accessor is reached through the
+ * in-progress batch's internal iterator; the vtable is patched and the
+ * fast path invalidated). No new hooks; runs in both build configs. */
+static WrapResult (*bq_oneshot_real_wrap)(RegionAccessor *, int64_t, Buffer *);
+static int64_t bq_oneshot_pos;
+static int     bq_oneshot_hits;
+static WrapResult bq_oneshot_wrap(RegionAccessor *self, int64_t position, Buffer *buf)
+{
+    if (position == bq_oneshot_pos) {
+        bq_oneshot_hits++;
+        self->wrap = bq_oneshot_real_wrap;   /* one-shot: restore in place */
+        return WRAP_MAP_TIMED_OUT;
+    }
+    return bq_oneshot_real_wrap(self, position, buf);
+}
+static void bq_arm_oneshot(MmapqMutableBatch *b, int64_t fail_pos)
+{
+    MmapqBatchPayloadIterator *bit = mmapq_mutable_batch_iterator(b, 0);
+    TEST_ASSERT_NOT_NULL(bit);
+    RegionAccessor *acc = bit->payload_acc;
+    bq_oneshot_real_wrap = acc->wrap;
+    bq_oneshot_pos = fail_pos;
+    bq_oneshot_hits = 0;
+    acc->wrap = bq_oneshot_wrap;
+    region_accessor_invalidate_fast_path(acc);
+}
+
+/* §7.7 D-F (boundary padding marker): fail the wrap AFTER
+ * write_padding_if_needed has stored a long-padding marker (append returns
+ * -1, message_count unchanged); the batch completes with count > 0 and the
+ * marker sits at a batch boundary. Rejoin crosses it (§3.8), both batches
+ * poll exact, the walker sees no error, the validator passes.
+ * Pre-fix (recorded, ff49b dfmarker): probe_batch reads the marker as
+ * invalid — the rejoin positions AT the marker and the next batch
+ * overwrites forward (the D-E overlay). Mutant: §8 M16. */
+void test_batch_de_f1_boundary_padding_marker(void)
+{
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
+
+    /* B @64: m0 (4 bytes) @68; m1 is 32632 bytes — the remaining region
+     * capacity at 80 is 32768-80 = 32688, short by 4+... marker fills
+     * [80, 32768); the re-wrap at the next region (32768) is failed. */
+    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    TEST_ASSERT_EQUAL_INT64(64, b->batch_offset);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(b, "m0xx", 4));
+    char big[REGION_SZ - 79]; memset(big, 'Z', sizeof big);  /* len+4 > cap(76)=REGION_SZ-76 */
+    bq_arm_oneshot(b, REGION_SZ);
+    TEST_ASSERT_EQUAL_INT32(-1, mmapq_mutable_batch_append(b, big, (int32_t)sizeof big));
+    TEST_ASSERT_EQUAL_INT(1, bq_oneshot_hits);
+    TEST_ASSERT_EQUAL_INT32(1, b->message_count);   /* unchanged */
+
+    /* The batch completes (count 1 stored) and publishes at index 0. */
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_mutable_batch_complete(b));
+    /* C in the next region, staged then committed after the rejoin. */
+    int64_t off_c = bq_stage(a, 2);
+    TEST_ASSERT_EQUAL_INT64(REGION_SZ, off_c);
+    mmapq_indexed_batch_appender_close(a);
+
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
+    /* The walker refills the set (C was staged pre-close); then C commits. */
+    {
+        MmapqUncommittedBatchIterator *it = NULL;
+        TEST_ASSERT_EQUAL_INT(0,
+            mmapq_indexed_batch_appender_uncommitted_batches_checked(a, &it));
+        int64_t off = -1; int32_t count = -1; MmapqBatchPayloadIterator *msgs = NULL;
+        TEST_ASSERT_EQUAL_INT(1, mmapq_uncommitted_batch_next(it, &off, &count, &msgs));
+        TEST_ASSERT_EQUAL_INT64(REGION_SZ, off);
+        TEST_ASSERT_EQUAL_INT32(1, count);
+        const void *data; int32_t len;
+        TEST_ASSERT_EQUAL_INT(1, mmapq_batch_iterator_next(msgs, &data, &len));
+        TEST_ASSERT_EQUAL_MEMORY("m2xx", data, 4);
+        TEST_ASSERT_EQUAL_INT(0, mmapq_uncommitted_batch_next(it, &off, &count, &msgs));
+    }
+    TEST_ASSERT_EQUAL_INT64(1, mmapq_indexed_batch_appender_commit_batch(a, off_c));
+
+    MmapqIndexedBatchPoller *p = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_poller(q, &p));
+    BatchPollCapture cap = { .directive = MMAPQ_NEXT_ADVANCE };
+    TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_ADVANCED, mmapq_indexed_batch_poller_poll(p, capture_handler, &cap));
+    TEST_ASSERT_EQUAL_INT64(0, cap.captured_batch_index);
+    TEST_ASSERT_EQUAL_MEMORY("m0xx", cap.captured_first_msg, 4);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_ADVANCED, mmapq_indexed_batch_poller_poll(p, capture_handler, &cap));
+    TEST_ASSERT_EQUAL_INT64(1, cap.captured_batch_index);
+    TEST_ASSERT_EQUAL_MEMORY("m2xx", cap.captured_first_msg, 4);
+    mmapq_indexed_batch_poller_close(p);
+
+    bq_assert_batches(a, NULL, 0);   /* the walker sees no error, no yields */
+    assert_batch_lane(DIR, QUEUE, 0, REGION_SZ + 12);
+    mmapq_indexed_batch_appender_close(a);
+}
+
+/* §7.7: start_batch after a discard's pre-store failure recovers the
+ * orphaned open batch to staged (§3.7 state machine). Mutant: §8 M13. */
+void test_batch_start_recovers_orphaned_open_batch(void)
+{
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
+    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    TEST_ASSERT_EQUAL_INT64(64, b->batch_offset);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(b, "m0xx", 4));
+    TEST_ASSERT_EQUAL_INT(1, mmapq_mutable_batch_append(b, "m1xx", 4));
+
+    /* One-shot timeout at the discard's count-store wrap => ORPHANED. */
+    bq_arm_oneshot(b, 64);
+    TEST_ASSERT_EQUAL_INT(-1, mmapq_mutable_batch_discard(b));
+    TEST_ASSERT_EQUAL_INT(1, bq_oneshot_hits);
+
+    /* The next start_batch recovers the orphan (count stored, staged) and
+     * starts a new batch after it. */
+    MmapqMutableBatch *b2 = mmapq_indexed_batch_appender_start_batch(a);
+    TEST_ASSERT_NOT_NULL(b2);
+    TEST_ASSERT_EQUAL_INT64(84, b2->batch_offset);
+    int64_t joined = -1;
+    TEST_ASSERT_EQUAL_INT(1, mmapq_indexed_batch_appender_join_completed_open_batch(a, &joined));
+    TEST_ASSERT_EQUAL_INT64(64, joined);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(b2, "m2xx", 4));
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_mutable_batch_complete(b2));
+
+    /* The walker yields the orphaned batch (staged by the recovery): count
+     * 2, exact bytes. */
+    {
+        MmapqUncommittedBatchIterator *it = NULL;
+        TEST_ASSERT_EQUAL_INT(0,
+            mmapq_indexed_batch_appender_uncommitted_batches_checked(a, &it));
+        int64_t off = -1; int32_t count = -1; MmapqBatchPayloadIterator *msgs = NULL;
+        TEST_ASSERT_EQUAL_INT(1, mmapq_uncommitted_batch_next(it, &off, &count, &msgs));
+        TEST_ASSERT_EQUAL_INT64(64, off);
+        TEST_ASSERT_EQUAL_INT32(2, count);
+        const void *data; int32_t len;
+        TEST_ASSERT_EQUAL_INT(1, mmapq_batch_iterator_next(msgs, &data, &len));
+        TEST_ASSERT_EQUAL_MEMORY("m0xx", data, 4);
+        TEST_ASSERT_EQUAL_INT(1, mmapq_batch_iterator_next(msgs, &data, &len));
+        TEST_ASSERT_EQUAL_MEMORY("m1xx", data, 4);
+        TEST_ASSERT_EQUAL_INT(0, mmapq_uncommitted_batch_next(it, &off, &count, &msgs));
+    }
+    assert_batch_lane(DIR, QUEUE, 0, 96);
+    mmapq_indexed_batch_appender_close(a);
+}
+
+/* §7.12 batch twin (paths 2–4 in one shape): staged batches below the line
+ * are chopped by archiving and stay chopped after an undo; the genuinely
+ * uncommitted batch above the line is yielded exactly; a shorter forward
+ * archive after an undo never lowers the line (mutant M18, batch archiver
+ * twin). doc/design/archive-boundaries.md. (The out-of-order batch range
+ * build is §7.3's pin; this pin's commits are position-ordered so the
+ * shorter forward computes a below-line candidate.) */
+void test_batch_uncommitted_dg_line_respected(void)
+{
+    const char *qn = "mmap_test_ibq_c49_dg";
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd), "rm -rf %s/%s", DIR, qn);
+    if (system(cmd) != 0) { /* best-effort */ }
+    char qdir[256];
+    snprintf(qdir, sizeof(qdir), "%s/%s", DIR, qn);
+    mkdir(qdir, 0775);
+    MmapqIndexedBatchQueue *dq = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create(DIR, qn,
+        REGION_SZ, RING_SZ, 1, MAX_FILE, 0, TIMEOUT, 1, rt, rt, &dq));
+
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(dq, &a));
+    TEST_ASSERT_EQUAL_INT64(64, bq_stage(a, 0));
+    TEST_ASSERT_EQUAL_INT64(76, bq_stage(a, 1));
+    TEST_ASSERT_EQUAL_INT64(88, bq_stage(a, 2));
+    TEST_ASSERT_EQUAL_INT64(100, bq_stage(a, 3));
+    /* B0 (idx 0), B2 (idx 1), B3 (idx 2) commit; B1 stays staged. */
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_batch_appender_commit_batch(a, 64));
+    TEST_ASSERT_EQUAL_INT64(1, mmapq_indexed_batch_appender_commit_batch(a, 88));
+    TEST_ASSERT_EQUAL_INT64(2, mmapq_indexed_batch_appender_commit_batch(a, 100));
+
+    /* Archive all three: the line = end of B3 = 112; B1 @76 is chopped. */
+    MmapqIndexedBatchArchiver *ar = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_archiver(dq, &ar));
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_archiver_archive_up_to_index(ar, 3));
+    mmapq_indexed_batch_archiver_close(ar);
+
+    /* The genuinely uncommitted batch above the line. */
+    TEST_ASSERT_EQUAL_INT64(112, bq_stage(a, 4));
+    const int64_t want[] = { 112 };
+    bq_assert_batches(a, want, 1);
+    /* The chopped B1: commit is exactly EINVAL (overtaken). */
+    TEST_ASSERT_EQUAL_INT64(MMAPQ_EINVAL, mmapq_indexed_batch_appender_commit_batch(a, 76));
+
+    /* Undo: si and start_offset roll back; the line stands — the chopped
+     * B1 is still never yielded. */
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_archiver(dq, &ar));
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_archiver_archive_up_to_index(ar, 0));
+    mmapq_indexed_batch_archiver_close(ar);
+    {
+        AppenderMeta *m = NULL;
+        TEST_ASSERT_EQUAL_INT(0, mmapqi_appender_meta_open_ro(DIR, qn, 0, &m));
+        TEST_ASSERT_EQUAL_INT64(112, appender_meta_archive_offset(m));
+        mmapqi_appender_meta_close(m);
+    }
+    bq_assert_batches(a, want, 1);
+    /* Validator at the post-undo state (the write position is 124 — B4
+     * staged at [112, 124)); the later shorter forward leaves a
+     * live-header-below-the-floor state (the CAND-35 reality), which the
+     * validator's check 3 is not meant to cover. */
+    assert_batch_lane(DIR, qn, 0, 124);
+
+    /* A shorter forward archive computes a candidate below the line (end of
+     * B0 = 76 < 112): the max-store keeps the line. */
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_archiver(dq, &ar));
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_archiver_archive_up_to_index(ar, 1));
+    mmapq_indexed_batch_archiver_close(ar);
+    {
+        AppenderMeta *m = NULL;
+        TEST_ASSERT_EQUAL_INT(0, mmapqi_appender_meta_open_ro(DIR, qn, 0, &m));
+        TEST_ASSERT_EQUAL_INT64(112, appender_meta_archive_offset(m));
+        mmapqi_appender_meta_close(m);
+    }
+    bq_assert_batches(a, want, 1);
+
+    mmapq_indexed_batch_appender_close(a);
+    mmapq_indexed_batch_queue_close(dq);
+    if (system(cmd) != 0) { /* best-effort */ }
+}
+
+/* §7.12 batch twin of the legacy-zero ruling: a zero archive line is a
+ * pre-0.2.0 file — the factory refuses with exactly MMAPQ_ECORRUPT. */
+void test_batch_uncommitted_zero_archive_offset_refused(void)
+{
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
+    TEST_ASSERT_EQUAL_INT64(0, bq_publish(a, 0));
+    TEST_ASSERT_EQUAL_INT64(76, bq_stage(a, 1));
+
+    int fd = open("/tmp/mmap_test_ibq/appender_meta_0", O_WRONLY);
+    TEST_ASSERT_GREATER_THAN_INT(0, fd);
+    int64_t zero = 0;
+    TEST_ASSERT_EQUAL_INT(8, (int)pwrite(fd, &zero, 8, APPENDER_META_ARCHIVE_OFFSET_OFFSET));
+    close(fd);
+
+    MmapqUncommittedBatchIterator *it = NULL;
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ECORRUPT,
+        mmapq_indexed_batch_appender_uncommitted_batches_checked(a, &it));
+    TEST_ASSERT_NULL(it);
+    mmapq_indexed_batch_appender_close(a);
 }
 
 int main(void)
@@ -1823,5 +2626,30 @@ int main(void)
     RUN_TEST(test_batch_iterator_init_null_returns_null);
     RUN_TEST(test_batch_iterator_huge_count_walks_to_ecorrupt);
     RUN_TEST(test_batch_spanning_regions_commits_polls_recovers);
+    RUN_TEST(test_batch_uncommitted_bounded_gap_exact);
+    RUN_TEST(test_batch_uncommitted_out_of_order_ranges);
+    RUN_TEST(test_batch_uncommitted_gap_undershoot_is_corrupt);
+    RUN_TEST(test_batch_uncommitted_gap_overshoot_is_corrupt);
+    RUN_TEST(test_batch_commit_double_rejected);
+    RUN_TEST(test_batch_commit_never_staged_rejected);
+    RUN_TEST(test_batch_commit_out_of_order_multi_legal);
+    RUN_TEST(test_batch_complete_empty_rejected);
+    RUN_TEST(test_batch_complete_uncommitted_empty_rejected);
+    RUN_TEST(test_batch_complete_twice_rejected);
+    RUN_TEST(test_batch_discard_after_complete_rejected);
+    RUN_TEST(test_batch_discard_after_complete_uncommitted_rejected);
+    RUN_TEST(test_batch_discard_in_session_is_final);
+    RUN_TEST(test_batch_commit_after_open_discard_rejected);
+    RUN_TEST(test_batch_start_while_open_rejected);
+    RUN_TEST(test_batch_uncommitted_commit_after_rejoin);
+    RUN_TEST(test_batch_uncommitted_crash_recovery_end_to_end);
+    RUN_TEST(test_batch_de_mode1_discard_overlay);
+    RUN_TEST(test_batch_de_mode2_rejoin_completes_open_batch);
+    RUN_TEST(test_batch_de_mode2_empty_open_batch);
+    RUN_TEST(test_batch_de_mode4_count0_hole);
+    RUN_TEST(test_batch_de_f1_boundary_padding_marker);
+    RUN_TEST(test_batch_start_recovers_orphaned_open_batch);
+    RUN_TEST(test_batch_uncommitted_dg_line_respected);
+    RUN_TEST(test_batch_uncommitted_zero_archive_offset_refused);
     return UNITY_END();
 }

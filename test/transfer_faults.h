@@ -13,7 +13,6 @@ int64_t fault_append(MmapqIndexedAppender *, const void *, int32_t);
 int fault_batch_append(MmapqMutableBatch *, const void *, int32_t);
 int fault_batch_start(MmapqIndexedBatchAppender *, MmapqMutableBatch **);
 int64_t fault_batch_complete(MmapqMutableBatch *);
-int64_t fault_batch_commit(MmapqIndexedBatchAppender *, int64_t);
 int fault_create(MmapqIndexedQueue *, uint8_t, MmapqIndexedAppender **);
 int fault_batch_create(MmapqIndexedBatchQueue *, uint8_t, MmapqIndexedBatchAppender **);
 #endif

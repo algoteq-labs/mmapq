@@ -13,8 +13,12 @@
  *
  *   1. Start a new batch:   MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
  *   2. Append messages:     mmapq_mutable_batch_append(b, data, length);
- *   3. Complete the batch:  int64_t offset = mmapq_mutable_batch_complete(b);
- *   4. Commit the batch:    int64_t index  = mmapq_indexed_batch_appender_commit_batch(a, offset);
+ *   3. Publish the batch:   int64_t index  = mmapq_mutable_batch_complete(b);
+ *
+ * To stage a batch for a later commit (out-of-order commit, crash-safe
+ * staging): complete_uncommitted() instead of complete(), then
+ * commit_batch(offset) — any subset, any order, same session or after
+ * rejoin (the uncommitted-batches iterator refills found offsets).
  *
  * The returned batch index can be used for random-access reading via an
  * indexed batch reader.
@@ -28,12 +32,16 @@
 
 typedef struct MmapqIndexedBatchAppender MmapqIndexedBatchAppender;
 
+/* Opaque iterator over uncommitted batches — struct definition is private
+ * (src/internal/). */
+typedef struct MmapqUncommittedBatchIterator MmapqUncommittedBatchIterator;
+
 /**
  * MmapqMutableBatch — an in-progress batch being constructed before commit.
  *
  * Owned by the appender. Valid only between mmapq_indexed_batch_appender_start_batch()
- * and mmapq_indexed_batch_appender_commit_batch(). Do not retain a pointer to it across
- * a commit or close.
+ * and its consumption by complete / complete_uncommitted / discard. Do not
+ * retain a pointer to it across a commit or close.
  *
  * The internal iterator used by mmapq_mutable_batch_get() and mmapq_mutable_batch_iterator()
  * is shared — these two accessors must not be used concurrently on the same batch.
@@ -46,6 +54,10 @@ struct MmapqMutableBatch {
     MmapqIndexedBatchAppender *appender;
     int64_t               batch_offset;
     int32_t               message_count;
+    /* CAND-49 §3.5: set by complete / complete_uncommitted / discard at the
+     * count store (or the empty-batch reset). Using a consumed handle is
+     * undefined (C); Rust/Python enforce this by ownership. */
+    int                   consumed;
 };
 
 /* ── Factory ─────────────────────────────────────────────────────────────── */
@@ -111,12 +123,17 @@ int mmapq_indexed_batch_appender_create_with_id(
  * Start a new batch.
  *
  * The returned MmapqMutableBatch is in-progress. Messages must be appended,
- * the batch completed with mmapq_mutable_batch_complete(), and then committed
- * with mmapq_indexed_batch_appender_commit_batch().
+ * then the batch published with mmapq_mutable_batch_complete(), staged with
+ * mmapq_mutable_batch_complete_uncommitted(), or discarded with
+ * mmapq_mutable_batch_discard().
  *
- * Only one batch may be in progress at a time per appender.
+ * Only one batch may be in progress at a time per appender: starting while
+ * one is open returns NULL (MMAPQ_EINVAL via the checked variant). Starting
+ * after a discard's pre-store failure first recovers the orphaned open
+ * batch to staged (see mmapq_indexed_batch_appender_join_completed_open_batch).
  *
- * Returns: pointer to the appender-owned MmapqMutableBatch (valid until commit or close),
+ * Returns: pointer to the appender-owned MmapqMutableBatch (valid until
+ *         complete/complete_uncommitted/discard or close),
  *         or NULL on mapping timeout
  */
 MmapqMutableBatch *mmapq_indexed_batch_appender_start_batch(MmapqIndexedBatchAppender *a);
@@ -132,48 +149,157 @@ int mmapq_indexed_batch_appender_start_batch_checked(
     MmapqIndexedBatchAppender *appender, MmapqMutableBatch **out);
 
 /**
- * Finalise the batch by writing the message count to the batch header.
+ * Finalise the batch and PUBLISH it (CAND-49: complete is now the one-call
+ * publish — it stores the message count and commits the batch header).
  *
- * After calling this, no further appends may be made to the batch.
+ * After calling this, no further appends may be made to the batch; the
+ * handle is consumed. On a publish failure after the count store (mapping
+ * timeout), the batch is staged — its offset becomes committable via
+ * mmapq_indexed_batch_appender_commit_batch() (and via the uncommitted
+ * iterator after a rejoin).
  *
  * b: the in-progress batch
- * Returns: the payload offset of the completed batch (to be passed to
- *         mmapq_indexed_batch_appender_commit_batch()), or -1 on mapping timeout
+ * Returns: the zero-based index of the committed batch,
+ *         or MMAPQ_EINVAL for a NULL/consumed handle or an empty batch
+ *         (message_count == 0 — the handle stays open; discard it instead),
+ *         or MMAPQ_ECLOSED on a closed appender,
+ *         or -1 on mapping timeout (before the count store the handle
+ *         stays open; after it, see above),
+ *         or MMAPQ_ECORRUPT if the batch offset is outside the encodable
+ *         56-bit field
  */
 int64_t mmapq_mutable_batch_complete(MmapqMutableBatch *b);
 
 /**
- * Commit a completed batch, making it visible to pollers and readers.
+ * Finalise the batch WITHOUT publishing it (stage): stores the message
+ * count and returns the batch offset for a later
+ * mmapq_indexed_batch_appender_commit_batch(). The handle is consumed.
+ *
+ * b: the in-progress batch
+ * Returns: the payload offset of the staged batch,
+ *         or MMAPQ_EINVAL for a NULL/consumed handle or an empty batch
+ *         (the handle stays open),
+ *         or MMAPQ_ECLOSED on a closed appender,
+ *         or MMAPQ_ENOMEM if the outstanding-offset set cannot grow (nothing
+ *         is stored; the handle stays open),
+ *         or -1 on mapping timeout (the handle stays open)
+ */
+int64_t mmapq_mutable_batch_complete_uncommitted(MmapqMutableBatch *b);
+
+/**
+ * Discard an in-progress batch without committing it (CAND-49: replaces
+ * mmapq_indexed_batch_appender_discard_batch; batch lanes are forward-only).
+ *
+ * message_count > 0: the count is stored — the batch becomes a staged
+ * record that is never committed (the write position is already past it;
+ * no reset). In-session, commit_batch of its offset returns EINVAL —
+ * discard is final. After a restart, the uncommitted iterator reports it
+ * (refill makes it committable; recovery code decides).
+ * message_count == 0: the write position resets to the batch start (nothing
+ * but the untouched count slot lies between); the next batch overwrites
+ * the slot.
+ *
+ * b: the in-progress batch
+ * Returns: 0 on success, MMAPQ_EINVAL for a NULL/consumed handle,
+ *         MMAPQ_ECLOSED on a closed appender, or -1 on a pre-store mapping
+ *         failure (the handle stays open-orphaned; the next start_batch
+ *         recovers it to staged — see
+ *         mmapq_indexed_batch_appender_join_completed_open_batch)
+ */
+int mmapq_mutable_batch_discard(MmapqMutableBatch *b);
+
+/**
+ * Commit a staged batch, making it visible to pollers and readers.
  *
  * The CAS on the header entry is atomic — once this returns, any poller
  * waiting on this index will see the batch.
  *
  * a:           the appender
- * batch_offset: the value returned by mmapq_mutable_batch_complete()
+ * batch_offset: the value returned by mmapq_mutable_batch_complete_uncommitted(),
+ *              or an offset yielded by the uncommitted-batches iterator
  * Returns: the zero-based index of the committed batch,
- *         or -1 on mapping timeout, or MMAPQ_EINVAL if batch_offset is
- *         above this appender's last written start (a batch it never
- *         started — CAND-32)
+ *         or -1 on mapping timeout,
+ *         or MMAPQ_EINVAL if batch_offset is not outstanding (never staged
+ *         by this incarnation, already committed, a discarded batch, above
+ *         the last started batch) or has been overtaken by archiving (its
+ *         position is below the appender's current start_offset),
+ *         or MMAPQ_ECLOSED on a closed appender,
+ *         or MMAPQ_ECORRUPT if the batch offset is outside the encodable
+ *         56-bit field
  */
 int64_t mmapq_indexed_batch_appender_commit_batch(MmapqIndexedBatchAppender *a, int64_t batch_offset);
 
 /**
- * Discard an in-progress batch without committing it.
+ * Report whether this appender's join completed a trailing open batch to
+ * staged (at the rejoin, or by start_batch's orphan recovery).
  *
- * Resets the appender's payload write position to @p batch_offset,
- * effectively undoing all appends made since the corresponding
- * mmapq_indexed_batch_appender_start_batch() call. A zero message count is
- * written at the batch offset so recovery scanners skip past it.
- *
- * Safe to call when the batch was started but never completed, or after
- * mmapq_mutable_batch_complete() was called but before commit. Not needed when
- * commit succeeds — the batch is then permanent.
- *
- * a:           the appender
- * batch_offset: the value returned by mmapq_mutable_batch_complete(),
- *                     or the offset from start_batch if never completed
+ * a:      the appender
+ * offset: receives the completed batch's offset when 1 is returned
+ * Returns: 1 once per join-completion event (read-and-clear), 0 otherwise.
+ *         The batch was completed by the queue, not the app: it may lack
+ *         messages the app intended; the last counted message may have
+ *         partial content.
  */
-void mmapq_indexed_batch_appender_discard_batch(MmapqIndexedBatchAppender *a, int64_t batch_offset);
+int mmapq_indexed_batch_appender_join_completed_open_batch(
+    MmapqIndexedBatchAppender *a, int64_t *offset);
+
+/**
+ * mmapq_indexed_batch_appender_uncommitted_batches_checked — iterate only
+ * uncommitted batches (CAND-49 §3.6; checked factory).
+ *
+ * Appender-owned iterator, no destroy (freed by
+ * mmapq_indexed_batch_appender_close); a factory call re-initialises it
+ * (snapshot at init — new appends/commits after the call are invisible).
+ * The batch walk takes no start/end parameters: it runs from
+ * appender_meta.archive_offset (the archive line,
+ * doc/design/archive-boundaries.md) to the frozen end of stream. The
+ * appending context must not be active while iterating.
+ *
+ * a:   the appender
+ * out: receives the iterator (NULL on failure)
+ * Returns 0 on success; MMAPQ_EINVAL for NULL args; MMAPQ_ETIMEDOUT on a
+ * transient scan timeout (retryable — a NEW factory call);
+ * MMAPQ_ECORRUPT on genuine scan truncation or gap-boundary corruption, or
+ * a zero archive line (a pre-0.2.0 file — recreate the queue).
+ *
+ * The iterator yields batches staged but never committed, from the archive
+ * line onward; archiving may chop older uncommitted batches, even after an
+ * undo; queues created before 0.2.0 must be recreated (zero-line refusal);
+ * a Java archiver must not be run against 0.2.0 queues. Discarded batches
+ * reappear in recovery after a restart — the walker reports them and
+ * refill makes them committable; recovery code decides (owner ruling 8).
+ * A found batch is committed with the existing
+ * mmapq_indexed_batch_appender_commit_batch() — any subset, any order, same
+ * session or after rejoin; not committing = skip; an offset archiving has
+ * overtaken returns EINVAL. Each yielded offset becomes committable
+ * (refill).
+ */
+int mmapq_indexed_batch_appender_uncommitted_batches_checked(
+    MmapqIndexedBatchAppender *a,
+    MmapqUncommittedBatchIterator **out);
+
+/**
+ * mmapq_uncommitted_batch_next — advance and read the current batch.
+ *
+ * it:            iterator from mmapq_indexed_batch_appender_uncommitted_batches_checked
+ * batch_offset:  receives the batch offset (pass to commit_batch)
+ * message_count: receives the batch's message count
+ * msgs:          receives the appender-owned message iterator over the
+ *                batch (re-initialised per next; invalidated by the next
+ *                next); read via the existing public batch accessors
+ *                (mmapq_batch_iterator_advance / _next / ffi accessors)
+ *
+ * Three-way: 1 batch / 0 exhausted (outputs cleared) / negative MMAPQ_E*
+ * (ETIMEDOUT retryable with unchanged state / ECORRUPT / ENOMEM on refill
+ * failure, state unchanged — the next call re-yields the same batch;
+ * outputs cleared on any non-1 return). A negative is truthy in C: compare
+ * explicitly, never `while (mmapq_uncommitted_batch_next(...))`.
+ */
+int mmapq_uncommitted_batch_next(
+    MmapqUncommittedBatchIterator *it,
+    int64_t     *batch_offset,
+    int32_t     *message_count,
+    MmapqBatchPayloadIterator **msgs);
 
 /**
  * Convenience: start, append, complete, and commit a single-message batch
@@ -182,8 +308,7 @@ void mmapq_indexed_batch_appender_discard_batch(MmapqIndexedBatchAppender *a, in
  * Equivalent to:
  *   MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
  *   mmapq_mutable_batch_append(b, data, length);
- *   int64_t off = mmapq_mutable_batch_complete(b);
- *   return mmapq_indexed_batch_appender_commit_batch(a, off);
+ *   return mmapq_mutable_batch_complete(b);
  *
  * a:     the appender
  * data:  pointer to the message payload

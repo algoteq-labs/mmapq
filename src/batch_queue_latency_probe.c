@@ -136,8 +136,7 @@ uint64_t mmapqi_batch_queue_latency_probe_execute(BatchQueueLatencyProbe *p)
 
     MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(p->request_appender);
     mmapq_mutable_batch_append(b, p->msg_buffer, p->message_size);
-    int64_t off = mmapq_mutable_batch_complete(b);
-    mmapq_indexed_batch_appender_commit_batch(p->request_appender, off);
+    mmapq_mutable_batch_complete(b);   /* CAND-49 §3.5: complete publishes */
 
     while (!atomic_load(&p->response_received)) {
         mmapq_indexed_batch_poller_poll(p->response_poller, client_handler, p);
@@ -162,7 +161,7 @@ void mmapqi_batch_queue_latency_probe_send_shutdown(BatchQueueLatencyProbe *p)
 
     MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(p->request_appender);
     mmapq_mutable_batch_append(b, p->msg_buffer, p->message_size);
-    mmapq_indexed_batch_appender_commit_batch(p->request_appender, mmapq_mutable_batch_complete(b));
+    mmapq_mutable_batch_complete(b);   /* CAND-49 §3.5: complete publishes */
 
     uint64_t timeout_at = mmapq_monotonic_nanos() + 2000000000ULL; /* 2 seconds */
     while (!atomic_load(&p->response_received) && mmapq_monotonic_nanos() < timeout_at)
