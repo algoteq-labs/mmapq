@@ -17,3 +17,6 @@ cand35_crash_listing_cap PASS 2
 cand35_no_wait_listing_cap FAIL 0
 cand35_narrow_wait FAIL 0
 hand_delete_undo_rule PASS 1
+cand49_iterate_regression PASS 1
+cand49_iterate_i1 PASS 2
+cand49_iterate PASS 2

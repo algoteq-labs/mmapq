@@ -49,7 +49,10 @@ be narrowed to the pre-CAS window.
 | Undo | `UndoStart` (check files exist, lower to lowest restored position), `UndoSi` | backward branch of `archive_up_to_index_locked` |
 | Listing / deletion | `List1` (mark), `List2`+`Delete` fused under `AtomicDelete=TRUE` (re-list, intersect, unlink in one step); unfused (`Delete` outside the lock) for the hand protocol; `Bound(a)` = `min(so[a], LowestLive(a))` under `ListingLivePass` | `archivable_files` (mark); `mmapq_indexed_archiver_reclaim_files` + batch twin (fused); the hand-deleter protocol in `archiving-design.md` "Deleting files" (unfused); the cap: the live-header scan in `archivable_files_locked` (both twins), checked reads, first `HEADER_NULL` ends the scan |
 | Hand-deleter undo rule | `UndoStart` guard (`UndoRule`) | the hand-deleter paragraph in `archiving-design.md` "Deleting files" |
-| Memory | `Flush` drains the archiver's buffered `start_offset` stores | store buffer, closed by the archiver's seq_cst fence |
+| Memory | `Flush` drains the archiver's buffered `start_offset`/`archive_offset` stores | store buffer, closed by the archiver's seq_cst fence |
+| Uncommitted iteration (CAND-49) | `IterateUncommitted` refills the pending set from the lane's surviving uncommitted positions at or above the archive line (`IterEffAoffChoices`: acquire si first, then the line — the D-G publication rule; the harmless early-line direction is a modelled nondeterministic choice) | the `_checked` iterator factories (snapshot at init; refill on yield) |
+| The pending flag (CAND-49) | `flag[a]` — the `last_pending_offset` tail; set only by `AppendUncommitted`, cleared on commit success/overtake and by `Crash`/`Join`; the set is uniform, the flag is modelled | `indexed_appender.c` `last_pending_offset` (§3.3/§3.4 double conjunct) |
+| The archive line (D-G) | `aoff[a]` — raised only by a forward archive (`Publish`/`Flush`, `Max2`); never lowered. `ArchiveLineMonotonic` pins it | `appender_meta.archive_offset` — see `doc/design/archive-boundaries.md` |
 
 **Abstractions.** Each appender owns a payload lane; a message occupies
 one position and ends at `p+1`; payload file `f` holds positions
@@ -86,6 +89,9 @@ positions (see Results) adds depth, not exhaustiveness.
 | `HeadersReferenceMessages` | Every header points at a message that was actually written. |
 | `I1` | Outside an archive operation, each lane's `start_offset` ≤ every live payload of that lane, except a commit between its CAS and its re-check (design I1/I3). |
 | `PassWithinSnapshot` | The live pass never reads past the tail it saw at its fence (CAND-31). |
+| `NoDoubleCommit` | No two header slots, live or archived, ever reference the same message — a duplicate is a double delivery to pollers (CAND-49 D-G; the property that pins the archive-line design). Model-only: the C counterpart is the test-only lane validator's header-uniqueness check, never a commit-path runtime check. |
+| `ArchiveLineMonotonic` | `archive_offset` never decreases (via the `aoffPrev` ghost): only a forward archive raises it; the commit min, live pass, rollback, and undo never touch it (D-G). |
+| `ArchiveLineNeverDecreases` | The total form, a checked PROPERTY: *every* step keeps `aoff'[a] >= aoff[a]` — a lowering added to any action violates it on the spot, where the ghost only watches Flush. Mutation record (PassFail with `aoff' := 0`): this property fails at 0 s, the ghost fails later (2 s), `NoDoubleCommit` dies at 1 s to the reopened D-G. |
 
 ## Variant switches
 
@@ -96,6 +102,7 @@ positions (see Results) adds depth, not exhaustiveness.
 | `UndoRule` | Landed documented rule (CAND-36): for hand-deleters, undo never starts between the re-list and the unlink; `reclaim_files` enforces it by holding the lock across both steps. |
 | `ListingLivePass` | Landed fix (CAND-35): the listing caps each lane's boundary at the lowest live payload visible in the headers (`archivable_files`; `reclaim_files` inherits it through the re-list). |
 | `WaitPreCasOnly` | Historical record (CAND-35 review): the wait narrowed to the pre-CAS window — UNSAFE even with the cap (`cand35_narrow_wait`); landed so the wait is never narrowed. |
+| `IterateRefill` | CAND-49: enable `IterateUncommitted` (default FALSE; inert by construction when FALSE). |
 | `BoundedPass` | CAND-31 proposal: the live pass stops at the tail seen after the fence. |
 | `ArchFence`, `CommitFence` | The two seq_cst fences. |
 | `WaitAssumption` | The deleter's second listing happens only when no commit is between its pre-check and its re-check (what "wait" in the deletion protocol must achieve). |
@@ -104,26 +111,47 @@ positions (see Results) adds depth, not exhaustiveness.
 
 ## Results (TLC exhaustive, bounds above)
 
+Counts below are the CAND-49 encoding (`flag[a]`, `aoff[a]`/`sbAoff[a]`;
+2026-10-19): every pre-existing check kept its verdict — FAIL checks fail
+on the recorded invariant — and the count deltas are the flag/archive-line
+state encoding (owner-accepted). Pre-CAND-49 counts are in git history.
+
 | Check | Expect | Result | Distinct states |
 |---|---|---|---|
-| `current` | PASS | pass | 44,763,809 |
-| `current_no_undo` | PASS | pass | 7,465,618 |
-| `current_no_undo_no_timeout` | PASS | pass | 4,979,768 |
+| `current` | PASS | pass | 141,812,096 |
+| `current_no_undo` | PASS | pass | 11,467,666 |
+| `current_no_undo_no_timeout` | PASS | pass | 7,650,853 |
 | `cand36_undo_race` | FAIL | `NoLiveLoss` | — |
-| `cand37_cas_publish` | PASS | pass | 7,465,618 |
-| `fixed` | PASS | pass | 44,590,581 |
+| `cand37_cas_publish` | PASS | pass | 11,467,666 |
+| `fixed` | PASS | pass | 140,849,111 |
 | `naive_delete` | FAIL | `NoLiveLoss` | — |
 | `no_wait` | FAIL | `NoLiveLoss` | — |
 | `no_fence_archiver` | FAIL | `I1` | — |
 | `no_fence_committer` | FAIL | `I1` | — |
 | `cand33_arbitrary_commit` | FAIL | `HeadersReferenceMessages` | — |
 | `cand31_chase` | FAIL | `PassWithinSnapshot` | — |
-| `cand31_bounded` | PASS | pass | 36,454,766 |
+| `cand31_bounded` | PASS | pass | 117,668,995 |
 | `cand35_crash` | FAIL | `I1` | — |
-| `cand35_crash_listing_cap` | PASS | pass | 195,522,487 |
+| `cand35_crash_listing_cap` | PASS | pass | 195,522,487 † |
 | `cand35_no_wait_listing_cap` | FAIL | `NoLiveLoss` | — |
 | `cand35_narrow_wait` | FAIL | `NoLiveLoss` | — |
-| `hand_delete_undo_rule` | PASS | pass | 56,137,369 |
+| `hand_delete_undo_rule` | PASS | pass | 179,748,536 |
+| `cand49_iterate_regression` | PASS | pass | 9,798,122 |
+| `cand49_iterate_i1` | PASS | pass | 141,812,096 ‡ |
+| `cand49_iterate` | PASS | pass | 878,242,588 †† |
+
+† Not re-run at the CAND-49 encoding (speed 2, outside the default tier);
+the count is the pre-encoding run. The pre-release `--all` re-run re-records
+it.
+
+‡ Equals the control's count exactly: refill is inert without crashes
+(nothing clears the pending set/flag), so this check's value is I1 over
+the CAND-49 encoding; refill is exercised by the crash checks.
+
+†† `cand49_iterate` passed on the v2.2-draft (deterministic-read) encoding;
+its re-run on the final encoding (the nondeterministic early-line read) is
+deferred to the pre-release `--all` run (owner, 2026-10-19) —
+`cand49_iterate_regression` covers crash + the branch in the default tier.
 
 **Random simulation at larger bounds** (6 header slots, 6 positions per
 lane, traces up to depth 120, TLC `-simulate`):
@@ -235,8 +263,47 @@ publishes a header to garbage. The model's commit takes offsets only from
 the appender's pending set; that set is exactly what the library must
 track to close CAND-33 for the plain appender.
 
+### CAND-49 (D-G): the iterator and the archive line
+
+`cand49_iterate*` model the uncommitted iterator: `IterateUncommitted`
+refills an appender's pending set from the lane's written-but-uncommitted
+positions that survive on disk after a crash (the queue itself does not
+recover anything; the iterator is a tool for *application* recovery).
+The modelling decisions, all from executed counterexamples:
+
+- The pending **flag** is modelled (`flag[a]`): a uniform pending set let
+  a refilled, previously-committed offset equal to the last appended take
+  the commit fast path and publish a second header below the boundary
+  (I1, 15-state trace). The C fast path's double conjunct
+  (`offset == last_appended && offset == last_pending_offset`) excludes
+  this; the model now transcribes it.
+- **D-G:** the iterator could report an already-committed message as
+  uncommitted whenever the readability floor (`start_offset`) sat below
+  an archived committed position — reachable by a mid-archive race, by
+  the commit re-check min, by a rollback, and mid-undo (four
+  `NoDoubleCommit` traces). The fix splits the floor from the new
+  monotonic **archive line** (`aoff[a]`, raised only by a forward
+  archive; `ArchiveLineMonotonic` (ghost) and `ArchiveLineNeverDecreases`
+  (total action property) pin it). The full design, semantics
+  (including the aborted-archive case), worked example, and rejected
+  alternatives: **`doc/design/archive-boundaries.md`**.
+- The iterator's read is the publication pair: acquire si first, then the
+  line; when si does not yet show the in-flight archive, the model
+  nondeterministically allows the line's new value to be visible early
+  (harmless; checked, not just argued — branch on/off state counts on the
+  regression check differ: 9,798,122 vs 9,797,714).
+
+`cand49_iterate` (crashes on, full bounds) and `cand49_iterate_i1`
+(crashes off, I1 on) are speed-2 (`--all`); `cand49_iterate_regression`
+(crash on, reduced bounds, ~3 min) is the default-tier guard. Fail-first
+record: the regression check FAILs `NoDoubleCommit` in 3 s against the
+pre-archive-line model (rollback trace).
+
 ## Maintenance rule
 
 Any change to forward archiving, rollback, undo, the commit fast or slow
-path, join, or `archivable_files` updates this model and its mapping table
-in the same task, and re-runs `./check.sh` (and `--all` before release).
+path, join, `archivable_files`, the uncommitted iterator's snapshot
+discipline, or anything that writes `archive_offset` updates this model
+and its mapping table in the same task, and re-runs `./check.sh` (and
+`--all` before release). `cand49_iterate_regression` in the default tier
+is the D-G tripwire.
