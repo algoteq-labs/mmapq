@@ -402,6 +402,65 @@ Typical usage in production:
 3. On restart: download the relevant chunks, import with PRESERVE mode,
    and replay to the point of interest.
 
+### Crash recovery — uncommitted messages and batches
+
+After a restart, messages this lane appended but never committed (and
+batches staged or discarded before a crash) are recoverable by the
+rejoining lane owner. The iterator snapshots at the factory call; the
+appending context must not be active while iterating. Commit found offsets
+with `mmapq_indexed_appender_commit()` — any subset, any order; skipping
+is fine. Archiving may remove messages the walk has not yielded, even
+after an undo; queues created before 0.2.0 must be recreated (a zero
+archive line is refused with `MMAPQ_ECORRUPT`).
+
+```c
+#include <inttypes.h>
+#include "runtime.h"
+#include "indexed_queue.h"
+#include "indexed_appender.h"
+
+MmapqRuntime *rt = NULL;
+assert(mmapq_runtime_region_mapper(&rt) == 0);
+
+MmapqIndexedQueue *q = NULL;
+assert(mmapq_indexed_queue_create_default("./data", "orders", rt, rt, &q) == 0);
+
+MmapqIndexedAppender *a = NULL;
+assert(mmapq_indexed_queue_create_appender(q, &a) == 0);
+
+MmapqUncommittedPayloadIterator *it = NULL;
+assert(mmapq_indexed_appender_uncommitted_iterator_checked(
+    a, MMAPQ_PAYLOAD_ITERATOR_NOT_SET, MMAPQ_PAYLOAD_ITERATOR_NOT_SET,
+    &it) == 0);
+
+const void *data; int32_t len; int64_t off; int rc;
+while ((rc = mmapq_uncommitted_iterator_next(it, &data, &len, &off)) == 1) {
+    printf("recovered %d bytes at %" PRId64 "\n", len, off);
+    assert(mmapq_indexed_appender_commit(a, off) >= 0);  /* or skip */
+}
+/* Three-way: 1 message / 0 exhausted / negative MMAPQ_E*. A negative is
+ * truthy in C — compare explicitly, never
+ * while (mmapq_uncommitted_iterator_next(...)) */
+assert(rc == 0);
+
+mmapq_indexed_appender_close(a);
+mmapq_indexed_queue_close(q);
+mmapq_runtime_destroy(rt);
+```
+
+Batch lanes: `mmapq_indexed_batch_appender_uncommitted_batches_checked()`
+yields staged-but-uncommitted batches (offset + message iterator);
+`mmapq_indexed_batch_appender_commit_batch()` publishes a found offset;
+discarded batches reappear in recovery after a restart — recovery code
+decides. `mmapq_indexed_batch_appender_join_completed_open_batch()`
+reports a crash-interrupted open batch the rejoin completed to staged.
+
+**Java interop is not supported in 0.2.0. A Java archiver does not
+maintain archive_offset.** The silent case: a queue created by C but
+archived by Java has a stale non-zero line, the zero-line refusal does
+not trigger, and recovery (D-G) reopens without any error — a Java
+archiver must not be run against 0.2.0 queues (CAND-52).
+
 ---
 
 ## Design

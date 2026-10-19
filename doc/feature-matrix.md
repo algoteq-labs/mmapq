@@ -45,7 +45,8 @@ must not be interpreted as an existing queue's authoritative disk geometry.
 | Append uncommitted + explicit commit | ✓ | ✓ | ✓ |
 | Appender with specific ID (single-message + batch) | ✓ | ✓ | ✓ |
 | Appender ID / current index / start offset accessors | ✓ | ✓ | ◐ id only |
-| Committed / uncommitted payload iterators | ✓ | ◐ via FFI layer | — |
+| Uncommitted payload iterator (recovery walk, archive line → end) | ✓ `mmapq_indexed_appender_uncommitted_iterator_checked` + `mmapq_uncommitted_iterator_next` in `src/indexed_appender.c`; test `test_uncommitted_iterator_finds_uncommitted` in `test/test_indexed_queue.c` | ✓ `uncommitted_iter` in `../mmapq-rs/src/appender.rs` + `UncommittedIter::next` in `../mmapq-rs/src/uncommitted.rs`; test `uncommitted_iter_finds_uncommitted` in `../mmapq-rs/tests/recovery.rs` | ✓ `uncommitted` in `../mmapq-py/src/mmapq/single_appender.py`; test `test_uncommitted_finds_uncommitted` in `../mmapq-py/tests/test_recovery.py` |
+| All-payloads iterator (`mmapq_indexed_appender_iterator`) | ◐ incomplete — factory only, no public advance/current accessors; CAND-50 owns the open question | ◐ via FFI layer (same caveat) | — |
 | Zero-length append rejected (`MMAPQ_EINVAL`) at runtime | ✓ | ✓ `Err(InvalidArgument)` | ✓ raises `ValueError` |
 | Crash recovery: appender resumes position after restart | ✓ | ✓ (via C) | ✓ (via C) |
 
@@ -53,8 +54,11 @@ must not be interpreted as an existing queue's authoritative disk geometry.
 
 | Feature | C | Rust | Python |
 |---|---|---|---|
-| Start batch → append N messages → atomic commit (command/event transaction pattern) | ✓ | ✓ `BatchWriter`, commit consumes writer | ✓ context manager, discard on any exit without commit |
-| Discard batch (rollback) | ✓ | ✓ (drop) | ✓ (any exit without commit) |
+| Start batch → append N messages → publish (`complete` is the one-call publish: stores the count and commits the header) | ✓ `mmapq_mutable_batch_complete` in `src/indexed_batch_appender.c`; test `test_batch_de_mode2_empty_open_batch` in `test/test_indexed_batch_queue.c` | ✓ `BatchWriter::commit` consumes writer in `../mmapq-rs/src/batch/batch_appender.rs`; test `rejoin_completes_open_batch` in `../mmapq-rs/tests/recovery.rs` | ✓ `BatchWriter.commit` in `../mmapq-py/src/mmapq/batch_appender.py`; test `test_rejoin_completes_open_batch` in `../mmapq-py/tests/test_recovery.py` |
+| Stage without publish → later commit by offset (`complete_uncommitted` + `commit_batch`; the staged/recovered commit path) | ✓ `mmapq_mutable_batch_complete_uncommitted` + `mmapq_indexed_batch_appender_commit_batch` in `src/indexed_batch_appender.c`; test `test_batch_uncommitted_commit_after_rejoin` in `test/test_indexed_batch_queue.c` | ✓ `BatchWriter::complete_uncommitted` + `IndexedBatchAppender::commit_batch` in `../mmapq-rs/src/batch/batch_appender.rs`; test `batch_complete_uncommitted_then_commit_batch` in `../mmapq-rs/tests/recovery.rs` | ✓ `BatchWriter.complete_uncommitted` + `IndexedBatchAppender.commit_batch` in `../mmapq-py/src/mmapq/batch_appender.py`; test `test_complete_uncommitted_then_commit_batch` in `../mmapq-py/tests/test_recovery.py` |
+| Discard batch (rollback; discard-only on guard exit — never complete, which publishes now) | ✓ `mmapq_mutable_batch_discard` in `src/indexed_batch_appender.c`; test `test_batch_de_mode1_discard_overlay` in `test/test_indexed_batch_queue.c` | ✓ `BatchWriter::drop` in `../mmapq-rs/src/batch/batch_appender.rs`; test `discarded_batch_reappears_in_recovery` in `../mmapq-rs/tests/recovery.rs` | ✓ `BatchWriter.__exit__` in `../mmapq-py/src/mmapq/batch_appender.py`; test `test_discarded_batch_reappears_in_recovery` in `../mmapq-py/tests/test_recovery.py` |
+| Uncommitted batch iterator (recovery walk, archive line → frozen end; discarded batches reappear after a restart) | ✓ `mmapq_indexed_batch_appender_uncommitted_batches_checked` + `mmapq_uncommitted_batch_next` in `src/indexed_batch_appender.c`; test `test_batch_uncommitted_crash_recovery_end_to_end` in `test/test_indexed_batch_queue.c` | ✓ `uncommitted_batches` in `../mmapq-rs/src/batch/batch_appender.rs` + `UncommittedBatches::next` in `../mmapq-rs/src/batch/uncommitted.rs`; test `discarded_batch_reappears_in_recovery` in `../mmapq-rs/tests/recovery.rs` | ✓ `uncommitted_batches` in `../mmapq-py/src/mmapq/batch_appender.py`; test `test_discarded_batch_reappears_in_recovery` in `../mmapq-py/tests/test_recovery.py` |
+| Join completion of a trailing open batch (reported once, read-and-clear) | ✓ `mmapq_indexed_batch_appender_join_completed_open_batch` in `src/indexed_batch_appender.c`; test `test_batch_de_mode2_rejoin_completes_open_batch` in `test/test_indexed_batch_queue.c` | ✓ `join_completed_open_batch` in `../mmapq-rs/src/batch/batch_appender.rs`; test `rejoin_completes_open_batch` in `../mmapq-rs/tests/recovery.rs` | ✓ `join_completed_open_batch` in `../mmapq-py/src/mmapq/batch_appender.py`; test `test_rejoin_completes_open_batch` in `../mmapq-py/tests/test_recovery.py` |
 | Single-call append_and_commit | ✓ | ✓ | ✓ |
 | Reserved append (write into reserved space) / append_remaining_from | ✓ | ✓ | ✓ |
 | In-batch message iterator / message count | ✓ | ✓ | ✓ (handler-side iteration) |
@@ -145,11 +149,11 @@ Regression: `../mmapq-py/tests/test_reader_borrowing.py`
 
 | C header | Rust (ffi.rs) | Python (cdef) |
 |---|---|---|
-| `batch_payload_iterator.h` | 7/12 | 5/12 |
+| `batch_payload_iterator.h` | 7/12 | 6/12 |
 | `batch_queue_transfer.h` | 7/7 | 6/7 |
-| `indexed_appender.h` | 11/16 | 6/16 |
+| `indexed_appender.h` | 12/18 | 8/18 |
 | `indexed_archiver.h` | 6/14 | 7/14 |
-| `indexed_batch_appender.h` | 15/16 | 8/16 |
+| `indexed_batch_appender.h` | 19/23 | 12/23 |
 | `indexed_batch_archiver.h` | 4/11 | 6/11 |
 | `indexed_batch_poller.h` | 14/20 | 14/20 |
 | `indexed_batch_queue.h` | 12/12 | 12/12 |
