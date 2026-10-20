@@ -230,7 +230,12 @@ static int move_to_last_header(MmapqIndexedAppender *a)
     return 0;
 }
 
-static int commit_header(MmapqIndexedAppender *a, int64_t payload_offset, int64_t *out_index)
+/* always_inline (CAND-45): GCC stopped inlining commit_header during the
+ * hardening campaign — append went 99 → 137 Ir/msg (reviewer pack
+ * audit/claude-hotpath-drift/, callgrind exclusive, release flags). The
+ * attribute restores the shipped shape: 102. Same flip mechanism as the
+ * CAND-49 anchors on write_payload / write_padding_if_needed above. */
+static __attribute__((always_inline)) inline int commit_header(MmapqIndexedAppender *a, int64_t payload_offset, int64_t *out_index)
 {
     /* Encoded positions are STARTS — limited to the 56-bit field (2^56−1),
      * one tighter than the start_offset open check (CAND-32 spec §2). */
