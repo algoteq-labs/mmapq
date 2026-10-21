@@ -187,6 +187,52 @@ void test_poller_before_queue_retries(void)
     { int _rc_ = system(cleanup_cmd); (void)_rc_; }
 }
 
+/* CAND-17(a): a mapping timeout on the poller's header read must report
+ * MMAPQ_POLL_ERROR with last_error == MMAPQ_ETIMEDOUT (payload-path parity;
+ * Java throws), never END_OF_STREAM — and the cursor must not advance.
+ * Pin shape from audit/repro/INV-24_timeout_as_eos.c: a standalone poller
+ * with timeout_ns = 0 times out on the first header region map; once the
+ * background map completes, the same message is delivered. */
+void test_poll_header_timeout_is_error_not_eos(void)
+{
+    MmapqIndexedAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(q, &a));
+    TEST_ASSERT_NOT_NULL(a);
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_appender_append(a, "hello", 5));
+    mmapq_indexed_appender_close(a);
+
+    MmapqIndexedPoller *p = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_poller_create(DIR, QUEUE, RING_SZ, 0, rt, &p));
+    TEST_ASSERT_NOT_NULL(p);
+
+    PollCapture cap = { .directive = MMAPQ_NEXT_ADVANCE };
+    MmapqPollResult r = mmapq_indexed_poller_poll(p, capture_handler, &cap);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_ERROR, r);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ETIMEDOUT, mmapq_indexed_poller_last_error(p));
+    TEST_ASSERT_EQUAL_INT(0, cap.call_count);
+
+    /* Cursor never advanced on the timeout: retry until the background
+     * mapping completes (bounded); the same message then polls ADVANCED. */
+    struct timespec ts;
+    TEST_ASSERT_EQUAL_INT(0, clock_gettime(CLOCK_MONOTONIC, &ts));
+    int64_t deadline_ns = (int64_t)ts.tv_sec * 1000000000LL + ts.tv_nsec
+                          + (int64_t)TIMEOUT_NS;
+    while (r == MMAPQ_POLL_ERROR
+           && mmapq_indexed_poller_last_error(p) == MMAPQ_ETIMEDOUT) {
+        TEST_ASSERT_EQUAL_INT(0, clock_gettime(CLOCK_MONOTONIC, &ts));
+        int64_t now_ns = (int64_t)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+        if (now_ns >= deadline_ns) break;
+        r = mmapq_indexed_poller_poll(p, capture_handler, &cap);
+    }
+    TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_ADVANCED, r);
+    TEST_ASSERT_EQUAL_INT(1, cap.call_count);
+    TEST_ASSERT_EQUAL_INT64(0, cap.index);
+    TEST_ASSERT_EQUAL_INT32(5, cap.length);
+    TEST_ASSERT_EQUAL_STRING("hello", cap.data);
+
+    mmapq_indexed_poller_close(p);
+}
+
 void test_append_multiple_and_poll_all(void)
 {
     MmapqIndexedAppender *a = NULL;
@@ -2695,11 +2741,11 @@ static void c08_run_concurrent(MmapqRuntime *write_rt, MmapqRuntime *read_rt)
     v.bad_writer = 0;
     v.bad_seq = -1;
     v.bad_length = 0;
-    /* CAND-17: a mapping timeout on the poller's header read is reported as
-     * MMAPQ_POLL_END_OF_STREAM, indistinguishable from "no message yet".
-     * Under TSan one slow mapping would otherwise end this loop early and
-     * look like lost messages. Retry END_OF_STREAM until a bounded deadline;
-     * do not remove the retry while CAND-17 is open. */
+    /* CAND-17 fixed (2026-10-21): a mapping timeout on the poller's header
+     * read is now MMAPQ_POLL_ERROR with last_error == MMAPQ_ETIMEDOUT,
+     * never END_OF_STREAM. The retry remains only to tolerate slow first
+     * mappings under TSan; only EOS and POLL_ERROR+ETIMEDOUT retry —
+     * anything else fails loudly. */
     struct timespec ts;
     TEST_ASSERT_EQUAL_INT(0, clock_gettime(CLOCK_MONOTONIC, &ts));
     int64_t deadline_ns = (int64_t)ts.tv_sec * 1000000000LL + ts.tv_nsec
@@ -2707,7 +2753,9 @@ static void c08_run_concurrent(MmapqRuntime *write_rt, MmapqRuntime *read_rt)
     while (v.seen_total < (int64_t)(C08_LANES * C08_COUNT)) {
         MmapqPollResult r = mmapq_indexed_poller_poll(p, c08_verify_handler, &v);
         if (r == MMAPQ_POLL_ADVANCED) continue;
-        if (r == MMAPQ_POLL_END_OF_STREAM) {
+        if (r == MMAPQ_POLL_END_OF_STREAM ||
+            (r == MMAPQ_POLL_ERROR &&
+             mmapq_indexed_poller_last_error(p) == MMAPQ_ETIMEDOUT)) {
             TEST_ASSERT_EQUAL_INT(0, clock_gettime(CLOCK_MONOTONIC, &ts));
             int64_t now_ns = (int64_t)ts.tv_sec * 1000000000LL + ts.tv_nsec;
             if (now_ns < deadline_ns) continue;
@@ -3478,6 +3526,7 @@ int main(void)
     RUN_TEST(test_append_and_poll_single_message);
     RUN_TEST(test_poll_end_of_stream_when_empty);
     RUN_TEST(test_poller_before_queue_retries);
+    RUN_TEST(test_poll_header_timeout_is_error_not_eos);
     RUN_TEST(test_append_multiple_and_poll_all);
 
     RUN_TEST(test_reader_read_at_index);

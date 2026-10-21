@@ -123,8 +123,17 @@ BatchPollResult mmapq_indexed_batch_poller_poll(MmapqIndexedBatchPoller *p, Mmap
     long start_idx = queue_meta_start_index(p->queue_meta);
     if (p->current_batch_index < start_idx) return MMAPQ_POLL_ARCHIVED;
 
-    uint64_t header = mmapqi_header_read_sequential(p->header_acc, &p->header_buf, p->current_batch_index, p->queue_name);
-    if (header == HEADER_NULL) return MMAPQ_POLL_END_OF_STREAM;
+    /* Header read: a mapping timeout is MMAPQ_POLL_ERROR + last_error
+     * ETIMEDOUT (CAND-17, single-poller parity); the cursor does not
+     * advance. Only a genuinely absent entry is END_OF_STREAM. herr stays
+     * 0 unless wrap() itself failed — a successful wrap of an unwritten
+     * slot does not touch it. */
+    int herr = 0;
+    uint64_t header = mmapqi_header_read_sequential(p->header_acc, &p->header_buf, p->current_batch_index, &herr);
+    if (header == HEADER_NULL) {
+        if (herr != 0) { p->last_error = herr; return MMAPQ_POLL_ERROR; }
+        return MMAPQ_POLL_END_OF_STREAM;
+    }
 
     uint8_t aid = header_appender_id(header);
     int64_t pos = header_payload_position(header);

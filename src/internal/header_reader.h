@@ -2,9 +2,11 @@
 #define HEADER_READER_H
 
 #include <stdint.h>
+#include <stdatomic.h>
 #include "internal/region_accessor.h"
 #include "header_codec.h"
 #include "mmap_assert.h"
+#include "mmap_platform.h"
 
 /**
  * HeaderReader — utilities for reading queue header entries and searching
@@ -18,10 +20,9 @@
  *
  * read():
  *   Returns the raw uint64 header at the given index.
- *   Returns HEADER_NULL if the file does not exist yet or the position
- *   is beyond the current file size (queue not yet that large).
- *   Aborts (MMAP_ASSERT) on MAP_TIMED_OUT or UNWRAPPED — these are
- *   fatal and indicate a serious system problem.
+ *   Returns HEADER_NULL if the file does not exist yet, the position is
+ *   beyond the current file size, or the mapping timed out (transient;
+ *   the checked variants below distinguish it). Aborts on UNWRAPPED.
  *
  * found():
  *   Returns 1 if a non-NULL header exists at the index, 0 otherwise.
@@ -52,17 +53,71 @@ uint64_t mmapqi_header_read(
     const char     *queue_name);
 
 /**
- * mmapqi_header_read_sequential — like mmapqi_header_read but uses wrap() to trigger
- * premap of the next region.
+ * mmapqi_header_read_sequential — like mmapqi_header_read but uses wrap() to
+ * trigger premap of the next region, and distinguishes a mapping timeout
+ * from an unwritten entry (CAND-17).
  *
  * Use this for sequential pollers advancing forward through the queue.
- * Use mmapqi_header_read for random-access readers and search algorithms (mmapqi_header_search_last_index).
+ * Use mmapqi_header_read for random-access readers and search algorithms
+ * (mmapqi_header_search_last_index).
+ *
+ * header_accessor: the RegionAccessor for the header file.
+ * buf:             caller-provided Buffer, filled by wrap().
+ * index:           queue index to read.
+ * err:             required output, written ONLY when wrap() fails:
+ *                  0 for a genuinely not-yet-accessible entry (file
+ *                  absent or not yet grown), MMAPQ_ETIMEDOUT on mapping
+ *                  timeout, MMAPQ_ECORRUPT after the fatal assert
+ *                  (release-build fallback). A successful wrap of an
+ *                  unwritten slot ALSO returns HEADER_NULL without
+ *                  touching err — zero-initialise it before the call and
+ *                  read it only when the return value is HEADER_NULL.
+ *
+ * Returns the uint64 header, or HEADER_NULL on an unwritten entry
+ * (err untouched or 0) or a mapping failure (err set).
+ *
+ * static inline (CAND-17): the call must disappear into both pollers —
+ * as a separate TU without LTO, inlining saved ~10 Ir/msg on poll
+ * (107 → 97, callgrind); the err store is dead on the inlined success path.
  */
-uint64_t mmapqi_header_read_sequential(
+static inline uint64_t mmapqi_header_read_sequential(
     RegionAccessor *header_accessor,
     Buffer         *buf,
     int64_t         index,
-    const char     *queue_name);
+    int            *err)
+{
+    int64_t position = header_position(index);
+
+    WrapResult r = region_accessor_wrap(header_accessor, position, buf);
+
+    if (r == WRAP_SUCCESS) {
+        /*
+         * Read with acquire semantics — pairs with the release CAS in
+         * the appender. Ensures we see all payload bytes written before
+         * the header was committed.
+         */
+        const _Atomic uint64_t *p = (const _Atomic uint64_t *)buf->data;
+        return atomic_load_explicit(p, memory_order_acquire);
+    }
+
+    if (r == WRAP_MAP_TIMED_OUT) {
+        *err = MMAPQ_ETIMEDOUT;
+        return HEADER_NULL;
+    }
+
+    if (r == WRAP_FILE_NOT_FOUND || r == WRAP_BEYOND_FILE_SIZE) {
+        /* Queue not yet accessible — genuinely unwritten */
+        *err = 0;
+        return HEADER_NULL;
+    }
+
+    /* WRAP_UNWRAPPED — fatal */
+    MMAP_ASSERT(0,
+        "mmapqi_header_read_sequential: FATAL — unexpected wrap result. "
+        "This indicates region corruption.");
+    *err = MMAPQ_ECORRUPT;  /* release-build fallback (was silent EOS) */
+    return HEADER_NULL;
+}
 
 /**
  * header_found — returns 1 if a valid (non-NULL) header exists at index.

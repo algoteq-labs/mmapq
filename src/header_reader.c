@@ -58,39 +58,6 @@ uint64_t mmapqi_header_read(
     return HEADER_NULL;  /* unreachable */
 }
 
-/*
- * mmapqi_header_read_sequential — like mmapqi_header_read but uses wrap() to trigger
- * premap of the next region. Use for sequential pollers advancing forward.
- * Use mmapqi_header_read for random-access readers and search algorithms.
- *
- * Returns HEADER_NULL on mapping timeout (caller should retry).
- */
-uint64_t mmapqi_header_read_sequential(
-    RegionAccessor *header_accessor,
-    Buffer         *buf,
-    int64_t         index,
-    const char     *queue_name)
-{
-    int64_t position = header_position(index);
-    (void)queue_name;
-
-    WrapResult r = region_accessor_wrap(header_accessor, position, buf);
-
-    if (r == WRAP_SUCCESS) {
-        const _Atomic uint64_t *p = (const _Atomic uint64_t *)buf->data;
-        return atomic_load_explicit(p, memory_order_acquire);
-    }
-
-    if (r == WRAP_FILE_NOT_FOUND || r == WRAP_BEYOND_FILE_SIZE || r == WRAP_MAP_TIMED_OUT) {
-        return HEADER_NULL;
-    }
-
-    MMAP_ASSERT(0,
-        "mmapqi_header_read_sequential: FATAL — unexpected wrap result. "
-        "This indicates region corruption.");
-    return HEADER_NULL;
-}
-
 int mmapqi_header_read_checked(
     RegionAccessor *header_accessor, Buffer *buf, int64_t index, uint64_t *header)
 {

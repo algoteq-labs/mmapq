@@ -1,9 +1,13 @@
 # ASSERT_AUDIT.md — MMAP_ASSERT Inventory
 
-**71 asserts across 20 files** (17 src/*.c, 3 src/internal/*.h). Generated from source.
+**71 asserts across 21 files** (17 src/*.c, 4 src/internal/*.h). Generated from source.
 (CAND-49: the overlap assert in mmapqi_uncommitted_iterator_advance became a
 runtime MMAPQ_ECORRUPT return (spec §3.2); the ranges_insert assert moved to
 committed_ranges.c with the extracted helpers.)
+(CAND-17: mmapqi_header_read_sequential became `static inline` in
+internal/header_reader.h so the call disappears into both pollers; its
+WRAP_UNWRAPPED fatal assert moved with it — header_reader.c 2→1,
+header_reader.h 0→1, total unchanged.)
 Last verified: 2026-10-15 (CAND-32 — the header_encode 56-bit field check
 (:113) is now guarded by MMAPQ_ECORRUPT runtime checks at both append
 commit paths and the appender_meta open-time start_offset validation, and
@@ -74,9 +78,15 @@ Lines 46, 136-137, 184-186, 198. Internal dispatch null checks.
 
 Lines 28-29, 52. Internal dispatch null checks.
 
-### header_reader.c — 2 (all I)
+### header_reader.c — 1 (all I)
 
-Lines 55, 88. Internal dispatch null checks.
+Lines 55. Internal dispatch fatal check (WRAP_UNWRAPPED in mmapqi_header_read).
+
+### header_reader.h — 1 (all I)
+
+| Line | Disposition | Verified |
+|---|---|---|
+| 115 | I | WRAP_UNWRAPPED fatal in the static-inline mmapqi_header_read_sequential — internal accessor-state invariant (region corruption), unreachable from caller input. Release builds report MMAPQ_ECORRUPT via the err out-param instead of the pre-CAND-17 silent HEADER_NULL. |
 
 ### header_codec.h — 5 (all I)
 
@@ -98,7 +108,7 @@ Lines 55, 88. Internal dispatch null checks.
 
 | Line | Disposition | Verified |
 |---|---|---|
-| 207 unknown handler directive | I | Internal: MMAP_ASSERT(0) guards unreachable default in switch. |
+| 214 unknown handler directive | I | Internal: MMAP_ASSERT(0) guards unreachable default in switch. (CAND-17: line moved, site unchanged.) |
 
 ### indexed_reader.c — 1 (0 V)
 

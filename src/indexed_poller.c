@@ -149,11 +149,18 @@ MmapqPollResult mmapq_indexed_poller_poll(
         }
     }
 
-    /* Read header at current index — use sequential wrap to trigger premap */
+    /* Read header at current index — sequential wrap to trigger premap.
+     * A mapping timeout is MMAPQ_POLL_ERROR + last_error ETIMEDOUT, exactly
+     * like the payload wrap below (CAND-17; Java throws in the same spot).
+     * The cursor does not advance. Only a genuinely absent entry is
+     * END_OF_STREAM. herr stays 0 unless wrap() itself failed — a
+     * successful wrap of an unwritten slot does not touch it. */
+    int herr = 0;
     uint64_t header = mmapqi_header_read_sequential(p->header_acc, &p->header_buf,
-                                              p->current_index, p->queue_name);
+                                                    p->current_index, &herr);
 
     if (header == HEADER_NULL) {
+        if (herr != 0) { p->last_error = herr; return MMAPQ_POLL_ERROR; }
         return MMAPQ_POLL_END_OF_STREAM;
     }
 

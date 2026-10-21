@@ -155,6 +155,53 @@ void test_batch_poll_single_batch(void)
     mmapq_indexed_batch_poller_close(p);
 }
 
+/* CAND-17(a): batch twin of test_poll_header_timeout_is_error_not_eos —
+ * a mapping timeout on the batch poller's header read must report
+ * MMAPQ_POLL_ERROR with last_error == MMAPQ_ETIMEDOUT, never
+ * END_OF_STREAM, and the cursor must not advance. */
+void test_batch_poll_header_timeout_is_error_not_eos(void)
+{
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
+    TEST_ASSERT_NOT_NULL(a);
+
+    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    mmapq_mutable_batch_append(b, "hello", 5);
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_mutable_batch_complete(b));
+    mmapq_indexed_batch_appender_close(a);
+
+    MmapqIndexedBatchPoller *p = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_poller_create(DIR, QUEUE, RING_SZ, 0, rt, &p));
+    TEST_ASSERT_NOT_NULL(p);
+
+    BatchPollCapture cap = { .directive = MMAPQ_NEXT_ADVANCE };
+    BatchPollResult pr = mmapq_indexed_batch_poller_poll(p, capture_handler, &cap);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_ERROR, pr);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ETIMEDOUT, mmapq_indexed_batch_poller_last_error(p));
+    TEST_ASSERT_EQUAL_INT(0, cap.call_count);
+
+    /* Cursor never advanced on the timeout: retry until the background
+     * mapping completes (bounded); the same batch then polls ADVANCED. */
+    struct timespec ts;
+    TEST_ASSERT_EQUAL_INT(0, clock_gettime(CLOCK_MONOTONIC, &ts));
+    int64_t deadline_ns = (int64_t)ts.tv_sec * 1000000000LL + ts.tv_nsec
+                          + (int64_t)TIMEOUT;
+    while (pr == MMAPQ_POLL_ERROR
+           && mmapq_indexed_batch_poller_last_error(p) == MMAPQ_ETIMEDOUT) {
+        TEST_ASSERT_EQUAL_INT(0, clock_gettime(CLOCK_MONOTONIC, &ts));
+        int64_t now_ns = (int64_t)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+        if (now_ns >= deadline_ns) break;
+        pr = mmapq_indexed_batch_poller_poll(p, capture_handler, &cap);
+    }
+    TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_ADVANCED, pr);
+    TEST_ASSERT_EQUAL_INT(1, cap.call_count);
+    TEST_ASSERT_EQUAL_INT64(0, cap.captured_batch_index);
+    TEST_ASSERT_EQUAL_INT(1, cap.captured_message_count);
+    TEST_ASSERT_EQUAL_STRING("hello", cap.captured_first_msg);
+
+    mmapq_indexed_batch_poller_close(p);
+}
+
 void test_batch_poll_multiple_batches(void)
 {
     MmapqIndexedBatchAppender *a = NULL;
@@ -2589,6 +2636,7 @@ int main(void)
     RUN_TEST(test_batch_append_rejects_oversized_message);
     RUN_TEST(test_batch_poll_end_of_stream);
     RUN_TEST(test_batch_poll_single_batch);
+    RUN_TEST(test_batch_poll_header_timeout_is_error_not_eos);
     RUN_TEST(test_batch_poll_multiple_batches);
     RUN_TEST(test_batch_poll_advance_all_messages);
     RUN_TEST(test_batch_poll_stop);
