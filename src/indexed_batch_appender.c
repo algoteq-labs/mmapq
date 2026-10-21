@@ -91,7 +91,11 @@ static int ensure_space_for_batch_header(MmapqIndexedBatchAppender *a)
     return 0;
 }
 
-static int write_padding_if_needed(MmapqIndexedBatchAppender *a, int32_t length)
+/* always_inline: the CAND-45 rationale (a helper flipping to outlined is a
+ * silent hot-path change). The CAND-51c signal fence in the append bodies
+ * flipped this helper to outlined (append_reserved 60.0 → 70.0 Ir/msg);
+ * the attribute restores the shipped shape. */
+static __attribute__((always_inline)) inline int write_padding_if_needed(MmapqIndexedBatchAppender *a, int32_t length)
 {
     if (wrap_payload_or_fail(a, a->current_payload_position)) return -1;
     int32_t cap = a->payload_buf.capacity;
