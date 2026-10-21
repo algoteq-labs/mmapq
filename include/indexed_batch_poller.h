@@ -106,6 +106,14 @@ int mmapq_indexed_batch_poller_create(
  * batch exists at the current index, returns MMAPQ_POLL_END_OF_STREAM without
  * invoking the handler.
  *
+ * Message iteration inside the handler via mmapq_batch_iterator_advance is
+ * unchecked (0 = exhaustion OR error), but the poller itself checks the
+ * iterator's error channel after the handler returns: a mid-batch mapping
+ * timeout or corruption yields MMAPQ_POLL_ERROR / MMAPQ_POLL_CORRUPT (never
+ * a partial batch treated as consumed) and the cursor does not advance.
+ * Handlers that need the failure cause inline may iterate with the checked
+ * mmapq_batch_iterator_next step instead.
+ *
  * p:      the poller
  * handler: callback to receive the batch context
  * ctx:    caller context passed through to the handler

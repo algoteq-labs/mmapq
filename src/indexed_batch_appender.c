@@ -747,10 +747,17 @@ int mmapq_indexed_batch_appender_join_completed_open_batch(
 
 int64_t mmapq_indexed_batch_appender_append_and_commit(MmapqIndexedBatchAppender *a, const void *data, int32_t length)
 {
-    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
-    if (!b) return -1;
+    /* CAND-51a (W): validate BEFORE start_batch — a rejected call leaves no
+     * open batch behind. Any later append failure discards (rc ignored —
+     * best-effort rollback). The checked start preserves the failure code
+     * (ECLOSED/EINVAL/ENOMEM/timeout) — never the -1 collapse. */
+    if (a == NULL || data == NULL || length <= 0) return MMAPQ_EINVAL;
+    if (length > queue_meta_region_size(a->queue_meta) - PAYLOAD_LENGTH_SIZE) return MMAPQ_EINVAL;
+    MmapqMutableBatch *b = NULL;
+    int started = mmapq_indexed_batch_appender_start_batch_checked(a, &b);
+    if (started != 0) return started;
     int append_rc = mmapq_mutable_batch_append(b, data, length);
-    if (append_rc < 0) return append_rc;
+    if (append_rc < 0) { (void)mmapq_mutable_batch_discard(b); return append_rc; }
     return mmapq_mutable_batch_complete(b);   /* complete = publish (§3.5) */
 }
 
@@ -852,6 +859,7 @@ int32_t mmapq_mutable_batch_message_count(const MmapqMutableBatch *b) { return b
 
 const void *mmapq_mutable_batch_get(MmapqMutableBatch *b, int32_t message_index, int32_t *out_length)
 {
+    if (b == NULL || out_length == NULL) return NULL;
     MmapqIndexedBatchAppender *a = b->appender;
     mmapq_batch_iterator_init(&a->batch_iterator, b->batch_offset, b->message_count, message_index);
     if (mmapq_batch_iterator_advance(&a->batch_iterator)) {

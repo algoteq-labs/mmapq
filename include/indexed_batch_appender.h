@@ -127,6 +127,11 @@ int mmapq_indexed_batch_appender_create_with_id(
  * mmapq_mutable_batch_complete_uncommitted(), or discarded with
  * mmapq_mutable_batch_discard().
  *
+ * Producer invariant (CAND-51a): every path that calls start_batch must end
+ * in exactly one of complete, complete_uncommitted or discard. Rust and
+ * Python enforce this by discarding on scope exit; C callers must do it
+ * explicitly.
+ *
  * Only one batch may be in progress at a time per appender: starting while
  * one is open returns NULL (MMAPQ_EINVAL via the checked variant). Starting
  * after a discard's pre-store failure first recovers the orphaned open
@@ -392,7 +397,9 @@ int32_t mmapq_mutable_batch_append_remaining_from(MmapqMutableBatch *b, MmapqBat
  * b:             the in-progress batch
  * message_index: zero-based index of the message (must be < message_count)
  * out_length:    set to the length of the message on return
- * Returns: pointer to the raw payload bytes; NULL if index is out of range
+ * Returns: pointer to the raw payload bytes; NULL if index is out of range.
+ *         NULL for an in-range index means an internal failure; discard
+ *         the batch.
  */
 const void *mmapq_mutable_batch_get(MmapqMutableBatch *b, int32_t message_index, int32_t *out_length);
 

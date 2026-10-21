@@ -991,6 +991,65 @@ void test_batch_copy_preserve_append(void)
     mmapq_indexed_batch_queue_close(src);
 }
 
+/* CAND-51a F2 pin: a mid-batch source corruption is detected by the
+ * read-only validation walk BEFORE the destination batch is started — the
+ * destination lane is left untouched: no join completion event, and the
+ * uncommitted walk lists zero batches. (Pre-fix the abandoned open batch
+ * was join-completed to staged on reopen: join rc was 1 and the walk
+ * listed the partial batch.) */
+void test_batch_copy_source_corruption_mid_batch_leaves_nothing(void)
+{
+    const char *batches[][3] = {{"m-one", "m-two"}};
+    int sizes[] = {2};
+    MmapqIndexedBatchQueue *src = create_batch_queue(BQ_QUEUE, batches, sizes, 1);
+    mmapq_indexed_batch_queue_close(src);
+
+    /* Corrupt the second message's length on disk. Batch framing:
+     * @64 int32 count, then per message int32 len + data; msg2's length
+     * sits at 64 + 4 + 4 + len1. */
+    char payfile[512];
+    snprintf(payfile, sizeof(payfile), "%s/%s/payload_0_0", TEST_DIR, BQ_QUEUE);
+    FILE *f = fopen(payfile, "r+b");
+    TEST_ASSERT_NOT_NULL(f);
+    int32_t len1 = 0;
+    TEST_ASSERT_EQUAL_INT(0, fseek(f, 68, SEEK_SET));
+    TEST_ASSERT_EQUAL(1, fread(&len1, 4, 1, f));
+    int64_t off = 72 + len1;
+    int32_t bogus = 0x7FFFFFFF;
+    TEST_ASSERT_EQUAL_INT(0, fseek(f, off, SEEK_SET));
+    TEST_ASSERT_EQUAL(1, fwrite(&bogus, 4, 1, f));
+    fclose(f);
+
+    MmapqIndexedBatchReader *reader = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_reader_create(TEST_DIR, BQ_QUEUE, 4, 5000000000ULL, rt, &reader));
+    cleanup_queue(BQ_COPY);
+    int64_t n = mmapq_batch_queue_transfer_copy(reader, TEST_DIR, BQ_COPY, 0, 0, MMAPQ_BATCH_QUEUE_TRANSFER_REBASE,
+                                           NULL, NULL, NULL, rt, rt, 0, NULL, NULL, MMAPQ_CONFLICT_AUTO);
+    TEST_ASSERT_EQUAL_INT64(MMAPQ_ECORRUPT, n);
+    mmapq_indexed_batch_reader_close(reader);
+
+    MmapqIndexedBatchQueue *dst = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create(TEST_DIR, BQ_COPY, 32768, 16, 1, 32768LL * 8,
+                                                          0, 5000000000ULL, 0, rt, rt, &dst));
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(dst, &a));
+    int64_t joined = -1;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_join_completed_open_batch(a, &joined));
+    MmapqUncommittedBatchIterator *uit = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_uncommitted_batches_checked(a, &uit));
+    int walked = 0;
+    while (1) {
+        int64_t boff; int32_t count; MmapqBatchPayloadIterator *msgs;
+        int nrc = mmapq_uncommitted_batch_next(uit, &boff, &count, &msgs);
+        if (nrc == 0) break;
+        TEST_ASSERT_GREATER_OR_EQUAL_INT(1, nrc);
+        walked++;
+    }
+    TEST_ASSERT_EQUAL_INT(0, walked);
+    mmapq_indexed_batch_appender_close(a);
+    mmapq_indexed_batch_queue_close(dst);
+}
+
 void test_batch_copy_no_append(void)
 {
     const char *batches[][3] = {{"b1"}};
@@ -2511,6 +2570,7 @@ int main(void)
     RUN_TEST(test_batch_copy_rebase_append);
     RUN_TEST(test_batch_copy_preserve_append);
     RUN_TEST(test_batch_copy_no_append);
+    RUN_TEST(test_batch_copy_source_corruption_mid_batch_leaves_nothing);
 
     /* Cross-type import — batch stream → normal (4) */
     RUN_TEST(test_import_batch_stream_to_new);

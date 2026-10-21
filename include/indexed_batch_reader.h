@@ -136,6 +136,13 @@ int mmapq_indexed_batch_reader_create(
  * positioned before the first message (call mmapq_batch_iterator_advance() to
  * begin iteration).
  *
+ * Iteration contract (CAND-51a): mmapq_batch_iterator_advance is unchecked
+ * (0 = exhaustion OR error). After the message loop the caller MUST check
+ * mmapq_indexed_batch_reader_last_error — it reflects the iterator's live
+ * error channel — before trusting a complete message list; a mid-batch
+ * mapping timeout or corruption otherwise looks like a shorter batch. The
+ * checked mmapq_batch_iterator_next step needs no such post-check.
+ *
  * If the batch is not available, ctx->status indicates why:
  *   MMAPQ_BATCH_ENTRY_END_OF_STREAM — index beyond the last committed batch
  *   MMAPQ_BATCH_ENTRY_ARCHIVED      — index below start_index()

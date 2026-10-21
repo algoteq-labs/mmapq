@@ -428,6 +428,7 @@ int64_t mmapq_batch_queue_transfer_import(
     };
 
     int error = 0;
+    MmapqMutableBatch *batch = NULL;
     for (int64_t entry = 0; entry < meta.total_entries; entry++) {
         uint16_t source_id;
         int32_t message_count = 1;
@@ -439,7 +440,6 @@ int64_t mmapq_batch_queue_transfer_import(
         int32_t mapped = appender_cache_map(mapped_cache, source_id, mapper, mapper_ctx);
         MmapqIndexedBatchAppender *appender = appender_cache_get(&ac, mapped, q, on_conflict, &error);
         if (!appender) goto failed;
-        MmapqMutableBatch *batch = NULL;
         error = mmapq_indexed_batch_appender_start_batch_checked(appender, &batch);
         if (error != 0) goto failed;
         for (int32_t message = 0; message < message_count; message++) {
@@ -466,9 +466,14 @@ int64_t mmapq_batch_queue_transfer_import(
          * complete + commit_batch). */
         int64_t committed = mmapq_mutable_batch_complete(batch);
         if (committed < 0) { error = (int)committed; goto failed; }
+        batch = NULL;   /* consumed — the failed label must not discard it */
         imported++;
     }
 failed:
+    /* CAND-51a (W): a failure with an open batch leaves a discarded record
+     * (the CAND-49 contract), never an abandoned open batch; discard's rc
+     * is ignored — best-effort rollback. */
+    if (batch != NULL) mmapq_mutable_batch_discard(batch);
     appender_cache_cleanup(&ac);
     mmapq_indexed_batch_queue_close(q);
     return error != 0 ? error : imported;
@@ -530,6 +535,7 @@ int64_t mmapq_batch_queue_transfer_import_flat_stream(
     };
 
     int error = 0;
+    MmapqMutableBatch *batch = NULL;
     for (int64_t entry = 0; entry < meta.total_entries; entry++) {
         uint16_t source_id;
         int32_t message_count = 1;
@@ -538,7 +544,6 @@ int64_t mmapq_batch_queue_transfer_import_flat_stream(
         int32_t mapped = appender_cache_map(mapped_cache, source_id, mapper, mapper_ctx);
         MmapqIndexedBatchAppender *appender = appender_cache_get(&ac, mapped, q, on_conflict, &error);
         if (!appender) goto failed;
-        MmapqMutableBatch *batch = NULL;
         error = mmapq_indexed_batch_appender_start_batch_checked(appender, &batch);
         if (error != 0) goto failed;
         for (int32_t message = 0; message < message_count; message++) {
@@ -565,9 +570,14 @@ int64_t mmapq_batch_queue_transfer_import_flat_stream(
          * complete + commit_batch). */
         int64_t committed = mmapq_mutable_batch_complete(batch);
         if (committed < 0) { error = (int)committed; goto failed; }
+        batch = NULL;   /* consumed — the failed label must not discard it */
         imported++;
     }
 failed:
+    /* CAND-51a (W): a failure with an open batch leaves a discarded record
+     * (the CAND-49 contract), never an abandoned open batch; discard's rc
+     * is ignored — best-effort rollback. */
+    if (batch != NULL) mmapq_mutable_batch_discard(batch);
     appender_cache_cleanup(&ac);
     mmapq_indexed_batch_queue_close(q);
     return error != 0 ? error : imported;
@@ -652,6 +662,16 @@ int64_t mmapq_batch_queue_transfer_copy(
         MmapqMutableBatch *mb = NULL;
         int batch_has_msgs = 0;
 
+        /* CAND-51a (W): validate the source batch with a read-only checked
+         * walk BEFORE opening the destination batch — a source error here
+         * returns with nothing written to the destination. */
+        {
+            const void *vd; int32_t vl;
+            int step;
+            while ((step = mmapq_batch_iterator_next(bctx.iterator, &vd, &vl)) == 1) { }
+            if (step < 0) { appender_cache_cleanup(&ac); mmapq_indexed_batch_queue_close(q); return step; }
+        }
+
         mmapq_batch_iterator_init(bctx.iterator, bctx.batch_offset,
                             bctx.message_count, 0);
         while (mmapq_batch_iterator_advance(bctx.iterator)) {
@@ -669,15 +689,18 @@ int64_t mmapq_batch_queue_transfer_copy(
                 if (started != 0) { appender_cache_cleanup(&ac); mmapq_indexed_batch_queue_close(q); return started; }
             }
             int appended = mmapq_mutable_batch_append(mb, d, l);
-            if (appended < 0) { appender_cache_cleanup(&ac); mmapq_indexed_batch_queue_close(q); return appended; }
+            if (appended < 0) { mmapq_mutable_batch_discard(mb); appender_cache_cleanup(&ac); mmapq_indexed_batch_queue_close(q); return appended; }
             batch_has_msgs = 1;
         }
-        if (bctx.iterator->last_error != 0) { appender_cache_cleanup(&ac); mmapq_indexed_batch_queue_close(q); return bctx.iterator->last_error; }
+        /* CAND-51a (W): a failure once the destination batch exists leaves a
+         * discarded record (the CAND-49 contract), never an abandoned open
+         * batch; discard's rc is ignored — best-effort rollback. */
+        if (bctx.iterator->last_error != 0) { if (mb != NULL) mmapq_mutable_batch_discard(mb); appender_cache_cleanup(&ac); mmapq_indexed_batch_queue_close(q); return bctx.iterator->last_error; }
 
         if (batch_has_msgs) {
             /* CAND-49 §3.5: complete is the one-call publish. */
             int64_t committed = mmapq_mutable_batch_complete(mb);
-            if (committed < 0) { appender_cache_cleanup(&ac); mmapq_indexed_batch_queue_close(q); return committed; }
+            if (committed < 0) { mmapq_mutable_batch_discard(mb); appender_cache_cleanup(&ac); mmapq_indexed_batch_queue_close(q); return committed; }
             copied++;
         }
     }
@@ -772,11 +795,14 @@ int64_t mmapq_batch_queue_transfer_copy_normal_to_batch(
         MmapqMutableBatch *mb = NULL;
         int started = mmapq_indexed_batch_appender_start_batch_checked(a, &mb);
         if (started != 0) { appender_cache_cleanup(&ac); mmapq_indexed_batch_queue_close(q); return started; }
+        /* CAND-51a (W): a failure once the destination batch exists leaves a
+         * discarded record (the CAND-49 contract), never an abandoned open
+         * batch; discard's rc is ignored — best-effort rollback. */
         int appended = mmapq_mutable_batch_append(mb, rc.data, rc.length);
-        if (appended < 0) { appender_cache_cleanup(&ac); mmapq_indexed_batch_queue_close(q); return appended; }
+        if (appended < 0) { mmapq_mutable_batch_discard(mb); appender_cache_cleanup(&ac); mmapq_indexed_batch_queue_close(q); return appended; }
         /* CAND-49 §3.5: complete is the one-call publish. */
         int64_t committed = mmapq_mutable_batch_complete(mb);
-        if (committed < 0) { appender_cache_cleanup(&ac); mmapq_indexed_batch_queue_close(q); return committed; }
+        if (committed < 0) { mmapq_mutable_batch_discard(mb); appender_cache_cleanup(&ac); mmapq_indexed_batch_queue_close(q); return committed; }
         copied++;
     }
 

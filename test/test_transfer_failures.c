@@ -203,6 +203,193 @@ static void test_import_failure_matrix(void)
                     exercise(source, destination, (enum Fault)operation, fail_at, 1);
             }
 }
+/* CAND-51a F2 pins: a destination-side failure AFTER start_batch leaves a
+ * discarded record (the CAND-49 contract), never an abandoned open batch —
+ * no join completion on reopen, the offset is not committable before the
+ * uncommitted walk refills it, and the lane stays usable. Fail-first
+ * discriminator: join_completed_open_batch (pre-fix rc=1, the abandoned
+ * open batch was join-completed to staged).
+ * Scenario 0: second append fails (partial batch, discarded count=1).
+ * Scenario 1: complete fails (both messages appended, discarded count=2). */
+
+/* Shared destination-lane assertions: join rc 0, commit EINVAL pre-walk,
+ * exactly one discarded record at offset 64 with `expect_count` messages,
+ * and the lane accepts a new batch afterwards. */
+static void assert_discarded_record_lane(const char *directory, int32_t expect_count)
+{
+    MmapqIndexedBatchQueue *destination = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create(directory, "destination", 32768, 16, 1, 32768 * 8, 0, 1000000000, 0, NULL, NULL, &destination));
+    MmapqIndexedBatchAppender *appender = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender_with_id(destination, 0, &appender));
+    int64_t joined = -1;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_join_completed_open_batch(appender, &joined));
+    /* The discarded offset is not in the outstanding set until a walk refills it. */
+    TEST_ASSERT_EQUAL_INT64(MMAPQ_EINVAL, mmapq_indexed_batch_appender_commit_batch(appender, 64));
+    MmapqUncommittedBatchIterator *uit = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_uncommitted_batches_checked(appender, &uit));
+    int walked = 0;
+    int64_t walked_off = -1;
+    int32_t walked_count = -1;
+    while (1) {
+        int64_t boff; int32_t count; MmapqBatchPayloadIterator *msgs;
+        int nrc = mmapq_uncommitted_batch_next(uit, &boff, &count, &msgs);
+        if (nrc == 0) break;
+        TEST_ASSERT_GREATER_OR_EQUAL_INT(1, nrc);
+        walked++;
+        walked_off = boff;
+        walked_count = count;
+    }
+    TEST_ASSERT_EQUAL_INT(1, walked);
+    TEST_ASSERT_EQUAL_INT64(64, walked_off);
+    TEST_ASSERT_EQUAL_INT32(expect_count, walked_count);
+    /* The lane stays usable: the next batch publishes at index 0. */
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_batch_appender_append_and_commit(appender, "next", 4));
+    mmapq_indexed_batch_appender_close(appender);
+    mmapq_indexed_batch_queue_close(destination);
+}
+
+static void make_two_message_source_batch(const char *directory)
+{
+    MmapqIndexedBatchQueue *batch = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create(directory, "source", 32768, 16, 1, 32768 * 8, 0, 1000000000, 0, NULL, NULL, &batch));
+    MmapqIndexedBatchAppender *appender = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender_with_id(batch, 0, &appender));
+    MmapqMutableBatch *mb = mmapq_indexed_batch_appender_start_batch(appender);
+    TEST_ASSERT_NOT_NULL(mb);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(mb, "m-one", 6));
+    TEST_ASSERT_EQUAL_INT(1, mmapq_mutable_batch_append(mb, "m-two", 6));
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_mutable_batch_complete(mb));
+    mmapq_indexed_batch_appender_close(appender);
+    mmapq_indexed_batch_queue_close(batch);
+}
+
+static void test_copy_dest_failure_after_start_leaves_discarded_record(void)
+{
+    for (int scenario = 0; scenario < 2; scenario++) {
+        tearDown();
+        const char *directory = "/tmp/mmapq-transfer-fault";
+        TEST_ASSERT_EQUAL_INT(0, mkdir(directory, 0775));
+        make_two_message_source_batch(directory);
+        MmapqIndexedBatchQueue *batch = NULL;
+        TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create(directory, "source", 32768, 16, 1, 32768 * 8, 0, 1000000000, 0, NULL, NULL, &batch));
+        MmapqIndexedBatchReader *batch_reader = NULL;
+        TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_reader(batch, &batch_reader));
+
+        fault = scenario == 0 ? APPEND : COMPLETE;
+        calls = consumed = 0;
+        target = scenario == 0 ? 2 : 1;
+        int64_t result = mmapq_batch_queue_transfer_copy(batch_reader, directory, "destination", 0, 0, 0,
+                                                         NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, MMAPQ_CONFLICT_AUTO);
+        fault = NO_FAULT;
+        TEST_ASSERT_EQUAL_INT64(scenario == 0 ? MMAPQ_ENOMEM : MMAPQ_ETIMEDOUT, result);
+        mmapq_indexed_batch_reader_close(batch_reader);
+        mmapq_indexed_batch_queue_close(batch);
+
+        assert_discarded_record_lane(directory, scenario == 0 ? 1 : 2);
+    }
+}
+
+static void test_import_dest_failure_after_start_leaves_discarded_record(void)
+{
+    for (int scenario = 0; scenario < 2; scenario++) {
+        tearDown();
+        const char *directory = "/tmp/mmapq-transfer-fault";
+        TEST_ASSERT_EQUAL_INT(0, mkdir(directory, 0775));
+        make_two_message_source_batch(directory);
+        MmapqIndexedBatchQueue *batch = NULL;
+        TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create(directory, "source", 32768, 16, 1, 32768 * 8, 0, 1000000000, 0, NULL, NULL, &batch));
+        MmapqIndexedBatchReader *batch_reader = NULL;
+        TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_reader(batch, &batch_reader));
+        FILE *stream = tmpfile();
+        TEST_ASSERT_NOT_NULL(stream);
+        TEST_ASSERT_EQUAL_INT64(1, mmapq_batch_queue_transfer_export(batch_reader, stream, 0, 0, 0, NULL, NULL, NULL));
+        rewind(stream);
+        mmapq_indexed_batch_reader_close(batch_reader);
+        mmapq_indexed_batch_queue_close(batch);
+
+        fault = scenario == 0 ? APPEND : COMPLETE;
+        calls = consumed = 0;
+        target = scenario == 0 ? 2 : 1;
+        int64_t result = mmapq_batch_queue_transfer_import(stream, directory, "destination", 0,
+                                                           NULL, NULL, 0, NULL, NULL, MMAPQ_CONFLICT_AUTO);
+        TEST_ASSERT_EQUAL_INT(0, fclose(stream));
+        fault = NO_FAULT;
+        TEST_ASSERT_EQUAL_INT64(scenario == 0 ? MMAPQ_ENOMEM : MMAPQ_ETIMEDOUT, result);
+
+        assert_discarded_record_lane(directory, scenario == 0 ? 1 : 2);
+    }
+}
+
+/* Same discarded-record pin for the two 1-message-per-batch paths: with a
+ * COMPLETE fault the single append has already landed, so the discard
+ * stores count=1 — pre-fix the abandoned open batch was join-completed on
+ * reopen (join rc=1). (An APPEND fault on these paths fails before any
+ * store — the empty batch is discarded by position reset and leaves no
+ * trace either way, so APPEND cannot fail-first there.) */
+static void make_one_message_normal_source(const char *directory)
+{
+    MmapqIndexedQueue *queue = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create(directory, "source", 32768, 16, 1, 32768 * 8, 0, 1000000000, 0, NULL, NULL, &queue));
+    MmapqIndexedAppender *appender = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender_with_id(queue, 0, &appender));
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_appender_append(appender, "m-one", 6));
+    mmapq_indexed_appender_close(appender);
+    mmapq_indexed_queue_close(queue);
+}
+
+static void test_copy_normal_to_batch_complete_failure_leaves_discarded_record(void)
+{
+    tearDown();
+    const char *directory = "/tmp/mmapq-transfer-fault";
+    TEST_ASSERT_EQUAL_INT(0, mkdir(directory, 0775));
+    make_one_message_normal_source(directory);
+    MmapqIndexedQueue *queue = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create(directory, "source", 32768, 16, 1, 32768 * 8, 0, 1000000000, 0, NULL, NULL, &queue));
+    MmapqIndexedReader *normal_reader = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_reader(queue, &normal_reader));
+
+    fault = COMPLETE;
+    calls = consumed = 0;
+    target = 1;
+    int64_t result = mmapq_batch_queue_transfer_copy_normal_to_batch(normal_reader, directory, "destination", 0, 0, 0,
+                                                                     NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, MMAPQ_CONFLICT_AUTO);
+    fault = NO_FAULT;
+    TEST_ASSERT_EQUAL_INT64(MMAPQ_ETIMEDOUT, result);
+    mmapq_indexed_reader_close(normal_reader);
+    mmapq_indexed_queue_close(queue);
+
+    assert_discarded_record_lane(directory, 1);
+}
+
+static void test_import_flat_stream_complete_failure_leaves_discarded_record(void)
+{
+    tearDown();
+    const char *directory = "/tmp/mmapq-transfer-fault";
+    TEST_ASSERT_EQUAL_INT(0, mkdir(directory, 0775));
+    make_one_message_normal_source(directory);
+    MmapqIndexedQueue *queue = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create(directory, "source", 32768, 16, 1, 32768 * 8, 0, 1000000000, 0, NULL, NULL, &queue));
+    MmapqIndexedReader *normal_reader = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_reader(queue, &normal_reader));
+    FILE *stream = tmpfile();
+    TEST_ASSERT_NOT_NULL(stream);
+    TEST_ASSERT_EQUAL_INT64(1, mmapq_queue_transfer_export(normal_reader, stream, 0, 0, 0, NULL, NULL, NULL));
+    rewind(stream);
+    mmapq_indexed_reader_close(normal_reader);
+    mmapq_indexed_queue_close(queue);
+
+    fault = COMPLETE;
+    calls = consumed = 0;
+    target = 1;
+    int64_t result = mmapq_batch_queue_transfer_import_flat_stream(stream, directory, "destination", 0,
+                                                                   NULL, NULL, 0, NULL, NULL, MMAPQ_CONFLICT_AUTO);
+    TEST_ASSERT_EQUAL_INT(0, fclose(stream));
+    fault = NO_FAULT;
+    TEST_ASSERT_EQUAL_INT64(MMAPQ_ETIMEDOUT, result);
+
+    assert_discarded_record_lane(directory, 1);
+}
+
 static void test_chunk_export_does_not_serialize_context_padding(void)
 {
     const char *directory = "/tmp/mmapq-transfer-fault";
@@ -561,6 +748,10 @@ int main(void)
     RUN_TEST(test_batch_export_rejects_message_count_growth);
     RUN_TEST(test_copy_failure_matrix);
     RUN_TEST(test_import_failure_matrix);
+    RUN_TEST(test_copy_dest_failure_after_start_leaves_discarded_record);
+    RUN_TEST(test_import_dest_failure_after_start_leaves_discarded_record);
+    RUN_TEST(test_copy_normal_to_batch_complete_failure_leaves_discarded_record);
+    RUN_TEST(test_import_flat_stream_complete_failure_leaves_discarded_record);
     RUN_TEST(test_chunk_export_does_not_serialize_context_padding);
     return UNITY_END();
 }

@@ -2622,6 +2622,22 @@ void test_batch_uncommitted_zero_archive_offset_refused(void)
     mmapq_indexed_batch_appender_close(a);
 }
 
+/* CAND-51a F2 pin: an append_and_commit rejected by the up-front length
+ * validation never starts a batch — the lane stays usable. (Pre-fix the
+ * failed append left batch_state OPEN and the next start_batch returned
+ * EINVAL, so the second append_and_commit returned -1.) */
+static void test_append_and_commit_failure_leaves_lane_usable(void)
+{
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
+    TEST_ASSERT_NOT_NULL(a);
+    int64_t bad = mmapq_indexed_batch_appender_append_and_commit(a, "x", REGION_SZ);
+    TEST_ASSERT_EQUAL_INT64(MMAPQ_EINVAL, bad);
+    int64_t good = mmapq_indexed_batch_appender_append_and_commit(a, "next", 4);
+    TEST_ASSERT_EQUAL_INT64(0, good);
+    mmapq_indexed_batch_appender_close(a);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -2699,5 +2715,6 @@ int main(void)
     RUN_TEST(test_batch_start_recovers_orphaned_open_batch);
     RUN_TEST(test_batch_uncommitted_dg_line_respected);
     RUN_TEST(test_batch_uncommitted_zero_archive_offset_refused);
+    RUN_TEST(test_append_and_commit_failure_leaves_lane_usable);
     return UNITY_END();
 }
