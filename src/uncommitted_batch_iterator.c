@@ -255,9 +255,10 @@ int mmapqi_uncommitted_batch_iterator_next(
 
         int32_t cap = it->msgs.payload_buf.capacity;
 
-        /* Batch headers never occupy a < 4-byte region tail
-         * (ensure_space_for_batch_header rule) — skip to the next region. */
-        if (cap < MMAPQ_BATCH_MSG_COUNT_SIZE) {
+        /* CAND-51e unified tail rule: <= 4 bytes left means padding —
+         * skip to the next region; a batch count slot never occupies a
+         * region tail (the ensure_space_for_batch_header rule). */
+        if (cap <= MMAPQ_BATCH_MSG_COUNT_SIZE) {
             it->gap_pos += cap;
             continue;
         }

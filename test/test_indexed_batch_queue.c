@@ -11,6 +11,7 @@
 #include "internal/queue_meta.h"
 #include "internal/batch_payload_iterator_internal.h"
 #include "internal/uncommitted_batch_iterator.h"
+#include "wrap_fault_oneshot.h"
 #include <stdio.h>
 #include <time.h>
 
@@ -2380,33 +2381,8 @@ void test_batch_de_mode4_count0_hole(void)
     mmapq_indexed_batch_appender_close(a);
 }
 
-/* One-shot wrap-failure injection on the batch appender's payload accessor
- * (the D8 stub idiom, adapted: the shared accessor is reached through the
- * in-progress batch's internal iterator; the vtable is patched and the
- * fast path invalidated). No new hooks; runs in both build configs. */
-static WrapResult (*bq_oneshot_real_wrap)(RegionAccessor *, int64_t, Buffer *);
-static int64_t bq_oneshot_pos;
-static int     bq_oneshot_hits;
-static WrapResult bq_oneshot_wrap(RegionAccessor *self, int64_t position, Buffer *buf)
-{
-    if (position == bq_oneshot_pos) {
-        bq_oneshot_hits++;
-        self->wrap = bq_oneshot_real_wrap;   /* one-shot: restore in place */
-        return WRAP_MAP_TIMED_OUT;
-    }
-    return bq_oneshot_real_wrap(self, position, buf);
-}
-static void bq_arm_oneshot(MmapqMutableBatch *b, int64_t fail_pos)
-{
-    MmapqBatchPayloadIterator *bit = mmapq_mutable_batch_iterator(b, 0);
-    TEST_ASSERT_NOT_NULL(bit);
-    RegionAccessor *acc = bit->payload_acc;
-    bq_oneshot_real_wrap = acc->wrap;
-    bq_oneshot_pos = fail_pos;
-    bq_oneshot_hits = 0;
-    acc->wrap = bq_oneshot_wrap;
-    region_accessor_invalidate_fast_path(acc);
-}
+/* The one-shot wrap-failure seam moved to test/wrap_fault_oneshot.h
+ * (CAND-51e shares it with the crash-composition suite). */
 
 /* §7.7 D-F (boundary padding marker): fail the wrap AFTER
  * write_padding_if_needed has stored a long-padding marker (append returns

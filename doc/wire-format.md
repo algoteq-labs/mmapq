@@ -101,6 +101,14 @@ Two padding cases at a region end:
 - **Long padding** — write a negative length; skip `abs(length) + 4` bytes
   (= the remaining region capacity) across the boundary.
 
+**One tail rule for every item (CAND-51e):** with ≤ 4 bytes left in a
+region, skip to the next region. A message keeps its length and payload in
+one region; a batch count slot could fit in exactly 4 bytes but
+deliberately does not use them — four zero bytes at a region end must mean
+only padding, because an open batch's count slot is also zero and recovery
+could not tell them apart. (Pre-0.2.0 change; the batch format is
+unreleased — recreate queues.)
+
 ### Alignment contract
 
 Regions are 8-byte and page aligned. Individual messages within a region are

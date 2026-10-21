@@ -28,6 +28,14 @@ This library implements a **Vertical Walk**:
 
 The payload framing uses a dense `[int32 length][payload bytes...]` format.
 
+**The region-tail rule is one rule for every item (CAND-51e):** with ≤ 4
+bytes left in a region, skip to the next region. A message keeps its length
+and payload in one region; a batch count slot could fit in exactly 4 bytes
+but deliberately does not use them — four zero bytes at a region end must
+mean only padding, because an open batch's count slot is also zero and
+recovery could not tell them apart (the rejoin wedge found by the
+crash-composition suite). Wire-format details: `doc/wire-format.md`.
+
 ### Rationale
 We deliberately avoided 8-byte message alignment (which would require a `[length][reserved]` 8-byte header and trailing padding).
 1.  **Binary Compatibility**: Single-message queues are compatible with Algoteq's evolved Java implementation, not upstream `tools4j/mmap`. Java does not yet read mmapq batch queues.

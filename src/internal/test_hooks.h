@@ -51,12 +51,18 @@
  *   -1 disarms. appender_walk_fired returns how many times the armed site
  *   fired since the last setter call — the liveness assertion against
  *   vacuous pin geometries.
+ * batch_recover_walk_step: invoked in recover_open_batch's walk loop
+ *   after each walked message (argument = count walked so far) — lets a
+ *   pin kill -9 the process mid-join-completion, before the count store
+ *   (CAND-51e P8: crash-during-recovery; also what makes the early
+ *   count-store mutation observable).
  */
 #ifdef MMAPQ_TEST_HOOKS
 void mmapq_test_hook_set_commit_pre(void (*fn)(void));
 void mmapq_test_hook_set_commit_min_pre(void (*fn)(void));
 void mmapq_test_hook_set_commit_post_cas(void (*fn)(void));
 void mmapq_test_hook_set_batch_commit_pre_publish(void (*fn)(void));
+void mmapq_test_hook_set_batch_recover_walk_step(void (*fn)(int walked));
 void mmapq_test_hook_set_archiver_live_pass(int (*fn)(void));
 void mmapq_test_hook_set_batch_archiver_live_pass(int (*fn)(void));
 void mmapq_test_hook_set_archiver_publish_pre(void (*fn)(void));

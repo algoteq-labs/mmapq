@@ -310,12 +310,24 @@ int mmapq_test_hook_appender_walk_fired(void) { return appender_walk_fired; }
 static int walk_payload_to_end(MmapqIndexedAppender *a, int64_t from,
                                int64_t *out_end)
 {
-    RegionAccessor *ro_payload =
-        mmapqi_queue_region_accessor_payload(a->ro_acc, a->appender_id);
+    /* CAND-51e: the rejoin walk uses the WRITER'S RW payload accessor, not
+     * the RO one. Anti-Pattern E (no file-size check on the RO payload path)
+     * is correct for header-driven readers, which only map where a committed
+     * header points; this walk PROBES past committed data, where that
+     * premise fails. The RO accessor neither extends nor size-checks, so a
+     * probe at a region the writer never touched SIGBUSed (a message ending
+     * exactly at an in-file region end) and a tail marker whose skip target
+     * file was never created read as ECORRUPT instead of EOS. The RW wrap is
+     * size-checked and creates/extends the region (zeros -> EOS), matching
+     * the batch twin's walk. It can never re-create a reclaimed file: the
+     * walk starts at this lane's last live header or at start_offset — never
+     * below the readability floor, while reclaimed files are wholly below it
+     * (the listing cap + the validated overlap in reclaim_files). */
+    RegionAccessor *rw_payload = a->payload_acc;
     int64_t probing = from;
     while (1) {
-        WrapResult wr = region_accessor_wrap_no_premap(ro_payload, probing,
-                                                       &a->ro_buf);
+        WrapResult wr = region_accessor_wrap_no_premap(rw_payload, probing,
+                                                       &a->payload_buf);
         if (wr == WRAP_FILE_NOT_FOUND || wr == WRAP_BEYOND_FILE_SIZE)
             break;   /* end of stream */
         if (wr == WRAP_MAP_TIMED_OUT)
@@ -325,7 +337,7 @@ static int walk_payload_to_end(MmapqIndexedAppender *a, int64_t from,
         int64_t msg_off = PAYLOAD_ITERATOR_NOT_SET;
         int32_t len = mmapqi_payload_walk_advance(a->queue_name, &probing,
                                                   &msg_off,
-                                                  ro_payload, &a->ro_buf);
+                                                  rw_payload, &a->payload_buf);
         WALK_HOOK(0, len);
         if (len == 0) break;
         if (len < 0) return len;   /* D8: timeout vs corruption propagates */
@@ -392,10 +404,14 @@ static int initialise_append_position(MmapqIndexedAppender *a, int64_t start_ind
             /*
              * Step 3: Walk payload forward past the committed message
              *         and any uncommitted tail, to find the true end
-             *         of the payload stream.
+             *         of the payload stream. CAND-51e: the WRITER'S RW
+             *         payload accessor, like walk_payload_to_end — this
+             *         walk probes past committed data, where the RO path's
+             *         no-size-check premise (Anti-Pattern E is for
+             *         header-driven readers) does not hold.
              */
-            RegionAccessor *ro_payload =
-                mmapqi_queue_region_accessor_payload(a->ro_acc, a->appender_id);
+            RegionAccessor *rw_payload = a->payload_acc;
+            Buffer         *rw_buf     = &a->payload_buf;
 
             int64_t probing = committed_payload_pos;
             int64_t msg_off = PAYLOAD_ITERATOR_NOT_SET;
@@ -403,7 +419,7 @@ static int initialise_append_position(MmapqIndexedAppender *a, int64_t start_ind
             /* Walk past the committed message itself first */
             int32_t len = mmapqi_payload_walk_advance(a->queue_name,
                                                 &probing, &msg_off,
-                                                ro_payload, ro_buf);
+                                                rw_payload, rw_buf);
             WALK_HOOK(1, len);
             if (len < 0) return len;   /* D8: timeout vs corruption propagates */
             if (len == 0) {
@@ -418,9 +434,18 @@ static int initialise_append_position(MmapqIndexedAppender *a, int64_t start_ind
                 int32_t next_len = mmapqi_payload_walk_advance(a->queue_name,
                                                           &next_probing,
                                                           &next_msg_off,
-                                                          ro_payload, ro_buf);
+                                                          rw_payload, rw_buf);
                 WALK_HOOK(2, next_len);
-                if (next_len == 0) break;
+                /* CAND-51e: adopt the final advance's position at EOS too —
+                 * payload_walk sets it past a terminal padding skip (short
+                 * or marker), and the walker must apply the writer's rule at
+                 * each position: the next write belongs past the padding
+                 * (walk_payload_to_end adopts via its direct probing, and
+                 * the batch twin's recover/skip adopt likewise). Dropping it
+                 * here placed the next write ON a terminal marker when the
+                 * rejoin walked from a committed base — the two rejoin paths
+                 * disagreed by the skip. */
+                if (next_len == 0) { probing = next_probing; break; }
                 /* A walk error leaves probing unadvanced; without this the loop
                  * would spin forever on a corrupt tail. D8: the walk's code
                  * propagates verbatim (timeout is retryable, corruption is

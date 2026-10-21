@@ -84,7 +84,14 @@ static int wrap_payload_or_fail(MmapqIndexedBatchAppender *a, int64_t position)
 static int ensure_space_for_batch_header(MmapqIndexedBatchAppender *a)
 {
     if (wrap_payload_or_fail(a, a->current_payload_position)) return -1;
-    if (a->payload_buf.capacity < MMAPQ_BATCH_MSG_COUNT_SIZE) {
+    /* CAND-51e unified tail rule — one rule for every item: with <= 4
+     * bytes left in a region, skip to the next region. A message keeps its
+     * length and payload in one region; a batch count could fit in exactly
+     * 4 bytes but deliberately does not use them — four zero bytes at a
+     * region end must mean only padding, because an open batch's count
+     * slot is also zero and recovery could not tell them apart (the rejoin
+     * wedge found by the crash-composition suite). */
+    if (a->payload_buf.capacity <= MMAPQ_BATCH_MSG_COUNT_SIZE) {
         a->current_payload_position += a->payload_buf.capacity;
         if (wrap_payload_or_fail(a, a->current_payload_position)) return -1;
     }
@@ -114,6 +121,14 @@ static __attribute__((always_inline)) inline int write_padding_if_needed(MmapqIn
     return 0;
 }
 
+#ifdef MMAPQ_TEST_HOOKS
+/* CAND-51e P8: fires per walked message in recover_open_batch below, before
+ * the count store — the mid-join-completion kill point. Declared here, not
+ * with the other batch hooks, because the call site precedes them. */
+static void (*batch_recover_walk_step_hook)(int);
+void mmapq_test_hook_set_batch_recover_walk_step(void (*fn)(int)) { batch_recover_walk_step_hook = fn; }
+#endif
+
 /* §3.7 join completion of a trailing open batch (D-E fix), shared by rejoin
  * and the start_batch ORPHANED recovery. Walks messages from just past the
  * count slot at `p` until a zero length (end of stream), applying the
@@ -140,6 +155,11 @@ static int recover_open_batch(MmapqIndexedBatchAppender *a, int64_t p, int64_t *
         if (len < 0) return len;   /* D8: timeout (retryable) vs corruption propagates */
         if (len == 0) break;       /* end of stream */
         walked++;
+#ifdef MMAPQ_TEST_HOOKS
+        /* CAND-51e P8: mid-completion kill point — after the s-th walked
+         * message, before the count store (the store stays the last step). */
+        if (batch_recover_walk_step_hook) batch_recover_walk_step_hook(walked);
+#endif
     }
 
     if (walked == 0) {
@@ -175,9 +195,10 @@ static int skip_to_end_of_stream(MmapqIndexedBatchAppender *a, int64_t offset,
         if (wr != WRAP_SUCCESS) return MMAPQ_ECORRUPT;
 
         int32_t cap = a->payload_buf.capacity;
-        /* Batch headers never occupy a < 4-byte region tail
-         * (ensure_space_for_batch_header rule) — skip to the next region. */
-        if (cap < MMAPQ_BATCH_MSG_COUNT_SIZE) {
+        /* CAND-51e unified tail rule: <= 4 bytes left means padding —
+         * skip to the next region (the ensure_space_for_batch_header
+         * rule; the batch count slot never occupies a region tail). */
+        if (cap <= MMAPQ_BATCH_MSG_COUNT_SIZE) {
             end_of_stream += cap;
             continue;
         }

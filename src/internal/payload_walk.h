@@ -21,6 +21,11 @@
  *   Short padding: capacity <= 4 bytes at region end.
  *     Action: skip to next region, position += capacity.
  *     No length field is written.
+ *     CAND-51e: this is now the ONE tail rule for every item — the batch
+ *     count slot follows it too (a count could fit in exactly 4 bytes but
+ *     deliberately does not use them: four zero bytes at a region end must
+ *     mean only padding, because an open batch's count slot is also zero
+ *     and recovery could not tell them apart).
  *
  *   Long padding: length field < 0.
  *     Action: skip forward by (-length + 4) bytes.

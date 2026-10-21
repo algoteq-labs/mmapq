@@ -377,6 +377,47 @@ int mmapqi_uncommitted_iterator_advance(MmapqUncommittedPayloadIterator *it)
             continue;
         }
 
+        /* CAND-51e (finding #4; owner ruling: adopted, generalised): a
+         * padding skip — short (<= 4 bytes) or a long-padding marker —
+         * whose target equals current_gap_end is gap exhaustion; the walker
+         * never reads a length at or past the gap end. Principle: a walker
+         * applies the writer's rule at each position, and the gap end is
+         * where the committed record begins. The batch twin skips both
+         * kinds inline and re-tests the gap end at its loop top
+         * (uncommitted_batch_iterator.c); here the skip happens inside the
+         * inner advance (payload_walk), so the landing must be detected
+         * before it. */
+        if (it->current_gap_end != PAYLOAD_ITERATOR_NOT_SET &&
+            it->inner->next_probing_offset < it->current_gap_end) {
+            int64_t p = it->inner->next_probing_offset;
+            WrapResult wr = region_accessor_wrap(it->inner->payload_accessor,
+                                                 p, &it->inner->payload_buf);
+            if (wr != WRAP_SUCCESS)
+                return wr == WRAP_MAP_TIMED_OUT ? MMAPQ_ETIMEDOUT : MMAPQ_ECORRUPT;
+            int64_t cap = it->inner->payload_buf.capacity;
+            int64_t target = p;                     /* no padding */
+            if (cap <= PAYLOAD_LENGTH_SIZE) {
+                target = p + cap;                   /* short padding */
+            } else {
+                int32_t v;
+                memcpy(&v, it->inner->payload_buf.data + PAYLOAD_LENGTH_OFFSET,
+                       sizeof(int32_t));
+                if (v < 0) {
+                    int64_t skip = -(int64_t)v + PAYLOAD_LENGTH_SIZE;
+                    if (skip != cap)
+                        return MMAPQ_ECORRUPT;      /* the exact-extent rule */
+                    target = p + skip;              /* long-padding marker */
+                }
+            }
+            if (target == it->current_gap_end) {
+                /* the gap's remainder is padding: exhausted */
+                it->inner->next_probing_offset = it->current_gap_end;
+                continue;
+            }
+            if (target > it->current_gap_end)
+                return MMAPQ_ECORRUPT;  /* padding over a committed start: torn */
+        }
+
         /* D8: three-way — a negative error from the inner advance
          * propagates; 0 means the current gap is exhausted. A negative is
          * truthy in C: `if (advance(...))` here would report an error as a

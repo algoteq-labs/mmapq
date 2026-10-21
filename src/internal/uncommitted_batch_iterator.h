@@ -40,9 +40,10 @@
  *   At next():
  *     1. Bounded-gap pre-check: position == current_gap_end ⇒ gap exhausted
  *        — never probe at a committed range's start.
- *     2. At position p: remaining region capacity < MMAPQ_BATCH_MSG_COUNT_SIZE
- *        ⇒ skip to the next region (batch headers never occupy a < 4-byte
- *        tail). Read the count. count == 0 ends the gap walk (a count is
+ *     2. At position p: remaining region capacity <= MMAPQ_BATCH_MSG_COUNT_SIZE
+ *        ⇒ skip to the next region (the CAND-51e unified tail rule: <= 4
+ *        bytes left means padding; a batch count slot never occupies a
+ *        region tail). Read the count. count == 0 ends the gap walk (a count is
  *        written only by complete/complete_uncommitted/non-empty discard/
  *        join completion, so count 0 can exist only at the true tail); in a
  *        bounded gap, count 0 with p != current_gap_end ⇒ MMAPQ_ECORRUPT.

@@ -17,7 +17,10 @@
 
 #include <fcntl.h>
 #include <pthread.h>
+#include <signal.h>
 #include <unistd.h>
+#include <poll.h>
+#include <sys/wait.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -3516,6 +3519,232 @@ void test_c38_create_accepts_non_pow2_file_multiple(void)
     c32_cleanup("mmap_test_iq_c38_ok");
 }
 
+/* ── CAND-51e pins: the exact in-file region-end rejoin (the RW rejoin walk) ──
+ * Finding #2: single-message, message ends exactly at an in-file region end,
+ * clean close, reopen. Pre-fix the rejoin walk probes the never-written
+ * in-file region through the RO payload accessor (no size check — Anti-
+ * Pattern E, correct for header-driven readers only) and the process dies
+ * with SIGBUS on the NULL-runtime (sync) path. The async runtime pre-extends
+ * the file, so it never fires there (control, green on both trees). */
+
+#define CCE_DIR    "/tmp"
+#define CCE_QUEUE  "mmap_test_iq_c51e_re"
+#define CCE_REGION 32768
+#define CCE_FILE   (32768 * 2)   /* two regions per file: 32768 is IN-FILE */
+
+static void cce_cleanup(void)
+{
+    char cmd[512];
+    snprintf(cmd, sizeof cmd, "rm -rf %s/%s", CCE_DIR, CCE_QUEUE);
+    int rc = system(cmd); (void)rc;
+}
+
+/* The child: append a message ending exactly at the first in-file region
+ * end, clean close, reopen (the walk probes the unwritten region), write
+ * one more record at the exact position. _exit codes name the step; 0 =
+ * all exact. */
+static void cce_child(void)
+{
+    alarm(15);
+    MmapqIndexedQueue *q = NULL;
+    MmapqIndexedAppender *a = NULL;
+    if (mmapq_indexed_queue_create(CCE_DIR, CCE_QUEUE, CCE_REGION, 4, 1,
+            CCE_FILE, 0, TIMEOUT_NS, 0, NULL, NULL, &q) != 0) _exit(2);
+    if (mmapq_indexed_queue_create_appender(q, &a) != 0) _exit(3);
+    /* [64, 32768): length 32700 = 32768 - 64 - 4 */
+    static char big[CCE_REGION - 64 - 4];
+    memset(big, 'E', sizeof big);
+    if (mmapq_indexed_appender_append(a, big, (int32_t)sizeof big) != 0) _exit(4);
+    mmapq_indexed_appender_close(a);
+    mmapq_indexed_queue_close(q);
+
+    if (mmapq_indexed_queue_create(CCE_DIR, CCE_QUEUE, CCE_REGION, 4, 1,
+            CCE_FILE, 0, TIMEOUT_NS, 0, NULL, NULL, &q) != 0) _exit(5);
+    if (mmapq_indexed_queue_create_appender(q, &a) != 0) _exit(6);
+    char small[8];
+    memset(small, 'F', sizeof small);
+    int64_t off = mmapq_indexed_appender_append_uncommitted(a, small, 8);
+    if (off != CCE_REGION) _exit(7);                 /* exact position */
+    if (mmapq_indexed_appender_commit(a, off) != 1) _exit(8);
+    mmapq_indexed_appender_close(a);
+    mmapq_indexed_queue_close(q);
+    _exit(0);
+}
+
+void test_c51e_rejoin_exact_infile_region_end_sync(void)
+{
+#if !defined(__SANITIZE_THREAD__)
+    cce_cleanup();
+    mkdir(CCE_DIR "/" CCE_QUEUE, 0775);
+
+    pid_t pid = fork();
+    TEST_ASSERT_NOT_EQUAL(-1, pid);
+    if (pid == 0) cce_child();
+
+    int st = 0, waited = 0;
+    for (;;) {
+        pid_t r = waitpid(pid, &st, WNOHANG);
+        if (r == pid) break;
+        TEST_ASSERT_EQUAL_INT(0, r);
+        if (++waited > 200) {
+            kill(pid, SIGKILL);
+            waitpid(pid, &st, 0);
+            TEST_FAIL_MESSAGE("c51e pin: child did not exit");
+        }
+        struct pollfd pfd = { .fd = -1 };
+        poll(&pfd, 0, 50);
+    }
+    if (!(WIFEXITED(st) && WEXITSTATUS(st) == 0)) {
+        char m[160];
+        if (WIFSIGNALED(st))
+            snprintf(m, sizeof m,
+                     "c51e pin: child died with signal %d (%s) — the rejoin "
+                     "walk probed the unwritten in-file region (finding #2)",
+                     WTERMSIG(st),
+                     WTERMSIG(st) == SIGBUS ? "SIGBUS" : "other");
+        else
+            snprintf(m, sizeof m, "c51e pin: child exit %d (a _exit(n) names "
+                     "the failed step)", WIFEXITED(st) ? WEXITSTATUS(st) : -1);
+        TEST_FAIL_MESSAGE(m);
+    }
+
+    /* parent: both records readable, exact bytes */
+    MmapqIndexedQueue *q = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create(CCE_DIR, CCE_QUEUE,
+        CCE_REGION, 4, 1, CCE_FILE, 0, TIMEOUT_NS, 0, NULL, NULL, &q));
+    MmapqIndexedReader *r = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_reader(q, &r));
+    MmapqReadingContext ctx = {0};
+    mmapq_indexed_reader_read(r, 0, &ctx);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ENTRY_AVAILABLE, ctx.status);
+    TEST_ASSERT_EQUAL_INT32(CCE_REGION - 64 - 4, ctx.length);
+    TEST_ASSERT_EQUAL_INT64(64, ctx.msg_offset);
+    mmapq_indexed_reader_read(r, 1, &ctx);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ENTRY_AVAILABLE, ctx.status);
+    TEST_ASSERT_EQUAL_INT32(8, ctx.length);
+    TEST_ASSERT_EQUAL_INT64(CCE_REGION, ctx.msg_offset);
+    mmapq_indexed_reader_close(r);
+    mmapq_indexed_queue_close(q);
+    cce_cleanup();
+#else
+    TEST_IGNORE_MESSAGE("fork pin: excluded under TSan");
+#endif
+}
+
+/* Async-runtime control: the region premap extends the file ahead, so the
+ * probe never reaches an unwritten region — green on both trees. */
+void test_c51e_rejoin_exact_infile_region_end_async(void)
+{
+    cce_cleanup();
+    mkdir(CCE_DIR "/" CCE_QUEUE, 0775);
+
+    MmapqRuntime *rt = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_runtime_region_mapper(&rt));
+
+    MmapqIndexedQueue *q = NULL;
+    MmapqIndexedAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create(CCE_DIR, CCE_QUEUE,
+        CCE_REGION, 4, 1, CCE_FILE, 0, TIMEOUT_NS, 0, rt, rt, &q));
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(q, &a));
+    static char big[CCE_REGION - 64 - 4];
+    memset(big, 'E', sizeof big);
+    TEST_ASSERT_EQUAL_INT64(0,
+        mmapq_indexed_appender_append(a, big, (int32_t)sizeof big));
+    mmapq_indexed_appender_close(a);
+    mmapq_indexed_queue_close(q);
+
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create(CCE_DIR, CCE_QUEUE,
+        CCE_REGION, 4, 1, CCE_FILE, 0, TIMEOUT_NS, 0, rt, rt, &q));
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(q, &a));
+    char small[8];
+    memset(small, 'F', sizeof small);
+    int64_t off = mmapq_indexed_appender_append_uncommitted(a, small, 8);
+    TEST_ASSERT_EQUAL_INT64(CCE_REGION, off);
+    TEST_ASSERT_EQUAL_INT64(1, mmapq_indexed_appender_commit(a, off));
+    mmapq_indexed_appender_close(a);
+    mmapq_indexed_queue_close(q);
+    mmapq_runtime_close(rt);
+    cce_cleanup();
+}
+
+/* CAND-51e finding #4 pin family (owner ruling: adopted, generalised).
+ * An uncommitted record, padding to the region end, then a committed record
+ * in the next region: the bounded gap walk must treat a padding skip
+ * landing on the gap end as exhaustion — pre-fix it read the committed
+ * record's length and the overlap check returned MMAPQ_ECORRUPT.
+ * Cells: bytes-left {1,2,3,4} (short padding), {5,8,1000} (long markers),
+ * controls {0} (exact region end) and {100} (same-region fit). */
+void test_c51e_uncommitted_gap_end_padding(void)
+{
+    static const struct { int32_t left; int32_t clen; } cells[] = {
+        {0, 9},                            /* control: exact region end */
+        {1, 9}, {2, 9}, {3, 9}, {4, 9},    /* short padding */
+        {5, 9}, {8, 9},                    /* small long-padding markers */
+        {100, 9},                          /* control: same-region fit */
+        {1000, 997},                       /* larger marker */
+    };
+    int failures = 0;
+    for (int ci = 0; ci < (int)(sizeof cells / sizeof cells[0]); ci++) {
+        int32_t left  = cells[ci].left;
+        int32_t clen  = cells[ci].clen;
+        int32_t ulen  = CCE_REGION - 64 - PAYLOAD_LENGTH_SIZE - left;
+        char qn[80];
+        snprintf(qn, sizeof qn, "mmap_test_iq_c51e_gap_%d", ci);
+        char cmd[512];
+        snprintf(cmd, sizeof cmd, "rm -rf %s/%s", CCE_DIR, qn);
+        int rc = system(cmd); (void)rc;
+        snprintf(cmd, sizeof cmd, "mkdir -p %s/%s", CCE_DIR, qn);
+        rc = system(cmd); (void)rc;
+
+        MmapqIndexedQueue *q = NULL;
+        MmapqIndexedAppender *a = NULL;
+        TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create(CCE_DIR, qn,
+            CCE_REGION, 4, 1, CCE_FILE, 0, TIMEOUT_NS, 0, NULL, NULL, &q));
+        TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(q, &a));
+
+        static char buf[CCE_REGION];
+        memset(buf, 'U', (size_t)ulen);
+        int64_t uoff = mmapq_indexed_appender_append_uncommitted(a, buf, ulen);
+        TEST_ASSERT_EQUAL_INT64(64, uoff);
+        /* the committed record: the writer pads per the message rule */
+        memset(buf, 'C', (size_t)clen);
+        int64_t cidx = mmapq_indexed_appender_append(a, buf, clen);
+        TEST_ASSERT_EQUAL_INT64(0, cidx);
+        mmapq_indexed_appender_close(a);
+        mmapq_indexed_queue_close(q);
+
+        /* rejoin and iterate: exactly the uncommitted record, then clean
+         * exhaustion */
+        TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create(CCE_DIR, qn,
+            CCE_REGION, 4, 1, CCE_FILE, 0, TIMEOUT_NS, 0, NULL, NULL, &q));
+        TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(q, &a));
+        MmapqUncommittedPayloadIterator *it = NULL;
+        TEST_ASSERT_EQUAL_INT(0,
+            mmapq_indexed_appender_uncommitted_iterator_checked(a,
+                MMAPQ_PAYLOAD_ITERATOR_NOT_SET, MMAPQ_PAYLOAD_ITERATOR_NOT_SET,
+                &it));
+        const void *data = NULL; int32_t len = 0; int64_t off = -2;
+        int r1 = mmapq_uncommitted_iterator_next(it, &data, &len, &off);
+        int64_t off1 = off; int32_t len1 = len;   /* r2 clears the outputs */
+        int bad = 0;
+        if (r1 != 1 || off1 != 64 || len1 != ulen) bad = 1;
+        int r2 = mmapq_uncommitted_iterator_next(it, &data, &len, &off);
+        if (r2 != 0) bad = 1;
+        if (bad) {
+            printf("c51e gap cell left=%d: r1=%d off=%lld len=%d r2=%d "
+                   "(expected r1=1 off=64 len=%d r2=0)\n",
+                   (int)left, r1, (long long)off1, (int)len1, r2, (int)ulen);
+            failures++;
+        }
+        mmapq_indexed_appender_close(a);
+        mmapq_indexed_queue_close(q);
+        snprintf(cmd, sizeof cmd, "rm -rf %s/%s", CCE_DIR, qn);
+        rc = system(cmd); (void)rc;
+    }
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, failures,
+        "c51e gap-end padding cells failed (see per-cell lines)");
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -3632,6 +3861,10 @@ int main(void)
 
     RUN_TEST(test_c38_create_refuses_region_below_header_block);
     RUN_TEST(test_c38_create_accepts_non_pow2_file_multiple);
+
+    RUN_TEST(test_c51e_rejoin_exact_infile_region_end_sync);
+    RUN_TEST(test_c51e_rejoin_exact_infile_region_end_async);
+    RUN_TEST(test_c51e_uncommitted_gap_end_padding);
 
     return UNITY_END();
 }

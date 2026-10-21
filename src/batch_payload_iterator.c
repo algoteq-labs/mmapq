@@ -18,7 +18,9 @@ int32_t mmapq_batch_iterator_read_message_count(MmapqBatchPayloadIterator *it, i
 {
     WrapResult result = region_accessor_wrap(it->payload_acc, batch_offset, &it->payload_buf);
     if (result == WRAP_MAP_TIMED_OUT) return MMAPQ_ETIMEDOUT;
-    if (result != WRAP_SUCCESS || it->payload_buf.capacity < MMAPQ_BATCH_MSG_COUNT_SIZE)
+    /* capacity <= 4: a batch count never occupies a region tail (the
+     * CAND-51e unified tail rule) — a batch offset there is corrupt. */
+    if (result != WRAP_SUCCESS || it->payload_buf.capacity <= MMAPQ_BATCH_MSG_COUNT_SIZE)
         return MMAPQ_ECORRUPT;
     int32_t count;
     memcpy(&count, it->payload_buf.data + MMAPQ_BATCH_MSG_COUNT_OFFSET, sizeof(int32_t));
@@ -36,10 +38,12 @@ int64_t mmapq_batch_iterator_probe_batch(MmapqBatchPayloadIterator *it, int64_t 
     if (r != WRAP_SUCCESS) return MMAPQ_BATCH_ITERATOR_INVALID_POSITION;
 
     int32_t cap = it->payload_buf.capacity;
-    if (cap < MMAPQ_BATCH_MSG_COUNT_SIZE) {
+    /* CAND-51e unified tail rule: <= 4 bytes left means padding — skip to
+     * the next region; a batch count slot never occupies a region tail. */
+    if (cap <= MMAPQ_BATCH_MSG_COUNT_SIZE) {
         offset += cap;
         r = region_accessor_wrap(it->payload_acc, offset, &it->payload_buf);
-        if (r != WRAP_SUCCESS || it->payload_buf.capacity < MMAPQ_BATCH_MSG_COUNT_SIZE) {
+        if (r != WRAP_SUCCESS || it->payload_buf.capacity <= MMAPQ_BATCH_MSG_COUNT_SIZE) {
             return MMAPQ_BATCH_ITERATOR_INVALID_POSITION;
         }
     }
@@ -57,7 +61,7 @@ int64_t mmapq_batch_iterator_probe_batch(MmapqBatchPayloadIterator *it, int64_t 
             return MMAPQ_BATCH_ITERATOR_INVALID_POSITION;
         offset += it->payload_buf.capacity;
         r = region_accessor_wrap(it->payload_acc, offset, &it->payload_buf);
-        if (r != WRAP_SUCCESS || it->payload_buf.capacity < MMAPQ_BATCH_MSG_COUNT_SIZE)
+        if (r != WRAP_SUCCESS || it->payload_buf.capacity <= MMAPQ_BATCH_MSG_COUNT_SIZE)
             return MMAPQ_BATCH_ITERATOR_INVALID_POSITION;
         memcpy(&count, it->payload_buf.data + MMAPQ_BATCH_MSG_COUNT_OFFSET, sizeof(int32_t));
     }

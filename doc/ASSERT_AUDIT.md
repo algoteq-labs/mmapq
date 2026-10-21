@@ -164,7 +164,8 @@ room for giving up.)
 
 ### uncommitted_payload_iterator.c — 3 (all I)
 
-Lines 364, 434, 450. Internal dispatch null checks. (A5/CAND-22:
+Lines 364, 475, 491. Internal dispatch null checks. (CAND-51e: the
+gap-end padding-skip check shifted the last two from 434/450. A5/CAND-22:
 init and rewind NULL checks became MMAPQ_EINVAL returns. D8: scan floor,
 checked header read, and three-way advance propagation shifted the
 catalogued sites. CAND-49: the gap-overlap MMAP_ASSERT(0) became a runtime

@@ -20,6 +20,11 @@
  *  2. Tail-zero: every byte from write_position to the end of the last
  *     existing payload file of the lane is zero — the forward-only
  *     invariant (§3.7's (a)–(c)). Kills every "positioned too early" bug.
+ *     CAND-51e: a rejoin at an exact file boundary creates the next
+ *     payload file (the RW walk's probe + the eager-scaffolding wrap —
+ *     documented warm-up behaviour), so later files may exist iff they are
+ *     ENTIRELY zero; the zero scan covers them. File existence is mapping
+ *     policy, not content; the teeth (content past EOS) are unchanged.
  *  3. Header cross-check: every header entry of this appender (scanned from
  *     the queue's on-disk start index) points at a batch start encountered
  *     in the walk.
@@ -98,7 +103,9 @@ static inline void assert_batch_lane(
 {
     BatchLane L;
     memset(&L, 0, sizeof L);
-    snprintf(L.dir_queue, sizeof L.dir_queue, "%s/%s", dir, queue);
+    int dq = snprintf(L.dir_queue, sizeof L.dir_queue, "%s/%s", dir, queue);
+    if (dq < 0 || dq >= (int)sizeof L.dir_queue)
+        TEST_FAIL_MESSAGE("batch lane validator: dir/queue too long");
     L.appender_id = appender_id;
 
     /* On-disk queue meta */
@@ -121,9 +128,9 @@ static inline void assert_batch_lane(
     int64_t pos = L.start_offset;
     while (pos < write_position) {
         int64_t cap = L.region_size - (pos % L.region_size);
-        if (cap < MMAPQ_BATCH_MSG_COUNT_SIZE) {
-            /* < 4-byte region-skip tail — legal only immediately preceding
-             * a batch header (checked by the next iteration landing on one) */
+        if (cap <= MMAPQ_BATCH_MSG_COUNT_SIZE) {
+            /* CAND-51e unified tail rule: <= 4 bytes left is padding —
+             * skip; a batch count slot never occupies a region tail. */
             pos += cap;
             continue;
         }
@@ -146,7 +153,7 @@ static inline void assert_batch_lane(
         int64_t m = pos + MMAPQ_BATCH_MSG_COUNT_SIZE;
         for (int32_t i = 0; i < count; i++) {
             int64_t mcap = L.region_size - (m % L.region_size);
-            if (mcap <= PAYLOAD_LENGTH_SIZE) { m += mcap; continue; }  /* short padding */
+            if (mcap <= PAYLOAD_LENGTH_SIZE) { m += mcap; i--; continue; }  /* short padding: no length field is written — not a message (CAND-51e; the writer skips cap <= 4 silently, so the walk must not consume a count slot) */
             int32_t len;
             TEST_ASSERT_EQUAL_INT(0, blv_read32(&L, m, &len));
             if (len == 0)
@@ -177,13 +184,28 @@ static inline void assert_batch_lane(
         struct stat st;
         if (stat(zpath, &st) == 0) {
             /* zero bytes from write_position to the end of the LAST existing
-             * payload file of the lane (later files must not exist) */
+             * payload file of the lane; later files (a rejoin at an exact
+             * boundary creates the next one — see the header comment) must
+             * be entirely zero */
             for (int64_t fi = last / L.max_file_size + 1; ; fi++) {
                 char p2[600];
                 snprintf(p2, sizeof p2, "%s/payload_%d_%lld", L.dir_queue,
                          appender_id, (long long)fi);
                 if (stat(p2, &st) != 0) break;
-                TEST_FAIL_MESSAGE("batch lane validator: payload file exists past the write position's file");
+                int lfd = open(p2, O_RDONLY);
+                TEST_ASSERT_GREATER_THAN_INT(0, lfd);
+                char lbuf[4096];
+                ssize_t lgot; int64_t loff = 0;
+                while ((lgot = pread(lfd, lbuf, sizeof lbuf, (off_t)loff)) > 0) {
+                    for (ssize_t i = 0; i < lgot; i++)
+                        if (lbuf[i] != 0) {
+                            close(lfd);
+                            blv_fail(&L, fi * L.max_file_size + loff + i,
+                                     "non-zero byte in a payload file past the write position's file");
+                        }
+                    loff += lgot;
+                }
+                close(lfd);
             }
             /* scan the current file from write_position % max_file_size */
             int fd = open(zpath, O_RDONLY);
