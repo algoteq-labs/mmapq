@@ -251,9 +251,11 @@ static int archive_forward(MmapqIndexedBatchArchiver *a,
     if (rwm == NULL) return MMAPQ_EIO;
 
     /* Publish the candidate boundary (never lowered here), then start_index.
-     * CAND-37 twin: CAS from the snapshot, as in indexed_archiver.c. Here
-     * the CAS cannot fail — batch commits never touch start_offset and
-     * archive.lock EX excludes other archivers — mirrored for symmetry. */
+     * CAND-37 twin: CAS from the snapshot, as in indexed_archiver.c. The
+     * CAS can fail here (CAND-51b): commit_batch's re-check min can lower
+     * start_offset between the snapshot and this publish — the lower value
+     * then stands; the live pass and the min-based rollback only lower
+     * further. */
     for (int aid = 0; aid < MAX_APPENDERS; aid++) {
         if (ends[aid] == OFFSET_NOT_SET) continue;
         AppenderMeta *m = get_appender_meta(a, (uint8_t)aid);

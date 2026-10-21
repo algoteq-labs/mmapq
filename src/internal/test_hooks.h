@@ -18,6 +18,11 @@
  * commit_post_cas: invoked in the slow path immediately after the header
  *   CAS and before the seq_cst fence + re-check — the CAND-35 crash
  *   point; lets a pin kill -9 the process at the literal window.
+ * batch_commit_pre_publish: invoked in commit_batch after the §3.5
+ *   overtaken pre-check passes and before the publish CAS — lets a pin
+ *   park a batch commit there while an archive runs (CAND-51b). Parking
+ *   must be here, not post-CAS: post-CAS the archiver's live pass already
+ *   sees the header, and the pin would be vacuous.
  * archiver_live_pass / batch twin: invoked on each iteration of the
  *   archiver's live-header pass; a nonzero return arms the wrap-level
  *   injection for that read (P15).
@@ -51,6 +56,7 @@
 void mmapq_test_hook_set_commit_pre(void (*fn)(void));
 void mmapq_test_hook_set_commit_min_pre(void (*fn)(void));
 void mmapq_test_hook_set_commit_post_cas(void (*fn)(void));
+void mmapq_test_hook_set_batch_commit_pre_publish(void (*fn)(void));
 void mmapq_test_hook_set_archiver_live_pass(int (*fn)(void));
 void mmapq_test_hook_set_batch_archiver_live_pass(int (*fn)(void));
 void mmapq_test_hook_set_archiver_publish_pre(void (*fn)(void));

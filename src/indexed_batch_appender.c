@@ -575,6 +575,11 @@ static int move_to_last_header(MmapqIndexedBatchAppender *a)
     return 0;
 }
 
+#ifdef MMAPQ_TEST_HOOKS
+static void (*batch_commit_pre_publish_hook)(void);
+void mmapq_test_hook_set_batch_commit_pre_publish(void (*fn)(void)) { batch_commit_pre_publish_hook = fn; }
+#endif
+
 /* batch_publish — the encode + wrap + CAS + move_to_last_header body,
  * extracted verbatim from the pre-reshape commit_batch (incl. the 56-bit
  * ECORRUPT guard). Shared by the complete() hot path (membership by
@@ -716,18 +721,33 @@ int64_t mmapq_indexed_batch_appender_commit_batch(MmapqIndexedBatchAppender *a, 
      * analogue). The most recently started batch is exempt: it is the
      * lane's tail — every committed batch sits below it, so the archiver's
      * boundary can never reach it (the §3.4 fast-path proof's batch form).
-     * §4.5: a batch commit racing an archive past the check lands a live
-     * header below the boundary; the CAND-35 listing cap then protects its
-     * file from deletion and undo can lower the boundary. */
+     * A batch commit racing an archive past the check is caught by the
+     * re-check below (CAND-51b F-REC-1 — the CAND-30 protocol's batch form,
+     * retiring the CAND-49 §4-item-5 carve-out); commit_batch is the cold
+     * path (§3.5), so complete and batch_publish stay fence-free. */
     if (batch_offset != a->current_batch.batch_offset &&
         batch_offset < appender_meta_start_offset(a->appender_meta)) {
         mmapqi_offset_set_remove(&a->outstanding, batch_offset);
         return MMAPQ_EINVAL;   /* overtaken — final */
     }
 
+#ifdef MMAPQ_TEST_HOOKS
+    /* CAND-51b pin: park between the overtaken pre-check and the publish */
+    if (batch_commit_pre_publish_hook) batch_commit_pre_publish_hook();
+#endif
     int64_t idx = batch_publish(a, batch_offset);
-    if (idx >= 0)
-        mmapqi_offset_set_remove(&a->outstanding, batch_offset);
+    if (idx < 0) return idx;   /* publish failure — member retained, retryable */
+    /* Race with an archive that published a higher boundary between the
+     * pre-check and the CAS: the archiver stores start_offset, fences, then
+     * reads headers; this commit stored its header, fences, then reads
+     * start_offset — with seq_cst fences on both sides at least one side
+     * observes the other, so one of them lowers the boundary below this
+     * batch (the CAND-30 store-buffering argument, batch form). Lowers
+     * start_offset only; never archive_offset (CAND-49 §3.9). */
+    atomic_thread_fence(memory_order_seq_cst);
+    if (batch_offset < appender_meta_start_offset(a->appender_meta))
+        appender_meta_start_offset_min(a->appender_meta, batch_offset);
+    mmapqi_offset_set_remove(&a->outstanding, batch_offset);
     return idx;
 }
 

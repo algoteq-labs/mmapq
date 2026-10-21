@@ -1335,6 +1335,123 @@ void test_c38_batch_reclaim_aligned_96k_file_loses_nothing(void)
     c38_batch_reclaim_loses_nothing(98304);
 }
 
+/* ── CAND-51b pins (F-REC-1: the commit_batch re-check) ──────────────────── */
+
+#ifdef MMAPQ_TEST_HOOKS
+static _Atomic int c51b_fired, c51b_release;
+static void c51b_hold_hook(void)
+{
+    atomic_store_explicit(&c51b_fired, 1, memory_order_release);
+    for (long s = 0; s < 50000000; s++) {   /* bounded — never hang the suite */
+        if (atomic_load_explicit(&c51b_release, memory_order_acquire)) return;
+        sched_yield();
+    }
+}
+typedef struct { MmapqIndexedBatchAppender *a; int64_t off; int64_t rc; } C51bCommit;
+static void *c51b_commit_main(void *p)
+{
+    C51bCommit *j = p;
+    j->rc = mmapq_indexed_batch_appender_commit_batch(j->a, j->off);
+    return NULL;
+}
+static void c51b_park_commit(MmapqIndexedBatchAppender *a, int64_t off,
+                             C51bCommit *j, pthread_t *t)
+{
+    atomic_store(&c51b_fired, 0); atomic_store(&c51b_release, 0);
+    mmapq_test_hook_set_batch_commit_pre_publish(c51b_hold_hook);
+    j->a = a; j->off = off; j->rc = -999;
+    TEST_ASSERT_EQUAL_INT(0, pthread_create(t, NULL, c51b_commit_main, j));
+    int waited = 0;
+    while (!atomic_load_explicit(&c51b_fired, memory_order_acquire)) {
+        struct timespec ts = { .tv_sec = 0, .tv_nsec = 1000000 };
+        nanosleep(&ts, NULL);
+        if (++waited > 5000) {
+            atomic_store_explicit(&c51b_release, 1, memory_order_release);
+            pthread_join(*t, NULL);
+            mmapq_test_hook_set_batch_commit_pre_publish(NULL);
+            TEST_FAIL_MESSAGE("commit_batch hook never fired (routing regression?)");
+        }
+    }
+}
+static void c51b_release_commit(pthread_t t)
+{
+    atomic_store_explicit(&c51b_release, 1, memory_order_release);
+    TEST_ASSERT_EQUAL_INT(0, pthread_join(t, NULL));
+    mmapq_test_hook_set_batch_commit_pre_publish(NULL);
+}
+#endif
+
+/* F-REC-1 fail-first pin (the arm-B interleaving of the CAND-51b probe):
+ * commit_batch parked between the §3.5 overtaken pre-check and the publish
+ * CAS while a full archive runs; the archiver publishes 496 and its live
+ * pass sees nothing; the commit then lands the header live at slot 3.
+ * Post-fix the fence + re-check + min lower start_offset to 64.
+ * Pre-fix: start_offset stays 496 (the §4.5 carve-out — executed: probe arm
+ * B, audit/claude-CAND-51b/probe-output.txt).
+ * Exact layout (100-byte messages): B1 staged @64 (ends 172); B2 @172 →
+ * idx 0 (ends 280); B3 @280 → idx 1 (ends 388); B4 @388 → idx 2 (ends 496).
+ * Mutation: remove the min call → this pin fails (start_offset 496). */
+void test_c51b_batch_commit_batch_recheck_lowers_boundary(void)
+{
+#ifdef MMAPQ_TEST_HOOKS
+    char sm[100]; memset(sm, 'B', sizeof(sm));
+    MmapqIndexedBatchAppender *a = tiny_archivable_batch_appender(0);
+
+    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    TEST_ASSERT_NOT_NULL(b);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(b, sm, (int32_t)sizeof(sm)));
+    TEST_ASSERT_EQUAL_INT64(64, mmapq_mutable_batch_complete_uncommitted(b));
+    for (int i = 0; i < 3; i++)
+        TEST_ASSERT_EQUAL_INT64(i, commit_one_msg_batch(a, sm, (int32_t)sizeof(sm)));
+
+    C51bCommit j; pthread_t t;
+    c51b_park_commit(a, 64, &j, &t);              /* parked pre-publish */
+    MmapqIndexedBatchArchiver *arch = tiny_batch_archiver();
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_batch_archiver_archive_up_to_index(arch, 3));
+    TEST_ASSERT_EQUAL_INT64(496, batch_arch_start_offset(arch, 0));
+    c51b_release_commit(t);
+    TEST_ASSERT_EQUAL_INT64(3, j.rc);             /* the CAS landed live */
+    TEST_ASSERT_EQUAL_INT64(64, batch_arch_start_offset(arch, 0));
+
+    mmapq_indexed_batch_archiver_close(arch);
+    mmapq_indexed_batch_appender_close(a);
+#endif
+}
+
+/* Guard (F-REC-1 tail exemption): commit_batch of the CURRENT batch's
+ * offset skips the overtaken pre-check — the lane tail can never be
+ * overtaken in real operation (the §3.4 fast-path proof's batch form), so
+ * the boundary here is raised artificially to make the branch observable.
+ * The commit succeeds; the re-check min then lowers the boundary to the
+ * just-published offset. */
+void test_c51b_batch_commit_batch_tail_exemption(void)
+{
+    char sm[100]; memset(sm, 'C', sizeof(sm));
+    MmapqIndexedBatchAppender *a = tiny_archivable_batch_appender(0);
+
+    TEST_ASSERT_EQUAL_INT64(0, commit_one_msg_batch(a, sm, (int32_t)sizeof(sm)));
+    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    TEST_ASSERT_NOT_NULL(b);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(b, sm, (int32_t)sizeof(sm)));
+    int64_t off = mmapq_mutable_batch_complete_uncommitted(b);
+    TEST_ASSERT_EQUAL_INT64(172, off);
+
+    /* Artificial boundary above the staged tail (meta surgery, as in the
+     * CAND-35 stranded-batch pin). */
+    AppenderMeta *am = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapqi_appender_meta_open_rw(DIR, QUEUE, 0, &am));
+    TEST_ASSERT_EQUAL_INT(1,
+        appender_meta_start_offset_cas(am, INITIAL_PAYLOAD_POSITION, 1000));
+    mmapqi_appender_meta_close(am);
+
+    TEST_ASSERT_EQUAL_INT64(1, mmapq_indexed_batch_appender_commit_batch(a, off));
+    MmapqIndexedBatchArchiver *arch = tiny_batch_archiver();
+    TEST_ASSERT_EQUAL_INT64(172, batch_arch_start_offset(arch, 0));
+    mmapq_indexed_batch_archiver_close(arch);
+    mmapq_indexed_batch_appender_close(a);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -1372,5 +1489,9 @@ int main(void)
     /* CAND-38 pins (batch) */
     RUN_TEST(test_c38_batch_reclaim_aligned_32k_file_loses_nothing);
     RUN_TEST(test_c38_batch_reclaim_aligned_96k_file_loses_nothing);
+
+    /* CAND-51b pins (batch) */
+    RUN_TEST(test_c51b_batch_commit_batch_recheck_lowers_boundary);
+    RUN_TEST(test_c51b_batch_commit_batch_tail_exemption);
     return UNITY_END();
 }

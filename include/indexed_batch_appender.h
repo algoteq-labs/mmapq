@@ -139,7 +139,8 @@ int mmapq_indexed_batch_appender_create_with_id(
  *
  * Returns: pointer to the appender-owned MmapqMutableBatch (valid until
  *         complete/complete_uncommitted/discard or close),
- *         or NULL on mapping timeout
+ *         or NULL on a closed appender or mapping timeout
+ *         (the checked variant distinguishes the codes)
  */
 MmapqMutableBatch *mmapq_indexed_batch_appender_start_batch(MmapqIndexedBatchAppender *a);
 

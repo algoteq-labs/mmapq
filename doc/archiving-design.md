@@ -143,8 +143,17 @@ sees the other, so one of them lowers the boundary. The archiver needs no
 stability loop. `start_offset` changes only when archiving runs, so both
 loads hit a shared cache line.
 
-The batch appender has one batch in flight at a time and always commits
-the batch it appended last, so it always takes the fast path.
+Batch queues play the same protocol at batch granularity. The one-call
+publish (`complete`) is the tail case: the completed batch is the lane's
+most recently started and every committed batch sits below it, so the
+boundary can never reach it and no check is needed — the fast path's batch
+form. The deferred commit (`commit_batch`, for staged batches) is
+membership-gated, rejects an offset below `start_offset` with
+`MMAPQ_EINVAL` (final — an overtaken batch can never become live), then
+publishes, fences, re-checks, and lowers exactly like the slow path above.
+A running batch commit that raced an archive therefore never stays live
+below the boundary; one killed between its CAS and its re-check can (see
+Deleting files: the listing cap protects its file).
 
 ## Undo: `archive_up_to_index(N)` with N < `start_index`
 
@@ -174,10 +183,11 @@ over a longer one leaves stale bytes that a later recovery would misread.
 
 - header files wholly below `start_index`;
 - payload files of each appender wholly below its `start_offset`, capped
-  at the lowest live payload visible in the headers. A slow-path commit
-  killed between its header CAS and its boundary re-check leaves
-  `start_offset` raised above a live payload forever; the listing's
-  live-header scan never lists below what it can see is live.
+  at the lowest live payload visible in the headers. A slow-path commit —
+  or a deferred batch commit — killed between its header CAS and its
+  boundary re-check leaves `start_offset` raised above a live payload
+  forever; the listing's live-header scan never lists below what it can
+  see is live.
 
 `reclaim_files()` re-lists through this same listing, so its re-check
 carries the cap too.
@@ -202,14 +212,20 @@ listing and your last `unlink()` of the files it returned. The wait before
 the second listing is still required. `reclaim_files()` enforces this for
 you by holding `archive.lock` shared across both steps.
 
-The wait only has to outlast a writer's stall between its CAS and its
-re-check — normally a few instructions — so seconds to minutes covers
-preemption and scheduling. It does not cover a writer process stopped in
-exactly that window (SIGSTOP, a debugger). Deletion safety in that window
-rests on callers following this protocol; the library does not enforce it.
-The listing cap (CAND-35) additionally covers a writer that dies between
-publishing its header and its re-check; it does not shorten the wait for
-live writers.
+The wait has to outlast a writer's stall between its overtaken pre-check
+and its header CAS — the window in which an archive can publish past a
+commit that has already validated. That window contains a header-region
+wrap, which can block for up to the queue's mapping timeout (mapping a
+contended or not-yet-mapped region costs what a synchronous mmap costs,
+bounded by that timeout), plus the catch-up header scan on contention. So
+the wait must comfortably exceed the queue's mapping timeout, not merely
+scheduling delays — minutes, not milliseconds, for the default timeout.
+It does not cover a writer process stopped in that window (SIGSTOP, a
+debugger). Deletion safety in that window rests on callers following this
+protocol; the library does not enforce it. The listing cap (CAND-35)
+additionally covers a writer that dies after publishing its header
+(single-message and deferred batch commits alike); it does not shorten
+the wait for live writers.
 
 Never truncate or rewrite a mapped file (see `persistence-contract.md`).
 Undo is possible only while the files it needs still exist.
@@ -220,6 +236,7 @@ Undo is possible only while the files it needs still exist.
 |---|---|---|
 | Archiver | `start_offset` (CAS from the snapshot, acq_rel), `start_index` | live headers (acquire, after a seq_cst fence) |
 | Appender, slow-path commit | header (CAS) | `start_offset` (acquire, after a seq_cst fence) |
+| Batch appender, deferred commit | header (CAS) | `start_offset` (acquire, after a seq_cst fence) |
 | `archivable_files` | — | `start_index`, `start_offset`, live headers (checked reads) — under the shared lock |
 | `reclaim_files` | unlinks marked ∩ re-listed files | `start_index`, `start_offset`, live headers (via the re-list) — under the shared lock, held across the unlink |
 
@@ -258,7 +275,12 @@ Mixed C/Java queues are safe only when Java follows the same rules:
 3. Every archived header must reference a complete message.
 4. Undo: lower to the lowest restored position; never raise.
 5. Commit: fast path for the last appended offset; otherwise reject below
-   `start_offset`, CAS, fence, re-check, lower if needed.
+   `start_offset`, CAS, fence, re-check, lower if needed. Batch queues:
+   the same at batch granularity — the one-call complete is the tail (no
+   check); the deferred batch commit is membership-gated, rejects below
+   `start_offset`, then CAS, fence, re-check, lower. (The current Java
+   batch appender has no commit validation at all; Java does not yet read
+   batch queues, so no mixed C/Java batch queue can exist.)
 6. Join: never read headers below `start_index`; with no own live entry,
    walk from `start_offset` to the end of the stream; never write at it.
 7. Deletion: mark, wait, re-validate, delete — or the library reclaim call

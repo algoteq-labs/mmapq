@@ -10,6 +10,7 @@
 #include "indexed_queue.h"
 #include "internal/queue_meta.h"
 #include "internal/batch_payload_iterator_internal.h"
+#include "internal/uncommitted_batch_iterator.h"
 #include <stdio.h>
 #include <time.h>
 
@@ -2638,6 +2639,148 @@ static void test_append_and_commit_failure_leaves_lane_usable(void)
     mmapq_indexed_batch_appender_close(a);
 }
 
+/* ── CAND-51b F-REC-3 guard pins ───────────────────────────────────────────
+ * All four assert pre-existing behaviour (guards, not fail-first). The
+ * header-side one-shot fault reaches the appender's header accessor through
+ * the lazily created uncommitted-batches walker, which shares the object
+ * (the factory receives a->header_acc). */
+
+static void bq_arm_oneshot_header(MmapqIndexedBatchAppender *a, int64_t fail_pos)
+{
+    MmapqUncommittedBatchIterator *it = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_batch_appender_uncommitted_batches_checked(a, &it));
+    TEST_ASSERT_NOT_NULL(it);
+    RegionAccessor *acc = it->header_accessor;
+    TEST_ASSERT_NOT_NULL(acc);
+    bq_oneshot_real_wrap = acc->wrap;
+    bq_oneshot_pos = fail_pos;
+    bq_oneshot_hits = 0;
+    acc->wrap = bq_oneshot_wrap;
+    region_accessor_invalidate_fast_path(acc);
+}
+
+/* Guard (§2.3 cell 3): complete's publish failure AFTER the count store
+ * returns -1 (ETIMEDOUT from the injected wrap fault), the handle is
+ * consumed, and the offset joins the outstanding set — a later commit_batch
+ * publishes it. */
+static void test_batch_complete_publish_failure_stages(void)
+{
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
+    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    TEST_ASSERT_NOT_NULL(b);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(b, "hello", 5));
+    bq_arm_oneshot_header(a, 0);   /* the publish wraps header position 0 */
+    TEST_ASSERT_EQUAL_INT64(MMAPQ_ETIMEDOUT, mmapq_mutable_batch_complete(b));
+    TEST_ASSERT_EQUAL_INT(1, bq_oneshot_hits);
+    TEST_ASSERT_EQUAL_INT(1, b->consumed);
+    /* Staged: commit_batch of the offset publishes it at index 0. */
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_batch_appender_commit_batch(a, 64));
+    mmapq_indexed_batch_appender_close(a);
+}
+
+/* Guard (§2.3 cell 4): commit_batch's publish failure returns -1 and keeps
+ * the offset in the outstanding set — the retry publishes it. */
+static void test_batch_commit_batch_publish_failure_retains_member(void)
+{
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
+    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    TEST_ASSERT_NOT_NULL(b);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(b, "hello", 5));
+    TEST_ASSERT_EQUAL_INT64(64, mmapq_mutable_batch_complete_uncommitted(b));
+    bq_arm_oneshot_header(a, 0);
+    TEST_ASSERT_EQUAL_INT64(MMAPQ_ETIMEDOUT,
+        mmapq_indexed_batch_appender_commit_batch(a, 64));
+    TEST_ASSERT_EQUAL_INT(1, bq_oneshot_hits);
+    /* Member retained: the retry publishes at index 0. */
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_batch_appender_commit_batch(a, 64));
+    mmapq_indexed_batch_appender_close(a);
+}
+
+/* Guard (§2.3 cell 8): append_and_commit discards on a mid-append failure
+ * (the write_padding marker is stored, then the re-wrap into the next
+ * region is faulted) — no open batch is left behind; the lane stays usable
+ * and nothing was count-stored. Payload-side fault reached through the
+ * walker's shared payload accessor. */
+static void test_append_and_commit_mid_append_failure_discards(void)
+{
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
+
+    MmapqUncommittedBatchIterator *it = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_batch_appender_uncommitted_batches_checked(a, &it));
+    TEST_ASSERT_NOT_NULL(it);
+    RegionAccessor *acc = it->payload_acc;
+    TEST_ASSERT_NOT_NULL(acc);
+    bq_oneshot_real_wrap = acc->wrap;
+    bq_oneshot_pos = REGION_SZ;   /* the append re-wraps into the next region */
+    bq_oneshot_hits = 0;
+    acc->wrap = bq_oneshot_wrap;
+    region_accessor_invalidate_fast_path(acc);
+
+    char big[REGION_SZ - 60]; memset(big, 'Z', sizeof big);  /* len+4 > cap at 68 */
+    TEST_ASSERT_EQUAL_INT64(MMAPQ_ETIMEDOUT,
+        mmapq_indexed_batch_appender_append_and_commit(a, big, (int32_t)sizeof big));
+    TEST_ASSERT_EQUAL_INT(1, bq_oneshot_hits);
+
+    /* No abandoned open batch, nothing count-stored: the next call
+     * publishes index 0 and the walker (re-initialised) yields nothing. */
+    TEST_ASSERT_EQUAL_INT64(0,
+        mmapq_indexed_batch_appender_append_and_commit(a, "next", 4));
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_batch_appender_uncommitted_batches_checked(a, &it));
+    int64_t off = -1; int32_t count = -1; MmapqBatchPayloadIterator *msgs = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_uncommitted_batch_next(it, &off, &count, &msgs));
+    int64_t joined = -1;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_batch_appender_join_completed_open_batch(a, &joined));
+    mmapq_indexed_batch_appender_close(a);
+}
+
+/* Guard (§2.3 cell 9): a mid-batch corrupt message LENGTH (the count reads
+ * fine) surfaces as MMAPQ_POLL_CORRUPT via the post-handler iterator check,
+ * the handler ran (m0 was delivered), and the cursor does not advance — the
+ * next poll hits the same corrupt batch again. */
+static void test_batch_poll_mid_batch_corrupt_length_is_corrupt(void)
+{
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
+    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    TEST_ASSERT_NOT_NULL(b);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(b, "hello", 5));
+    TEST_ASSERT_EQUAL_INT(1, mmapq_mutable_batch_append(b, "world", 5));
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_mutable_batch_complete(b));
+    mmapq_indexed_batch_appender_close(a);
+
+    /* m1's length slot: batch @64, count [64,68), m0 len [68,72),
+     * m0 data [72,77), m1 len [77,81). */
+    char path[512];
+    snprintf(path, sizeof(path), "%s/%s/payload_0_0", DIR, QUEUE);
+    int fd = open(path, O_WRONLY);
+    TEST_ASSERT_GREATER_THAN_INT(0, fd);
+    int32_t bad = 0x7FFFFFFF;
+    TEST_ASSERT_EQUAL_INT(4, (int)pwrite(fd, &bad, sizeof bad, 77));
+    close(fd);
+
+    MmapqIndexedBatchPoller *p = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_poller(q, &p));
+    int delivered = -1;
+    TEST_ASSERT_EQUAL(MMAPQ_POLL_CORRUPT,
+        mmapq_indexed_batch_poller_poll(p, advance_all_handler, &delivered));
+    TEST_ASSERT_EQUAL(1, delivered);   /* m0 delivered, m1 corrupt */
+    TEST_ASSERT_EQUAL(MMAPQ_ECORRUPT, mmapq_indexed_batch_poller_last_error(p));
+    /* Cursor held: the same corrupt batch is served again. */
+    delivered = -1;
+    TEST_ASSERT_EQUAL(MMAPQ_POLL_CORRUPT,
+        mmapq_indexed_batch_poller_poll(p, advance_all_handler, &delivered));
+    TEST_ASSERT_EQUAL(1, delivered);
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_batch_poller_current_batch_index(p));
+    mmapq_indexed_batch_poller_close(p);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -2716,5 +2859,11 @@ int main(void)
     RUN_TEST(test_batch_uncommitted_dg_line_respected);
     RUN_TEST(test_batch_uncommitted_zero_archive_offset_refused);
     RUN_TEST(test_append_and_commit_failure_leaves_lane_usable);
+
+    /* CAND-51b F-REC-3 guard pins */
+    RUN_TEST(test_batch_complete_publish_failure_stages);
+    RUN_TEST(test_batch_commit_batch_publish_failure_retains_member);
+    RUN_TEST(test_append_and_commit_mid_append_failure_discards);
+    RUN_TEST(test_batch_poll_mid_batch_corrupt_length_is_corrupt);
     return UNITY_END();
 }
