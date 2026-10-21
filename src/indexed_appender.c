@@ -170,6 +170,16 @@ static __attribute__((always_inline)) inline int write_payload(
 
     /* Write length prefix */
     memcpy(a->payload_buf.data + PAYLOAD_LENGTH_OFFSET, &length, sizeof(int32_t));
+    /* The length store must precede the payload bytes in program order —
+     * the no-leftover argument (CAND-49 §3.7, CAND-51c §0): a kill -9 may
+     * leave a full length with partial content (the rejoin walk jumps its
+     * declared extent) or a zero length (EOS), but never payload bytes
+     * past EOS without their length. Plain memcpys carry no ordering
+     * guarantee; the -O3 build happens to emit them in order today
+     * (CAND-51c objdump evidence). Compiler barrier only — a signal fence
+     * emits no instructions; cross-observer visibility is carried by the
+     * header CAS (acq_rel) at commit. */
+    atomic_signal_fence(memory_order_release);
 
     /* Write payload bytes */
     memcpy(a->payload_buf.data + PAYLOAD_DATA_OFFSET, data, (size_t)length);

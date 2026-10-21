@@ -1047,8 +1047,8 @@ static MmapqNextMove c35_batch_capture_handler(
 }
 
 /* ── CAND-35 pins (batch twins): the listing caps each lane's boundary at ───
- * the lowest live payload visible in the headers. Batch commits never touch
- * start_offset. Converted by CAND-49 (§7.6): the stale commit below the
+ * the lowest live payload visible in the headers. Converted by CAND-49
+ * (§7.6): the stale commit below the
  * boundary is illegal under §3.5 (non-member EINVAL), so the stranded state
  * (live batch below the boundary) is built by committing every batch
  * legally BEFORE any boundary exists, then raising the lane's start_offset
@@ -1059,18 +1059,30 @@ static MmapqNextMove c35_batch_capture_handler(
  * rolls into file 1, ends TINYB_B_END; the raised boundary is TINYB_B_END. */
 
 /* B1: a boundary stranded above a live batch — the capped listing must not
- * list the live batch's payload file. Fail-first: pre-fix lists payload_0_0. */
+ * list the live batch's payload file. Reshaped by CAND-51c (G-1(a)): the
+ * pre-reshape test never advanced start_index, so archivable_files
+ * early-returned before consulting the cap — the pin had no killing power
+ * (observed: PASS under the cap-removed mutation). Now a prefix is
+ * archived first (the B3 form): start_index = 1 and the stranded batch S
+ * is live at idx 1 in file 0 with the raised boundary (meta surgery, the
+ * crash-stranded state) in file 1. Killing power proven this task: FAILs
+ * with the cap removed (n == 1, payload_0_0 listed), PASSes restored —
+ * transcripts in audit/CAND-51c-spec.md. The mutant-M9 commit-EINVAL step
+ * is kept. */
 void test_c35_batch_listing_cap_covers_stranded_batch(void)
 {
     char big[TINY_BIG_LEN]; memset(big, 'A', sizeof(big));
     char sm[100];   memset(sm, 'B', sizeof(sm));
+    char s8[8];     memset(s8, 'S', sizeof(s8));
 
     TEST_ASSERT_EQUAL_INT64(TINYB_A_END, batch_record_end(64, TINY_BIG_LEN));
     TEST_ASSERT_EQUAL_INT64(TINYB_B_END, batch_record_end(TINYB_A_END, 100));
 
     MmapqIndexedBatchAppender *a = tiny_archivable_batch_appender(0);
-    /* Batch A committed -> index 0; batch B committed -> index 1. Both legal,
-     * before any boundary exists. */
+    /* A0 (big) -> idx 0: the archivable prefix. S (8 bytes) -> idx 1: ends
+     * at 32760, wholly in file 0 — the stranded batch. B0 (100 bytes) ->
+     * idx 2: its message rolls into file 1, ends TINYB_B_END. All commits
+     * legal, before any boundary exists. */
     MmapqMutableBatch *ba = mmapq_indexed_batch_appender_start_batch(a);
     TEST_ASSERT_NOT_NULL(ba);
     TEST_ASSERT_EQUAL_INT(0,
@@ -1079,14 +1091,27 @@ void test_c35_batch_listing_cap_covers_stranded_batch(void)
     TEST_ASSERT_EQUAL_INT64(INITIAL_PAYLOAD_POSITION, off_a);
     TEST_ASSERT_EQUAL_INT64(0,
         mmapq_indexed_batch_appender_commit_batch(a, off_a));
-    TEST_ASSERT_EQUAL_INT64(1,
+    MmapqMutableBatch *bs = mmapq_indexed_batch_appender_start_batch(a);
+    TEST_ASSERT_NOT_NULL(bs);
+    TEST_ASSERT_EQUAL_INT64(TINYB_A_END, bs->batch_offset);
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_mutable_batch_append(bs, s8, (int32_t)sizeof(s8)));
+    TEST_ASSERT_EQUAL_INT64(1, mmapq_mutable_batch_complete(bs));
+    TEST_ASSERT_EQUAL_INT64(2,
         commit_one_msg_batch(a, sm, (int32_t)sizeof(sm)));
 
-    /* The crash-stranded boundary: TINYB_B_END, with live A below it. */
+    /* Archive the prefix: boundary = end of A0 = TINYB_A_END,
+     * start_index = 1 — S stays live at idx 1. */
+    MmapqIndexedBatchArchiver *arch = tiny_batch_archiver();
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_batch_archiver_archive_up_to_index(arch, 1));
+
+    /* The crash-stranded boundary: TINYB_B_END (file 1), with live S
+     * (file 0) below it. */
     AppenderMeta *am = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapqi_appender_meta_open_rw(DIR, QUEUE, 0, &am));
     TEST_ASSERT_EQUAL_INT(1,
-        appender_meta_start_offset_cas(am, INITIAL_PAYLOAD_POSITION, TINYB_B_END));
+        appender_meta_start_offset_cas(am, TINYB_A_END, TINYB_B_END));
     mmapqi_appender_meta_close(am);
 
     /* The commit-EINVAL step (mutant M9): stage C, stage D (so C is not the
@@ -1111,7 +1136,9 @@ void test_c35_batch_listing_cap_covers_stranded_batch(void)
         mmapq_indexed_batch_appender_commit_batch(a, off_c));
     mmapq_indexed_batch_appender_close(a);
 
-    MmapqIndexedBatchArchiver *arch = tiny_batch_archiver();
+    /* The listing runs (start_index = 1): the cap keeps the stranded
+     * batch's file off it. Cap-removed mutant: n == 1, payload_0_0
+     * listed. */
     char *paths[64] = {0};
     int n = mmapq_indexed_batch_archiver_archivable_files(arch, paths, 64);
     TEST_ASSERT_EQUAL_INT(0, n);
@@ -1119,18 +1146,18 @@ void test_c35_batch_listing_cap_covers_stranded_batch(void)
     batch_free_paths(paths, n);
     mmapq_indexed_batch_archiver_close(arch);
 
-    /* Non-vacuity: the stranded batch really is live and readable */
+    /* Non-vacuity: the stranded batch really is live and readable — the
+     * poller starts at start_index (1) and serves S. */
     MmapqIndexedBatchPoller *p = NULL;
     TEST_ASSERT_EQUAL_INT(0,
         mmapq_indexed_batch_poller_create(DIR, QUEUE, 4, TIMEOUT, rt, &p));
-    C35BatchCapture cap = { .want_index = 0, .seen = 0, .len = -1 };
-    /* The poller starts at start_index (0): one poll serves batch 0 */
+    C35BatchCapture cap = { .want_index = 1, .seen = 0, .len = -1 };
     TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_ADVANCED,
         mmapq_indexed_batch_poller_poll(p, c35_batch_capture_handler, &cap));
     mmapq_indexed_batch_poller_close(p);
-    TEST_ASSERT_TRUE_MESSAGE(cap.seen, "stranded batch index 0 not readable");
-    TEST_ASSERT_EQUAL_INT32((int32_t)sizeof(big), cap.len);
-    TEST_ASSERT_EQUAL_INT('A', cap.first);
+    TEST_ASSERT_TRUE_MESSAGE(cap.seen, "stranded batch index 1 not readable");
+    TEST_ASSERT_EQUAL_INT32((int32_t)sizeof(s8), cap.len);
+    TEST_ASSERT_EQUAL_INT('S', cap.first);
 }
 
 /* B2 (twin of P2): a mapping timeout inside the batch listing's

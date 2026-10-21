@@ -842,6 +842,12 @@ int32_t mmapq_mutable_batch_append(MmapqMutableBatch *b, const void *data, int32
     if (length > queue_meta_region_size(a->queue_meta) - PAYLOAD_LENGTH_SIZE) return MMAPQ_EINVAL;
     if (write_padding_if_needed(a, length)) return -1;
     memcpy(a->payload_buf.data + PAYLOAD_LENGTH_OFFSET, &length, sizeof(int32_t));
+    /* Length store precedes payload bytes in program order — the
+     * no-leftover argument (CAND-49 §3.7, CAND-51c §0; the twin comment in
+     * indexed_appender.c has the full text). Compiler barrier only — no
+     * instructions emitted; cross-observer visibility is carried by the
+     * header CAS at publish. */
+    atomic_signal_fence(memory_order_release);
     memcpy(a->payload_buf.data + PAYLOAD_DATA_OFFSET, data, (size_t)length);
     a->current_payload_position += PAYLOAD_LENGTH_SIZE + length;
     return b->message_count++;
@@ -854,6 +860,11 @@ int32_t mmapq_mutable_batch_append_reserved(MmapqMutableBatch *b, int32_t length
     if (length > queue_meta_region_size(a->queue_meta) - PAYLOAD_LENGTH_SIZE) return MMAPQ_EINVAL;
     if (write_padding_if_needed(a, length)) return -1;
     memcpy(a->payload_buf.data + PAYLOAD_LENGTH_OFFSET, &length, sizeof(int32_t));
+    /* Length store precedes the (caller-written) payload bytes in program
+     * order — the no-leftover argument (CAND-49 §3.7, CAND-51c §0; the
+     * twin comment in indexed_appender.c has the full text). Compiler
+     * barrier only — no instructions emitted. */
+    atomic_signal_fence(memory_order_release);
     *out_data = a->payload_buf.data + PAYLOAD_DATA_OFFSET;
     a->current_payload_position += PAYLOAD_LENGTH_SIZE + length;
     return b->message_count++;

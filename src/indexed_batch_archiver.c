@@ -495,12 +495,10 @@ static int archivable_files_locked(
 
     /* CAND-35: cap each lane's deletable boundary at the lowest live
      * payload visible in the headers (the model's ListingLivePass) —
-     * see indexed_archiver.c for the full rationale. Batch commits never
-     * touch start_offset, so a stale commit_batch strands the boundary
-     * with no crash required. The checked read is required — the plain
-     * read maps a mapping timeout to HEADER_NULL and would end the scan
-     * early, silently skipping the cap. Placed before any strdup: a scan
-     * failure has no partial listing to free. */
+     * see indexed_archiver.c for the full rationale. The checked read is
+     * required — the plain read maps a mapping timeout to HEADER_NULL and
+     * would end the scan early, silently skipping the cap. Placed before
+     * any strdup: a scan failure has no partial listing to free. */
     int64_t live_floor[MAX_APPENDERS];
     for (int i = 0; i < MAX_APPENDERS; i++) live_floor[i] = OFFSET_NOT_SET;
     for (int64_t i = start; ; i++) {

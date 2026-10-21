@@ -141,6 +141,9 @@ int64_t mmapq_indexed_appender_append(
  *
  * Use case: UDP resequencing — append as packets arrive, commit when
  * the sequence is gapless.
+ *
+ * Crash caveat: after a process crash, the lane's last uncommitted
+ * payload may have partial content; validate before committing.
  */
 int64_t mmapq_indexed_appender_append_uncommitted(
     MmapqIndexedAppender *a,
@@ -235,7 +238,9 @@ MmapqPayloadIterator *mmapq_indexed_appender_iterator(
  * committed with the existing mmapq_indexed_appender_commit() — any subset,
  * any order, same session or after rejoin; not committing = skip; an offset
  * archiving has overtaken returns EINVAL. Each yielded offset becomes
- * committable (refill).
+ * committable (refill). After a process crash, the lane's last
+ * uncommitted payload may have partial content; validate before
+ * committing.
  */
 int mmapq_indexed_appender_uncommitted_iterator_checked(
     MmapqIndexedAppender *a,
@@ -259,6 +264,8 @@ int mmapq_indexed_appender_uncommitted_iterator_checked(
  * next call re-yields the same message; outputs cleared on any non-1
  * return). A negative is truthy in C: compare explicitly, never
  * `while (mmapq_uncommitted_iterator_next(...))`.
+ * After a process crash, the lane's last uncommitted payload may have
+ * partial content; validate before committing.
  */
 int mmapq_uncommitted_iterator_next(
     MmapqUncommittedPayloadIterator *it,
