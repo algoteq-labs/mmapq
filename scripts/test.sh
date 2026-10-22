@@ -75,6 +75,38 @@ echo '#include "mmapq.h"' | gcc $GATE_CFLAGS -x c - -c -o /dev/null 2>&1 && \
 PASS=0
 FAIL=0
 
+# ── Tools block (CAND-50 import): runs only when tools/mmapq-ids exists ────
+# Conditional so the mirrored copy in the wrappers' c/ trees (which carry no
+# tools/) is a provable no-op there. Fail-closed: a present tools dir with a
+# broken build, a missing python3, or a failing suite is a counted FAIL,
+# never a skip.
+IDS_BIN=""
+if [ -d tools/mmapq-ids ]; then
+    echo "--- tools: mmapq-ids build ---"
+    if make -C tools/mmapq-ids > /dev/null 2>&1 && \
+       [ -x tools/mmapq-ids/build/release/mmapq-ids ]; then
+        IDS_BIN="$PWD/tools/mmapq-ids/build/release/mmapq-ids"
+        echo "PASS ($MODE): mmapq-ids build"
+        PASS=$((PASS+1))
+    else
+        echo "FAIL ($MODE): mmapq-ids build"
+        FAIL=$((FAIL+1))
+    fi
+
+    echo "--- tools: mmapq-ids unit/CLI suite (python3) ---"
+    if ! command -v "${PYTHON:-python3}" >/dev/null 2>&1; then
+        echo "FAIL ($MODE): mmapq-ids unit/CLI suite (python3 missing)"
+        FAIL=$((FAIL+1))
+    elif make -C tools/mmapq-ids test PYTHON="${PYTHON:-python3}" > /tmp/mmapq_ids_pytest.log 2>&1; then
+        echo "PASS ($MODE): mmapq-ids unit/CLI suite"
+        PASS=$((PASS+1))
+    else
+        echo "FAIL ($MODE): mmapq-ids unit/CLI suite"
+        tail -20 /tmp/mmapq_ids_pytest.log
+        FAIL=$((FAIL+1))
+    fi
+fi
+
 # ── Shared compile + run + verify ──────────────────────────────────────────
 run_test() {
     local test="$1"
@@ -116,6 +148,39 @@ run_test() {
     return 0
 }
 
+# ── Tools integration suite (CAND-50): the C fork/kill real-queue test for
+# the mmapq-ids CLI. Lives in tools/mmapq-ids/tests/, so it needs -I test
+# for unity.h and the freshly built CLI path via MMAPQ_IDS_BIN. ────────────
+run_ids_integration() {
+    local label="$1"
+    local cflags="$2"
+    local bin="/tmp/mmapq_test_ids_integration_${label}"
+
+    if ! gcc $cflags -I test -Wno-missing-prototypes -Wno-strict-prototypes \
+         $SRCS tools/mmapq-ids/tests/test_ids_integration.c $UNITY \
+         -o "$bin" $LDFLAGS 2>&1; then
+        echo "FAIL ($label): test_ids_integration (compile error)"
+        return 1
+    fi
+
+    set +e
+    OUT=$(MMAPQ_IDS_BIN="$IDS_BIN" timeout 300 "$bin" 2>&1)
+    STATUS=$?
+    set -e
+
+    if [ "$STATUS" -ne 0 ] || echo "$OUT" | grep -qE \
+        "FAIL|ASSERTION FAILED|Aborted|AddressSanitizer|LeakSanitizer|ThreadSanitizer|DATA RACE|heap-use-after-free|heap-buffer-overflow"; then
+        echo "FAIL ($label): test_ids_integration (exit=$STATUS)"
+        echo "$OUT" | tail -20
+        rm -f "$bin"
+        return 1
+    fi
+
+    rm -f "$bin"
+    echo "$OUT" | grep -E '^[0-9]+ Tests [0-9]+ Failures [0-9]+ Ignored'
+    return 0
+}
+
 # ── Normal mode ────────────────────────────────────────────────────────────
 for TEST in "${TESTS[@]}"; do
     if run_test "$TEST" "$MODE" "$CFLAGS"; then
@@ -125,6 +190,15 @@ for TEST in "${TESTS[@]}"; do
         FAIL=$((FAIL+1))
     fi
 done
+
+if [ -n "$IDS_BIN" ]; then
+    if run_ids_integration "$MODE" "$CFLAGS"; then
+        echo "PASS ($MODE): test_ids_integration"
+        PASS=$((PASS+1))
+    else
+        FAIL=$((FAIL+1))
+    fi
+fi
 
 # ── Release-flags validation (all 21 tests + gates under exact release flags) ──
 echo ""
@@ -149,6 +223,16 @@ for TEST in "${TESTS[@]}"; do
         REL_FAIL=$((REL_FAIL+1))
     fi
 done
+
+if [ -n "$IDS_BIN" ]; then
+    if run_ids_integration "release" "$CFLAGS_RELEASE"; then
+        echo "PASS (release): test_ids_integration"
+        REL_PASS=$((REL_PASS+1))
+    else
+        echo "FAIL (release): test_ids_integration"
+        REL_FAIL=$((REL_FAIL+1))
+    fi
+fi
 
 echo ""
 echo "=== Results (normal): $PASS passed, $FAIL failed ==="

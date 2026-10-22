@@ -455,6 +455,34 @@ discarded batches reappear in recovery after a restart — recovery code
 decides. `mmapq_indexed_batch_appender_join_completed_open_batch()`
 reports a crash-interrupted open batch the rejoin completed to staged.
 
+### Appender ID inspection and manual release (mmapq-ids)
+
+A SIGKILLed writer never releases its appender ID: the lane's bit stays
+set in the `appender_id_pool` file and re-acquisition is refused with
+`MMAPQ_EIDCONFLICT`. The operator tool **mmapq-ids** (in
+[`tools/mmapq-ids/`](tools/mmapq-ids/)) inspects lane occupancy and
+releases a specific ID. It is a separate build that does not link
+libmmapq and never opens queue metadata — a damaged meta file does not
+prevent releasing a known ID.
+
+```sh
+make mmapq-ids
+tools/mmapq-ids/build/release/mmapq-ids /data orders          # list lanes
+tools/mmapq-ids/build/release/mmapq-ids /data orders --unset 7  # release ID 7
+```
+
+**`--unset` verifies nothing about ownership or liveness.** Before
+releasing, the operator must ensure the ID is unused and prevent
+acquisition or restart during reclamation — prefer a maintenance window
+with producers stopped and automatic restarts disabled. Clearing an
+active ID can allow two writers into the same payload lane and corrupt
+the queue. Exit codes: 0 success, 1 already free, 2 error. A successful
+release changes exactly one bit of exactly one file, with checked
+synchronous writeback — not a general power-loss durability guarantee.
+After release, a restarted writer re-acquires its lane with
+`mmapq_indexed_queue_create_appender_with_id()` and recovers its
+uncommitted tail as above.
+
 **Java interop is not supported in 0.2.0. A Java archiver does not
 maintain archive_offset.** The silent case: a queue created by C but
 archived by Java has a stale non-zero line, the zero-line refusal does

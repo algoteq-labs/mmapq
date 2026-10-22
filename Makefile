@@ -7,6 +7,8 @@
 #   make test-asan  run test suite (AddressSanitizer)
 #   make test-tsan  run test suite (ThreadSanitizer)
 #   make test-multi run multiprocess tests
+#   make mmapq-ids  build the operator tool tools/mmapq-ids (not part of all)
+#   make mmapq-ids-test  run the tool's own unit/CLI suite (python3)
 #   make clean      remove build artefacts
 
 PREFIX    ?= /usr/local
@@ -28,7 +30,7 @@ SRCS    = $(wildcard src/*.c)
 OBJS    = $(SRCS:.c=.o)
 LIB     = libmmapq.a
 
-.PHONY: all demo bench echo_server batch_demo batch_bench batch_echo_server bench-suite batch-bench-suite interop test test-asan test-tsan test-multi install clean
+.PHONY: all demo bench echo_server batch_demo batch_bench batch_echo_server bench-suite batch-bench-suite interop test test-asan test-tsan test-multi mmapq-ids mmapq-ids-test install clean
 
 all: $(LIB) demo bench echo_server batch_demo batch_bench batch_echo_server
 
@@ -82,6 +84,13 @@ test-tsan:
 test-multi: $(LIB)
 	@bash test/multiprocess/test_multiprocess.sh
 
+# Operator tool: separate build, no link to libmmapq (see tools/mmapq-ids).
+mmapq-ids:
+	$(MAKE) -C tools/mmapq-ids
+
+mmapq-ids-test:
+	$(MAKE) -C tools/mmapq-ids test
+
 print-cflags-release:
 	@echo $(CFLAGS)
 
@@ -99,3 +108,4 @@ install: $(LIB)
 
 clean:
 	rm -f $(OBJS) $(LIB) demo latency_bench echo_server batch_demo batch_latency_bench batch_echo_server
+	rm -rf tools/mmapq-ids/build
