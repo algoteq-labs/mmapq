@@ -1,0 +1,45 @@
+C c54_case1
+"CAND-54 spec 9.2, case 1, amendment-L form: the lister's intent load
+ reads the INITIAL value.  All protocol locations are seq_cst; under
+ L(iii) the archiver stores the archive line BEFORE raising
+ start_offset, and under L(i) the pre-check loads both and compares
+ against the max.  In the single total order S:
+   line-store < raise-so < lister so-load < lister intent-load
+     < committer intent-store < committer's two floor loads
+ so the committer's aoff load sees the raised line (monotone — no
+ lowering ever touches it) and max(so, aoff) >= the raise: the commit
+ refuses.
+ The raise CASes are modelled by their successful case (stores); a
+ failed CAS means the boundary is already lower — the safe direction.
+ Forbidden: lister sees the raise AND reads the initial intent AND the
+ committer's floor loads are both below the raise."
+
+{
+ aoff = 64;
+ so = 64;
+ intent = 0;
+}
+
+P0 (atomic_int *aoff, atomic_int *so)
+{
+  /* archiver: the line first (L(iii)), then the boundary raise */
+  atomic_store_explicit(aoff, 128, memory_order_seq_cst);
+  atomic_store_explicit(so, 128, memory_order_seq_cst);
+}
+
+P1 (atomic_int *so, atomic_int *aoff, atomic_int *intent)
+{
+  /* committer: intent store, then the pre-check's two floor loads */
+  atomic_store_explicit(intent, 96, memory_order_seq_cst);
+  int r0 = atomic_load_explicit(so, memory_order_seq_cst);
+  int r1 = atomic_load_explicit(aoff, memory_order_seq_cst);
+}
+
+P2 (atomic_int *so, atomic_int *intent)
+{
+  /* lister: start_offset load, then intent load */
+  int r2 = atomic_load_explicit(so, memory_order_seq_cst);
+  int r3 = atomic_load_explicit(intent, memory_order_seq_cst);
+}
+
+exists (2:r2 = 128 /\ 2:r3 = 0 /\ 1:r0 = 64 /\ 1:r1 = 64)

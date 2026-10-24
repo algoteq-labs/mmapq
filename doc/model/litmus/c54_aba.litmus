@@ -1,0 +1,48 @@
+C c54_aba
+"CAND-54 spec 9.2, ABA: two intent generations 0 -> 96 -> 0 -> 128 with
+ the clear value IDENTICAL to the initial value (the real ABA).  The
+ lister's intent load reading 0 has two possible sources, and the
+ forbidden conjunction covers both:
+  - source = initial 0: case 1 — in the single seq_cst order S,
+    raise < lister so-load < lister intent-load < gen-1 intent store <
+    gen-2 pre-check, so the gen-2 pre-check must see the raise;
+    r0 = 64 contradicts.
+  - source = the gen-1 clear (release): case 3 — release/acquire
+    synchronisation makes the gen-1 header CAS visible to the scan;
+    r3 = 0 contradicts.
+ Forbidden: lister saw the raise AND read intent 0 AND the scan read
+ no header AND the gen-2 pre-check saw the old boundary."
+
+{
+ so = 64;
+ hdr = 0;
+ intent = 0;
+}
+
+P0 (atomic_int *so, atomic_int *hdr, atomic_int *intent)
+{
+  /* committer, generation 1 */
+  atomic_store_explicit(intent, 96, memory_order_seq_cst);
+  atomic_store_explicit(hdr, 1, memory_order_acq_rel);
+  atomic_thread_fence(memory_order_seq_cst);
+  atomic_store_explicit(intent, 0, memory_order_release);  /* clear == initial */
+  /* generation 2 */
+  atomic_store_explicit(intent, 128, memory_order_seq_cst);
+  int r0 = atomic_load_explicit(so, memory_order_seq_cst);
+}
+
+P1 (atomic_int *so, atomic_int *hdr, atomic_int *intent)
+{
+  /* lister: so load, intent load, scan header load */
+  int r1 = atomic_load_explicit(so, memory_order_seq_cst);
+  int r2 = atomic_load_explicit(intent, memory_order_seq_cst);
+  int r3 = atomic_load_explicit(hdr, memory_order_acquire);
+}
+
+P2 (atomic_int *so)
+{
+  /* archiver: raise (seq_cst) */
+  atomic_store_explicit(so, 256, memory_order_seq_cst);
+}
+
+exists (1:r1 = 256 /\ 1:r2 = 0 /\ 1:r3 = 0 /\ 0:r0 = 64)

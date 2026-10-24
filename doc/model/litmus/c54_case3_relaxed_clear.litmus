@@ -1,0 +1,25 @@
+C c54_case3_relaxed_clear
+"CAND-54 spec 9.3 mutant: the clear is RELAXED.  The case-3 forbidden
+ outcome must become allowed — demonstrating the release clear is
+ load-bearing.  Expected: outcomes exist."
+
+{
+ hdr = 0;
+ intent = 0;
+}
+
+P0 (atomic_int *hdr, atomic_int *intent)
+{
+  atomic_store_explicit(intent, 96, memory_order_seq_cst);
+  atomic_store_explicit(hdr, 1, memory_order_acq_rel);
+  atomic_thread_fence(memory_order_seq_cst);
+  atomic_store_explicit(intent, 2, memory_order_relaxed);
+}
+
+P1 (atomic_int *hdr, atomic_int *intent)
+{
+  int r0 = atomic_load_explicit(intent, memory_order_seq_cst);
+  int r1 = atomic_load_explicit(hdr, memory_order_acquire);
+}
+
+exists (1:r0 = 2 /\ 1:r1 = 0)

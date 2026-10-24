@@ -1,0 +1,34 @@
+C c54_case3
+"CAND-54 spec 9.2, case 3: the lister's intent load reads the CLEAR
+ (release).  Release/acquire synchronisation makes the header CAS
+ visible to the live-header scan that follows the intent load, so
+ live_floor caps the listing.  The clear carries the value 2 here (not
+ the real 0) so the read's source is observably the release store; the
+ clear == initial ABA identity is exercised in c54_aba.
+ The header CAS is modelled by its successful case (an acq_rel store).
+ Forbidden: the lister reads the clear AND the scan reads no header."
+
+{
+ hdr = 0;
+ intent = 0;
+}
+
+P0 (atomic_int *hdr, atomic_int *intent)
+{
+  /* committer: intent store (sc), header CAS (acq_rel), fence (sc),
+   * clear (release) */
+  atomic_store_explicit(intent, 96, memory_order_seq_cst);
+  atomic_store_explicit(hdr, 1, memory_order_acq_rel);
+  atomic_thread_fence(memory_order_seq_cst);
+  atomic_store_explicit(intent, 2, memory_order_release);
+}
+
+P1 (atomic_int *hdr, atomic_int *intent)
+{
+  /* lister: intent load (seq_cst), then the scan's header load
+   * (acquire, as mmapqi_header_read_checked) */
+  int r0 = atomic_load_explicit(intent, memory_order_seq_cst);
+  int r1 = atomic_load_explicit(hdr, memory_order_acquire);
+}
+
+exists (1:r0 = 2 /\ 1:r1 = 0)

@@ -53,6 +53,7 @@ be narrowed to the pre-CAS window.
 | Uncommitted iteration (CAND-49) | `IterateUncommitted` refills the pending set from the lane's surviving uncommitted positions at or above the archive line (`IterEffAoffChoices`: acquire si first, then the line — the D-G publication rule; the harmless early-line direction is a modelled nondeterministic choice) | the `_checked` iterator factories (snapshot at init; refill on yield) |
 | The pending flag (CAND-49) | `flag[a]` — the `last_pending_offset` tail; set only by `AppendUncommitted`, cleared on commit success/overtake and by `Crash`/`Join`; the set is uniform, the flag is modelled | `indexed_appender.c` `last_pending_offset` (§3.3/§3.4 double conjunct) |
 | The archive line (D-G) | `aoff[a]` — raised only by a forward archive (`Publish`/`Flush`, `Max2`); never lowered. `ArchiveLineMonotonic` pins it | `appender_meta.archive_offset` — see `doc/design/archive-boundaries.md` |
+| Commit intent (CAND-54 proposal; spec `audit/CAND-54-spec.md` — NOT yet landed in code) | `CommitIntent`: slow-path commit stores `intent[a]` before the pre-check (`SlowIntent`, c0), clears it last (`SlowClear`, c5; refusal path c5r); crash leaves it stale, `Join` clears it (plain). The re-list is decomposed (`RLoadSo` → `RLoadIntents` → `RScan` → `RCompute`) with `Bound` gaining the inflight term, the SH hold transcribed as the `UndoStart` mid-round guard; `WaitAssumption` is off. Amendment H: `MinSkipArchived` — the commit min is skipped when the committed entry is already archived (`cidx[a] < si`; in code the si read runs under a brief `archive.lock` SH hold taken on the fired re-check path only) | proposal: `indexed_appender.c:787-829` slow path + `indexed_batch_appender.c:736-776` twin; the intent slot at appender-meta byte 24; `archivable_files_locked` load order; `reclaim_files` SH hold |
 
 **Abstractions.** Each appender owns a payload lane; a message occupies
 one position and ends at `p+1`; payload file `f` holds positions
@@ -92,6 +93,7 @@ positions (see Results) adds depth, not exhaustiveness.
 | `NoDoubleCommit` | No two header slots, live or archived, ever reference the same message — a duplicate is a double delivery to pollers (CAND-49 D-G; the property that pins the archive-line design). Model-only: the C counterpart is the test-only lane validator's header-uniqueness check, never a commit-path runtime check. |
 | `ArchiveLineMonotonic` | `archive_offset` never decreases (via the `aoffPrev` ghost): only a forward archive raises it; the commit min, live pass, rollback, and undo never touch it (D-G). |
 | `ArchiveLineNeverDecreases` | The total form, a checked PROPERTY: *every* step keeps `aoff'[a] >= aoff[a]` — a lowering added to any action violates it on the spot, where the ghost only watches Flush. Mutation record (PassFail with `aoff' := 0`): this property fails at 0 s, the ghost fails later (2 s), `NoDoubleCommit` dies at 1 s to the reopened D-G. |
+| `NoDeleteUnderPending` | CAND-54: no payload file is deleted while an intent into it is pending and its commit may still publish (vacuous before the pre-check passes — a delete there forces the pending pre-check to observe the raise and refuse, so it is benign by construction). |
 
 ## Variant switches
 
@@ -108,6 +110,10 @@ positions (see Results) adds depth, not exhaustiveness.
 | `WaitAssumption` | The deleter's second listing happens only when no commit is between its pre-check and its re-check (what "wait" in the deletion protocol must achieve). |
 | `NaiveDelete` | Delete straight after one listing. |
 | `AllowCrash`, `AllowUndo`, `AllowTimeout`, `ArbitraryCommit` | Enable crashes, undo, live-pass read failures, commits of non-pending offsets. |
+| `CommitIntent` | CAND-54 proposal: the commit intent protocol (default FALSE, inert: `intent[a]` stays empty, the re-list stays fused, and existing checks keep their state counts). |
+| `MinSkipArchived` | CAND-54 amendment H: the commit min is skipped when the committed entry is already archived (TLC-found holes §7.1/§7.2 of the spec). |
+| `JoinAtArchiveLine` | CAND-54 amendment candidate A (superseded by H; kept for the record checks). |
+| `ClearBeforeCAS`, `ScanBeforeIntents`, `ClearBeforeMin` | CAND-54 mutants; the first two must FAIL, the third must PASS (live_floor carries the min window). |
 
 ## Results (TLC exhaustive, bounds above)
 
@@ -115,6 +121,9 @@ Counts below are the CAND-49 encoding (`flag[a]`, `aoff[a]`/`sbAoff[a]`;
 2026-10-19): every pre-existing check kept its verdict — FAIL checks fail
 on the recorded invariant — and the count deltas are the flag/archive-line
 state encoding (owner-accepted). Pre-CAND-49 counts are in git history.
+The CAND-54 encoding (`intent`, `cidx`, decomposed re-list, flush split)
+is inert when its switches are FALSE: `current_no_undo` re-run on
+2026-10-24 reports exactly 11,467,666 distinct states, unchanged.
 
 | Check | Expect | Result | Distinct states |
 |---|---|---|---|
@@ -137,6 +146,17 @@ state encoding (owner-accepted). Pre-CAND-49 counts are in git history.
 | `cand35_narrow_wait` | FAIL | `NoLiveLoss` | — |
 | `hand_delete_undo_rule` | PASS | pass | 179,748,536 |
 | `cand49_iterate_regression` | PASS | pass | 9,798,122 |
+| `cand54_no_join_anchor` | FAIL | `NoOverwrite` | — |
+| `cand54_no_minskip` | FAIL | `NoDeleteUnderPending` | — |
+| `cand54_intent` (H lock-free record) | FAIL | `NoOverwrite` | — |
+| `cand54_intent_hand` (H record) | FAIL | `NoOverwrite` | — |
+| `cand54_clear_before_min` (H; moot) | FAIL | `NoOverwrite` | — |
+| `cand54_clear_before_cas` / `cand54_scan_before_intents` / `cand54_no_live_floor` (H mutants) | FAIL | `NoLiveLoss` | — |
+| `cand54l_clear_before_cas` / `cand54l_scan_before_intents` / `cand54l_no_live_floor` (L mutants) | FAIL | `NoLiveLoss` | — |
+| `cand54l_intent` (L) | PASS | pass | 401,057,143 |
+| `cand54l_intent_hand` (L) | PASS | pass | 439,733,123 |
+| `cand54l_clear_before_min` (L) | PASS | pass | 459,672,512 |
+| `cand54l_intent_core` / `cand54l_intent_hand_core` / `cand54l_clear_before_min_core` (L, tier-1 guards) | PASS | pass | 13,908,615 / 15,286,465 / 16,179,432 |
 | `cand49_iterate_i1` | PASS | pass | 141,812,096 ‡ |
 | `cand49_iterate` | PASS | pass | 878,242,588 †† |
 
@@ -262,6 +282,62 @@ below the published boundary.
 publishes a header to garbage. The model's commit takes offsets only from
 the appender's pending set; that set is exactly what the library must
 track to close CAND-33 for the plain appender.
+
+### CAND-54: the commit intent and the two holes in the wait's replacement
+
+The CAND-54 proposal (spec `audit/CAND-54-spec.md`, not yet landed in
+code) replaces the deletion wait with a per-lane **commit intent** (an
+appender-meta slot stored before a slow commit's pre-check, released
+after the boundary repair) and a third term in the listing's bound
+(`min(start_offset, live_floor, inflight)`).
+
+Two design holes were found by this model before any code existed:
+
+1. **Hole 1 — `cand54_no_join_anchor` (FAIL, NoOverwrite).** The wait
+   also covered a *stale* `start_offset` read in the re-list: a racing
+   commit's re-check min lowers the boundary below the **archived**
+   region (the commit cannot tell its entry was archived); a re-list
+   holding the pre-min value deletes the file — legitimately (every
+   entry in it is archived) — and a later crash+join anchors at the
+   lowered `start_offset`, re-creating a reclaimed file. Undo then
+   passes its existence check over NEW bytes (`NoLiveLoss` one step
+   later). Same mechanism as `cand35_narrow_wait`.
+2. **Hole 2 — `cand54_no_minskip` (FAIL, NoDeleteUnderPending).** Two
+   generations: generation 1's min lowers the boundary after the
+   re-list's load; generation 2's pre-check passes against the lowered
+   value while its intent store postdates the lister's intent load
+   (which read generation 1's clear — case-3 visibility points at an
+   *archived* entry, invisible to the scan). The case-1 proof's
+   "something later can't be a lowering" missed the commit min as a
+   lowering source for *later* generations. Option B (the request's
+   fallback) has the same hole: its SH hold does not cover the min
+   either.
+
+Amendment H (skip the min when the entry is archived, deciding under a
+brief SH hold) was modelled and **rejected** (reviewer, 2026-10-24): the
+`si` read needs the lock for currency (Option B reasons 1 and 4), and
+the lock-free transcription fails hole 1 (`cand54_intent` FAIL
+NoOverwrite — the re-check raced the covering archive).
+
+**Amendment L (reviewer, 2026-10-24; lock-free):** (i) the overtaken
+pre-check compares against `max(start_offset, archive_offset)`; (ii) a
+join with no live entry anchors at `archive_offset`; (iii) the archiver
+stores the line (seq_cst) before raising the boundary, so
+`start_offset ≤ line` always (`SoLeLine` pins it; the flush drains
+`sbAoff` before `sbSo`); (iv) the commit min is unchanged. The line is
+monotone, so the case-1 chain's "later value" can never be lower — both
+holes close at the root. Semantics change (owner ruling, rule 13 —
+`archive-boundaries.md:95-96` kept commit on `start_offset`): an
+uncommitted payload below the line becomes uncommittable (EINVAL),
+consistent with the iterator's chop.
+
+Checks: `cand54l_*` (L family) and `cand54_*` (H records + mutants);
+litmus under `litmus/` (herd7/RC11). A bring-up note: a bookkeeping
+error (a variable both assigned and listed UNCHANGED) once disabled the
+model's slow-path CAS and produced vacuous PASSes — caught by chasing
+the unexpected PASS of `cand54_clear_before_cas`; TLC's "changed while
+UNCHANGED" warning is not surfaced by check.sh's verdict grep, so the
+run procedure now greps logs for `Warning`.
 
 ### CAND-49 (D-G): the iterator and the archive line
 

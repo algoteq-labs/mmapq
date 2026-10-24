@@ -1,0 +1,32 @@
+C c54_case1_relaxed_store
+"CAND-54 spec 9.3 mutant, amendment-L form: the intent store is
+ RELAXED.  The case-1 forbidden outcome must become allowed —
+ demonstrating the seq_cst intent store is load-bearing.  Expected:
+ outcomes exist (herd7 reports the condition as reachable)."
+
+{
+ aoff = 64;
+ so = 64;
+ intent = 0;
+}
+
+P0 (atomic_int *aoff, atomic_int *so)
+{
+  atomic_store_explicit(aoff, 128, memory_order_seq_cst);
+  atomic_store_explicit(so, 128, memory_order_seq_cst);
+}
+
+P1 (atomic_int *so, atomic_int *aoff, atomic_int *intent)
+{
+  atomic_store_explicit(intent, 96, memory_order_relaxed);
+  int r0 = atomic_load_explicit(so, memory_order_seq_cst);
+  int r1 = atomic_load_explicit(aoff, memory_order_seq_cst);
+}
+
+P2 (atomic_int *so, atomic_int *intent)
+{
+  int r2 = atomic_load_explicit(so, memory_order_seq_cst);
+  int r3 = atomic_load_explicit(intent, memory_order_seq_cst);
+}
+
+exists (2:r2 = 128 /\ 2:r3 = 0 /\ 1:r0 = 64 /\ 1:r1 = 64)

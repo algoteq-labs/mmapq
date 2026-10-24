@@ -51,10 +51,48 @@ CONSTANTS
     WaitPreCasOnly,  \* historical record (CAND-35 review): the wait
                      \* covering only the pre-CAS window — UNSAFE even with
                      \* the listing cap (cand35_narrow_wait FAILS)
-    IterateRefill    \* CAND-49: IterateUncommitted(a) refills pend[a] from
+    IterateRefill,   \* CAND-49: IterateUncommitted(a) refills pend[a] from
                      \* the lane's written-but-uncommitted positions
                      \* surviving on disk (default FALSE; inert by
                      \* construction when FALSE)
+    \* ---- CAND-54 (proposal; audit/CAND-54-spec.md) ----
+    CommitIntent,    \* CAND-54: the slow-path commit stores an intent slot
+                     \* (appender meta byte 24) before its pre-check and
+                     \* clears it (release) after the min; the re-list is
+                     \* decomposed into load-so -> load-intents -> scan and
+                     \* Bound gains the inflight term.  FALSE = landed
+                     \* protocol, fully inert (intent stays Empty, the
+                     \* re-list stays fused, state counts unchanged).
+    ClearBeforeCAS,  \* CAND-54 mutant: clear the intent before the CAS
+                     \* (cand54_clear_before_cas FAILS)
+    ScanBeforeIntents,\* CAND-54 mutant: the re-list scans headers before
+                     \* loading intents (cand54_scan_before_intents FAILS)
+    ClearBeforeMin,  \* CAND-54 mutant: clear the intent between the
+                     \* re-check and the min — EXPECTED TO PASS
+                     \* (cand54_clear_before_min), live_floor carries it
+    JoinAtArchiveLine, \* CAND-54 amendment candidate A (spec 7.1,
+                     \* TLC-found): the join walk's base is
+                     \* max(start_offset, archive_offset).  Superseded by
+                     \* MinSkipArchived (which fixes the shared root);
+                     \* kept for the hole-1 record check.
+    MinSkipArchived,  \* CAND-54 amendment H (spec 7.2, TLC-found): the
+                     \* commit re-check min is SKIPPED when the committed
+                     \* entry is already archived (its index < si).
+                     \* REJECTED (reviewer 2026-10-24): the si read needs
+                     \* an archive.lock SH hold for currency, which
+                     \* re-introduces Option B's reasons 1 and 4 — and the
+                     \* lock-free transcription fails hole 1 in TLC
+                     \* (cand54_intent NoOverwrite: the re-check raced the
+                     \* covering archive).  Kept as the record.
+    LineFloor         \* CAND-54 amendment L (reviewer 2026-10-24),
+                     \* lock-free: (i) the overtaken pre-check compares
+                     \* against max(start_offset, archive_offset); (ii) a
+                     \* join with no live entry anchors at archive_offset;
+                     \* (iii) the archiver stores the line (seq_cst)
+                     \* BEFORE raising start_offset, so so <= line always
+                     \* (model: the flush drains sbAoff before sbSo;
+                     \* SoLeLine pins it); (iv) the commit min is
+                     \* unchanged.  Only evaluated when CommitIntent.
 
 Appenders == 1..NA
 Pos       == 0..(NPos-1)
@@ -79,7 +117,14 @@ Max2(x,y) == IF x > y THEN x ELSE y
 \*          (CommitFence = FALSE).
 PreCasWindow  == {"c2", "c2e", "c2l"}          \* pre-check passed, no header yet
 PostCasWindow == {"c3", "c4"}                  \* header visible, re-check pending
+               \cup (IF ClearBeforeMin THEN {"c5m"} ELSE {})
+                                               \* CAND-54 mutant: c5m is
+                                               \* post-CAS, pre-min
 WindowStates  == PreCasWindow \cup PostCasWindow
+
+\* CAND-54: the intent slot.  Model positions are 0-based, so Empty = -1;
+\* on disk empty = 0 (offsets are always >= INITIAL_PAYLOAD_POSITION).
+Empty == -1
 
 VARIABLES
     \* ---- shared / on-disk state ----
@@ -93,6 +138,9 @@ VARIABLES
                 \*   it; NOTHING lowers it.  Do not merge with so;
                 \*   see doc/design/archive-boundaries.md)
     aoffPrev,   \* ghost: pre-step aoff, for ArchiveLineMonotonic
+    intent,     \* [Appenders -> {Empty} \cup Pos]  CAND-54 commit intent
+                \*   (appender meta byte 24; seq_cst store/load, release
+                \*   clear; stale after a crash, cleared at join)
     \* ---- ghost: bytes ----
     written,    \* set of <<a,p>> message starts ever written
     lost,       \* set of <<a,p>> whose bytes were destroyed by a delete
@@ -101,15 +149,21 @@ VARIABLES
     overwrite,  \* TRUE once a write lands on existing bytes
     \* ---- appenders ----
     apc, cur, pos, lastApp, pend, flag, loaded, crashes,
+    cidx,       \* CAND-54: the slot the in-flight slow commit's CAS used
+                \* (-1 = none; set only when CommitIntent — inert
+                \* otherwise, existing checks' state counts unchanged)
     \* ---- archiver ----
     xpc, xN, cand, old, xi, xlane, snap, sbSo, sbAoff,
     \* ---- deleter ----
-    dpc, markedH, markedP, todoH, todoP
+    dpc, markedH, markedP, todoH, todoP,
+    \* CAND-54: decomposed re-list scratch (per-lane snapshots of
+    \* start_offset, the intents, and the live-header scan)
+    lso, lin, lscan
 
-dataVars == <<hdr, si, so, aoff, aoffPrev, written, lost, delP, delH, overwrite>>
-appVars  == <<apc, cur, pos, lastApp, pend, flag, loaded, crashes>>
+dataVars == <<hdr, si, so, aoff, aoffPrev, intent, written, lost, delP, delH, overwrite>>
+appVars  == <<apc, cur, pos, lastApp, pend, flag, loaded, crashes, cidx>>
 arcVars  == <<xpc, xN, cand, old, xi, xlane, snap, sbSo, sbAoff>>
-delVars  == <<dpc, markedH, markedP, todoH, todoP>>
+delVars  == <<dpc, markedH, markedP, todoH, todoP, lso, lin, lscan>>
 vars     == <<dataVars, appVars, arcVars, delVars>>
 
 FreeSlots == {i \in Idx : hdr[i] = Null}
@@ -126,6 +180,7 @@ Init ==
     /\ so = [a \in Appenders |-> 0]
     /\ aoff = [a \in Appenders |-> 0]
     /\ aoffPrev = [a \in Appenders |-> 0]
+    /\ intent = [a \in Appenders |-> Empty]
     /\ written = {} /\ lost = {} /\ delP = {} /\ delH = {}
     /\ overwrite = FALSE
     /\ apc = [a \in Appenders |-> "down"]
@@ -135,6 +190,7 @@ Init ==
     /\ pend = [a \in Appenders |-> {}]
     /\ flag = [a \in Appenders |-> -1]
     /\ loaded = [a \in Appenders |-> 0]
+    /\ cidx = [a \in Appenders |-> -1]
     /\ crashes = 0
     /\ xpc = "idle" /\ xN = 0
     /\ cand = [a \in Appenders |-> -1]
@@ -144,6 +200,9 @@ Init ==
     /\ sbAoff = [a \in Appenders |-> -1]
     /\ dpc = "idle"
     /\ markedH = {} /\ markedP = {} /\ todoH = {} /\ todoP = {}
+    /\ lso = [a \in Appenders |-> 0]
+    /\ lin = [a \in Appenders |-> Empty]
+    /\ lscan = [a \in Appenders |-> NPos]
 
 -----------------------------------------------------------------------------
 (* ============================ APPENDER ==================================*)
@@ -154,12 +213,24 @@ Init ==
 (* unwritten or whose file is missing ("no file = end of stream").         *)
 JoinBase(a) ==
     LET own == {p \in Pos : \E i \in Idx : i >= si /\ hdr[i] = <<a, p>>}
-    IN  IF own # {} THEN Max(own) ELSE so[a]
+        base == IF own # {} THEN Max(own) ELSE so[a]
+    \* CAND-54 amendment A (superseded, kept for the record checks):
+    \* never anchor the walk below the archive line.  Amendment L(ii):
+    \* a join with NO live entry anchors at the line itself.
+    IN  IF JoinAtArchiveLine THEN Max2(base, aoff[a])
+        ELSE IF CommitIntent /\ LineFloor
+               THEN (IF own = {} THEN aoff[a] ELSE base)
+               ELSE base
 
 Stops(a, q) == q = NPos \/ <<a, q>> \notin written \/ <<a, FileOf(q)>> \in delP
 
 Walk(a, base) == MinOf({q \in base..NPos : Stops(a, q)})
 
+(* CAND-54 §5: join clears the lane's stale intent — the PLAIN clear,   *)
+(* no re-check/min first.  Sound because the ID bit establishes a        *)
+(* single writer: nothing of this lane is in flight; a committed payload *)
+(* of the dead incarnation is covered by live_floor or already archived; *)
+(* an uncommitted one runs the full protocol on re-commit.               *)
 Join(a) ==
     /\ apc[a] = "down"
     /\ pos' = [pos EXCEPT ![a] = Walk(a, JoinBase(a))]
@@ -167,7 +238,9 @@ Join(a) ==
     /\ lastApp' = [lastApp EXCEPT ![a] = -1]
     /\ pend' = [pend EXCEPT ![a] = {}]
     /\ flag' = [flag EXCEPT ![a] = -1]
-    /\ UNCHANGED <<dataVars, cur, loaded, crashes, arcVars, delVars>>
+    /\ intent' = [intent EXCEPT ![a] = Empty]
+    /\ UNCHANGED <<hdr, si, so, aoff, aoffPrev, written, lost, delP, delH,
+                   overwrite, cur, loaded, crashes, cidx, arcVars, delVars>>
 
 (* write_payload: bytes at pos; recreates the file if it was deleted.      *)
 WriteAt(a) ==
@@ -184,7 +257,7 @@ Append(a) ==
     /\ WriteAt(a)
     /\ cur' = [cur EXCEPT ![a] = pos[a]]
     /\ apc' = [apc EXCEPT ![a] = "fc"]
-    /\ UNCHANGED <<hdr, si, so, aoff, aoffPrev, lost, delH, pend, flag, loaded, crashes,
+    /\ UNCHANGED <<hdr, si, so, aoff, aoffPrev, intent, lost, delH, pend, flag, loaded, crashes, cidx,
                    arcVars, delVars>>
 
 (* append_uncommitted(): write only; the offset is handed to the caller.   *)
@@ -195,7 +268,7 @@ AppendUncommitted(a) ==
     /\ WriteAt(a)
     /\ pend' = [pend EXCEPT ![a] = @ \cup (IF flag[a] = -1 THEN {} ELSE {flag[a]})]
     /\ flag' = [flag EXCEPT ![a] = pos[a]]
-    /\ UNCHANGED <<hdr, si, so, aoff, aoffPrev, lost, delH, apc, cur, loaded, crashes,
+    /\ UNCHANGED <<hdr, si, so, aoff, aoffPrev, intent, lost, delH, apc, cur, loaded, crashes, cidx,
                    arcVars, delVars>>
 
 (* The offsets commit() will accept: the set plus the flag-tracked tail.   *)
@@ -207,8 +280,11 @@ Track(a) == pend[a] \cup (IF flag[a] = -1 THEN {} ELSE {flag[a]})
 CommitStart(a, o) ==
     /\ apc[a] = "idle" /\ FreeSlots # {}
     /\ cur' = [cur EXCEPT ![a] = o]
+    \* CAND-54: the slow path stores the intent FIRST (c0).  The tail fast
+    \* path (fc) is untouched — property 2, no cost on ordinary commits.
     /\ apc' = [apc EXCEPT ![a] =
-                 IF o = lastApp[a] /\ o = flag[a] THEN "fc" ELSE "c1"]
+                 IF o = lastApp[a] /\ o = flag[a] THEN "fc"
+                 ELSE IF CommitIntent THEN "c0" ELSE "c1"]
 
 Commit(a) ==
     \/ \E o \in Track(a) :
@@ -219,12 +295,12 @@ Commit(a) ==
           \* rejection exactly (every in-flight commit terminates in one
           \* of the two).
           /\ flag' = [flag EXCEPT ![a] = IF o = flag[a] THEN -1 ELSE @]
-          /\ UNCHANGED <<dataVars, pos, lastApp, loaded, crashes, arcVars, delVars>>
+          /\ UNCHANGED <<dataVars, pos, lastApp, loaded, crashes, cidx, arcVars, delVars>>
     \/ /\ ArbitraryCommit           \* caller passes an offset that is not pending
        /\ \E o \in Pos \ pend[a] :
              /\ o # lastApp[a]
              /\ CommitStart(a, o)
-             /\ UNCHANGED <<dataVars, pend, flag, pos, lastApp, loaded, crashes, arcVars, delVars>>
+             /\ UNCHANGED <<dataVars, pend, flag, pos, lastApp, loaded, crashes, cidx, arcVars, delVars>>
 
 CAS(a) == hdr' = [hdr EXCEPT ![NextSlot] = <<a, cur[a]>>]
 
@@ -232,38 +308,122 @@ FastCommit(a) ==
     /\ apc[a] = "fc" /\ FreeSlots # {}
     /\ CAS(a)
     /\ apc' = [apc EXCEPT ![a] = "idle"]
-    /\ UNCHANGED <<si, so, aoff, aoffPrev, written, lost, delP, delH, overwrite,
-                   cur, pos, lastApp, pend, flag, loaded, crashes, arcVars, delVars>>
+    /\ UNCHANGED <<si, so, aoff, aoffPrev, intent, written, lost, delP, delH, overwrite,
+                   cur, pos, lastApp, pend, flag, loaded, crashes, cidx, arcVars, delVars>>
+
+(* c0 (CAND-54): seq_cst intent store, BEFORE the pre-check.  The value  *)
+(* is the commit's target offset; Empty means no intent.                 *)
+SlowIntent(a) ==
+    /\ apc[a] = "c0"
+    /\ intent' = [intent EXCEPT ![a] = cur[a]]
+    /\ apc' = [apc EXCEPT ![a] = "c1"]
+    /\ UNCHANGED <<hdr, si, so, aoff, aoffPrev, written, lost, delP, delH,
+                   overwrite, cur, pos, lastApp, pend, flag, loaded, crashes, cidx,
+                   arcVars, delVars>>
 
 (* c1: pre-check.  offset < start_offset -> MMAPQ_EINVAL, payload dropped  *)
 (* (the caller must re-append it; I2).                                     *)
+(* CAND-54: the refusal path clears the intent (c5r) — a refused commit    *)
+(* holds no claim, and a lingering intent would pin the lane's reclaim.    *)
+(* CAND-54 amendment L(i): the overtaken test compares against           *)
+(* max(start_offset, archive_offset) — the line is monotone, so a "later  *)
+(* value" in the case-1 chain can never be a lowering (the commit min     *)
+(* does not touch the line).  Semantics change (owner ruling, rule 13 —   *)
+(* archive-boundaries.md:95-96 deliberately kept commit on start_offset): *)
+(* an uncommitted payload below the line becomes uncommittable (EINVAL),  *)
+(* consistent with the iterator's chop.                                   *)
 SlowPreCheck(a) ==
     /\ apc[a] = "c1"
-    /\ apc' = [apc EXCEPT ![a] =
-                 IF cur[a] < so[a] THEN "idle"
-                 ELSE IF CommitFence THEN "c2" ELSE "c2e"]
-    /\ UNCHANGED <<dataVars, cur, pos, lastApp, pend, flag, loaded, crashes, arcVars, delVars>>
+    /\ LET floor == IF CommitIntent /\ LineFloor
+                      THEN Max2(so[a], aoff[a]) ELSE so[a]
+       IN apc' = [apc EXCEPT ![a] =
+                    IF cur[a] < floor THEN (IF CommitIntent THEN "c5r" ELSE "idle")
+                    ELSE IF CommitFence THEN "c2" ELSE "c2e"]
+    /\ UNCHANGED <<dataVars, cur, pos, lastApp, pend, flag, loaded, crashes, cidx, arcVars, delVars>>
 
 SlowCAS(a) ==
     /\ apc[a] = "c2" /\ FreeSlots # {}
+    \* CAND-54 mutant ClearBeforeCAS: the clear runs BETWEEN the pre-check
+    \* and the CAS — the re-list is then uncapped in exactly the window
+    \* the intent exists for (cand54_clear_before_cas FAILS NoLiveLoss).
+    /\ IF CommitIntent /\ ClearBeforeCAS
+         THEN /\ apc' = [apc EXCEPT ![a] = "c5x"]
+              /\ UNCHANGED <<hdr, si, so, aoff, aoffPrev, intent, written,
+                             lost, delP, delH, overwrite, cur, pos, lastApp,
+                             pend, flag, loaded, crashes, cidx, arcVars, delVars>>
+         ELSE /\ CAS(a)
+              /\ cidx' = IF CommitIntent THEN [cidx EXCEPT ![a] = NextSlot]
+                           ELSE cidx
+              /\ apc' = [apc EXCEPT ![a] = "c3"]
+              /\ UNCHANGED <<si, so, aoff, aoffPrev, intent, written, lost, delP, delH, overwrite,
+                             cur, pos, lastApp, pend, flag, loaded, crashes, arcVars, delVars>>
+
+(* c5x (mutant): clear before the header CAS.                            *)
+SlowClearEarly(a) ==
+    /\ apc[a] = "c5x"
+    /\ intent' = [intent EXCEPT ![a] = Empty]
+    /\ apc' = [apc EXCEPT ![a] = "c2x"]
+    /\ UNCHANGED <<hdr, si, so, aoff, aoffPrev, written, lost, delP, delH,
+                   overwrite, cur, pos, lastApp, pend, flag, loaded, crashes, cidx,
+                   arcVars, delVars>>
+
+(* c2x (mutant): the CAS after the early clear.                          *)
+SlowCASAfterClear(a) ==
+    /\ apc[a] = "c2x" /\ FreeSlots # {}
     /\ CAS(a)
+    /\ cidx' = [cidx EXCEPT ![a] = NextSlot]
     /\ apc' = [apc EXCEPT ![a] = "c3"]
-    /\ UNCHANGED <<si, so, aoff, aoffPrev, written, lost, delP, delH, overwrite,
-                   cur, pos, lastApp, pend, flag, loaded, crashes, arcVars, delVars>>
+    /\ UNCHANGED <<si, so, aoff, aoffPrev, intent, written, lost, delP, delH, overwrite,
+                    cur, pos, lastApp, pend, flag, loaded, crashes, arcVars, delVars>>
 
 (* c3: after the seq_cst fence, re-load start_offset.                      *)
+(* CAND-54: the clear comes after the min (c5); mutant ClearBeforeMin      *)
+(* clears between the re-check and the min (c5m) — expected to PASS        *)
+(* because live_floor carries the post-CAS window (cand54_clear_before_min).*)
+(* Amendment H (spec 7.2): the min is SKIPPED when the committed entry is  *)
+(* already archived (cidx < si).  In the code the si read runs under a     *)
+(* brief archive.lock SH hold taken on this fired re-check path only, so   *)
+(* no archive op is in flight and si is current; the model's atomic state  *)
+(* needs no such transcription.                                            *)
 SlowRecheck(a) ==
     /\ apc[a] = "c3"
-    /\ apc' = [apc EXCEPT ![a] = IF cur[a] < so[a] THEN "c4" ELSE "idle"]
-    /\ UNCHANGED <<dataVars, cur, pos, lastApp, pend, flag, loaded, crashes, arcVars, delVars>>
+    /\ apc' = [apc EXCEPT ![a] =
+                 IF cur[a] < so[a]
+                   THEN IF CommitIntent /\ MinSkipArchived /\ cidx[a] < si
+                          THEN "c5"   \* entry archived: the min must not
+                                      \* lower so below the archived region
+                          ELSE (IF CommitIntent /\ ClearBeforeMin THEN "c5m" ELSE "c4")
+                   ELSE (IF CommitIntent THEN "c5" ELSE "idle")]
+    /\ UNCHANGED <<dataVars, cur, pos, lastApp, pend, flag, loaded, crashes, cidx, arcVars, delVars>>
+
+(* c5m (mutant): release clear between the re-check and the min.           *)
+SlowClearPreMin(a) ==
+    /\ apc[a] = "c5m"
+    /\ intent' = [intent EXCEPT ![a] = Empty]
+    /\ apc' = [apc EXCEPT ![a] = "c4"]
+    /\ UNCHANGED <<hdr, si, so, aoff, aoffPrev, written, lost, delP, delH,
+                   overwrite, cur, pos, lastApp, pend, flag, loaded, crashes, cidx,
+                   arcVars, delVars>>
 
 (* c4: appender_meta_start_offset_min (atomic-min CAS loop).               *)
 SlowMin(a) ==
     /\ apc[a] = "c4"
     /\ so' = [so EXCEPT ![a] = Min2(@, cur[a])]
+    /\ apc' = [apc EXCEPT ![a] = IF CommitIntent THEN "c5" ELSE "idle"]
+    /\ UNCHANGED <<hdr, si, aoff, aoffPrev, intent, written, lost, delP, delH, overwrite,
+                    cur, pos, lastApp, pend, flag, loaded, crashes, cidx, arcVars, delVars>>
+
+(* c5/c5r (CAND-54): release clear, LAST — after the header is published  *)
+(* and the boundary repair (re-check + min) is done.  c5r is the refusal   *)
+(* path; the one-step lingering intent there is benign (the commit was     *)
+(* refused — its file is legitimately deletable).                          *)
+SlowClear(a) ==
+    /\ apc[a] \in {"c5", "c5r"}
+    /\ intent' = [intent EXCEPT ![a] = Empty]
     /\ apc' = [apc EXCEPT ![a] = "idle"]
-    /\ UNCHANGED <<hdr, si, aoff, aoffPrev, written, lost, delP, delH, overwrite,
-                   cur, pos, lastApp, pend, flag, loaded, crashes, arcVars, delVars>>
+    /\ UNCHANGED <<hdr, si, so, aoff, aoffPrev, written, lost, delP, delH,
+                   overwrite, cur, pos, lastApp, pend, flag, loaded, crashes, cidx,
+                   arcVars, delVars>>
 
 (* CommitFence = FALSE: the re-check load is satisfied before the CAS is   *)
 (* visible (acq_rel CAS does not order a later load of another location).  *)
@@ -271,14 +431,16 @@ SlowEarlyLoad(a) ==
     /\ apc[a] = "c2e"
     /\ loaded' = [loaded EXCEPT ![a] = so[a]]
     /\ apc' = [apc EXCEPT ![a] = "c2l"]
-    /\ UNCHANGED <<dataVars, cur, pos, lastApp, pend, flag, crashes, arcVars, delVars>>
+    /\ UNCHANGED <<dataVars, cur, pos, lastApp, pend, flag, crashes, cidx, arcVars, delVars>>
 
 SlowLateCAS(a) ==
     /\ apc[a] = "c2l" /\ FreeSlots # {}
     /\ CAS(a)
-    /\ apc' = [apc EXCEPT ![a] = IF cur[a] < loaded[a] THEN "c4" ELSE "idle"]
-    /\ UNCHANGED <<si, so, aoff, aoffPrev, written, lost, delP, delH, overwrite,
-                   cur, pos, lastApp, pend, flag, loaded, crashes, arcVars, delVars>>
+    /\ apc' = [apc EXCEPT ![a] =
+                 IF cur[a] < loaded[a] THEN "c4"
+                 ELSE (IF CommitIntent THEN "c5" ELSE "idle")]
+    /\ UNCHANGED <<si, so, aoff, aoffPrev, intent, written, lost, delP, delH, overwrite,
+                    cur, pos, lastApp, pend, flag, loaded, crashes, cidx, arcVars, delVars>>
 
 (* Crash at any step: pending payloads become dead; a CAS already done     *)
 (* stays done, a re-check not yet done never happens.                      *)
@@ -288,7 +450,7 @@ Crash(a) ==
     /\ pend' = [pend EXCEPT ![a] = {}]
     /\ flag' = [flag EXCEPT ![a] = -1]
     /\ crashes' = crashes + 1
-    /\ UNCHANGED <<dataVars, cur, pos, lastApp, loaded, arcVars, delVars>>
+    /\ UNCHANGED <<dataVars, cur, pos, lastApp, loaded, cidx, arcVars, delVars>>
 
 (* IterateUncommitted(a): the uncommitted-payload iterator (CAND-49).     *)
 (* Crash/Join clear pend[a] and flag[a] — the appender's *memory* — but   *)
@@ -336,13 +498,15 @@ IterateUncommitted(a) ==
                                     /\ p # flag[a]}
          IN  /\ refill \ pend[a] # {}
              /\ pend' = [pend EXCEPT ![a] = @ \cup refill]
-    /\ UNCHANGED <<dataVars, apc, cur, pos, lastApp, flag, loaded, crashes,
+    /\ UNCHANGED <<dataVars, apc, cur, pos, lastApp, flag, loaded, crashes, cidx,
                    arcVars, delVars>>
 
 AppenderNext(a) ==
     \/ Join(a) \/ Append(a) \/ AppendUncommitted(a) \/ Commit(a)
-    \/ FastCommit(a) \/ SlowPreCheck(a) \/ SlowCAS(a) \/ SlowRecheck(a)
-    \/ SlowMin(a) \/ SlowEarlyLoad(a) \/ SlowLateCAS(a) \/ Crash(a)
+    \/ FastCommit(a) \/ SlowIntent(a) \/ SlowPreCheck(a) \/ SlowCAS(a)
+    \/ SlowRecheck(a) \/ SlowMin(a) \/ SlowEarlyLoad(a) \/ SlowLateCAS(a)
+    \/ SlowClearEarly(a) \/ SlowCASAfterClear(a) \/ SlowClearPreMin(a)
+    \/ SlowClear(a) \/ Crash(a)
     \/ IterateUncommitted(a)
 
 -----------------------------------------------------------------------------
@@ -382,8 +546,31 @@ Publish ==
     /\ UNCHANGED <<dataVars, appVars, xN, cand, old, xi, snap, delVars>>
 
 (* A buffered start_offset / archive_offset store becomes globally         *)
-(* visible.                                                                *)
+(* visible.  CAND-54 amendment L(iii): under LineFloor the line store is   *)
+(* seq_cst and drains BEFORE the boundary store, so an observer that sees  *)
+(* the raised boundary also sees the raised line — so <= aoff at every     *)
+(* state (SoLeLine).                                                       *)
+FlushAoff(a) ==
+    /\ CommitIntent /\ LineFloor /\ sbAoff[a] # -1
+    /\ aoffPrev' = [aoffPrev EXCEPT ![a] = aoff[a]]
+    /\ aoff' = [aoff EXCEPT ![a] = Max2(@, sbAoff[a])]
+    /\ sbAoff' = [sbAoff EXCEPT ![a] = -1]
+    /\ UNCHANGED <<hdr, si, so, intent, written, lost, delP, delH, overwrite,
+                   appVars, xpc, xN, cand, old, xi, xlane, snap, sbSo, delVars>>
+
+FlushSo(a) ==
+    /\ CommitIntent /\ LineFloor /\ sbSo[a] # -1
+    /\ sbAoff[a] = -1   \* the line drains first (iii)
+    /\ so' = [so EXCEPT ![a] =
+                IF PublishCAS THEN (IF @ = old[a] THEN sbSo[a] ELSE @)
+                ELSE sbSo[a]]
+    /\ sbSo' = [sbSo EXCEPT ![a] = -1]
+    /\ UNCHANGED <<hdr, si, aoff, aoffPrev, intent, written, lost, delP, delH,
+                   overwrite, appVars, xpc, xN, cand, old, xi, xlane, snap,
+                   sbAoff, delVars>>
+
 Flush(a) ==
+    /\ ~(CommitIntent /\ LineFloor)
     /\ sbSo[a] # -1 \/ sbAoff[a] # -1
     /\ so' = IF sbSo[a] # -1
                THEN [so EXCEPT ![a] =
@@ -396,7 +583,7 @@ Flush(a) ==
                  ELSE aoff
     /\ sbSo' = [sbSo EXCEPT ![a] = -1]
     /\ sbAoff' = [sbAoff EXCEPT ![a] = -1]
-    /\ UNCHANGED <<hdr, si, written, lost, delP, delH, overwrite,
+    /\ UNCHANGED <<hdr, si, intent, written, lost, delP, delH, overwrite,
                    appVars, xpc, xN, cand, old, xi, xlane, snap, delVars>>
 
 (* step 3b: start_index = N.                                               *)
@@ -404,7 +591,7 @@ PublishSi ==
     /\ xpc = "si"
     /\ si' = xN
     /\ xpc' = "fence"
-    /\ UNCHANGED <<hdr, so, aoff, aoffPrev, written, lost, delP, delH, overwrite,
+    /\ UNCHANGED <<hdr, so, aoff, aoffPrev, intent, written, lost, delP, delH, overwrite,
                    appVars, xN, cand, old, xi, xlane, snap, sbSo, sbAoff, delVars>>
 
 (* seq_cst fence: with ArchFence the buffered stores must drain first.     *)
@@ -435,7 +622,7 @@ PassStep ==
               IN /\ sbSo[a] = -1
                  /\ so' = [so EXCEPT ![a] = Min2(@, p)]
                  /\ xi' = xi + 1
-                 /\ UNCHANGED <<hdr, si, aoff, aoffPrev, written, lost, delP, delH, overwrite, xpc>>
+                 /\ UNCHANGED <<hdr, si, aoff, aoffPrev, intent, written, lost, delP, delH, overwrite, xpc>>
     /\ UNCHANGED <<appVars, xN, cand, old, xlane, snap, sbSo, sbAoff, delVars>>
 
 (* step 5: a header read fails (timeout/corruption): lower every boundary  *)
@@ -445,7 +632,7 @@ PassFail ==
     /\ \A a \in Appenders : sbSo[a] = -1
     /\ so' = [a \in Appenders |-> IF old[a] = -1 THEN so[a] ELSE Min2(so[a], old[a])]
     /\ xpc' = "fin"
-    /\ UNCHANGED <<hdr, si, aoff, aoffPrev, written, lost, delP, delH, overwrite,
+    /\ UNCHANGED <<hdr, si, aoff, aoffPrev, intent, written, lost, delP, delH, overwrite,
                    appVars, xN, cand, old, xi, xlane, snap, sbSo, sbAoff, delVars>>
 
 (* lock release: buffered stores drain before the unlock (release).        *)
@@ -461,6 +648,13 @@ Finish ==
 UndoStart ==
     /\ AllowUndo /\ xpc = "idle"
     /\ UndoRule => dpc # "del"
+    \* CAND-54: reclaim_files holds archive.lock SH across the WHOLE
+    \* decomposed re-list (CAND-36), so undo (EX) cannot slip in
+    \* mid-round.  Without this guard TLC finds the undo race against a
+    \* stale mid-round lso (cand54_clear_before_min bring-up trace:
+    \* undo lowers so between RLoadSo and RCompute, the stale bound
+    \* deletes a restored file).
+    /\ CommitIntent => dpc \notin {"r_in", "r_scan", "r_c"}
     /\ \E N \in 0..(si-1) :
          LET R == N..(si-1) IN
          /\ \A i \in R : /\ hdr[i] # Null
@@ -471,20 +665,20 @@ UndoStart ==
                      IN IF ps = {} THEN so[a] ELSE Min2(so[a], MinOf(ps))]
          /\ xN' = N
     /\ xpc' = "undo2"
-    /\ UNCHANGED <<hdr, si, aoff, aoffPrev, written, lost, delP, delH, overwrite,
+    /\ UNCHANGED <<hdr, si, aoff, aoffPrev, intent, written, lost, delP, delH, overwrite,
                    appVars, cand, old, xi, xlane, snap, sbSo, sbAoff, delVars>>
 
 UndoSi ==
     /\ xpc = "undo2"
     /\ si' = xN
     /\ xpc' = "idle"
-    /\ UNCHANGED <<hdr, so, aoff, aoffPrev, written, lost, delP, delH, overwrite,
+    /\ UNCHANGED <<hdr, so, aoff, aoffPrev, intent, written, lost, delP, delH, overwrite,
                    appVars, xN, cand, old, xi, xlane, snap, sbSo, sbAoff, delVars>>
 
 ArchiverNext ==
     \/ ForwardStart \/ Publish \/ PublishSi \/ Fence \/ PassStep
     \/ PassFail \/ Finish \/ UndoStart \/ UndoSi
-    \/ \E a \in Appenders : Flush(a)
+    \/ \E a \in Appenders : Flush(a) \/ FlushAoff(a) \/ FlushSo(a)
 
 -----------------------------------------------------------------------------
 (* ============================ DELETER ===================================*)
@@ -500,8 +694,18 @@ Bound(a) == IF ListingLivePass THEN Min2(so[a], LowestLive(a)) ELSE so[a]
 ListedH == {h \in HFiles : (h + 1) * HF <= si}
 ListedP == {<<a, f>> \in Appenders \X Files : (f + 1) * F <= Bound(a)}
 
+(* CAND-54: the decomposed re-list's per-lane bound — the three-term     *)
+(* min of §2.4: start_offset (maintained boundary), live_floor (the      *)
+(* scan; CAND-35, kept), inflight (the pending intent).                  *)
+DBound(a) == Min2(Min2(lso[a], IF ListingLivePass THEN lscan[a] ELSE NPos),
+                  IF lin[a] = Empty THEN NPos ELSE lin[a])
+DListedP == {<<a, f>> \in Appenders \X Files : (f + 1) * F <= DBound(a)}
+
 List1 ==
     /\ dpc = "idle" /\ xpc = "idle"
+    \* CAND-54: the MARK stays fused even under CommitIntent — it is only
+    \* a filter; the re-list (decomposed) decides.  Sound: a coarser mark
+    \* can only shrink the intersection, never lose a counterexample.
     /\ IF NaiveDelete
          THEN /\ todoH' = ListedH /\ todoP' = ListedP
               /\ dpc' = "del"
@@ -509,9 +713,12 @@ List1 ==
          ELSE /\ markedH' = ListedH /\ markedP' = ListedP
               /\ dpc' = "wait"
               /\ UNCHANGED <<todoH, todoP>>
-    /\ UNCHANGED <<dataVars, appVars, arcVars>>
+    /\ UNCHANGED <<dataVars, appVars, arcVars, lso, lin, lscan>>
 
+(* Landed protocol (CommitIntent = FALSE): fused re-list under the wait  *)
+(* assumption.                                                           *)
 List2 ==
+    /\ ~CommitIntent
     /\ dpc = "wait" /\ xpc = "idle"
     /\ WaitAssumption => \A a \in Appenders :
          apc[a] \notin (IF WaitPreCasOnly THEN PreCasWindow ELSE WindowStates)
@@ -522,12 +729,50 @@ List2 ==
                  /\ delP' = delP \cup tP
                  /\ delH' = delH \cup tH
                  /\ dpc' = "idle"
-                 /\ UNCHANGED <<todoH, todoP, hdr, si, so, aoff, aoffPrev, written, overwrite>>
+                 /\ UNCHANGED <<todoH, todoP, hdr, si, so, aoff, aoffPrev, intent, written, overwrite>>
          ELSE /\ todoH' = markedH \cap ListedH
               /\ todoP' = markedP \cap ListedP
               /\ dpc' = "del"
-              /\ UNCHANGED dataVars
-    /\ UNCHANGED <<markedH, markedP, appVars, arcVars>>
+              /\ UNCHANGED <<hdr, si, so, aoff, aoffPrev, intent, written, lost, delP, delH, overwrite>>
+    /\ UNCHANGED <<markedH, markedP, appVars, arcVars, lso, lin, lscan>>
+
+(* CAND-54: the re-list decomposed into load-so -> load-intents -> scan  *)
+(* (the mutant ScanBeforeIntents runs the scan before the intent load).  *)
+(* NO WaitAssumption guard anywhere in this round — the intent replaces  *)
+(* the wait (property 1: no timing assumption).                          *)
+RLoadSo ==
+    /\ CommitIntent /\ dpc = "wait" /\ xpc = "idle"
+    /\ lso' = so
+    /\ dpc' = IF ScanBeforeIntents THEN "r_scan" ELSE "r_in"
+    /\ UNCHANGED <<dataVars, appVars, arcVars, markedH, markedP, todoH, todoP, lin, lscan>>
+
+RLoadIntents ==
+    /\ CommitIntent /\ dpc = "r_in"
+    /\ lin' = intent
+    /\ dpc' = IF ScanBeforeIntents THEN "r_c" ELSE "r_scan"
+    /\ UNCHANGED <<dataVars, appVars, arcVars, markedH, markedP, todoH, todoP, lso, lscan>>
+
+RScan ==
+    /\ CommitIntent /\ dpc = "r_scan"
+    /\ lscan' = [a \in Appenders |-> LowestLive(a)]
+    /\ dpc' = IF ScanBeforeIntents THEN "r_in" ELSE "r_c"
+    /\ UNCHANGED <<dataVars, appVars, arcVars, markedH, markedP, todoH, todoP, lso, lin>>
+
+RCompute ==
+    /\ CommitIntent /\ dpc = "r_c"
+    /\ IF AtomicDelete
+         THEN LET tP == markedP \cap DListedP
+                  tH == markedH \cap ListedH
+              IN /\ lost' = lost \cup {w \in written : <<w[1], FileOf(w[2])>> \in tP}
+                 /\ delP' = delP \cup tP
+                 /\ delH' = delH \cup tH
+                 /\ dpc' = "idle"
+                 /\ UNCHANGED <<todoH, todoP, hdr, si, so, aoff, aoffPrev, intent, written, overwrite>>
+         ELSE /\ todoH' = markedH \cap ListedH
+              /\ todoP' = markedP \cap DListedP
+              /\ dpc' = "del"
+              /\ UNCHANGED <<hdr, si, so, aoff, aoffPrev, intent, written, lost, delP, delH, overwrite>>
+    /\ UNCHANGED <<markedH, markedP, appVars, arcVars, lso, lin, lscan>>
 
 (* unlink() happens outside the lock.                                      *)
 Delete ==
@@ -536,10 +781,11 @@ Delete ==
     /\ delP' = delP \cup todoP
     /\ delH' = delH \cup todoH
     /\ dpc' = "idle"
-    /\ UNCHANGED <<hdr, si, so, aoff, aoffPrev, written, overwrite, appVars, arcVars,
-                   markedH, markedP, todoH, todoP>>
+    /\ UNCHANGED <<hdr, si, so, aoff, aoffPrev, intent, written, overwrite, appVars, arcVars,
+                   markedH, markedP, todoH, todoP, lso, lin, lscan>>
 
 DeleterNext == List1 \/ List2 \/ Delete
+    \/ RLoadSo \/ RLoadIntents \/ RScan \/ RCompute
 
 -----------------------------------------------------------------------------
 Next ==
@@ -563,6 +809,22 @@ NoLiveLoss ==
     \A i \in LiveIdx :
         /\ HFileOf(i) \notin delH
         /\ hdr[i] \notin lost
+
+(* CAND-54: no payload file is deleted while an intent into it is        *)
+(* pending and its commit may still publish.  The invariant is VACUOUS   *)
+(* before the pre-check passes (c0/c1/c5r): a delete there forces the    *)
+(* pending pre-check to observe the raise and refuse (spec 9.1 case-1    *)
+(* chain) — the commit can never publish into that file, so the delete   *)
+(* is benign.  "down" keeps the stale intent by design (join clears it). *)
+NoDeleteUnderPending ==
+    \A a \in Appenders :
+        (intent[a] # Empty
+         /\ apc[a] \in {"c2", "c2e", "c2l", "c2x", "c3", "c4", "c5", "c5x", "c5m"}) =>
+            <<a, FileOf(intent[a])>> \notin delP
+
+(* CAND-54 amendment L(iii): the boundary never exceeds the archive line  *)
+(* (the line drains first; every lowering touches only start_offset).     *)
+SoLeLine == \A a \in Appenders : so[a] <= aoff[a]
 
 (* I5: a joining appender never writes over existing bytes.                *)
 NoOverwrite == ~overwrite
