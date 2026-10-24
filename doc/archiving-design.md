@@ -27,14 +27,18 @@ found three reclamation defects (CAND-35/36/37), all now fixed; see
 | File | Field | Meaning |
 |---|---|---|
 | `meta` | `start_index` (int64, atomic) | First index that is not archived. Header files wholly below it may be listed. |
-| `appender_meta_<id>` | `start_offset` (int64, atomic) | Payload files of this appender wholly below it may be listed. It is also the anchor a joining appender walks forward from when it has no entry left in the live range. |
+| `appender_meta_<id>` | `start_offset` (int64, atomic) | Payload files of this appender wholly below it may be listed. |
+| `appender_meta_<id>` | `archive_offset` (int64, atomic) | The archive line: how far archiving has gone, never lowered. A joining appender with no entry left in the live range walks forward from the join anchor `max(start_offset, archive_offset)` — the line under the protocol's `start_offset ≤ archive_offset` invariant (CAND-54 L(ii); the `start_offset` side preserves the CAND-32 corrupt-state refusal for states outside the invariant). |
+| `appender_meta_<id>` | `commit_intent` (int64, atomic) | CAND-54: a slow-path commit's payload offset, stored before its overtaken pre-check and cleared after the boundary repair (or on refusal/publish failure); cleared at join. The listing's deletion bound per lane is `min(start_offset, live_floor, commit_intent)`. Empty = 0. |
 | `archive.lock` | (no content) | `flock` target: one archive operation at a time per queue. |
 
 `start_offset` exists because a joining appender must find the end of its
 payload stream without reading headers below `start_index` — those header
 files may have been deleted. If the appender has an entry in the live range,
 it walks forward from that entry's payload. If it has none, it walks forward
-from `start_offset`. It never *writes* at `start_offset`.
+from the archive line — exactly `max(start_offset, archive_offset)`
+(CAND-54 L(ii): a commit re-check can lower `start_offset` into reclaimed
+territory; the line never moves back). It never *writes* at the anchor.
 
 ## Payload states
 
@@ -42,7 +46,7 @@ from `start_offset`. It never *writes* at `start_offset`.
 |---|---|---|
 | **Archived** | Referenced by a header with index < `start_index` | No |
 | **Live** | Referenced by a header with index ≥ `start_index` | **Yes** |
-| **Uncommitted** | Referenced by no header — pending (current appender incarnation) or orphaned (a previous incarnation; recoverable by the rejoining lane owner via the uncommitted iterator until archiving passes it*) | No — and once below `start_offset` it can no longer be committed |
+| **Uncommitted** | Referenced by no header — pending (current appender incarnation) or orphaned (a previous incarnation; recoverable by the rejoining lane owner via the uncommitted iterator until archiving passes it*) | No — and once below the archive line it can no longer be committed (CAND-54 L(i)) |
 
 \* Iteration starts at `appender_meta.archive_offset` (the archive line —
 see `doc/design/archive-boundaries.md`), never below it; archiving may chop
@@ -61,15 +65,17 @@ computed with that in mind.
   payload of that appender. The only exception is a commit racing that
   archive, for the few instructions between its CAS and its re-check (see
   "Commit"); the deletion protocol covers that window.
-- **I2** An uncommitted payload below `start_offset` can never become live:
-  committing it returns `MMAPQ_EINVAL`. Append it again instead.
+- **I2** An uncommitted payload below the archive line can never become
+  live (CAND-54 L(i)): committing it returns `MMAPQ_EINVAL` — the commit
+  pre-check floors at `max(start_offset, archive_offset)`. Append it again
+  instead.
 - **I3** Forward archiving never sets `start_offset` above the lowest live
   payload; undo never raises it.
 - **I4** Every archived header must reference a complete message (or
   batch); otherwise archiving fails with `MMAPQ_ECORRUPT` and changes
   nothing.
 - **I5** A joining appender never reads headers below `start_index`, and
-  never writes at `start_offset` or over existing bytes.
+  never writes below the archive line or over existing bytes.
 - **I6** One archive operation at a time per queue; `archivable_files`
   waits for it.
 
@@ -128,13 +134,28 @@ hold the boundary back: reclamation after a crash works as before.
   recently (the normal in-sequence case). Nothing changes: no shared loads.
   It must be keyed on the last *appended* offset. "Greater than the last
   committed offset" is not safe under resequencing.
-- **Slow path** — any other offset (filling a gap):
-  1. Load `start_offset`. If `offset` is below it, return `MMAPQ_EINVAL`:
-     the payload has been overtaken by archiving and may already be listed.
-  2. Publish the header (CAS), as today.
-  3. Fence, load `start_offset` again. If `offset` is now below it — an
-     archive published a higher value between steps 1 and 2 — lower
-     `start_offset` to `offset`.
+- **Slow path** — any other offset (filling a gap). On archivable queues
+  (CAND-54):
+  1. Store the commit intent = `offset` (seq_cst) — the listing bounds this
+     lane at the intent while it is set, so the file can never be listed
+     under a stalled commit.
+  2. Load `start_offset` and `archive_offset` (both seq_cst). If `offset`
+     is below `max` of the two, clear the intent and return
+     `MMAPQ_EINVAL`: the payload has been overtaken by archiving and may
+     already be listed. (The line floors the check — L(i): a commit
+     re-check can lower `start_offset` below the line, so `start_offset`
+     alone is not the floor.)
+  3. Publish the header (CAS), as today. On a publish failure nothing was
+     published and the intent is cleared; the retry stores it again.
+  4. Fence, load `start_offset` again. If `offset` is now below it — an
+     archive published a higher value between steps 2 and 3 — lower
+     `start_offset` to `offset` (L(iv): unchanged — it may go below the
+     line; the line is the floor).
+  5. Clear the intent (release), last.
+
+  On non-archivable queues nothing can raise the boundary or delete files:
+  the slow path keeps the pre-CAND-54 shape (pre-check against
+  `start_offset`, CAS — no intent, fence, re-check or min).
 
 Why this is enough: the archiver *stores* `start_offset` and then *reads*
 the live headers; the appender *stores* its header and then *reads*
@@ -148,9 +169,10 @@ publish (`complete`) is the tail case: the completed batch is the lane's
 most recently started and every committed batch sits below it, so the
 boundary can never reach it and no check is needed — the fast path's batch
 form. The deferred commit (`commit_batch`, for staged batches) is
-membership-gated, rejects an offset below `start_offset` with
-`MMAPQ_EINVAL` (final — an overtaken batch can never become live), then
-publishes, fences, re-checks, and lowers exactly like the slow path above.
+membership-gated, then runs the CAND-54 sequence above (intent, pre-check
+against `max(start_offset, archive_offset)`, publish CAS, fence, re-check,
+min, clear last) — an overtaken batch returns `MMAPQ_EINVAL` (final — it
+can never become live).
 A running batch commit that raced an archive therefore never stays live
 below the boundary; one killed between its CAS and its re-check can (see
 Deleting files: the listing cap protects its file).
@@ -167,8 +189,9 @@ It never raises it.
 1. Search for the appender's own latest entry **only** in the live range
    (indices ≥ `start_index`).
 2. If found, walk forward from that payload to the end of the stream.
-3. If not found (or the queue is empty), walk forward from `start_offset`
-   to the end of the stream.
+3. If not found (or the queue is empty), walk forward from the archive
+   line — `max(start_offset, archive_offset)` (CAND-54 L(ii)) — to the
+   end of the stream.
 4. Start writing there.
 
 A position with no file yet, or beyond the end of a file, is the end of
@@ -182,18 +205,21 @@ over a longer one leaves stale bytes that a later recovery would misread.
 `archivable_files()` (taking `archive.lock` shared) lists:
 
 - header files wholly below `start_index`;
-- payload files of each appender wholly below its `start_offset`, capped
-  at the lowest live payload visible in the headers. A slow-path commit —
-  or a deferred batch commit — killed between its header CAS and its
-  boundary re-check leaves `start_offset` raised above a live payload
-  forever; the listing's live-header scan never lists below what it can
-  see is live.
+- payload files of each appender wholly below its per-lane deletion bound
+  `min(start_offset, live_floor, intent)` (CAND-54): the lane's
+  `start_offset`, capped at the lowest live payload visible in the headers
+  (`live_floor` — a slow-path commit, or a deferred batch commit, killed
+  between its header CAS and its boundary re-check leaves `start_offset`
+  raised above a live payload forever; the listing's live-header scan
+  never lists below what it can see is live), and capped at the lane's
+  commit intent while one is set (a file a stalled commit is about to
+  publish into is never listed).
 
 `reclaim_files()` re-lists through this same listing, so its re-check
 carries the cap too.
 
-The library path is **mark → wait → `reclaim_files(marks)`**. Mark the
-listed files, wait, then call `reclaim_files()`: it re-lists — completely,
+The library path is **mark → `reclaim_files(marks)`** — always safe. Mark
+the listed files, then call `reclaim_files()`: it re-lists — completely,
 growing its scratch listing until nothing is truncated — and unlinks the
 overlap in a single shared hold of `archive.lock`, so an undo (which takes
 the lock exclusively) cannot slip between the re-list and the unlink and
@@ -201,31 +227,26 @@ lose its restored files. Marks that dropped out of the re-list are
 skipped: they are live again (an undo ran before the hold) or already
 gone. A mark is a snapshot, not permission.
 
-**Do not delete immediately.** If you delete files yourself instead of
-calling `reclaim_files()`: mark the listed files, wait, then delete only
-the files that a fresh `archivable_files()` call — taken *after* the
-wait — still lists. The re-check is what closes I1's window: if a racing
-commit lowered `start_offset` after the first listing, its file drops out
-of the second. Additionally, no undo (`archive_up_to_index` to an index
-below `start_index`) may start between your second `archivable_files()`
-listing and your last `unlink()` of the files it returned. The wait before
-the second listing is still required. `reclaim_files()` enforces this for
-you by holding `archive.lock` shared across both steps.
+If you delete files yourself instead of calling `reclaim_files()`: the
+listed files are safe provided **no undo** (`archive_up_to_index` to an
+index below `start_index`) runs between your `archivable_files()` call and
+your last `unlink()` of the files it returned. An undo that ran *before*
+the call is harmless — the listing already reflects it.
 
-The wait has to outlast a writer's stall between its overtaken pre-check
-and its header CAS — the window in which an archive can publish past a
-commit that has already validated. That window contains a header-region
-wrap, which can block for up to the queue's mapping timeout (mapping a
-contended or not-yet-mapped region costs what a synchronous mmap costs,
-bounded by that timeout), plus the catch-up header scan on contention. So
-the wait must comfortably exceed the queue's mapping timeout, not merely
-scheduling delays — minutes, not milliseconds, for the default timeout.
-It does not cover a writer process stopped in that window (SIGSTOP, a
-debugger). Deletion safety in that window rests on callers following this
-protocol; the library does not enforce it. The listing cap (CAND-35)
-additionally covers a writer that dies after publishing its header
-(single-message and deferred batch commits alike); it does not shorten
-the wait for live writers.
+**There is no wait any more** (CAND-54, retiring the mark-wait-re-list
+protocol). Before CAND-54 the listing could name a file whose lane had a
+commit stalled between its overtaken pre-check and its header CAS, so
+callers had to wait out that window — minutes, because the window contains
+a header-region wrap bounded by the mapping timeout — and even then a
+writer *stopped* in the window (SIGSTOP, a debugger) was uncovered. The
+commit-intent protocol closes the window structurally: a slow-path commit
+stores its intent before the pre-check and clears it only after the header
+is published and the boundary repaired, and the listing bounds each lane
+at `min(start_offset, live_floor, intent)` — a file a stalled (or stopped)
+commit is about to publish into is never listed, with no timing
+assumption. The listing cap (CAND-35) additionally covers a writer that
+dies after publishing its header (single-message and deferred batch
+commits alike).
 
 Never truncate or rewrite a mapped file (see `persistence-contract.md`).
 Undo is possible only while the files it needs still exist.
@@ -234,16 +255,19 @@ Undo is possible only while the files it needs still exist.
 
 | Actor | Writes | Then reads |
 |---|---|---|
-| Archiver | `start_offset` (CAS from the snapshot, acq_rel), `start_index` | live headers (acquire, after a seq_cst fence) |
-| Appender, slow-path commit | header (CAS) | `start_offset` (acquire, after a seq_cst fence) |
-| Batch appender, deferred commit | header (CAS) | `start_offset` (acquire, after a seq_cst fence) |
-| `archivable_files` | — | `start_index`, `start_offset`, live headers (checked reads) — under the shared lock |
-| `reclaim_files` | unlinks marked ∩ re-listed files | `start_index`, `start_offset`, live headers (via the re-list) — under the shared lock, held across the unlink |
+| Archiver | `archive_offset` (seq_cst, **first** — CAND-54 L(iii)), then `start_offset` (CAS from the snapshot, seq_cst), `start_index` | live headers (acquire, after a seq_cst fence) |
+| Appender, slow-path commit | intent (seq_cst) → header (CAS) → min (if racing) → intent clear (release, last) | `start_offset` + `archive_offset` (seq_cst, pre-check); `start_offset` (acquire, after a seq_cst fence) |
+| Batch appender, deferred commit | same as the appender row | same as the appender row |
+| `archivable_files` | — | `start_index`; per lane `start_offset` then `commit_intent` (seq_cst); live headers (checked reads) — under the shared lock |
+| `reclaim_files` | unlinks marked ∩ re-listed files | via the re-list (same order) — under the shared lock, held across the unlink |
 
-The two seq_cst fences carry the argument; the accesses themselves need
-only release/acquire. Lowering is always an atomic-min loop; nothing stores
-a higher value except the archiver's publish in step 3, which is followed by
-the live pass.
+The two seq_cst fences carry the CAND-30 argument; CAND-54's commit-intent
+protocol adds its own order (the intent store, the pre-check loads, the
+archiver's line store and raise, and the lister's `start_offset`/intent
+loads are seq_cst — they participate in one total order; the litmus suite
+in `doc/model/litmus/` pins the orders that are load-bearing). Lowering is
+always an atomic-min loop; nothing stores a higher value except the
+archiver's publish in step 3, which is followed by the live pass.
 
 `archive.lock` is locked by inode. Deleting or recreating the queue
 directory while archivers or listers are open breaks exclusivity; recreate
@@ -274,17 +298,22 @@ Mixed C/Java queues are safe only when Java follows the same rules:
    position; publish; one pass over the live headers lowering it.
 3. Every archived header must reference a complete message.
 4. Undo: lower to the lowest restored position; never raise.
-5. Commit: fast path for the last appended offset; otherwise reject below
-   `start_offset`, CAS, fence, re-check, lower if needed. Batch queues:
-   the same at batch granularity — the one-call complete is the tail (no
-   check); the deferred batch commit is membership-gated, rejects below
-   `start_offset`, then CAS, fence, re-check, lower. (The current Java
-   batch appender has no commit validation at all; Java does not yet read
-   batch queues, so no mixed C/Java batch queue can exist.)
+5. Commit: fast path for the last appended offset; otherwise (archivable
+   queues) store the commit intent, reject below `max(start_offset,
+   archive_offset)` (CAND-54 L(i)), CAS, fence, re-check, lower if needed,
+   clear the intent last. Non-archivable queues keep the pre-CAND-54 shape
+   (reject below `start_offset`, CAS). Batch queues: the same at batch
+   granularity — the one-call complete is the tail (no check); the
+   deferred batch commit is membership-gated, then the same protocol.
+   (The current Java batch appender has no commit validation at all; Java
+   does not yet read batch queues, so no mixed C/Java batch queue can
+   exist.)
 6. Join: never read headers below `start_index`; with no own live entry,
-   walk from `start_offset` to the end of the stream; never write at it.
-7. Deletion: mark, wait, re-validate, delete — or the library reclaim call
-   where the implementation provides it.
+   walk from the archive line — `max(start_offset, archive_offset)`
+   (CAND-54 L(ii)) — to the end of the stream; never write at it.
+7. Deletion: mark, then the library reclaim call (no wait — CAND-54);
+   hand-deletion is safe provided no undo runs between the listing and
+   the last unlink.
 
 ## History
 

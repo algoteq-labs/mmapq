@@ -192,6 +192,9 @@ proof's count exactly.
 
 ## Counterexamples, in plain steps
 
+Historical: the deletion wait was retired by CAND-54 (`cand54l_*`); the
+CAND-35/36 narratives below record why it existed.
+
 Positions are lane-relative; "file 0" is positions 0–1. Every trace
 starts from an empty queue with appender 1 joined.
 

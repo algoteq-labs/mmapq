@@ -14,18 +14,18 @@
  * the entire batch (all messages) to find nextPayloadPosition, whereas the
  * normal archiver reads a single length field after the committed position.
  *
- * Physical reclamation follows mark -> wait -> reclaim: archivable_files()
- * returns the marks, the caller waits (outlasting a writer's commit/re-check
- * window), then reclaim_files() deletes the marks that a fresh COMPLETE
+ * Physical reclamation follows mark -> reclaim: archivable_files() returns
+ * the marks, then reclaim_files() deletes the marks that a fresh COMPLETE
  * listing still reports — the re-list and the unlink happen in a single
  * shared hold of archive.lock, so an undo cannot slip between them and lose
  * its restored files (CAND-36; see doc/archiving-design.md, "Deleting
- * files"). A mark is a snapshot, not permission. Callers who delete files
- * themselves instead of calling reclaim_files() must follow the same
- * mark/wait/re-list protocol by hand, and no undo (archive_up_to_index to
- * an index below start_index) may start between their second
- * archivable_files() listing and their last unlink() of the files it
- * returned.
+ * files"). There is no wait: CAND-54's commit-intent protocol bounds each
+ * lane's listing at min(start_offset, live-floor, intent), so a file a
+ * stalled commit is about to publish into is never listed. A mark is a
+ * snapshot, not permission. Callers who delete files themselves instead of
+ * calling reclaim_files() are safe provided no undo (archive_up_to_index
+ * to an index below start_index) runs between their archivable_files()
+ * call and their last unlink() of the files it returned.
  *
  * The payload boundary is computed from headers — the end of the archived
  * batch with the maximum payload position, lowered below any live batch
@@ -122,35 +122,30 @@ int64_t mmapq_indexed_batch_archiver_start_index(MmapqIndexedBatchArchiver *a);
  * Return the payload boundary for the given appender.
  *
  * start_offset is the per-appender deletion boundary: payload files wholly
- * below it may be reclaimed. It is also the anchor a joining appender with
- * no entry in the live range walks forward from to find the end of its
- * payload stream — it is NOT a write position. Returns 0 if the appender
- * ID is not used by this queue.
+ * below it may be reclaimed. A joining appender with no entry in the live
+ * range walks forward from the archive line — exactly max(start_offset,
+ * archive_offset) (CAND-54 L(ii); the line never moves back) — never from
+ * a write position. Returns 0 if the appender ID is not used by this
+ * queue.
  */
 int mmapq_indexed_batch_archiver_start_offset(
     MmapqIndexedBatchArchiver *a, uint8_t appender_id, int64_t *out_offset);
 
 /**
  * Populate @p paths_out with paths to files fully covered by the archive
- * boundary at the time of the call and safe to delete, move, or compress.
+ * boundary at the time of the call: files no live entry can need at the
+ * time of the call. Delete them with reclaim_files() (always safe). If
+ * you delete, move or compress them yourself, they are safe provided no
+ * undo (archive_up_to_index below the current start_index) runs between
+ * this call and your last unlink. An undo that ran before this call is
+ * harmless, because the listing already reflects it.
  *
  * Includes header_N and payload_N_M files whose entire range falls below
- * the current start_index / start_offset, the latter capped at the lowest
- * live payload visible in the headers (CAND-35 — batch commits never
- * touch start_offset, so a stale commit_batch strands the boundary with
- * no crash required). Only existing files are included.
- *
- * DELETION PROTOCOL: a listing is a snapshot, not permission. Mark the
- * listed files, wait, then delete only files that a fresh
- * archivable_files() call taken AFTER the wait still lists. The wait must
- * outlast a writer's stall between publishing a commit and its boundary
- * re-check — normally a few instructions, so seconds to minutes covers
- * preemption; it cannot cover a writer process stopped in that window
- * (SIGSTOP, a debugger). Deletion safety in that window rests on the
- * caller following this protocol; the library does not enforce it.
- * The listing cap additionally covers a writer that dies between
- * publishing its header and its re-check; it does not shorten the wait
- * for live writers.
+ * the current start_index / start_offset, the latter bounded by
+ * min(start_offset, live_floor, intent) per lane (CAND-35 + CAND-54 — a
+ * lane whose commit_batch is in flight is bounded by its stored intent;
+ * the pre-CAND-54 deletion wait is retired). Only existing files are
+ * included.
  * See doc/archiving-design.md.
  *
  * a:         the archiver
@@ -171,16 +166,16 @@ int mmapq_indexed_batch_archiver_archivable_files(
  * archivable listing, in a single shared hold of archive.lock (CAND-36).
  *
  * Batch twin of mmapq_indexed_archiver_reclaim_files — see
- * indexed_archiver.h for the full contract (mark -> wait -> reclaim; the
- * re-list and the unlink under one archive.lock SH hold so undo cannot
- * interleave; the wait is the caller's, before this call; skipped marks
- * are live again or already gone; ENOENT from a concurrent reclaimer is
- * tolerated, not counted). The re-list is capped at the lowest live
- * payload per lane exactly like archivable_files() (CAND-35) — the cap
- * is inherited through the shared listing code, and it does not shorten
- * the wait for live writers. Marks are matched by exact string comparison
- * against the fresh listing — pass the path strings exactly as
- * archivable_files() returned them (no relative paths, no patterns).
+ * indexed_archiver.h for the full contract (mark -> reclaim, always safe
+ * — CAND-54 retired the wait; the re-list and the unlink under one
+ * archive.lock SH hold so undo cannot interleave; skipped marks are live
+ * again or already gone; ENOENT from a concurrent reclaimer is tolerated,
+ * not counted). The re-list bounds each lane at min(start_offset,
+ * live_floor, intent) exactly like archivable_files() (CAND-35 +
+ * CAND-54) — inherited through the shared listing code. Marks are matched
+ * by exact string comparison against the fresh listing — pass the path
+ * strings exactly as archivable_files() returned them (no relative paths,
+ * no patterns).
  *
  * a:            the archiver
  * marked_paths: the marks — paths from an earlier archivable_files()

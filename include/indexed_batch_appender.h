@@ -228,7 +228,8 @@ int mmapq_mutable_batch_discard(MmapqMutableBatch *b);
  *         or MMAPQ_EINVAL if batch_offset is not outstanding (never staged
  *         by this incarnation, already committed, a discarded batch, above
  *         the last started batch) or has been overtaken by archiving (its
- *         position is below the appender's current start_offset),
+ *         position is below max(start_offset, archive_offset) — CAND-54
+ *         ruling 1: below the archive line is uncommittable),
  *         or MMAPQ_ECLOSED on a closed appender,
  *         or MMAPQ_ECORRUPT if the batch offset is outside the encodable
  *         56-bit field

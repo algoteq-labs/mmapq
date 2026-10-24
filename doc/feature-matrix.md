@@ -42,7 +42,7 @@ must not be interpreted as an existing queue's authoritative disk geometry.
 | Feature | C | Rust | Python |
 |---|---|---|---|
 | Atomic append-and-commit | ✓ | ✓ | ✓ |
-| Append uncommitted + explicit commit | ✓ | ✓ | ✓ |
+| Append uncommitted + explicit commit | ✓ (CAND-54: on archivable queues the overtaken pre-check floors at the archive line — EINVAL below it; tests `test_c54_l1_semantics_*` in `test/test_cand54_pins.c`) | ✓ | ✓ |
 | Appender with specific ID (single-message + batch) | ✓ | ✓ | ✓ |
 | Appender ID / current index / start offset accessors | ✓ | ✓ | ◐ id only |
 | Uncommitted payload iterator (recovery walk, archive line → end) | ✓ `mmapq_indexed_appender_uncommitted_iterator_checked` + `mmapq_uncommitted_iterator_next` in `src/indexed_appender.c`; test `test_uncommitted_iterator_finds_uncommitted` in `test/test_indexed_queue.c` | ✓ `uncommitted_iter` in `../mmapq-rs/src/appender.rs` + `UncommittedIter::next` in `../mmapq-rs/src/uncommitted.rs`; test `uncommitted_iter_finds_uncommitted` in `../mmapq-rs/tests/recovery.rs` | ✓ `uncommitted` in `../mmapq-py/src/mmapq/single_appender.py`; test `test_uncommitted_finds_uncommitted` in `../mmapq-py/tests/test_recovery.py` |
@@ -98,8 +98,8 @@ Regression: `../mmapq-py/tests/test_reader_borrowing.py`
 |---|---|---|---|
 | Archiver create / archivable check | ✓ | ✓ | — |
 | archive_up_to_index (advances start_index; returns `MMAPQ_EINVAL` on non-archivable) | ✓ | ✓ | — |
-| archivable_files (which files may be deleted; boundary capped at the lowest live payload visible in the headers) | ✓ `mmapq_indexed_archiver_archivable_files` + batch twin; tests `test_c35_*` | ✓ | — |
-| reclaim_files (mark → wait → reclaim; re-list + unlink in one `archive.lock` SH hold; re-list inherits the live-payload cap) | ✓ `mmapq_indexed_archiver_reclaim_files` + `mmapq_indexed_batch_archiver_reclaim_files`; tests `test_reclaim_*` (P1–P6) and `test_batch_reclaim_*` (B1–B6) | — | — |
+| archivable_files (which files may be deleted; per-lane bound min(start_offset, lowest live payload, commit intent); empty on non-archivable queues — CAND-54 §6(c)) | ✓ `mmapq_indexed_archiver_archivable_files` + batch twin; tests `test_c35_*`, `test_c54_refusal_*` | ✓ | — |
+| reclaim_files (mark → reclaim — the wait is retired (CAND-54); re-list + unlink in one `archive.lock` SH hold; re-list inherits the live-payload + intent bound; no-op on non-archivable queues — §6(c)) | ✓ `mmapq_indexed_archiver_reclaim_files` + `mmapq_indexed_batch_archiver_reclaim_files`; tests `test_reclaim_*` (P1–P6), `test_batch_reclaim_*` (B1–B6), `test_c54_refusal_*` | — | — |
 | print_summary | ✓ | ◐ single-message only (no batch C function) | — |
 | Batch archiver (archive/undo via `archive_up_to_index`; `archivable_files`; no `reclaim_files` binding in either wrapper) | ✓ `mmapq_indexed_batch_archiver_archive_up_to_index` + `mmapq_indexed_batch_archiver_archivable_files` in `src/indexed_batch_archiver.c`; tests `test_batch_archiver_*`, `test_batch_reclaim_*`, `test_c35_batch_*` in `test/test_indexed_batch_archiver.c` | ✓ `IndexedBatchArchiver::archive_up_to_index` + `archivable_files` in `../mmapq-rs/src/batch/batch_archiver.rs`; test `batch_archiver_forward_and_undo` in `../mmapq-rs/tests/recovery.rs` | ✓ `IndexedBatchArchiver.archive_up_to_index` + `archivable_files` in `../mmapq-py/src/mmapq/archiver.py`; tests `test_queue_scoped_batch_archiver_works` in `../mmapq-py/tests/test_queue.py`, `TestBatchC51bPins.test_batch_archiver_forward_and_undo` in `../mmapq-py/tests/test_recovery.py` |
 

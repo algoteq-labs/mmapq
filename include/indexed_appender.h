@@ -160,9 +160,11 @@ int64_t mmapq_indexed_appender_append_uncommitted(
  * or MMAPQ_EINVAL if a or payload_offset is NULL/invalid or not
  * outstanding: never written uncommitted by this incarnation, already
  * committed, mid-message, above the last written start, or overtaken by
- * archiving (a payload whose position is below the appender's current
- * start_offset can never become live — CAND-30; its file may already be
- * listed for reclamation). After a rejoin, offsets become committable by
+ * archiving (CAND-30; on archivable queues the pre-check floors at
+ * max(start_offset, archive_offset) — CAND-54 ruling 1: an uncommitted
+ * payload below the archive line can never become live, and its file may
+ * already be listed for reclamation). After a rejoin, offsets become
+ * committable by
  * running the uncommitted iterator (each yielded offset is refilled into
  * the outstanding set — see
  * mmapq_indexed_appender_uncommitted_iterator_checked).

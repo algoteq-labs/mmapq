@@ -344,14 +344,14 @@ payload position — undo never raises it.
 
 **Archivable file discovery** (`archivable_files()`):
 Returns the set of header and payload files fully covered by the current
-archive boundary at the time of the call. A listing is a snapshot, not
-permission: **mark the listed files, wait, then delete only files that a
-fresh call taken after the wait still lists.** The wait must outlast a
-writer's stall between publishing a commit and its boundary re-check —
-seconds to minutes covers preemption; a writer process stopped in exactly
-that window (SIGSTOP, a debugger) is not covered. Deletion safety in that
-window rests on the caller following this protocol; the library does not
-enforce it.
+archive boundary at the time of the call — files no live entry can need
+at that moment. Delete them with `reclaim_files()` (always safe). If you
+delete, move or compress them yourself, they are safe provided no undo
+(`archive_up_to_index` below the current `start_index`) runs between the
+listing call and your last unlink; an undo that ran before the call is
+harmless, because the listing already reflects it. There is no deletion
+wait: the commit-intent protocol (CAND-54) never lists a file a stalled —
+or stopped — commit is about to publish into.
 
 Archiving is serialised per queue on `archive.lock` (flock): archiving
 holds it exclusively and listing holds it shared, so a listing never
@@ -361,8 +361,8 @@ Typical usage in production:
 1. Hourly: call `archiveUpToIndex()` to log the archive boundary.
 2. Call `archivableFiles()` to list fully covered files; mark them.
 3. Upload those files to S3 or Glacier.
-4. Wait, re-list with a fresh `archivableFiles()` call, and delete local
-   copies only of files still listed.
+4. Delete the local copies with `reclaim_files()` (it re-lists and
+   unlinks the overlap in one `archive.lock` hold — always safe).
 
 ### Export / import (QueueTransfer)
 
@@ -464,6 +464,11 @@ set in the `appender_id_pool` file and re-acquisition is refused with
 releases a specific ID. It is a separate build that does not link
 libmmapq and never opens queue metadata — a damaged meta file does not
 prevent releasing a known ID.
+
+`--unset` is valid only when the process holding the ID is **dead**
+(owner ruling, CAND-50 item 1; CAND-54 §5): a SIGSTOPped live process
+plus `--unset` means two writers on the lane, and the single-writer
+guarantee — on which the whole commit-intent protocol rests — is void.
 
 ```sh
 make mmapq-ids

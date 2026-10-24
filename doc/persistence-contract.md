@@ -32,12 +32,14 @@ They do not provide power-loss-durable commit acknowledgments.
   committing it returns `MMAPQ_EINVAL` (append it again instead). This is
   what keeps reclamation safe under resequenced commits
   (`append_uncommitted` + `commit` in any order).
-- `archivable_files()` is a snapshot, not permission to delete. Mark the
-  listed files, wait, and delete only files that a fresh listing taken
-  after the wait still names. The wait must outlast a writer's stall
-  between publishing a commit and its boundary re-check; a writer process
-  stopped in that window (SIGSTOP, a debugger) is not covered. The library
-  does not enforce this protocol — deletion safety rests on the caller.
+- `archivable_files()` lists files no live entry can need at the time of
+  the call. Delete them with `reclaim_files()` (always safe). If you
+  delete, move or compress them yourself, they are safe provided no undo
+  (`archive_up_to_index` below the current `start_index`) runs between
+  this call and your last unlink. An undo that ran before this call is
+  harmless, because the listing already reflects it. (CAND-54 retired the
+  deletion wait: the commit-intent protocol never lists a file a stalled —
+  or stopped — commit is about to publish into.)
   See `archiving-design.md`.
 - `archive.lock` is locked by inode. Deleting or recreating the queue
   directory while an archiver or lister has it open lets two processes

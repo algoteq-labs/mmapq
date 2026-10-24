@@ -92,8 +92,12 @@ re-check lowers `start_offset` to 0:
   yielded again — **including after an undo or a rollback** (the line
   does not move back). Iterate (application recovery) before an archive
   passes your uncommitted messages.
-- Committing an offset the application holds is unaffected: `start_offset`
-  governs that path, and the commit slow path's checks are unchanged.
+- Committing an offset the application holds is governed by
+  `max(start_offset, archive_offset)` (CAND-54 ruling 1): an uncommitted
+  payload below the archive line is uncommittable (EINVAL) — the pre-CAND-54
+  rule ("commit governed by `start_offset` alone") let such a payload commit
+  while the iterator would never yield it after a restart. The commit slow
+  path's fence/re-check/min are unchanged (L(iv)).
 - **Aborted archive:** if an archive raises `archive_offset` but never
   publishes si (the archiver crashes between the two stores, or a
   rollback leaves si standing), uncommitted messages below the new line

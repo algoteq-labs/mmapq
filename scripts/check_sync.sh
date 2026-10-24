@@ -76,6 +76,61 @@ echo "PASS: doc/wire-format.md GENERATED constants block is current"
 # Verify every strdup() is followed by a NULL check
 bash mmapq/scripts/check_strdup_guards.sh
 
+# ── CAND-54 §6(a)/§6(b): grep-checked allowlists ────────────────────────────
+# §6(a): every start_offset writer in src/ is one of: the sanctioned
+# accessor bodies (internal/appender_meta.h), the creation init pwrite
+# (appender_meta.c), or these call sites — the archivers' forward publish
+# CAS, live-pass/rollback/undo mins, and the commit re-check mins (single +
+# batch). §6(b): payload-file deletion only via unlink() in the two
+# reclaim_files. A new writer or deleter fails the build. Counts are per
+# file, line-number-free; comments are excluded (lines whose first
+# non-whitespace token is *, /* or //).
+C54_COMMENT_RE='^[^:]+:[0-9]+:[[:space:]]*(\*|/\*|//)'
+
+C54_SO_WRITES=$(grep -rnE 'appender_meta_start_offset_(cas|min)\s*\(' \
+    mmapq/src --include='*.c' --include='*.h' \
+    | grep -vE "$C54_COMMENT_RE" \
+    | awk -F: '{print $1}' | sort | uniq -c | awk '{print $2 ":" $1}' \
+    | tr '\n' ' ' | sed 's/ $//')
+C54_SO_WRITERS_EXPECTED="mmapq/src/indexed_appender.c:1 mmapq/src/indexed_archiver.c:4 mmapq/src/indexed_batch_appender.c:1 mmapq/src/indexed_batch_archiver.c:4 mmapq/src/internal/appender_meta.h:2"
+if [ "$C54_SO_WRITES" != "$C54_SO_WRITERS_EXPECTED" ]; then
+    echo "ERROR: CAND-54 §6(a) start_offset-writer allowlist drifted" >&2
+    echo "  expected: $C54_SO_WRITERS_EXPECTED" >&2
+    echo "  actual:   $C54_SO_WRITES" >&2
+    exit 1
+fi
+# Every mention of the offset constant is allowlisted per file: the define +
+# the accessor bodies (appender_meta.h) and the creation init pwrite
+# (appender_meta.c). A raw atomic_store through the constant, or a new
+# accessor, is caught here even if it never calls the two accessors above.
+C54_SO_REFS=$(grep -rn 'APPENDER_META_START_OFFSET_OFFSET' \
+    mmapq/src --include='*.c' --include='*.h' \
+    | grep -vE "$C54_COMMENT_RE" \
+    | awk -F: '{print $1}' | sort | uniq -c | awk '{print $2 ":" $1}' \
+    | tr '\n' ' ' | sed 's/ $//')
+C54_SO_REFS_EXPECTED="mmapq/src/appender_meta.c:1 mmapq/src/internal/appender_meta.h:5"
+if [ "$C54_SO_REFS" != "$C54_SO_REFS_EXPECTED" ]; then
+    echo "ERROR: CAND-54 §6(a) start_offset offset-constant allowlist drifted" >&2
+    echo "  expected: $C54_SO_REFS_EXPECTED" >&2
+    echo "  actual:   $C54_SO_REFS" >&2
+    exit 1
+fi
+# §6(b): file-deletion/rename call sites (unlink/unlinkat/remove/rename/
+# renameat — a payload file can be "deleted" by any of them).
+C54_DELETES=$(grep -rnE '\b(unlink|unlinkat|remove|rename|renameat)\s*\(' \
+    mmapq/src --include='*.c' --include='*.h' \
+    | grep -vE "$C54_COMMENT_RE" \
+    | awk -F: '{print $1}' | sort | uniq -c | awk '{print $2 ":" $1}' \
+    | tr '\n' ' ' | sed 's/ $//')
+C54_DELETES_EXPECTED="mmapq/src/indexed_archiver.c:1 mmapq/src/indexed_batch_archiver.c:1"
+if [ "$C54_DELETES" != "$C54_DELETES_EXPECTED" ]; then
+    echo "ERROR: CAND-54 §6(b) payload-deletion allowlist drifted" >&2
+    echo "  expected: $C54_DELETES_EXPECTED" >&2
+    echo "  actual:   $C54_DELETES" >&2
+    exit 1
+fi
+echo "PASS: CAND-54 §6(a)/§6(b) writer/unlink allowlists current"
+
 # Verify every src/*.c appears in src/CMakeLists.txt's add_library list
 bash mmapq/scripts/check_cmake_sources.sh
 

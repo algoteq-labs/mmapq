@@ -92,6 +92,11 @@ returning incomplete information as success.
 - Only the selected bit is changed. A changed-bit success includes checked
   synchronous writeback, not a general power-loss durability guarantee for the
   queue or its filesystem. An unrelated queue-file change is never needed.
+- Release (`--unset` / `mmapq_appender_id_admin_release`) is valid only when
+  the process holding the ID is **dead** (owner ruling, CAND-50 item 1;
+  CAND-54 §5). A SIGSTOPped live process plus a release means two writers on
+  the lane: the single-writer guarantee — on which the queue library's
+  commit-intent protocol (CAND-54) rests — is void.
 
 This is manual ID administration, not automatic crash recovery or queue repair.
 PID ownership tracking, Rust/Python packages, and general queue verification are
