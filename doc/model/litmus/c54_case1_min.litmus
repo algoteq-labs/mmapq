@@ -1,0 +1,58 @@
+C c54_case1_min
+"CAND-54 spec 9.2, case 1 under amendment L — the suite's positive
+ case-1 test.  As c54_case1 plus the commit-min thread: P3 lowers
+ start_offset back below the raise (the hole-1/hole-2 root — a commit
+ min below the archived region), modelled by the code's operation: a
+ strong CAS, acq_rel success / acquire failure (a failed CAS means the
+ boundary is already lower — the safe direction).  The archiver stores
+ the line (seq_cst) BEFORE raising start_offset (L(iii)).  Here
+ start_offset is NOT monotone (the min lowers it) but the line is, so
+ the case-1 chain runs through the line: in the single total order S,
+   line-store < raise-so < lister so-load < lister intent-load
+     < committer intent-store < committer's two floor loads
+ and the committer's aoff load sees the raised line, so
+ max(so, aoff) >= the raise even when its so load reads the min's 64:
+ the commit refuses.  ('expected' is a shared location because herd7
+ litmus C has no address-of for locals; the CAS reads it
+ non-atomically, like the real thread-local cell, and nothing else
+ writes it.)
+ Forbidden: lister sees the raise AND reads the initial intent AND the
+ committer's floor loads are both below the raise."
+
+{
+ aoff = 64;
+ so = 64;
+ intent = 0;
+ expected = 128;
+}
+
+P0 (atomic_int *aoff, atomic_int *so)
+{
+  /* archiver: the line first (L(iii)), then the boundary raise */
+  atomic_store_explicit(aoff, 128, memory_order_seq_cst);
+  atomic_store_explicit(so, 128, memory_order_seq_cst);
+}
+
+P1 (atomic_int *so, atomic_int *aoff, atomic_int *intent)
+{
+  /* committer: intent store, then the pre-check's two floor loads */
+  atomic_store_explicit(intent, 96, memory_order_seq_cst);
+  int r0 = atomic_load_explicit(so, memory_order_seq_cst);
+  int r1 = atomic_load_explicit(aoff, memory_order_seq_cst);
+}
+
+P2 (atomic_int *so, atomic_int *intent)
+{
+  /* lister: start_offset load, then intent load */
+  int r2 = atomic_load_explicit(so, memory_order_seq_cst);
+  int r3 = atomic_load_explicit(intent, memory_order_seq_cst);
+}
+
+P3 (atomic_int *so, int *expected)
+{
+  /* commit min below the archived region: the code's acq_rel CAS */
+  atomic_compare_exchange_strong_explicit(so, expected, 64,
+      memory_order_acq_rel, memory_order_acquire);
+}
+
+exists (2:r2 = 128 /\ 2:r3 = 0 /\ 1:r0 = 64 /\ 1:r1 = 64)

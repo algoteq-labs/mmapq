@@ -1,14 +1,16 @@
 C c54_case1
-"CAND-54 spec 9.2, case 1, amendment-L form: the lister's intent load
- reads the INITIAL value.  All protocol locations are seq_cst; under
- L(iii) the archiver stores the archive line BEFORE raising
- start_offset, and under L(i) the pre-check loads both and compares
- against the max.  In the single total order S:
-   line-store < raise-so < lister so-load < lister intent-load
+"CAND-54 spec 9.2, case 1, PRE-L form — kept as the pre-L case-1
+ regression check.  The lister's intent load reads the INITIAL value;
+ all protocol locations are seq_cst.  start_offset is MONOTONE in this
+ test (no commit-min thread), so in the single total order S:
+   raise-so < lister so-load < lister intent-load
      < committer intent-store < committer's two floor loads
- so the committer's aoff load sees the raised line (monotone — no
- lowering ever touches it) and max(so, aoff) >= the raise: the commit
- refuses.
+ and the committer's so load sees the raise: the commit refuses.  With
+ so monotone this holds with the archiver's line store in EITHER order
+ (verified: the line-after-raise 3-thread form is also Never) — this
+ test does not pin L(iii).  The commit-min forms do:
+ c54_case1_min (line first, Never) and c54_case1_line_after_raise
+ (line after the raise, Sometimes) are the case-1 L(iii) pair.
  The raise CASes are modelled by their successful case (stores); a
  failed CAS means the boundary is already lower — the safe direction.
  Forbidden: lister sees the raise AND reads the initial intent AND the

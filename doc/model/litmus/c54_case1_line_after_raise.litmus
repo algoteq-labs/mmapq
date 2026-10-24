@@ -1,0 +1,54 @@
+C c54_case1_line_after_raise
+"CAND-54 spec 9.3 mutant: as c54_case1_min, but the archiver raises
+ start_offset BEFORE storing the archive line — the L(iii) order
+ inverted.  Everything else (the commit-min thread's strong acq_rel
+ CAS, all protocol locations seq_cst, the forbidden combination) is
+ unchanged.  The case-1 forbidden outcome must become allowed:
+ without the line-first drain, the committer's so load may read the
+ min's 64 AND its aoff load may precede the line store in S, so
+ max(so, aoff) stays below the raise and the overtaken commit is
+ accepted while the lister has already seen the raise and missed the
+ intent — demonstrating L(iii) is load-bearing in C11 once the commit
+ min makes start_offset non-monotone.  (The 3-thread form without the
+ min thread cannot show this: so is monotone in it and the so-load
+ chain alone forbids the outcome in either store order — the blindness
+ finding of spec 9.3.)  Expected: outcomes exist (herd7 reports the
+ condition as reachable)."
+
+{
+ aoff = 64;
+ so = 64;
+ intent = 0;
+ expected = 128;
+}
+
+P0 (atomic_int *aoff, atomic_int *so)
+{
+  /* mutant: the boundary raise FIRST, the line store second */
+  atomic_store_explicit(so, 128, memory_order_seq_cst);
+  atomic_store_explicit(aoff, 128, memory_order_seq_cst);
+}
+
+P1 (atomic_int *so, atomic_int *aoff, atomic_int *intent)
+{
+  /* committer: intent store, then the pre-check's two floor loads */
+  atomic_store_explicit(intent, 96, memory_order_seq_cst);
+  int r0 = atomic_load_explicit(so, memory_order_seq_cst);
+  int r1 = atomic_load_explicit(aoff, memory_order_seq_cst);
+}
+
+P2 (atomic_int *so, atomic_int *intent)
+{
+  /* lister: start_offset load, then intent load */
+  int r2 = atomic_load_explicit(so, memory_order_seq_cst);
+  int r3 = atomic_load_explicit(intent, memory_order_seq_cst);
+}
+
+P3 (atomic_int *so, int *expected)
+{
+  /* commit min below the archived region: the code's acq_rel CAS */
+  atomic_compare_exchange_strong_explicit(so, expected, 64,
+      memory_order_acq_rel, memory_order_acquire);
+}
+
+exists (2:r2 = 128 /\ 2:r3 = 0 /\ 1:r0 = 64 /\ 1:r1 = 64)

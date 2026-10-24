@@ -8,13 +8,23 @@
 # script exits non-zero on any mismatch.
 #
 #   c54_case1                  the forbidden combination is NEVER observed
+#                              (pre-L form: start_offset monotone — does
+#                              not pin L(iii); see the commit-min pair)
+#   c54_case1_min              NEVER — case 1 under L with the commit-min
+#                              thread (the suite's positive case-1 test)
 #   c54_case3                  NEVER
 #   c54_aba                    NEVER
 #   c54_linefirst              NEVER (L(iii): line visible before boundary)
 #   c54_case1_relaxed_store    observed (SOMETIMES) — the seq_cst intent
 #                              store is load-bearing
-#   c54_case3_relaxed_clear    observed (SOMETIMES) — the release clear
-#                              is load-bearing
+#   c54_case1_line_after_raise observed (SOMETIMES) — L(iii) (line first)
+#                              is load-bearing against the commit min
+#   c54_case3_relaxed_clear    NEVER — spec §9.2's double-synchronisation
+#                              finding: the CAND-30 seq_cst fence + the
+#                              lister's sc intent load already forbid the
+#                              outcome; the release clear is the second
+#                              synchronisation of the same obligation
+#                              (kept regardless)
 set -euo pipefail
 cd "$(dirname "$0")"
 HERD7="${HERD7:-herd7}"
@@ -40,9 +50,11 @@ check() { # name  expected(Never|Sometimes)
 }
 
 check c54_case1                 Never
+check c54_case1_min             Never
 check c54_case3                 Never
 check c54_aba                   Never
 check c54_linefirst             Never
 check c54_case1_relaxed_store   Sometimes
-check c54_case3_relaxed_clear   Sometimes
+check c54_case1_line_after_raise Sometimes
+check c54_case3_relaxed_clear   Never
 exit $fail
