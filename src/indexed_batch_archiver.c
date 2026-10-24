@@ -125,6 +125,8 @@ static void (*reclaim_pre_unlink_hook)(void);
 void mmapq_test_hook_set_batch_reclaim_pre_unlink(void (*fn)(void)) { reclaim_pre_unlink_hook = fn; }
 static int (*listing_scan_hook)(void);
 void mmapq_test_hook_set_batch_archiver_listing_scan(int (*fn)(void)) { listing_scan_hook = fn; }
+static void (*listing_pre_intent_hook)(void);
+void mmapq_test_hook_set_batch_archiver_listing_pre_intent(void (*fn)(void)) { listing_pre_intent_hook = fn; }
 #endif
 
 /* ── Factory ─────────────────────────────────────────────────────────────── */
@@ -255,20 +257,25 @@ static int archive_forward(MmapqIndexedBatchArchiver *a,
      * CAS can fail here (CAND-51b): commit_batch's re-check min can lower
      * start_offset between the snapshot and this publish — the lower value
      * then stands; the live pass and the min-based rollback only lower
-     * further. */
+     * further.
+     * CAND-54 L(iii): the archive line is stored (seq_cst) BEFORE the
+     * start_offset raise (seq_cst success) — start_offset <= the line at
+     * every state (the model's SoLeLine; see indexed_archiver.c's
+     * archive_forward_variable for the full rationale and the litmus
+     * pair). */
     for (int aid = 0; aid < MAX_APPENDERS; aid++) {
         if (ends[aid] == OFFSET_NOT_SET) continue;
         AppenderMeta *m = get_appender_meta(a, (uint8_t)aid);
         if (m == NULL) return MMAPQ_ECORRUPT;
-        if (ends[aid] > old[aid])
-            (void)appender_meta_start_offset_cas(m, old[aid], ends[aid]);
         /* CAND-49 §3.9 (D-G): the archive line takes the same candidate as
          * a max with its current value — never lowered, and nothing else
-         * ever writes it. Relaxed store: single writer under archive.lock
-         * EX (I6). Ordered before the si release store (see
+         * ever writes it. Single writer under archive.lock EX (I6).
+         * Ordered before the si release store (see
          * indexed_archiver.c's archive_forward_variable for the full
          * rationale; doc/design/archive-boundaries.md). */
         appender_meta_archive_offset_store(m, ends[aid]);
+        if (ends[aid] > old[aid])
+            (void)appender_meta_start_offset_cas(m, old[aid], ends[aid]);
     }
     queue_meta_set_start_index(rwm, index);
 
@@ -493,6 +500,29 @@ static int archivable_files_locked(
     int64_t headers_in_file = max_file_size / HEADER_SIZE;
     int     count = 0;
 
+    /* CAND-54 §2.3: per-lane start_offset loads, then the intent loads,
+     * then the live-header scan — the load-bearing reorder (spec §9.3's
+     * "headers scanned before intents" mutant); both loads seq_cst. See
+     * indexed_archiver.c for the full rationale. Lanes with a missing
+     * meta are marked OFFSET_NOT_SET and skipped in the payload listing,
+     * as before. */
+    uint8_t lane_ids[MAX_APPENDERS];
+    int64_t lane_so[MAX_APPENDERS];
+    int64_t lane_intent[MAX_APPENDERS];
+    int     n_lanes = mmapqi_queue_files_get_appender_ids(
+        a->directory, a->queue_name, lane_ids, MAX_APPENDERS);
+    for (int k = 0; k < n_lanes; k++) {
+        AppenderMeta *am = get_appender_meta(a, lane_ids[k]);
+        if (!am) { lane_so[k] = OFFSET_NOT_SET; continue; }
+        lane_so[k] = appender_meta_start_offset_sc(am);
+#ifdef MMAPQ_TEST_HOOKS
+        /* CAND-54 hole pins: park the lister between its start_offset
+         * load and its intent load */
+        if (listing_pre_intent_hook != NULL) listing_pre_intent_hook();
+#endif
+        lane_intent[k] = appender_meta_intent_load(am);
+    }
+
     /* CAND-35: cap each lane's deletable boundary at the lowest live
      * payload visible in the headers (the model's ListingLivePass) —
      * see indexed_archiver.c for the full rationale. The checked read is
@@ -540,22 +570,22 @@ static int archivable_files_locked(
     }
 
     /* Fully covered payload files per appender: byte range below the
-     * lane's start_offset capped at its lowest live payload (CAND-35) */
-    uint8_t ids[MAX_APPENDERS];
-    int n_ids = mmapqi_queue_files_get_appender_ids(
-        a->directory, a->queue_name, ids, MAX_APPENDERS);
-    for (int k = 0; k < n_ids && count < max_paths; k++) {
-        AppenderMeta *am = get_appender_meta(a, ids[k]);
-        if (!am) continue;
-        int64_t start_off    = appender_meta_start_offset(am);
-        if (live_floor[ids[k]] != OFFSET_NOT_SET &&
-            live_floor[ids[k]] < start_off)
-            start_off = live_floor[ids[k]];
+     * lane's deletion bound, min(start_offset, live_floor, inflight) —
+     * the CAND-35 live-floor cap plus the CAND-54 inflight term (a lane
+     * with a pending commit intent is capped at the intent's offset). */
+    for (int k = 0; k < n_lanes && count < max_paths; k++) {
+        if (lane_so[k] == OFFSET_NOT_SET) continue;   /* missing meta */
+        int64_t start_off    = lane_so[k];
+        if (live_floor[lane_ids[k]] != OFFSET_NOT_SET &&
+            live_floor[lane_ids[k]] < start_off)
+            start_off = live_floor[lane_ids[k]];
+        if (lane_intent[k] != 0 && lane_intent[k] < start_off)
+            start_off = lane_intent[k];
         int64_t full_payload = start_off / max_file_size;
         for (int64_t fi = 0; fi < full_payload && count < max_paths; fi++) {
             char path[4096];
             snprintf(path, sizeof(path), "%s/%s/payload_%u_%ld",
-                     a->directory, a->queue_name, (unsigned)ids[k], (long)fi);
+                     a->directory, a->queue_name, (unsigned)lane_ids[k], (long)fi);
             if (mmapqi_queue_file_exists(path)) {
                 paths_out[count] = strdup(path);
                 if (paths_out[count] == NULL) {
@@ -586,6 +616,14 @@ int mmapq_indexed_batch_archiver_archivable_files(
     if (lrc == MMAPQ_EINVAL) return 0;
     if (lrc != 0) return lrc;
 
+    /* CAND-54 §6(c): explicit refusal — a non-archivable queue lists
+     * nothing (see indexed_archiver.c for the rationale). */
+    QueueMeta *qm = ro_init(a);
+    if (qm != NULL && !queue_meta_archivable(qm)) {
+        close(lock_fd);
+        return 0;
+    }
+
     int n = archivable_files_locked(a, paths_out, max_paths);
     close(lock_fd);
     return n;
@@ -614,6 +652,15 @@ int mmapq_indexed_batch_archiver_reclaim_files(
                                           0, &lock_fd);
     if (lrc == MMAPQ_EINVAL) return 0;
     if (lrc != 0) return lrc;
+
+    /* CAND-54 §6(c): explicit refusal — a non-archivable queue reclaims
+     * nothing (the in-hold re-list shares archivable_files_locked, which
+     * no non-archivable listing reaches). */
+    QueueMeta *qm = ro_init(a);
+    if (qm != NULL && !queue_meta_archivable(qm)) {
+        close(lock_fd);
+        return 0;
+    }
 
     if (n_marked == 0) {
         close(lock_fd);

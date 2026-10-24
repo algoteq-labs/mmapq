@@ -66,6 +66,12 @@ struct MmapqIndexedAppender {
      * are unchanged. */
     OffsetSet            outstanding;
     int64_t              last_pending_offset;  /* PAYLOAD_ITERATOR_NOT_SET when none */
+
+    /* CAND-54: the queue's on-disk archivable flag, cached at open from
+     * the queue meta — NEVER the factory argument (a reopened queue keeps
+     * its on-disk value; the commit-intent protocol's branch must follow
+     * the disk, or a mismatched reopen silently drops the intent). */
+    int                  archivable;
 };
 
 /* ── Stream offset callbacks ─────────────────────────────────────────────── */
@@ -320,9 +326,12 @@ static int walk_payload_to_end(MmapqIndexedAppender *a, int64_t from,
      * file was never created read as ECORRUPT instead of EOS. The RW wrap is
      * size-checked and creates/extends the region (zeros -> EOS), matching
      * the batch twin's walk. It can never re-create a reclaimed file: the
-     * walk starts at this lane's last live header or at start_offset — never
-     * below the readability floor, while reclaimed files are wholly below it
-     * (the listing cap + the validated overlap in reclaim_files). */
+     * walk starts at this lane's last live header or at the join anchor
+     * max(start_offset, archive_line) (CAND-54 L(ii)) — reclaimed files
+     * are wholly below the archive line, and the line never moves back.
+     * (The pre-L argument anchored at start_offset; hole 1 of spec §7.1 —
+     * a commit min lowering start_offset into the reclaimed region after
+     * the reclaim — broke it.) */
     RegionAccessor *rw_payload = a->payload_acc;
     int64_t probing = from;
     while (1) {
@@ -348,6 +357,14 @@ static int walk_payload_to_end(MmapqIndexedAppender *a, int64_t from,
 
 static int initialise_append_position(MmapqIndexedAppender *a, int64_t start_index)
 {
+    /* CAND-54 ruling 2: the join clears a stale commit intent. A writer
+     * killed after its intent store would otherwise pin this lane's
+     * reclaim from the intent's file upward forever (the stated liveness
+     * cost). Safe here: one lane, one writer — the previous incarnation
+     * is gone by the appender-id-pool rule, so nothing in flight owns the
+     * slot. Harmless on non-archivable queues (the slot is never set). */
+    appender_meta_intent_clear(a->appender_meta);
+
     /*
      * Step 1: Use the stored RO accessor to find lastIndex via
      *         exponential+binary search. RO accessor allows non-sequential
@@ -369,9 +386,10 @@ static int initialise_append_position(MmapqIndexedAppender *a, int64_t start_ind
 
     if (last_index == HEADER_NULL_INDEX) {
         /* Queue is empty — start at the requested start_index; walk from
-         * start_offset to the end of stream (no file yet = the offset) */
+         * the join anchor to the end of stream (no file yet = the
+         * offset). */
         a->current_index = start_index;
-        int wrc = walk_payload_to_end(a, appender_meta_start_offset(a->appender_meta),
+        int wrc = walk_payload_to_end(a, appender_join_anchor(a->appender_meta),
                                       &a->current_payload_position);
         if (wrc != 0) return wrc;
     } else {
@@ -396,8 +414,9 @@ static int initialise_append_position(MmapqIndexedAppender *a, int64_t start_ind
 
         if (committed_payload_pos == PAYLOAD_ITERATOR_NOT_SET) {
             /* No committed entry in the live range for this appender —
-             * walk forward from start_offset to the end of the stream */
-            int wrc = walk_payload_to_end(a, appender_meta_start_offset(a->appender_meta),
+             * walk forward from the join anchor (CAND-54 L(ii)) to the
+             * end of the stream */
+            int wrc = walk_payload_to_end(a, appender_join_anchor(a->appender_meta),
                                           &a->current_payload_position);
             if (wrc != 0) return wrc;
         } else {
@@ -541,6 +560,7 @@ static int appender_create_internal(
     /* Adopt contractual parameters from meta */
     int32_t reconciled_region_size   = queue_meta_region_size(a->queue_meta);
     int64_t reconciled_max_file_size = queue_meta_max_file_size(a->queue_meta);
+    a->archivable = queue_meta_archivable(a->queue_meta);   /* CAND-54: on-disk value, never the argument */
 
     /* Open appender meta (creates file if new) */
     rc = mmapqi_appender_meta_open_rw(directory, queue_name, appender_id, &a->appender_meta);
@@ -784,11 +804,35 @@ int64_t mmapq_indexed_appender_commit(
         !mmapqi_offset_set_contains(&a->outstanding, payload_offset))
         return MMAPQ_EINVAL;
 
-    /* CAND-30 protocol UNCHANGED: pre-check, CAS, seq_cst fence, re-check,
-     * min; hooks commit_pre / commit_post_cas / commit_min_pre keep
-     * position. A payload overtaken by archiving can never become live —
-     * its file may already be listed. */
-    if (payload_offset < appender_meta_start_offset(a->appender_meta)) {
+    /* CAND-54 commit-intent protocol (spec §2.2), archivable queues only.
+     * archivable=0: membership gate + overtaken pre-check + CAS — nothing
+     * can raise the boundary or delete files, so the intent, fence,
+     * re-check and min are skipped (identical error behaviour; the
+     * pre-check keeps its single acquire load). The branch is on the flag
+     * cached at open from the queue meta — NEVER the factory argument
+     * (the mismatched-flag reopen pin). */
+    if (a->archivable) {
+        /* 1. intent store (seq_cst) — before the pre-check, so the
+         *    listing's inflight term covers the whole window */
+        appender_meta_intent_store(a->appender_meta, payload_offset);
+        /* 2. overtaken pre-check against max(start_offset, archive line)
+         *    (L(i): the line floors the pre-check — a commit min can lower
+         *    start_offset below the line, so start_offset alone is not
+         *    the floor); both loads seq_cst (spec §2.5) */
+        int64_t so   = appender_meta_start_offset_sc(a->appender_meta);
+        int64_t line = appender_meta_archive_offset_sc(a->appender_meta);
+        int64_t floor = so > line ? so : line;
+        if (payload_offset < floor) {
+            /* overtaken — final. Clear the intent first (release): a
+             * refused commit holds no claim, and a lingering intent would
+             * pin the lane's reclaim until the next slow commit or a
+             * join. */
+            appender_meta_intent_clear(a->appender_meta);
+            if (flagged) a->last_pending_offset = PAYLOAD_ITERATOR_NOT_SET;
+            else mmapqi_offset_set_remove(&a->outstanding, payload_offset);
+            return MMAPQ_EINVAL;
+        }
+    } else if (payload_offset < appender_meta_start_offset(a->appender_meta)) {
         /* overtaken — final: drop tracking (flag or set) */
         if (flagged) a->last_pending_offset = PAYLOAD_ITERATOR_NOT_SET;
         else mmapqi_offset_set_remove(&a->outstanding, payload_offset);
@@ -799,30 +843,46 @@ int64_t mmapq_indexed_appender_commit(
 #endif
     int64_t committed;
     int crc = commit_header(a, payload_offset, &committed);
-    if (crc != 0) return crc;
-    /* flag and set UNCHANGED on failure — a transient (ETIMEDOUT) failure
-     * is retryable (CAND-49 delta-review fix 1: clearing the flag before
-     * the CAS would make the retry EINVAL — neither flagged nor a member —
-     * and the payload committable again only after a re-scan). */
+    if (crc != 0) {
+        /* Publish failure: every failure return in commit_header precedes
+         * a successful CAS, so nothing was published — clear the intent
+         * (release). Leaving it set would pin the lane's reclaim for the
+         * life of a process that abandons the payload after a timeout —
+         * new behaviour versus today (ruling 2026-10-25). A retry stores
+         * it again. flag and set UNCHANGED — a transient (ETIMEDOUT)
+         * failure is retryable (CAND-49 delta-review fix 1: clearing the
+         * flag before the CAS would make the retry EINVAL — neither
+         * flagged nor a member — and the payload committable again only
+         * after a re-scan). */
+        if (a->archivable) appender_meta_intent_clear(a->appender_meta);
+        return crc;
+    }
 #ifdef MMAPQ_TEST_HOOKS
     /* CAND-35 pin: kill -9 between the CAS and the fence + re-check */
     if (commit_post_cas_hook) commit_post_cas_hook();
 #endif
-    /* Race with an archive that published a higher boundary between the
-     * pre-check and the CAS: the archiver stores start_offset, fences,
-     * then reads headers; this commit stored its header, fences, then
-     * reads start_offset — with seq_cst fences on both sides at least
-     * one side observes the other, so one of them lowers the boundary
-     * below this payload. */
-    atomic_thread_fence(memory_order_seq_cst);
-    if (payload_offset < appender_meta_start_offset(a->appender_meta)) {
+    if (a->archivable) {
+        /* Race with an archive that published a higher boundary between the
+         * pre-check and the CAS: the archiver stores start_offset, fences,
+         * then reads headers; this commit stored its header, fences, then
+         * reads start_offset — with seq_cst fences on both sides at least
+         * one side observes the other, so one of them lowers the boundary
+         * below this payload. */
+        atomic_thread_fence(memory_order_seq_cst);
+        if (payload_offset < appender_meta_start_offset(a->appender_meta)) {
 #ifdef MMAPQ_TEST_HOOKS
-        /* CAND-37 pin: hold the commit between the archiver's snapshot
-         * and its publish, just before the lowering min */
-        if (commit_min_pre_hook) commit_min_pre_hook();
+            /* CAND-37 pin: hold the commit between the archiver's snapshot
+             * and its publish, just before the lowering min */
+            if (commit_min_pre_hook) commit_min_pre_hook();
 #endif
-        /* lowers start_offset only; never archive_offset (CAND-49 §3.9) */
-        appender_meta_start_offset_min(a->appender_meta, payload_offset);
+            /* lowers start_offset only; never archive_offset (CAND-49 §3.9;
+             * CAND-54 L(iv): the min is UNCHANGED — it may lower
+             * start_offset below the line; the line is the floor) */
+            appender_meta_start_offset_min(a->appender_meta, payload_offset);
+        }
+        /* clear the intent (release) LAST — after the header is published
+         * and the boundary repair is done (spec §2.2) */
+        appender_meta_intent_clear(a->appender_meta);
     }
     if (flagged) a->last_pending_offset = PAYLOAD_ITERATOR_NOT_SET;
     else mmapqi_offset_set_remove(&a->outstanding, payload_offset);

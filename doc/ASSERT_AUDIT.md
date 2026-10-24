@@ -92,17 +92,17 @@ Lines 55. Internal dispatch fatal check (WRAP_UNWRAPPED in mmapqi_header_read).
 
 | Line | Disposition | Verified |
 |---|---|---|
-| 116 | I | ASSERT_HEADER_ALIGNED macro definition — counted per the wrapper-macro rule; its invocation is not a separate site. Platform/mapping alignment invariant. |
-| 127 | I | header_encode NULL_HEADER check — a non-positive on-disk start_offset is refused at appender_meta open (CAND-32 C1) before header_encode is reached. |
-| 129 | I | header_encode 56-bit field check — guarded by MMAPQ_ECORRUPT runtime checks at both append commit paths (indexed_appender.c commit_header, indexed_batch_appender.c commit_batch) and the appender_meta open-time start_offset validation (CAND-32). |
-| 207 | I | header_position: non-negativity of internally computed index. |
-| 230 | I | header_index: non-negativity of internally computed position. |
+| 136 | I | ASSERT_HEADER_ALIGNED macro definition — counted per the wrapper-macro rule; its invocation is not a separate site. Platform/mapping alignment invariant. |
+| 147 | I | header_encode NULL_HEADER check — a non-positive on-disk start_offset is refused at appender_meta open (CAND-32 C1) before header_encode is reached. |
+| 149 | I | header_encode 56-bit field check — guarded by MMAPQ_ECORRUPT runtime checks at both append commit paths (indexed_appender.c commit_header, indexed_batch_appender.c commit_batch) and the appender_meta open-time start_offset validation (CAND-32). |
+| 227 | I | header_position: non-negativity of internally computed index. |
+| 250 | I | header_index: non-negativity of internally computed position. |
 
 ### indexed_appender.c — 1 (V→I, Phase 6a)
 
 | Line | Disposition | Verified |
 |---|---|---|
-| 164 length + 4 > region_size | I | Phase 6a converted. Guarded by EINVAL checks at public entry points. (CAND-49: line moved, site unchanged.) |
+| 170 length + 4 > region_size | I | Phase 6a converted. Guarded by EINVAL checks at public entry points. (CAND-49: line moved, site unchanged; CAND-54: moved again by the archivable-field struct addition, site unchanged.) |
 
 ### indexed_poller.c — 1 (1 I)
 

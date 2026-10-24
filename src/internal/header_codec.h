@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <stdatomic.h>
 #include "mmap_assert.h"
 
 /**
@@ -86,6 +87,25 @@
 #define MMAPQI_HEADER_BLOCK_BYTES ((int64_t)(1 << HEADER_BLOCK_SIZE_BITS) * HEADER_SIZE)
 _Static_assert(MMAPQI_HEADER_BLOCK_BYTES == 32768,
     "header block must stay 32 KB — the archivers' file-contiguity assumption and the CAND-38 geometry rule depend on it");
+
+/* CAND-54 §8: cross-process C11 atomics on MAP_SHARED memory must be
+ * lock-free (ISO C11 does not specify cross-process atomics; mmapq relies
+ * on address-free lock-free atomics — true for GCC/Clang on x86-64/ARM64).
+ * The 64-bit group: the header slots (write CAS indexed_appender.c,
+ * indexed_batch_appender.c; reads there and header_reader.c,
+ * internal/header_reader.h), the appender-meta int64s (start_offset,
+ * archive_offset and — CAND-54 — the commit-intent slot,
+ * internal/appender_meta.h), queue_meta's start_index
+ * (internal/queue_meta.h) and the mapper pretouch CAS
+ * (file_mapper_single_rw.c). The 32-bit group: the appender-id-pool words
+ * (appender_id_pool.c; twin check tools/mmapq-ids/src/
+ * mmapq_appender_id_admin.c). No 16-bit atomic is shared through mappings
+ * (the int16 appender_id is pwrite-once at creation) — no 16-bit assert
+ * (owner ruling 2026-10-24). */
+_Static_assert(ATOMIC_LLONG_LOCK_FREE == 2,
+    "mmapq requires lock-free 64-bit atomics: header slots, appender-meta int64s (incl. the CAND-54 commit intent), queue_meta start_index, mapper pretouch");
+_Static_assert(ATOMIC_INT_LOCK_FREE == 2,
+    "mmapq requires lock-free 32-bit atomics: the appender-id-pool words");
 
 #define PAYLOAD_LENGTH_OFFSET    ((int32_t)0)
 #define PAYLOAD_LENGTH_SIZE      ((int32_t)4)

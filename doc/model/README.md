@@ -40,7 +40,7 @@ be narrowed to the pre-CAS window.
 
 | Actor | Model actions | Code |
 |---|---|---|
-| Appender join | `Join` (search own entry in live range, walk to end; "no file = end of stream") | join path in `indexed_appender.c` (`appender_start_of_stream`, `walk_payload_to_end`) |
+| Appender join | `Join` (search own entry in live range, walk to end; "no file = end of stream"). Under amendment L(ii) a join with no live entry anchors at `aoff`; the **code** anchors at `max(start_offset, archive_offset)` (`appender_join_anchor`, ruling 2026-10-25) — equal under `SoLeLine`, while the `start_offset` side preserves the CAND-32 corrupt-state refusal for states outside the invariant | join path in `indexed_appender.c` (`appender_join_anchor`, `walk_payload_to_end`) |
 | Append | `Append` = write, then `FastCommit` (header CAS) | `mmapq_indexed_appender_append` → `write_payload`, `commit_header` |
 | Uncommitted append | `AppendUncommitted` | `mmapq_indexed_appender_append_uncommitted` |
 | Commit | `Commit` picks fast path iff offset = last appended (`FastCommit`), else slow path: `SlowPreCheck` (load start_offset, EINVAL if below), `SlowCAS`, `SlowRecheck` (after seq_cst fence), `SlowMin` (atomic-min) | `mmapq_indexed_appender_commit` |

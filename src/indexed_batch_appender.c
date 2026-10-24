@@ -65,6 +65,11 @@ struct MmapqIndexedBatchAppender {
     int                  join_completed_flag;
     int64_t              join_completed_offset;
     MmapqUncommittedBatchIterator *uncommitted_batches;
+
+    /* CAND-54: the queue's on-disk archivable flag, cached at open from
+     * the queue meta — NEVER the factory argument (see the single-message
+     * twin in indexed_appender.c). */
+    int                  archivable;
 };
 
 /* §3.7 batch state machine values (batch_state). */
@@ -273,6 +278,10 @@ static int batch_appender_refill(void *ctx, int64_t off)
 
 static int initialise_append_position(MmapqIndexedBatchAppender *a, int64_t start_index)
 {
+    /* CAND-54 ruling 2: the join clears a stale commit intent (see the
+     * single-message twin in indexed_appender.c). */
+    appender_meta_intent_clear(a->appender_meta);
+
     RegionAccessor *ro_header = a->ro_header;
     Buffer         *ro_buf   = &a->ro_buf;
 
@@ -289,10 +298,11 @@ static int initialise_append_position(MmapqIndexedBatchAppender *a, int64_t star
 
     if (last_index == HEADER_NULL_INDEX) {
         a->current_index = start_index;
-        /* No live entry possible — skip from start_offset to the end of the
-         * stream rather than writing at it (CAND-30) */
+        /* No live entry possible — skip from the join anchor to the end
+         * of the stream rather than writing at it (CAND-30; CAND-54
+         * L(ii)) */
         int rc_skip = skip_to_end_of_stream(a,
-            appender_meta_start_offset(a->appender_meta),
+            appender_join_anchor(a->appender_meta),
             &a->current_payload_position);
         if (rc_skip != 0) return rc_skip;
     } else {
@@ -312,9 +322,10 @@ static int initialise_append_position(MmapqIndexedBatchAppender *a, int64_t star
             if (rc_scan != 0) return rc_scan;
         } else {
             /* No committed entry in the live range for this appender —
-             * skip forward from start_offset to the end of the stream */
+             * skip forward from the join anchor (CAND-54 L(ii)) to the
+             * end of the stream */
             int rc_skip = skip_to_end_of_stream(a,
-                appender_meta_start_offset(a->appender_meta),
+                appender_join_anchor(a->appender_meta),
                 &a->current_payload_position);
             if (rc_skip != 0) return rc_skip;
         }
@@ -374,6 +385,8 @@ static int batch_appender_create_internal(
     }
 
     int rc = mmapqi_queue_meta_open_rw(directory, queue_name, start_index, region_size, max_file_size, archivable, QUEUE_TYPE_BATCH, &a->queue_meta);
+    if (rc == 0)
+        a->archivable = queue_meta_archivable(a->queue_meta);   /* CAND-54: on-disk value, never the argument */
     if (rc != 0) {
         mmapqi_offset_set_destroy(&a->outstanding);
         mmapqi_appender_id_pool_release(a->id_pool, a->appender_id);
@@ -603,6 +616,10 @@ static int move_to_last_header(MmapqIndexedBatchAppender *a)
 #ifdef MMAPQ_TEST_HOOKS
 static void (*batch_commit_pre_publish_hook)(void);
 void mmapq_test_hook_set_batch_commit_pre_publish(void (*fn)(void)) { batch_commit_pre_publish_hook = fn; }
+static void (*batch_commit_post_cas_hook)(void);
+void mmapq_test_hook_set_batch_commit_post_cas(void (*fn)(void)) { batch_commit_post_cas_hook = fn; }
+static void (*batch_commit_min_pre_hook)(void);
+void mmapq_test_hook_set_batch_commit_min_pre(void (*fn)(void)) { batch_commit_min_pre_hook = fn; }
 #endif
 
 /* batch_publish — the encode + wrap + CAS + move_to_last_header body,
@@ -749,11 +766,34 @@ int64_t mmapq_indexed_batch_appender_commit_batch(MmapqIndexedBatchAppender *a, 
      * A batch commit racing an archive past the check is caught by the
      * re-check below (CAND-51b F-REC-1 — the CAND-30 protocol's batch form,
      * retiring the CAND-49 §4-item-5 carve-out); commit_batch is the cold
-     * path (§3.5), so complete and batch_publish stay fence-free. */
-    if (batch_offset != a->current_batch.batch_offset &&
-        batch_offset < appender_meta_start_offset(a->appender_meta)) {
-        mmapqi_offset_set_remove(&a->outstanding, batch_offset);
-        return MMAPQ_EINVAL;   /* overtaken — final */
+     * path (§3.5), so complete and batch_publish stay fence-free.
+     *
+     * CAND-54 (spec §2.2, the batch form by the same-protocol argument):
+     * archivable queues run the commit-intent protocol — intent store
+     * (seq_cst), pre-check against max(start_offset, archive line) (L(i)),
+     * publish CAS, fence, re-check, min (L(iv): unchanged), intent clear
+     * (release, LAST). archivable=0: membership gate + overtaken pre-check
+     * + CAS only (identical error behaviour; nothing can raise the
+     * boundary or delete files). The branch is on the on-disk flag cached
+     * at open — never the factory argument. */
+    int exempt = (batch_offset == a->current_batch.batch_offset);
+    if (!exempt) {
+        if (a->archivable) {
+            appender_meta_intent_store(a->appender_meta, batch_offset);
+            int64_t so   = appender_meta_start_offset_sc(a->appender_meta);
+            int64_t line = appender_meta_archive_offset_sc(a->appender_meta);
+            int64_t floor = so > line ? so : line;
+            if (batch_offset < floor) {
+                /* overtaken — final; clear the intent first (release): a
+                 * refused commit holds no claim */
+                appender_meta_intent_clear(a->appender_meta);
+                mmapqi_offset_set_remove(&a->outstanding, batch_offset);
+                return MMAPQ_EINVAL;
+            }
+        } else if (batch_offset < appender_meta_start_offset(a->appender_meta)) {
+            mmapqi_offset_set_remove(&a->outstanding, batch_offset);
+            return MMAPQ_EINVAL;   /* overtaken — final */
+        }
     }
 
 #ifdef MMAPQ_TEST_HOOKS
@@ -761,17 +801,45 @@ int64_t mmapq_indexed_batch_appender_commit_batch(MmapqIndexedBatchAppender *a, 
     if (batch_commit_pre_publish_hook) batch_commit_pre_publish_hook();
 #endif
     int64_t idx = batch_publish(a, batch_offset);
-    if (idx < 0) return idx;   /* publish failure — member retained, retryable */
-    /* Race with an archive that published a higher boundary between the
-     * pre-check and the CAS: the archiver stores start_offset, fences, then
-     * reads headers; this commit stored its header, fences, then reads
-     * start_offset — with seq_cst fences on both sides at least one side
-     * observes the other, so one of them lowers the boundary below this
-     * batch (the CAND-30 store-buffering argument, batch form). Lowers
-     * start_offset only; never archive_offset (CAND-49 §3.9). */
-    atomic_thread_fence(memory_order_seq_cst);
-    if (batch_offset < appender_meta_start_offset(a->appender_meta))
-        appender_meta_start_offset_min(a->appender_meta, batch_offset);
+    if (idx < 0) {
+        /* Publish failure — member retained, retryable. Nothing was
+         * published (every batch_publish failure precedes a successful
+         * CAS), so clear the intent (release): leaving it set would pin
+         * the lane's reclaim for a process that abandons the batch after
+         * a timeout (ruling 2026-10-25). A retry stores it again. The
+         * exempt current batch never stored one. */
+        if (a->archivable && !exempt)
+            appender_meta_intent_clear(a->appender_meta);
+        return idx;
+    }
+#ifdef MMAPQ_TEST_HOOKS
+    /* CAND-54 pin: kill -9 between the publish CAS and the fence +
+     * re-check (the single-message commit_post_cas pin's batch twin) */
+    if (batch_commit_post_cas_hook) batch_commit_post_cas_hook();
+#endif
+    if (a->archivable) {
+        /* Race with an archive that published a higher boundary between the
+         * pre-check and the CAS: the archiver stores start_offset, fences,
+         * then reads headers; this commit stored its header, fences, then
+         * reads start_offset — with seq_cst fences on both sides at least
+         * one side observes the other, so one of them lowers the boundary
+         * below this batch (the CAND-30 store-buffering argument, batch
+         * form). Lowers start_offset only; never archive_offset
+         * (CAND-49 §3.9). */
+        atomic_thread_fence(memory_order_seq_cst);
+        if (batch_offset < appender_meta_start_offset(a->appender_meta)) {
+#ifdef MMAPQ_TEST_HOOKS
+            /* CAND-54 pin: hold the commit just before the lowering min
+             * (the single-message commit_min_pre pin's batch twin) */
+            if (batch_commit_min_pre_hook) batch_commit_min_pre_hook();
+#endif
+            appender_meta_start_offset_min(a->appender_meta, batch_offset);
+        }
+        /* clear the intent (release) LAST — after the publish and the
+         * boundary repair (spec §2.2) */
+        if (!exempt)
+            appender_meta_intent_clear(a->appender_meta);
+    }
     mmapqi_offset_set_remove(&a->outstanding, batch_offset);
     return idx;
 }

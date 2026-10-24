@@ -56,12 +56,28 @@
  *   pin kill -9 the process mid-join-completion, before the count store
  *   (CAND-51e P8: crash-during-recovery; also what makes the early
  *   count-store mutation observable).
+ * batch_commit_post_cas / batch_commit_min_pre (CAND-54): the
+ *   commit_post_cas / commit_min_pre pins' batch twins — invoked in
+ *   commit_batch immediately after the publish CAS and immediately before
+ *   the re-check's lowering min. They exist so the batch hole pins can
+ *   drive the same CAS→archive→min interleaving as the single-message
+ *   pins (pre-CAND-54 parking pre-publish was the only option, which
+ *   leaves the file's deletion blocked by the parked commit's intent
+ *   post-fix and cannot reach the hole).
+ * archiver_listing_pre_intent / batch twin (CAND-54): invoked in
+ *   archivable_files_locked per lane, between the start_offset load and
+ *   the intent load — lets the hole pins drive the model's intra-lister
+ *   interleaving (re-list reads start_offset before the commit's min and
+ *   the intent after its clear), which is the only way the archived file
+ *   is legitimately deletable while a commit min is pending.
  */
 #ifdef MMAPQ_TEST_HOOKS
 void mmapq_test_hook_set_commit_pre(void (*fn)(void));
 void mmapq_test_hook_set_commit_min_pre(void (*fn)(void));
 void mmapq_test_hook_set_commit_post_cas(void (*fn)(void));
 void mmapq_test_hook_set_batch_commit_pre_publish(void (*fn)(void));
+void mmapq_test_hook_set_batch_commit_post_cas(void (*fn)(void));
+void mmapq_test_hook_set_batch_commit_min_pre(void (*fn)(void));
 void mmapq_test_hook_set_batch_recover_walk_step(void (*fn)(int walked));
 void mmapq_test_hook_set_archiver_live_pass(int (*fn)(void));
 void mmapq_test_hook_set_batch_archiver_live_pass(int (*fn)(void));
@@ -70,6 +86,8 @@ void mmapq_test_hook_set_reclaim_pre_unlink(void (*fn)(void));
 void mmapq_test_hook_set_batch_reclaim_pre_unlink(void (*fn)(void));
 void mmapq_test_hook_set_archiver_listing_scan(int (*fn)(void));
 void mmapq_test_hook_set_batch_archiver_listing_scan(int (*fn)(void));
+void mmapq_test_hook_set_archiver_listing_pre_intent(void (*fn)(void));
+void mmapq_test_hook_set_batch_archiver_listing_pre_intent(void (*fn)(void));
 void mmapq_test_hook_header_wrap_inject(int wrap_result);
 void mmapq_test_hook_set_page_size(long page_size);
 void mmapq_test_hook_set_appender_walk_result(int site, int32_t rc);
