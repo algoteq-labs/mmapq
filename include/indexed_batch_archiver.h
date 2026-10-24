@@ -20,7 +20,8 @@
  * shared hold of archive.lock, so an undo cannot slip between them and lose
  * its restored files (CAND-36; see doc/archiving-design.md, "Deleting
  * files"). There is no wait: CAND-54's commit-intent protocol bounds each
- * lane's listing at min(start_offset, live-floor, intent), so a file a
+ * lane's listing at the least of start_offset, the live floor and the
+ * intent, so a file a
  * stalled commit is about to publish into is never listed. A mark is a
  * snapshot, not permission. Callers who delete files themselves instead of
  * calling reclaim_files() are safe provided no undo (archive_up_to_index
@@ -123,9 +124,9 @@ int64_t mmapq_indexed_batch_archiver_start_index(MmapqIndexedBatchArchiver *a);
  *
  * start_offset is the per-appender deletion boundary: payload files wholly
  * below it may be reclaimed. A joining appender with no entry in the live
- * range walks forward from the archive line — exactly max(start_offset,
- * archive_offset) (CAND-54 L(ii); the line never moves back) — never from
- * a write position. Returns 0 if the appender ID is not used by this
+ * range walks forward from the archive line — exactly the larger of
+ * start_offset and the archive line (CAND-54 L(ii); the line never moves
+ * back) — never from a write position. Returns 0 if the appender ID is not used by this
  * queue.
  */
 int mmapq_indexed_batch_archiver_start_offset(
@@ -142,7 +143,8 @@ int mmapq_indexed_batch_archiver_start_offset(
  *
  * Includes header_N and payload_N_M files whose entire range falls below
  * the current start_index / start_offset, the latter bounded by
- * min(start_offset, live_floor, intent) per lane (CAND-35 + CAND-54 — a
+ * the least of start_offset, the live floor and the commit intent per
+ * lane (CAND-35 + CAND-54 — a
  * lane whose commit_batch is in flight is bounded by its stored intent;
  * the pre-CAND-54 deletion wait is retired). Only existing files are
  * included.
@@ -170,9 +172,9 @@ int mmapq_indexed_batch_archiver_archivable_files(
  * — CAND-54 retired the wait; the re-list and the unlink under one
  * archive.lock SH hold so undo cannot interleave; skipped marks are live
  * again or already gone; ENOENT from a concurrent reclaimer is tolerated,
- * not counted). The re-list bounds each lane at min(start_offset,
- * live_floor, intent) exactly like archivable_files() (CAND-35 +
- * CAND-54) — inherited through the shared listing code. Marks are matched
+ * not counted). The re-list bounds each lane at the least of
+ * start_offset, live_floor and the intent, exactly like
+ * archivable_files() (CAND-35 + CAND-54) — inherited through the shared listing code. Marks are matched
  * by exact string comparison against the fresh listing — pass the path
  * strings exactly as archivable_files() returned them (no relative paths,
  * no patterns).

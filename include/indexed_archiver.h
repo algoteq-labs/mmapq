@@ -18,7 +18,8 @@
  * shared hold of archive.lock, so an undo cannot slip between them and lose
  * its restored files (CAND-36; see doc/archiving-design.md, "Deleting
  * files"). There is no wait: CAND-54's commit-intent protocol bounds each
- * lane's listing at min(start_offset, live-floor, intent), so a file a
+ * lane's listing at the least of start_offset, the live floor and the
+ * intent, so a file a
  * stalled commit is about to publish into is never listed. A mark is a
  * snapshot, not permission. Callers who delete files themselves instead of
  * calling reclaim_files() are safe provided no undo (archive_up_to_index
@@ -135,9 +136,9 @@ int64_t mmapq_indexed_archiver_start_index(MmapqIndexedArchiver *a);
  *
  * start_offset is the per-appender deletion boundary: payload files wholly
  * below it may be reclaimed. A joining appender with no entry in the live
- * range walks forward from the archive line — exactly max(start_offset,
- * archive_offset) (CAND-54 L(ii); the line never moves back) — never from
- * a write position. Returns 0 if the appender ID is not used by this
+ * range walks forward from the archive line — exactly the larger of
+ * start_offset and the archive line (CAND-54 L(ii); the line never moves
+ * back) — never from a write position. Returns 0 if the appender ID is not used by this
  * queue.
  */
 int mmapq_indexed_archiver_start_offset(
@@ -154,8 +155,8 @@ int mmapq_indexed_archiver_start_offset(
  *
  * Includes header_N and payload_N_M files whose entire index / byte range
  * falls below the current start_index / start_offset respectively, the
- * latter bounded by min(start_offset, live_floor, intent) per lane
- * (CAND-35 + CAND-54): the live-header scan never lists below what it can
+ * latter bounded per lane by the least of start_offset, the live floor
+ * and the commit intent (CAND-35 + CAND-54): the live-header scan never lists below what it can
  * see is live, and a lane whose slow-path commit is in flight is bounded
  * by its stored intent — a file such a commit is about to publish into is
  * never listed, with no timing assumption (the pre-CAND-54 deletion wait
@@ -186,8 +187,9 @@ int mmapq_indexed_archiver_archivable_files(
  * exclusively) cannot slip between them and have its restored files
  * deleted. The re-list is complete: it grows until nothing was truncated,
  * so a mark whose files sort after other appenders' in the enumeration is
- * never starved. The re-list bounds each lane at min(start_offset,
- * live_floor, intent) exactly like archivable_files() (CAND-35 + CAND-54)
+ * never starved. The re-list bounds each lane at the least of
+ * start_offset, live_floor and the intent, exactly like
+ * archivable_files() (CAND-35 + CAND-54)
  * — inherited through the shared listing code.
  *
  * Marks that a fresh listing no longer reports are skipped — they are live
