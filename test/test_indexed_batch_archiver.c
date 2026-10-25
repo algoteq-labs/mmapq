@@ -604,6 +604,55 @@ void test_batch_appender_rejoin_after_payload_file_deleted(void)
     mmapq_indexed_batch_archiver_close(arch2);
 }
 
+/* DOC-01 W5 (ledger X7), batch twin of
+ * test_doc01_rejoin_after_reclaim_recreates_nothing: a plain rejoin after
+ * a library reclaim never re-creates the reclaimed file (the racing case
+ * is test_c54_hole1_batch).  Documentary contradiction; not fail-first. */
+void test_doc01_batch_rejoin_after_reclaim_recreates_nothing(void)
+{
+    char big[20000]; memset(big, 'Z', sizeof(big));
+
+    MmapqIndexedBatchAppender *a0 = tiny_archivable_batch_appender(0);
+    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a0);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(b, big, (int32_t)sizeof(big)));
+    TEST_ASSERT_EQUAL_INT(1, mmapq_mutable_batch_append(b, big, (int32_t)sizeof(big)));
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_mutable_batch_complete(b));
+    mmapq_indexed_batch_appender_close(a0);
+
+    MmapqIndexedBatchAppender *a1 = tiny_archivable_batch_appender(1);
+    TEST_ASSERT_EQUAL_INT64(1, commit_one_msg_batch(a1, "live", 4));
+    mmapq_indexed_batch_appender_close(a1);
+
+    MmapqIndexedBatchArchiver *arch = tiny_batch_archiver();
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_batch_archiver_archive_up_to_index(arch, 1));
+
+    char *paths[64] = {0};
+    int n = mmapq_indexed_batch_archiver_archivable_files(arch, paths, 64);
+    TEST_ASSERT_GREATER_OR_EQUAL(0, n);
+    int found = 0;
+    for (int i = 0; i < n; i++)
+        if (strstr(paths[i], "payload_0_0")) found = 1;
+    TEST_ASSERT_TRUE(found);
+    /* Reclaim through the library call (re-list + unlink in one hold). */
+    TEST_ASSERT_EQUAL_INT(n,
+        mmapq_indexed_batch_archiver_reclaim_files(arch, paths, n));
+    char reclaimed[512];
+    snprintf(reclaimed, sizeof(reclaimed), "%s/%s/payload_0_0", DIR, QUEUE);
+    TEST_ASSERT_EQUAL_INT(-1, access(reclaimed, F_OK));
+    for (int i = 0; i < n; i++) free(paths[i]);
+    mmapq_indexed_batch_archiver_close(arch);
+
+    /* Rejoin lane 0 (no live entry): the join anchors at
+     * max(start_offset, archive_offset) — never in the reclaimed file. */
+    MmapqIndexedBatchAppender *r1 = tiny_archivable_batch_appender(0);
+    TEST_ASSERT_EQUAL_INT64(2, commit_one_msg_batch(r1, "back", 4));
+    mmapq_indexed_batch_appender_close(r1);
+
+    /* The pin: the reclaimed file was not re-created. */
+    TEST_ASSERT_EQUAL_INT(-1, access(reclaimed, F_OK));
+}
+
 /* ── CAND-36 pins (batch twins of P1–P6): reclaim_files under archive.lock SH ── */
 /* Batch geometry: a one-message batch is a 4-byte count field followed by
  * the message under the appender's padding rule at region == file ==
@@ -1499,6 +1548,7 @@ int main(void)
     RUN_TEST(test_batch_appender_rejoin_over_abandoned_batch);
     RUN_TEST(test_batch_archiver_in_order_boundary_unchanged);
     RUN_TEST(test_batch_appender_rejoin_after_payload_file_deleted);
+    RUN_TEST(test_doc01_batch_rejoin_after_reclaim_recreates_nothing);
 
     /* CAND-36 pins (batch) */
     RUN_TEST(test_batch_reclaim_deletes_only_marked_still_archivable);

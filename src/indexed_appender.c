@@ -293,14 +293,20 @@ static __attribute__((always_inline)) inline int commit_header(MmapqIndexedAppen
 
 /* ── Initialise append position after (re)start ──────────────────────────── */
 
-/* Walk forward from `from` to the end of the payload stream, read-only and
- * never creating files (CAND-30, I5: a joining appender never writes at
- * start_offset — bytes there may belong to a dead payload, and writing a
- * shorter message over a longer one leaves stale bytes a later recovery
- * would misread). A position with no file yet, or beyond a file's end, is
- * the end of the stream. The pre-wrap is required: post-D8 the walk maps a
- * missing or too-short file at a wrap site to MMAPQ_ECORRUPT (F1) — only
- * this pre-wrap makes "no file" the end of the stream here. */
+/* Walk forward from `from` to the end of the payload stream. The walk
+ * uses the writer's RW payload accessor (CAND-51e, below): it may extend
+ * a region file at a wrap site, but it never RE-CREATES a reclaimed file,
+ * because it starts at or above the readability floor
+ * max(start_offset, archive_offset) (CAND-54 L(ii)) — files below the
+ * floor are never probed (pinned by test_c54_hole1_single and
+ * test_doc01_rejoin_after_reclaim_recreates_nothing). It never writes at
+ * start_offset (CAND-30, I5: bytes there may belong to a dead payload,
+ * and writing a shorter message over a longer one leaves stale bytes a
+ * later recovery would misread). A position with no file yet, or beyond a
+ * file's end, is the end of the stream. The pre-wrap is required:
+ * post-D8 the walk maps a missing or too-short file at a wrap site to
+ * MMAPQ_ECORRUPT (F1) — only this pre-wrap makes "no file" the end of the
+ * stream here. */
 #ifdef MMAPQ_TEST_HOOKS
 static int     appender_walk_site = -1;
 static int32_t appender_walk_rc;

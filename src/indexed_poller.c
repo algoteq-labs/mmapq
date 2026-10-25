@@ -138,9 +138,11 @@ MmapqPollResult mmapq_indexed_poller_poll(
         return MMAPQ_POLL_ERROR;
     }
 
-    /* 
-     * Optimisation: non-archivable queues always start at 0.
-     * Caching this check saves overhead in the hot loop.
+    /*
+     * Optimisation: a non-archivable queue's start_index is fixed at
+     * creation (it may be non-zero, e.g. a PRESERVE-mode transfer
+     * destination), so for them this check reads a value that never
+     * moves — caching it saves overhead in the hot loop.
      */
     if (p->queue_meta->archivable) {
         int64_t start_index = queue_meta_start_index(p->queue_meta);

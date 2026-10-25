@@ -160,7 +160,7 @@ int mmapq_indexed_poller_move_to_start(MmapqIndexedPoller *p);
 int64_t mmapq_indexed_poller_current_index(const MmapqIndexedPoller *p);
 
 /**
- * mmapq_indexed_poller_start_index — lowest readable index (0 if not archivable).
+ * mmapq_indexed_poller_start_index — lowest readable index (fixed at creation for non-archivable queues — may be non-zero, e.g. a PRESERVE-mode transfer destination).
  */
 int64_t mmapq_indexed_poller_start_index(MmapqIndexedPoller *p);
 

@@ -36,9 +36,18 @@ mean only padding, because an open batch's count slot is also zero and
 recovery could not tell them apart (the rejoin wedge found by the
 crash-composition suite). Wire-format details: `doc/wire-format.md`.
 
+**Schema version rule (0.2.0):** schema 2 is a protocol contract, not just
+a layout — the wire format plus the geometry rule, the unified tail rule,
+the archive-line/intent write rules, the commit slow path, the
+archiver/lister rules, the join anchor, and the ID-lease precondition
+(contract C0–C7 in `doc/wire-format.md`). An implementation may write
+schema 2 only if it implements the whole contract. Any later change to
+the contract is a schema bump — never a silent semantic change under the
+same version.
+
 ### Rationale
 We deliberately avoided 8-byte message alignment (which would require a `[length][reserved]` 8-byte header and trailing padding).
-1.  **Binary Compatibility**: Single-message queues are compatible with Algoteq's evolved Java implementation, not upstream `tools4j/mmap`. Java does not yet read mmapq batch queues.
+1.  **Binary Compatibility**: the file format derives from Algoteq's evolved Java implementation, not upstream `tools4j/mmap`. Not supported in 0.2.0: Java-written queues are refused at open (schema_version 1); planned at schema 2. See README.
 2.  **Memory Density**: No wasted padding bytes between small messages.
 
 ### The "C Rule" for Payloads

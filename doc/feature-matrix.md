@@ -3,10 +3,13 @@
 Feature coverage across the three repositories as of the archivable commit
 (feature freeze). Legend: ✓ full · ◐ partial (see note) · — not exposed.
 
-**Compatibility scope:** all three implementations target the wire format
-of Algoteq's Java implementation — an evolved derivative of
+**Compatibility scope:** all three implementations' file format derives
+from Algoteq's Java implementation — an evolved derivative of
 [tools4j/mmap](https://github.com/tools4j/mmap). The formats have
 diverged; these libraries are NOT compatible with upstream tools4j.
+Sharing queues with Java is not supported in 0.2.0: Java-written queues
+are refused at open (schema_version 1); planned at schema 2, under the
+same protocol contract (see `wire-format.md`).
 
 The C library is the complete surface and the source of truth. Rust exposes
 near-complete parity. **Python deliberately exposes the producer/consumer
@@ -118,7 +121,7 @@ Regression: `../mmapq-py/tests/test_reader_borrowing.py`
 
 | Guarantee | Status |
 |---|---|
-| Wire compatibility with Algoteq's Java implementation (tools4j-derived; NOT compatible with upstream tools4j — formats have diverged) | ✓ by construction, single-message queues; batch queues are C-ecosystem only |
+| Java queue sharing | Not supported in 0.2.0: Java-written queues are refused at open (schema_version 1), both queue types — pinned by `test_doc01_schema1_refused_{ro,rw}{,_batch}` (`test_queue_meta.c`); planned at schema 2, under the same protocol contract |
 | Up to 256 concurrent appenders, lock-free atomic per-message commit | ✓ |
 | Distinct error codes: `ETIMEDOUT/EINVAL/ECLOSED/ECORRUPT/ESCHEMA/EEXIST/ENOENT/EIDCONFLICT/ENOMEM/EIO/ENOTREADY/ECALLBACK` mapped 1:1 — Rust `MmapError` variants, Python exception classes | ✓ |
 | Factory functions return `int` (0 success, negative `MMAPQ_*` error code) with `**out` parameter instead of raw pointer | ✓ |

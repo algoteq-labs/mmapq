@@ -168,7 +168,9 @@ int mmapq_indexed_queue_create_appender_with_id(
 /**
  * mmapq_indexed_queue_create_poller — create a new sequential poller.
  *
- * The poller starts at the queue's current start_index (0 for non-archivable).
+ * The poller starts at the queue's current start_index (fixed at creation
+ * for non-archivable queues — non-zero is possible, e.g. a PRESERVE-mode
+ * transfer destination).
  * Close with mmapq_indexed_poller_close() before mmapq_indexed_queue_close().
  *
  * q:   the queue (must not be closed)

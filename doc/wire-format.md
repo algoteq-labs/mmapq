@@ -10,9 +10,17 @@ The authoritative implementation lives in the source distribution at
 from those headers by `scripts/gen_wire_format.sh` — they cannot drift from
 the implementation.
 
-The format is **frozen**. Files written today remain readable by every future
-version. Do not change any offset, size, framing rule, or alignment contract
-in this document; a change here is a binary-incompatible break.
+**Versioned compatibility.** The wire format is frozen within a schema
+version. 0.2.0 writes `schema_version=2` and refuses 0.1.0 files
+(`schema_version=1`) at open with `MMAPQ_ESCHEMA`: 0.2.0 changed what
+0.1.0 files mean and accept (the archive-line field, the geometry rule,
+the unified tail rule). To move 0.1.0 data forward, export with a 0.1.0
+library and import into a fresh 0.2.0 queue — the export stream format is
+unchanged. Each release states the schema versions it reads; a file of any
+other version is refused at open with `MMAPQ_ESCHEMA`. A version change is
+always a clean refusal, never a silent misread. Do not change any offset,
+size, framing rule, or alignment contract in this document; a change here
+is a binary-incompatible break.
 
 ## Storage layout
 
@@ -106,8 +114,8 @@ region, skip to the next region. A message keeps its length and payload in
 one region; a batch count slot could fit in exactly 4 bytes but
 deliberately does not use them — four zero bytes at a region end must mean
 only padding, because an open batch's count slot is also zero and recovery
-could not tell them apart. (Pre-0.2.0 change; the batch format is
-unreleased — recreate queues.)
+could not tell them apart. (0.2.0 change — the batch format WAS released
+in 0.1.0; pre-0.2.0 queues are refused at open via `schema_version`.)
 
 ### Alignment contract
 
@@ -150,7 +158,7 @@ PAYLOAD_DATA_OFFSET=4
 INITIAL_PAYLOAD_POSITION=64
 MAX_APPENDER_ID=255
 MAX_APPENDERS=256
-QUEUE_META_SCHEMA_VERSION=1
+QUEUE_META_SCHEMA_VERSION=2
 QUEUE_META_INITIAL_START_INDEX=0
 QUEUE_META_ENCODED_LENGTH=64
 QUEUE_TYPE_NORMAL=0
@@ -163,3 +171,44 @@ QUEUE_META_MAX_FILE_SIZE_OFFSET=16
 QUEUE_META_ARCHIVABLE_OFFSET=24
 QUEUE_META_QUEUE_TYPE_OFFSET=25
 <!-- /GENERATED -->
+
+## Schema version 2 — the protocol contract
+
+**0.2.0 reads and writes schema 2 only.** Schema 2 is a protocol contract,
+not just a layout: the byte-level format in this document (C0) plus the
+protocol rules C1–C7. An implementation may write `schema_version=2` only
+if it implements the whole contract. Any later change to the contract is a
+schema bump.
+
+- **C0 — the wire format in this document:** the 8-bit appender-id +
+  56-bit position header encoding; payload framing (`[int32 length]`
+  `[payload]`, zero length = end-of-stream sentinel, negative = long
+  padding); the padding markers; the meta layouts (queue meta 64 B here;
+  appender meta 64 B in `src/internal/appender_meta.h`).
+- **C1 — geometry (CAND-38):** `region_size` a power of two, a multiple of
+  32 KB (one transposed header block) and a multiple of the host page
+  size; `max_file_size` a multiple of `region_size`; pre-rule geometry is
+  refused with `MMAPQ_ESCHEMA`.
+- **C2 — the unified ≤ 4 tail rule (CAND-51e):** with ≤ 4 bytes left in a
+  region, skip to the next region; four zero bytes at a region end mean
+  only padding.
+- **C3 — appender meta `archive_offset` (byte 16) and `commit_intent`
+  (byte 24), with their write rules:** the archiver stores the line
+  (seq_cst) BEFORE the raise; a slow-path commit stores its intent
+  (seq_cst) before the pre-check and clears it (release) LAST — also on
+  refusal and on publish failure; a join clears a stale intent.
+- **C4 — the commit slow path:** pre-check against
+  `max(start_offset, archive_offset)` → header CAS (acq_rel) → seq_cst
+  fence → re-check → atomic-min lowering. Non-archivable queues:
+  membership gate + pre-check + CAS only.
+- **C5 — archiver and lister:** publish by CAS from the snapshot; the
+  per-lane listing bound is `min(start_offset, live_floor, intent)` from
+  the live-header scan; the listing loads `start_offset`, then the
+  intents, then scans; reclaim re-lists and unlinks in one `archive.lock`
+  shared hold.
+- **C6 — join:** never write over existing bytes; never read headers
+  below `start_index`; a no-live-entry join anchors at
+  `max(start_offset, archive_offset)` and clears a stale intent.
+- **C7 — appender-ID lease:** a SIGKILLed writer's lane stays occupied
+  (`MMAPQ_EIDCONFLICT`); release only via `mmapq-ids --unset`, valid only
+  when the holding process is dead.

@@ -18,21 +18,29 @@ What you get:
   (or until you archive them); readers can seek, tail, or re-read from zero.
   Replay is the same mechanism as recovery and replication
 - **Up to 256 concurrent writers**, lock-free, each message committed by a
-  single atomic operation — no torn reads, no partial messages, ever
+  single atomic operation — no committed message is ever torn or partial;
+  after a crash, a lane's last *uncommitted* record may be (see the crash
+  caveats on `append_uncommitted` and the uncommitted iterator)
 - **Batch queues with atomic multi-message commit** — append N messages,
   commit once; consumers never observe a partial batch. This is a
   transaction boundary, designed for command → event-batch architectures
 - **Crash-safe by construction** — a killed producer loses only its
-  uncommitted tail; recovery is a deterministic scan, not a repair
+  uncommitted tail; recovery is a deterministic scan, not a repair. A
+  SIGKILLed producer's lane stays occupied; an operator releases it with
+  `mmapq-ids --unset`, valid only when the process is dead (see Appender
+  ID inspection and manual release)
 - **No infrastructure** — two processes and a directory. No media driver,
   no broker, no background daemon required (an optional in-process mapper
   thread hides mmap latency)
-- **Wire-compatible with Algoteq's Java implementation** (an evolved
+- **File format derived from Algoteq's Java implementation** (an evolved
   derivative of [tools4j/mmap](https://github.com/tools4j/mmap); not
-  compatible with upstream tools4j — the formats have diverged). The same
-  queue files can be written from C and read from Java, and vice versa —
-  which makes migrating a Java system to C or Rust possible one process at
-  a time, over a live queue
+  compatible with upstream tools4j — the formats have diverged). In 0.2.0,
+  C, Rust and Python do not share queues with Java: 0.2.0 refuses
+  Java-written queues at open (schema_version 1), and the Java
+  implementation does not yet follow the 0.2.0 protocol (for example, it
+  does not maintain the archive line). This applies to both queue types.
+  Read Java-written queues with the Java library. Java support is planned
+  at schema 2, under the same protocol contract (see `doc/wire-format.md`)
 
 Rust and Python bindings live in the companion repositories `mmapq-rs` and
 `mmapq-py`; see `doc/feature-matrix.md` for exact coverage per language.
@@ -55,8 +63,9 @@ avoid it. Honest edges:
 **Use mmapq when** you need same-host inter-process messaging where the
 history matters: event-sourced services, sequenced order/command flow,
 market-data capture, sensor/telemetry logs that a second process analyses,
-replay-based testing and debugging, or a migration bridge between a Java
-system and C/Rust/Python processes sharing one queue.
+replay-based testing and debugging, or a migration bridge from a Java
+system to C/Rust/Python (via export/import — not by sharing a live queue;
+Java interop is not supported in 0.2.0).
 
 **Use something else when:**
 
@@ -85,8 +94,16 @@ under the exact release flags that ship.
 The feature set and the on-disk format are **frozen**. This is a design
 position, not a maturity disclaimer:
 
-- The wire format never changes. Queue files written today remain readable
-  by every future version. The format is specified in `doc/wire-format.md`
+- **Versioned compatibility.** The wire format is frozen within a schema
+  version. 0.2.0 writes `schema_version=2` and refuses 0.1.0 files
+  (`schema_version=1`) at open with `MMAPQ_ESCHEMA`: 0.2.0 changed what
+  0.1.0 files mean and accept (the archive-line field, the geometry rule,
+  the unified tail rule). To move 0.1.0 data forward, export with a 0.1.0
+  library and import into a fresh 0.2.0 queue — the export stream format
+  is unchanged. Each release states the schema versions it reads; a file
+  of any other version is refused at open with `MMAPQ_ESCHEMA`. A version
+  change is always a clean refusal, never a silent misread. The format is
+  specified in `doc/wire-format.md`
   (installed with the library at `share/doc/mmapq/wire-format.md`); the
   authoritative implementation lives in the source distribution at
   `src/internal/header_codec.h` and `src/internal/queue_meta.h`.
@@ -266,9 +283,9 @@ across different cache lines (512 byte stride).
 | **Appender** | A writer. Appends messages to a per-appender payload file and commits an 8-byte header atomically via CAS. Up to 256 concurrent appenders per queue. |
 | **Poller** | A sequential consumer. Reads headers in index order, follows the payload pointer, and delivers messages to a callback. |
 | **Reader** | A random-access consumer. Reads any entry by index without advancing a cursor. |
-| **MmapqRuntime** | A background thread that maps/unmaps file regions ahead of the hot loop. Absorbs `ftruncate`, page-zeroing, and `MAP_POPULATE` costs so the hot thread never stalls. |
+| **MmapqRuntime** | A background thread that maps/unmaps file regions ahead of the hot loop. Absorbs `ftruncate`, page-zeroing, and `MAP_POPULATE` costs so the hot thread normally doesn't stall; a header- or payload-region wrap can block up to the queue's mapping timeout. |
 | **Single-message queue** | One header commit per message. Maximum throughput for large messages, minimum overhead per message. |
-| **Batch queue** | Groups N messages under one header commit. Higher throughput for small messages (fewer CAS operations). Wire-format compatible with the Java batch queue. |
+| **Batch queue** | Groups N messages under one header commit. Higher throughput for small messages (fewer CAS operations). Not supported with Java in 0.2.0: Java-written queues are refused at open (schema_version 1); planned at schema 2. |
 | **Deferred commit** | Append payload without committing the header. Commit later, possibly in a different order. Useful for UDP resequencing or pipelined writes. |
 | **Mixed MmapqRuntime** | Use separate runtimes for writing (async) and reading (sync). The writer offloads `ftruncate` to a background thread; the reader runs without any background interference for minimum latency. |
 
@@ -488,11 +505,15 @@ After release, a restarted writer re-acquires its lane with
 `mmapq_indexed_queue_create_appender_with_id()` and recovers its
 uncommitted tail as above.
 
-**Java interop is not supported in 0.2.0. A Java archiver does not
-maintain archive_offset.** The silent case: a queue created by C but
-archived by Java has a stale non-zero line, the zero-line refusal does
-not trigger, and recovery (D-G) reopens without any error — a Java
-archiver must not be run against 0.2.0 queues (CAND-52).
+**Java interop is not supported in 0.2.0.** 0.2.0 refuses Java-written
+queues at open (schema_version 1), and the Java implementation does not
+yet follow the 0.2.0 protocol (for example, it does not maintain the
+archive line). This applies to both queue types. The silent case the
+refusal prevents: a queue created by C but archived by Java would keep a
+stale non-zero archive line, and recovery could reopen without any error
+— a Java archiver must not be run against 0.2.0 queues. Read Java-written
+queues with the Java library. Java support is planned at schema 2, under
+the same protocol contract (see `doc/wire-format.md`).
 
 ---
 
@@ -533,7 +554,8 @@ bits[55:0]  = payloadPosition
 
 Each message in the payload file is framed as `[int32 length][payload bytes]`.
 Batch entries add a `[int32 message_count]` prefix before the first message.
-The format is binary-compatible with the Java Algoteq batch queue implementations.
+The framing derives from Algoteq's Java implementation; sharing queues with
+Java is not supported in 0.2.0 (see the note above).
 
 ### Visibility and commit
 

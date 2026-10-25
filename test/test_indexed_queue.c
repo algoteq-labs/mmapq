@@ -437,6 +437,47 @@ void test_poller_move_to_index(void)
     mmapq_indexed_poller_close(p);
 }
 
+/* DOC-01 W4 (ledger X6): a non-archivable queue's start_index is fixed
+ * at creation and may be NON-ZERO — PRESERVE-mode transfer destinations
+ * are exactly such queues (the old "always 0" comments were the
+ * contradiction).  The poller starts at the created start_index and
+ * move_to_index below it is refused (indexed_poller.c:232-233).  Guards
+ * already-correct behavior; passes pre/post the comment fix (stated —
+ * the contradiction was documentary, so no fail-first). */
+void test_doc01_nonarch_start_index_respected(void)
+{
+    const char *qn = "mmap_test_iq_doc01_si";
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd), "rm -rf %s/%s", DIR, qn);
+    if (system(cmd) != 0) { /* best-effort cleanup */ }
+
+    MmapqIndexedQueue *cq = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create(DIR, qn,
+        REGION_SZ, RING_SZ, 1, MAX_FILE, 100, TIMEOUT_NS, 0, rt, rt, &cq));
+    MmapqIndexedAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(cq, &a));
+    int64_t idx = mmapq_indexed_appender_append(a, "si", 2);
+    TEST_ASSERT_EQUAL_INT64(100, idx);
+
+    MmapqIndexedPoller *p = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_poller(cq, &p));
+    PollCapture cap = { .directive = MMAPQ_NEXT_ADVANCE };
+    TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_ADVANCED,
+        mmapq_indexed_poller_poll(p, capture_handler, &cap));
+    TEST_ASSERT_EQUAL_INT64(100, cap.index);
+    TEST_ASSERT_EQUAL_INT32(2, cap.length);
+    TEST_ASSERT_EQUAL_STRING("si", cap.data);
+
+    /* Below the created start_index: refused (0).  At it: accepted. */
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_poller_move_to_index(p, 50));
+    TEST_ASSERT_EQUAL_INT(1, mmapq_indexed_poller_move_to_index(p, 100));
+
+    mmapq_indexed_poller_close(p);
+    mmapq_indexed_appender_close(a);
+    mmapq_indexed_queue_close(cq);
+    if (system(cmd) != 0) { /* best-effort cleanup */ }
+}
+
 void test_poller_handler_stop(void)
 {
     MmapqIndexedAppender *a = NULL;
@@ -3753,6 +3794,7 @@ int main(void)
     RUN_TEST(test_appender_open_rejects_corrupt_length);
     RUN_TEST(test_appender_open_rejects_corrupt_uncommitted_tail);
     RUN_TEST(test_append_and_poll_single_message);
+    RUN_TEST(test_doc01_nonarch_start_index_respected);
     RUN_TEST(test_poll_end_of_stream_when_empty);
     RUN_TEST(test_poller_before_queue_retries);
     RUN_TEST(test_poll_header_timeout_is_error_not_eos);

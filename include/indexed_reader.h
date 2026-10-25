@@ -138,7 +138,7 @@ MmapqReadingContext *mmapq_indexed_reader_read_last(
 int64_t mmapq_indexed_reader_last_index(MmapqIndexedReader *r);
 
 /**
- * mmapq_indexed_reader_start_index — lowest readable index (0 if not archivable).
+ * mmapq_indexed_reader_start_index — lowest readable index (fixed at creation for non-archivable queues — may be non-zero, e.g. a PRESERVE-mode transfer destination).
  */
 int64_t mmapq_indexed_reader_start_index(MmapqIndexedReader *r);
 

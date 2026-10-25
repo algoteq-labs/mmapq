@@ -1561,6 +1561,66 @@ void test_appender_rejoin_after_payload_file_deleted(void)
     mmapq_indexed_appender_close(r1);
 }
 
+/* DOC-01 W5 (ledger X7): the rejoin walk never re-creates a reclaimed
+ * file — the plain case (no racing commit; test_c54_hole1_single covers
+ * the racing one).  Reclaim via the library call, close, rejoin, append:
+ * the reclaimed path stays absent throughout.  Evidence class was N in
+ * the ledger; passes pre/post the comment fix (the contradiction was
+ * documentary — stated, not fail-first). */
+void test_doc01_rejoin_after_reclaim_recreates_nothing(void)
+{
+    /* Sized to end exactly at the file end: [64, TINY_FILE). */
+    char big[TINY_FILE - INITIAL_PAYLOAD_POSITION - PAYLOAD_LENGTH_SIZE];
+    memset(big, 'Z', sizeof(big));
+    char dir_path[512];
+    snprintf(dir_path, sizeof(dir_path), "%s/%s", DIR, QUEUE);
+    mkdir(dir_path, 0775);
+    QueueMeta *m = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapqi_queue_meta_open_rw(DIR, QUEUE, 0,
+        TINY_REGION, TINY_FILE, /* archivable= */ 1, QUEUE_TYPE_NORMAL, &m));
+    mmapqi_queue_meta_close(m);
+
+    MmapqIndexedAppender *a0 = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_appender_create_with_id(DIR, QUEUE,
+        TINY_REGION, 4, TINY_FILE, TIMEOUT, 0, rt, 0, 0, &a0));
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_appender_append(a0, big, (int32_t)sizeof(big)));
+    mmapq_indexed_appender_close(a0);
+
+    MmapqIndexedAppender *a1 = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_appender_create_with_id(DIR, QUEUE,
+        TINY_REGION, 4, TINY_FILE, TIMEOUT, 0, rt, 1, 0, &a1));
+    TEST_ASSERT_EQUAL_INT64(1, mmapq_indexed_appender_append(a1, "live", 4));
+    mmapq_indexed_appender_close(a1);
+
+    MmapqIndexedArchiver *arch = tiny_archiver();
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_archiver_archive_up_to_index(arch, 1));
+    TEST_ASSERT_EQUAL_INT64(TINY_FILE, arch_start_offset(arch, 0));
+
+    char *paths[64] = {0};
+    int n = mmapq_indexed_archiver_archivable_files(arch, paths, 64);
+    TEST_ASSERT_GREATER_OR_EQUAL(0, n);
+    TEST_ASSERT_TRUE(list_contains(paths, n, "payload_0_0"));
+    /* Reclaim through the library call (re-list + unlink in one hold). */
+    TEST_ASSERT_EQUAL_INT(n, mmapq_indexed_archiver_reclaim_files(arch, paths, n));
+    char reclaimed[560];
+    snprintf(reclaimed, sizeof(reclaimed), "%s/payload_0_0", dir_path);
+    TEST_ASSERT_EQUAL_INT(-1, access(reclaimed, F_OK));
+    free_paths(paths, n);
+    mmapq_indexed_archiver_close(arch);
+
+    /* Rejoin: lane 0 has no live entry; the join anchors at
+     * max(start_offset, archive_offset) = TINY_FILE — inside file 1. */
+    MmapqIndexedAppender *r1 = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_appender_create_with_id(DIR, QUEUE,
+        TINY_REGION, 4, TINY_FILE, TIMEOUT, 0, rt, 0, 0, &r1));
+    TEST_ASSERT_EQUAL_INT64(2, mmapq_indexed_appender_append(r1, "back", 4));
+    mmapq_indexed_appender_close(r1);
+
+    /* The pin: the reclaimed file was not re-created by the join walk
+     * or the append. */
+    TEST_ASSERT_EQUAL_INT(-1, access(reclaimed, F_OK));
+}
+
 /* P13: the commit fast path must be keyed on the last APPENDED offset —
  * "offset > last committed" skips the check for X and strands it. */
 void test_commit_fast_path_keyed_on_last_appended(void)
@@ -2930,6 +2990,7 @@ int main(void)
     RUN_TEST(test_archiver_in_order_boundary_unchanged);
     RUN_TEST(test_archiver_crash_tail_reclamation);
     RUN_TEST(test_appender_rejoin_after_payload_file_deleted);
+    RUN_TEST(test_doc01_rejoin_after_reclaim_recreates_nothing);
     RUN_TEST(test_commit_fast_path_keyed_on_last_appended);
     RUN_TEST(test_archive_lock_excludes_concurrent_archive);
     RUN_TEST(test_commit_archive_race_stress);

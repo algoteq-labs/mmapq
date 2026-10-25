@@ -55,9 +55,20 @@ They do not provide power-loss-durable commit acknowledgments.
   `MMAPQ_ECORRUPT` — the files are not damaged): recreate it with a legal
   geometry. Portability consequence: a queue is portable only to hosts
   whose page size divides its `region_size`.
-- Normal queues retain compatibility with Algoteq's evolved Java format;
-  Java does not currently read batch queues. No disk layout changes are
-  introduced by the hardening work.
+- Schema 2 (0.2.0) changed what 0.1.0 files mean and accept (the
+  archive-line field, the geometry rule, the unified tail rule): 0.2.0
+  writes `schema_version=2` and refuses 0.1.0 files at open with
+  `MMAPQ_ESCHEMA`. To move 0.1.0 data forward, export with a 0.1.0 library
+  and import into a fresh 0.2.0 queue — the export stream format is
+  unchanged. mmapq's file format derives from Algoteq's Java
+  implementation (an evolved derivative of tools4j/mmap; not compatible
+  with upstream tools4j). In 0.2.0, C, Rust and Python do not share queues
+  with Java: 0.2.0 refuses Java-written queues at open (schema_version 1),
+  and the Java implementation does not yet follow the 0.2.0 protocol (for
+  example, it does not maintain the archive line). This applies to both
+  queue types. Read Java-written queues with the Java library. Java
+  support is planned at schema 2, under the same protocol contract (see
+  `doc/wire-format.md`).
 
 `mmapq-py/tests/test_persistence_contract.py` runs producers and consumers
 in separate interpreters, checks the backing filesystem with `findmnt`,

@@ -129,13 +129,17 @@ void test_reopen_rw_preserves_values(void)
  * now a multiple of the 32 KB header block.) */
 #define D2_MAX_FILE ((int64_t)98304)
 
-static void create_valid_meta(void)
+static void create_valid_meta_typed(int32_t qtype)
 {
     QueueMeta *m = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapqi_queue_meta_open_rw(
-        DIR, QUEUE, 0, 32768, D2_MAX_FILE, 0, QUEUE_TYPE_NORMAL, &m));
+        DIR, QUEUE, 0, 32768, D2_MAX_FILE, 0, qtype, &m));
     TEST_ASSERT_NOT_NULL(m);
     mmapqi_queue_meta_close(m);
+}
+static void create_valid_meta(void)
+{
+    create_valid_meta_typed(QUEUE_TYPE_NORMAL);
 }
 
 static void pwrite_meta_field(const void *buf, size_t len, int32_t offset)
@@ -463,6 +467,85 @@ void test_c38_page_size_seam(void)
 #endif
 }
 
+/* ── DOC-01 W1 pins: a schema_version 1 meta (0.1.0 files, and           ────
+ * Java-written queues until Java implements the schema-2 contract) is
+ * refused at open with MMAPQ_ESCHEMA — both open paths, both queue types;
+ * a freshly created queue writes schema 2 on disk.  Fail-first against
+ * the pre-bump tree: version 1 was the library's own version, so all four
+ * refusal pins failed (the opens succeeded) before the bump. */
+
+static void write_schema1_typed(int32_t qtype)
+{
+    create_valid_meta_typed(qtype);
+    int32_t v1 = 1;
+    pwrite_meta_field(&v1, sizeof(v1), QUEUE_META_SCHEMA_VERSION_OFFSET);
+}
+
+void test_doc01_schema1_refused_ro(void)
+{
+    write_schema1_typed(QUEUE_TYPE_NORMAL);
+    QueueMeta *ro = NULL;
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ESCHEMA,
+        mmapqi_queue_meta_open_ro(DIR, QUEUE, QUEUE_TYPE_NORMAL, &ro));
+    TEST_ASSERT_NULL(ro);
+}
+
+void test_doc01_schema1_refused_rw(void)
+{
+    write_schema1_typed(QUEUE_TYPE_NORMAL);
+    QueueMeta *rw = NULL;
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ESCHEMA,
+        mmapqi_queue_meta_open_rw(DIR, QUEUE, 0, 32768, D2_MAX_FILE, 0,
+                                  QUEUE_TYPE_NORMAL, &rw));
+    TEST_ASSERT_NULL(rw);
+}
+
+void test_doc01_schema1_refused_ro_batch(void)
+{
+    write_schema1_typed(QUEUE_TYPE_BATCH);
+    QueueMeta *ro = NULL;
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ESCHEMA,
+        mmapqi_queue_meta_open_ro(DIR, QUEUE, QUEUE_TYPE_BATCH, &ro));
+    TEST_ASSERT_NULL(ro);
+}
+
+void test_doc01_schema1_refused_rw_batch(void)
+{
+    write_schema1_typed(QUEUE_TYPE_BATCH);
+    QueueMeta *rw = NULL;
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ESCHEMA,
+        mmapqi_queue_meta_open_rw(DIR, QUEUE, 0, 32768, D2_MAX_FILE, 0,
+                                  QUEUE_TYPE_BATCH, &rw));
+    TEST_ASSERT_NULL(rw);
+}
+
+static void assert_new_queue_schema2(int32_t qtype)
+{
+    create_valid_meta_typed(qtype);
+    char path[256];
+    snprintf(path, sizeof(path), "%s/%s/meta", DIR, QUEUE);
+    int fd = open(path, O_RDONLY);
+    TEST_ASSERT_TRUE(fd >= 0);
+    int32_t v = -1;
+    TEST_ASSERT_EQUAL_INT((int)sizeof(v),
+        (int)pread(fd, &v, sizeof(v), QUEUE_META_SCHEMA_VERSION_OFFSET));
+    close(fd);
+    /* Literal 2, not the constant alone: the pin catches an accidental
+     * revert of QUEUE_META_SCHEMA_VERSION itself. */
+    TEST_ASSERT_EQUAL_INT32(2, v);
+    TEST_ASSERT_EQUAL_INT32(QUEUE_META_SCHEMA_VERSION, v);
+}
+
+void test_doc01_new_queue_writes_schema2(void)
+{
+    assert_new_queue_schema2(QUEUE_TYPE_NORMAL);
+}
+
+void test_doc01_new_queue_writes_schema2_batch(void)
+{
+    assert_new_queue_schema2(QUEUE_TYPE_BATCH);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -493,5 +576,11 @@ int main(void)
     RUN_TEST(test_c38_open_ro_prerule_file_geometry_eschema);
     RUN_TEST(test_c38_open_current_geometry_control);
     RUN_TEST(test_c38_page_size_seam);
+    RUN_TEST(test_doc01_schema1_refused_ro);
+    RUN_TEST(test_doc01_schema1_refused_rw);
+    RUN_TEST(test_doc01_schema1_refused_ro_batch);
+    RUN_TEST(test_doc01_schema1_refused_rw_batch);
+    RUN_TEST(test_doc01_new_queue_writes_schema2);
+    RUN_TEST(test_doc01_new_queue_writes_schema2_batch);
     return UNITY_END();
 }

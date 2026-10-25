@@ -107,11 +107,14 @@ re-check lowers `start_offset` to 0:
   `INITIAL_PAYLOAD_POSITION`) means the file predates the field; the
   iterator factory refuses with `MMAPQ_ECORRUPT`. Queues created before
   0.2.0 must be recreated.
-- **Java:** Java interop is not supported in 0.2.0. A Java archiver does
-  not maintain `archive_offset`. A queue created by C but archived by
-  Java keeps a stale *non-zero* line, so the refusal does not trigger and
-  D-G reopens without any error — a Java archiver must not be run against
-  0.2.0 queues. (Post-0.2.0: CAND-52.)
+- **Java:** mixed C/Java access is not supported in 0.2.0 — 0.2.0 refuses
+  Java-written queues at open (schema_version 1), and Java does not yet
+  follow the 0.2.0 protocol: a Java archiver does not maintain
+  `archive_offset`, so a queue created by C but archived by Java keeps a
+  stale *non-zero* line, the zero-line refusal does not trigger, and D-G
+  reopens without any error — a Java archiver must not be run against
+  0.2.0 queues. Java support is planned at schema 2, under the same
+  protocol contract (CAND-52).
 
 ## How we got here
 

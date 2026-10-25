@@ -62,9 +62,12 @@ computed with that in mind.
 ## Invariants
 
 - **I1** Once `archive_up_to_index` returns, `start_offset` ≤ every live
-  payload of that appender. The only exception is a commit racing that
-  archive, for the few instructions between its CAS and its re-check (see
-  "Commit"); the deletion protocol covers that window.
+  payload of that appender — except for a commit between its header CAS
+  and its re-check. That exception can last any length of time, and it is
+  permanent if the writer dies there (CAND-35). Deletion never relies on
+  I1 in that state: the listing bounds each lane by `min(start_offset,
+  live_floor, intent)`, and the published header is visible to the
+  live-floor scan.
 - **I2** An uncommitted payload below the archive line can never become
   live (CAND-54 L(i)): committing it returns `MMAPQ_EINVAL` — the commit
   pre-check floors at `max(start_offset, archive_offset)`. Append it again
@@ -195,7 +198,11 @@ It never raises it.
 4. Start writing there.
 
 A position with no file yet, or beyond the end of a file, is the end of
-the stream. The walk uses read-only mappings and never creates files.
+the stream. The walk uses the writer's read-write mappings: it may extend
+a region file at a wrap site, but it never re-creates a reclaimed file,
+because it starts at or above the readability floor
+`max(start_offset, archive_offset)` — files below the floor are never
+probed.
 Walking (rather than writing at `start_offset`) matters: bytes at
 `start_offset` may belong to a dead payload, and writing a shorter message
 over a longer one leaves stale bytes that a later recovery would misread.
@@ -288,9 +295,13 @@ a queue only with all clients closed.
   reads through the already-mapped read-only accessor, no per-header
   syscalls. Reclaim pays the scan once per re-list pass. Off the hot path.
 
-## Java parity
+## Conditions Java would have to meet (schema-2 contract)
 
-Mixed C/Java queues are safe only when Java follows the same rules:
+Mixed C/Java access is not supported in 0.2.0: 0.2.0 refuses Java-written
+queues at open (schema_version 1), and Java does not yet follow this
+protocol. It becomes possible when Java implements the schema-2 contract
+(`doc/wire-format.md`); mixed queues would be safe only when Java follows
+the same rules:
 
 1. Exclusive archive lock; listing takes it shared and caps each appender
    at the lowest live payload visible in the headers.

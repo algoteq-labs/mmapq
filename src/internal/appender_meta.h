@@ -66,7 +66,8 @@
  */
 
 /*
- * The appender meta file size must be 64 bytes for binary compatibility with Java.
+ * The appender meta file size is 64 bytes; layout derived from Algoteq's
+ * Java implementation.
  */
 #define APPENDER_META_ENCODED_LENGTH ((int32_t)64)
 #define APPENDER_META_START_OFFSET_OFFSET  ((int32_t)0)

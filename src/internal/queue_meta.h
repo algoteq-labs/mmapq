@@ -31,27 +31,41 @@
  * with MMAPQ_ENOTREADY (incomplete, not corrupt).
  *
  * start_index:
- *   Always QUEUE_META_INITIAL_START_INDEX (0) for non-archivable queues.
+ *   Fixed at creation for non-archivable queues (may be non-zero, e.g. a
+ *   PRESERVE-mode transfer destination); archiving never moves it.
  *   For archivable queues, read with atomic_load (acquire) to observe
  *   archiver writes from other processes. Written with atomic_store (release).
  *
  * Archiving is fully implemented in this C port — archivable may be 1
  * and start_index advances when entries are archived. The field layout
- * is compatible with the Java implementation.
+ * derives from Algoteq's Java implementation.
  */
 
-#define QUEUE_META_SCHEMA_VERSION        ((int32_t)1)
+/*
+ * Schema 2 (0.2.0) is a protocol contract, not just a layout: the
+ * CAND-38 geometry rule, the unified <= 4 tail rule (CAND-51e), the
+ * appender-meta archive line at byte 16 and commit intent at byte 24
+ * with their write rules, the commit slow path, the archiver/lister
+ * rules, the join anchor, and the appender-ID lease precondition
+ * (contract C0-C7 in doc/wire-format.md).  An implementation may write
+ * schema 2 only if it implements the whole contract; any later change
+ * to the contract is a schema bump.  Version-1 files (0.1.0, and
+ * Java-written queues until Java implements the contract) are refused
+ * at open with MMAPQ_ESCHEMA — pinned by test_doc01_schema1_refused_*.
+ */
+#define QUEUE_META_SCHEMA_VERSION        ((int32_t)2)
 #define QUEUE_META_INITIAL_START_INDEX   ((int64_t)0)
 /*
- * The meta file size must be 64 bytes for binary compatibility with Java.
+ * The meta file size is 64 bytes; layout derived from Algoteq's Java
+ * implementation.
  */
 #define QUEUE_META_ENCODED_LENGTH        ((int32_t)64)
 
 /*
  * Queue type discriminator, stored at offset 25.
- * Historically Java's boolean fixed_size_8bytes; values 0 and 1 keep their
- * exact Java semantics, so Java compatibility is preserved. Value 2 is
- * new and C-ecosystem only (batch queues must not be opened from Java).
+ * Historically Java's boolean fixed_size_8bytes; values 0 and 1 keep
+ * their Java meanings. Value 2 (batch) is mmapq's. Java interop is not
+ * supported at schema 2 (see README).
  */
 #define QUEUE_TYPE_NORMAL           ((uint8_t)0)   /* single-message, length-prefixed */
 #define QUEUE_TYPE_FIXED8           ((uint8_t)1)   /* Java fixed 8-byte — NOT supported */

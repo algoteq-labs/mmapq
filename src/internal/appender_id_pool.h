@@ -38,7 +38,8 @@
  */
 
 /*
- * The appender id pool file size must be 64 bytes for binary compatibility with Java.
+ * The appender id pool file size is 64 bytes; layout derived from
+ * Algoteq's Java implementation.
  */
 #define APPENDER_ID_POOL_REGION_SIZE  ((int32_t)64)
 #define APPENDER_ID_POOL_WORD_COUNT   ((int32_t)(MAX_APPENDERS / 32))

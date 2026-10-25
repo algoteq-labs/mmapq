@@ -82,7 +82,9 @@ int mmapq_indexed_archiver_create(
  * Return 1 if the queue is archivable, 0 otherwise.
  *
  * A queue is archivable if and only if its meta file was created with
- * archivable=1. Non-archivable queues always have start_index=0.
+ * archivable=1. A non-archivable queue's start_index is fixed at
+ * creation (it may be non-zero, e.g. a PRESERVE-mode transfer
+ * destination); archiving never moves it.
  */
 int mmapq_indexed_archiver_archivable(MmapqIndexedArchiver *a);
 

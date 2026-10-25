@@ -108,7 +108,7 @@ Lines 55. Internal dispatch fatal check (WRAP_UNWRAPPED in mmapqi_header_read).
 
 | Line | Disposition | Verified |
 |---|---|---|
-| 214 unknown handler directive | I | Internal: MMAP_ASSERT(0) guards unreachable default in switch. (CAND-17: line moved, site unchanged.) |
+| 216 unknown handler directive | I | Internal: MMAP_ASSERT(0) guards unreachable default in switch. (CAND-17: line moved, site unchanged. DOC-01: moved by the X6 comment rewrite above it, site unchanged.) |
 
 ### indexed_reader.c — 1 (0 V)
 
@@ -125,7 +125,8 @@ propagation — comment lines only above the catalogued sites.)
 
 ### queue_meta.h — 1 (all I)
 
-Lines 142.
+Lines 156. (DOC-01: line moved by the schema-2 contract comment above the
+constants and again by the X6/Java comment corrections, site unchanged.)
 Archivable contract on the start_index setter; called by both archivers
 (`queue_meta_set_start_index` in `indexed_archiver.c` and
 `indexed_batch_archiver.c`, two sites each), guarded by the
