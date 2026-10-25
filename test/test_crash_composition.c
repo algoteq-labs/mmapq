@@ -1593,6 +1593,92 @@ void test_cc_orphan_recovery_end4(void)
     assert_batch_lane(CUR.dir, CC_QUEUE, 0,
                       CC_REG + 2 * MMAPQ_BATCH_MSG_COUNT_SIZE + 16);
 }
+
+/* D2.3 pin (CAND-50 item 2, owner ruling 2026-10-25): after a kill
+ * mid-write, earlier uncommitted records are byte-intact and only the
+ * lane's highest-offset uncommitted record may be torn (single writer,
+ * sequential writes, the length prefix before the data). No matrix cell
+ * asserted the earlier record's bytes (content compares covered only the
+ * synthesized partial's prefix/zero shape), so the pin is added here;
+ * it guards existing behaviour — fail-first not applicable. The kill is
+ * real (SIGKILL at the API boundary after the earlier record's append);
+ * the torn tail is pwrite synthesis — no intra-function seam exists in
+ * write_payload (the G-1(a) state-equivalence discipline, matrix
+ * SQ_SYNTH_PARTIAL). Coverage split: this pin covers the recovery side
+ * (what the rejoin walk yields for a torn tail); the write side is
+ * carried by the leading atomic_signal_fence in write_payload
+ * (indexed_appender.c) and its batch twins — a compiler-order guarantee
+ * no runtime pin can fail-first (stated per the owner's instruction). */
+static void cc_d2_child(void)
+{
+    MmapqIndexedQueue *q = NULL;
+    MmapqIndexedAppender *a = NULL;
+    if (cc_s_open(CUR.dir, CUR.file_size, &q, &a) != 0) _exit(2);
+    static char buf[64];
+    /* A: committed, 24 bytes, fill 0x71 */
+    memset(buf, 0x71, 24);
+    int64_t ap = cc_place(INITIAL_PAYLOAD_POSITION, 24);
+    if (mmapq_indexed_appender_append_uncommitted(a, buf, 24) != ap) _exit(63);
+    if (mmapq_indexed_appender_commit(a, ap) < 0) _exit(64);
+    /* B: uncommitted, 24 bytes, fill 0x72 — the earlier uncommitted record */
+    memset(buf, 0x72, 24);
+    int64_t bp = cc_place(cc_after(INITIAL_PAYLOAD_POSITION, 24), 24);
+    if (mmapq_indexed_appender_append_uncommitted(a, buf, 24) != bp) _exit(65);
+    cc_die();
+}
+
+void test_cc_sm_torn_tail_earlier_intact(void)
+{
+    cc_seq++;
+    memset(&CUR, 0, sizeof CUR);
+    CUR.file_size = CC_FILE_G1;
+    cc_case_dir();
+    cc_trace("sm-torn-tail");
+
+    cc_fork_kill(cc_d2_child);
+
+    /* C: the torn tail (the kill mid-write state) — declared length 100,
+     * half the payload written, the rest never touched */
+    int64_t after_a = cc_after(INITIAL_PAYLOAD_POSITION, 24);
+    int64_t bp = cc_place(after_a, 24);
+    int64_t cp = cc_place(cc_after(after_a, 24), 100);
+    cc_pwrite32(cp, 100);
+    char pay[50];
+    memset(pay, 0x73, sizeof pay);
+    cc_pwrite_bytes(cp + PAYLOAD_DATA_OFFSET, pay, sizeof pay);
+
+    /* rejoin: the uncommitted walk yields B byte-intact, then C torn */
+    MmapqIndexedQueue *q = NULL;
+    MmapqIndexedAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, cc_s_open(CUR.dir, CUR.file_size, &q, &a));
+    MmapqUncommittedPayloadIterator *it = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_appender_uncommitted_iterator_checked(a,
+            MMAPQ_PAYLOAD_ITERATOR_NOT_SET, MMAPQ_PAYLOAD_ITERATOR_NOT_SET,
+            &it));
+    const void *data = NULL; int32_t len = 0; int64_t off = -2;
+    TEST_ASSERT_EQUAL_INT(1,
+        mmapq_uncommitted_iterator_next(it, &data, &len, &off));
+    TEST_ASSERT_EQUAL_INT64(bp, off);
+    TEST_ASSERT_EQUAL_INT32(24, len);
+    const uint8_t *d = data;
+    for (int32_t x = 0; x < 24; x++)
+        TEST_ASSERT_EQUAL_UINT8(0x72, d[x]);     /* B: byte-intact */
+    TEST_ASSERT_EQUAL_INT(1,
+        mmapq_uncommitted_iterator_next(it, &data, &len, &off));
+    TEST_ASSERT_EQUAL_INT64(cp, off);
+    TEST_ASSERT_EQUAL_INT32(100, len);
+    d = data;
+    for (int32_t x = 0; x < 50; x++)
+        TEST_ASSERT_EQUAL_UINT8(0x73, d[x]);     /* C: written prefix intact */
+    for (int32_t x = 50; x < 100; x++)
+        TEST_ASSERT_EQUAL_UINT8(0, d[x]);        /* C: unwritten rest zero */
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_uncommitted_iterator_next(it, &data, &len, &off));
+    cc_s_close(q, a);
+    assert_payload_lane(CUR.dir, CC_QUEUE, 0,
+                        cp + PAYLOAD_LENGTH_SIZE + 100);
+}
 #else
 void test_cc_batch_compose_g1(void) { TEST_IGNORE_MESSAGE("fork suite: excluded under TSan (test_runtime.c precedent)"); }
 void test_cc_batch_compose_g2(void) { TEST_IGNORE_MESSAGE("fork suite: excluded under TSan"); }
@@ -1601,6 +1687,7 @@ void test_cc_sm_compose_g2(void)    { TEST_IGNORE_MESSAGE("fork suite: excluded 
 void test_cc_batch_header_cap4_next_region(void) { TEST_IGNORE_MESSAGE("excluded under TSan"); }
 void test_cc_recovered_end4_rejoin(void)         { TEST_IGNORE_MESSAGE("excluded under TSan"); }
 void test_cc_orphan_recovery_end4(void)          { TEST_IGNORE_MESSAGE("excluded under TSan"); }
+void test_cc_sm_torn_tail_earlier_intact(void)   { TEST_IGNORE_MESSAGE("fork suite: excluded under TSan"); }
 #endif
 
 /* Guard pin (owner, finding #4 ruling): a staged batch followed by a
@@ -1721,6 +1808,7 @@ int main(void)
     RUN_TEST(test_cc_batch_header_cap4_next_region);
     RUN_TEST(test_cc_recovered_end4_rejoin);
     RUN_TEST(test_cc_orphan_recovery_end4);
+    RUN_TEST(test_cc_sm_torn_tail_earlier_intact);
     RUN_TEST(test_cc_batch_compose_g1);
     RUN_TEST(test_cc_batch_compose_g2);
     RUN_TEST(test_cc_batch_recovery_crash);

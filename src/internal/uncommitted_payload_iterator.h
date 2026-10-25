@@ -24,8 +24,8 @@
  *        archive line (appender_meta archive_offset) — the D-G publication
  *        rule (CAND-49 §3.9; doc/design/archive-boundaries.md). Reading the
  *        line before si is the defect. A zero line (< INITIAL_PAYLOAD_POSITION)
- *        is a pre-0.2.0 file: init refuses with MMAPQ_ECORRUPT (recreate the
- *        queue).
+ *        means a corrupt appender meta: init refuses with MMAPQ_ECORRUPT
+ *        (pre-0.2.0 queues are refused at open with MMAPQ_ESCHEMA).
  *     2. Scan the header from the frozen start index forward (D8/S3 —
  *        entries below it are archived by definition and their files may
  *        have been reclaimed).
@@ -187,7 +187,8 @@ int mmapqi_uncommitted_iterator_create(
  * timeout during the scan (retryable — via a NEW factory call, see create);
  * MMAPQ_ECORRUPT if the header scan was genuinely truncated (a committed
  * header whose payload would not walk for a non-timeout reason) or the
- * archive line is zero (a pre-0.2.0 file — recreate the queue). On failure
+ * archive line is zero — a corrupt appender meta (pre-0.2.0 queues are
+ * refused at open with MMAPQ_ESCHEMA). On failure
  * the iterator is left uninitialised; the caller-owned inner iterator is
  * never freed and remains valid.
  */

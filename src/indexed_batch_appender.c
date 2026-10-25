@@ -933,6 +933,12 @@ int32_t mmapq_mutable_batch_append(MmapqMutableBatch *b, const void *data, int32
     if (b == NULL || data == NULL || length <= 0) return MMAPQ_EINVAL;
     MmapqIndexedBatchAppender *a = b->appender;
     if (length > queue_meta_region_size(a->queue_meta) - PAYLOAD_LENGTH_SIZE) return MMAPQ_EINVAL;
+    /* Order the previous record's payload bytes before this record's
+     * length prefix (and before any padding marker below) — the batch
+     * side of the torn-tail rule (CAND-50 item 2; the full text is on the
+     * leading fence in write_payload, indexed_appender.c). Compiler
+     * barrier only — no instructions emitted. */
+    atomic_signal_fence(memory_order_release);
     if (write_padding_if_needed(a, length)) return -1;
     memcpy(a->payload_buf.data + PAYLOAD_LENGTH_OFFSET, &length, sizeof(int32_t));
     /* Length store precedes payload bytes in program order — the
@@ -951,6 +957,14 @@ int32_t mmapq_mutable_batch_append_reserved(MmapqMutableBatch *b, int32_t length
     if (b == NULL || out_data == NULL || length <= 0) return MMAPQ_EINVAL;
     MmapqIndexedBatchAppender *a = b->appender;
     if (length > queue_meta_region_size(a->queue_meta) - PAYLOAD_LENGTH_SIZE) return MMAPQ_EINVAL;
+    /* Order the previous record's payload bytes before this record's
+     * length prefix (and before any padding marker below) — the batch
+     * side of the torn-tail rule (CAND-50 item 2; the full text is on the
+     * leading fence in write_payload, indexed_appender.c). Also covers
+     * the caller-written payload bytes of a preceding append_reserved:
+     * they are program-order-before this fence. Compiler barrier only —
+     * no instructions emitted. */
+    atomic_signal_fence(memory_order_release);
     if (write_padding_if_needed(a, length)) return -1;
     memcpy(a->payload_buf.data + PAYLOAD_LENGTH_OFFSET, &length, sizeof(int32_t));
     /* Length store precedes the (caller-written) payload bytes in program

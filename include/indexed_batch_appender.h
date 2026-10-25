@@ -268,11 +268,13 @@ int mmapq_indexed_batch_appender_join_completed_open_batch(
  * Returns 0 on success; MMAPQ_EINVAL for NULL args; MMAPQ_ETIMEDOUT on a
  * transient scan timeout (retryable — a NEW factory call);
  * MMAPQ_ECORRUPT on genuine scan truncation or gap-boundary corruption, or
- * a zero archive line (a pre-0.2.0 file — recreate the queue).
+ * a zero archive line — a corrupt appender meta (pre-0.2.0 queues are
+ * refused at open with MMAPQ_ESCHEMA).
  *
  * The iterator yields batches staged but never committed, from the archive
  * line onward; archiving may chop older uncommitted batches, even after an
- * undo; queues created before 0.2.0 must be recreated (zero-line refusal);
+ * undo; a zero archive line means a corrupt appender meta (pre-0.2.0
+ * queues are refused at open with MMAPQ_ESCHEMA);
  * a Java archiver must not be run against 0.2.0 queues. Discarded batches
  * reappear in recovery after a restart — the walker reports them and
  * refill makes them committable; recovery code decides (owner ruling 8).

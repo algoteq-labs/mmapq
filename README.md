@@ -427,8 +427,9 @@ rejoining lane owner. The iterator snapshots at the factory call; the
 appending context must not be active while iterating. Commit found offsets
 with `mmapq_indexed_appender_commit()` — any subset, any order; skipping
 is fine. Archiving may remove messages the walk has not yielded, even
-after an undo; queues created before 0.2.0 must be recreated (a zero
-archive line is refused with `MMAPQ_ECORRUPT`).
+after an undo; 0.1.0 queues are refused at open with `MMAPQ_ESCHEMA`;
+recreate or migrate them, see the release notes
+(`doc/RELEASE-NOTES-0.2.0.md`).
 
 ```c
 #include <inttypes.h>

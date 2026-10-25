@@ -925,9 +925,10 @@ void test_uncommitted_dg_out_of_order_completeness(void)
 #endif
 }
 
-/* §3.9 legacy ruling: a zero archive line (< INITIAL_PAYLOAD_POSITION) means
- * a pre-0.2.0 file — the factory refuses with exactly MMAPQ_ECORRUPT
- * (recreate the queue; CAND-32 range-check precedent). */
+/* §3.9 zero-line ruling: a zero archive line (< INITIAL_PAYLOAD_POSITION)
+ * simulates a corrupt appender meta; pre-0.2.0 queues are refused at open
+ * with MMAPQ_ESCHEMA — the factory refuses with exactly MMAPQ_ECORRUPT
+ * (CAND-32 range-check precedent). */
 void test_uncommitted_zero_archive_offset_refused(void)
 {
     MmapqIndexedAppender *a = tiny_archivable_appender();

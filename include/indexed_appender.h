@@ -224,15 +224,16 @@ MmapqPayloadIterator *mmapq_indexed_appender_iterator(
  * start-of-stream, or start_offset > end_offset when both are set;
  * MMAPQ_ETIMEDOUT on a transient scan timeout (retryable — a NEW factory
  * call); MMAPQ_ECORRUPT on genuine scan truncation or gap-boundary
- * corruption, or a zero archive line (a pre-0.2.0 file — recreate the
- * queue).
+ * corruption, or a zero archive line — a corrupt appender meta
+ * (pre-0.2.0 queues are refused at open with MMAPQ_ESCHEMA).
  *
  * Ownership/lifetime/contract: the iterator is owned by the appender — no
  * destroy; freed by mmapq_indexed_appender_close(). The appending context
  * must not be active while iterating. The iterator yields messages appended
  * but never committed, from the archive line onward; archiving may chop
- * older uncommitted messages, even after an undo; queues created before
- * 0.2.0 must be recreated (zero-line refusal); a Java archiver must not be
+ * older uncommitted messages, even after an undo; a zero archive line
+ * means a corrupt appender meta (pre-0.2.0 queues are refused at open
+ * with MMAPQ_ESCHEMA); a Java archiver must not be
  * run against 0.2.0 queues (it does not maintain archive_offset — a stale
  * non-zero line defeats the zero-line refusal and the archive-line
  * guarantee silently reopens). A concurrent archive reclaiming files the
@@ -241,9 +242,12 @@ MmapqPayloadIterator *mmapq_indexed_appender_iterator(
  * committed with the existing mmapq_indexed_appender_commit() — any subset,
  * any order, same session or after rejoin; not committing = skip; an offset
  * archiving has overtaken returns EINVAL. Each yielded offset becomes
- * committable (refill). After a process crash, the lane's last
- * uncommitted payload may have partial content; validate before
- * committing.
+ * committable (refill). After a process crash only the lane's
+ * highest-offset uncommitted record can be torn (single writer,
+ * sequential writes, the length prefix is written before the data);
+ * every earlier uncommitted record is byte-intact. Validate before
+ * committing; with no payload integrity check, discard that record and
+ * re-request or re-append it.
  */
 int mmapq_indexed_appender_uncommitted_iterator_checked(
     MmapqIndexedAppender *a,
@@ -267,8 +271,11 @@ int mmapq_indexed_appender_uncommitted_iterator_checked(
  * next call re-yields the same message; outputs cleared on any non-1
  * return). A negative is truthy in C: compare explicitly, never
  * `while (mmapq_uncommitted_iterator_next(...))`.
- * After a process crash, the lane's last uncommitted payload may have
- * partial content; validate before committing.
+ * After a process crash only the lane's highest-offset uncommitted
+ * record can be torn (single writer, sequential writes, the length
+ * prefix is written before the data); every earlier uncommitted record
+ * is byte-intact. Validate before committing; with no payload integrity
+ * check, discard that record and re-request or re-append it.
  */
 int mmapq_uncommitted_iterator_next(
     MmapqUncommittedPayloadIterator *it,

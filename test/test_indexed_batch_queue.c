@@ -2577,8 +2577,9 @@ void test_batch_uncommitted_dg_line_respected(void)
     if (system(cmd) != 0) { /* best-effort */ }
 }
 
-/* §7.12 batch twin of the legacy-zero ruling: a zero archive line is a
- * pre-0.2.0 file — the factory refuses with exactly MMAPQ_ECORRUPT. */
+/* §7.12 batch twin of the zero-line ruling: a zero archive line simulates
+ * a corrupt appender meta; pre-0.2.0 queues are refused at open with
+ * MMAPQ_ESCHEMA — the factory refuses with exactly MMAPQ_ECORRUPT. */
 void test_batch_uncommitted_zero_archive_offset_refused(void)
 {
     MmapqIndexedBatchAppender *a = NULL;

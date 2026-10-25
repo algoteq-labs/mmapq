@@ -102,7 +102,7 @@ Lines 55. Internal dispatch fatal check (WRAP_UNWRAPPED in mmapqi_header_read).
 
 | Line | Disposition | Verified |
 |---|---|---|
-| 170 length + 4 > region_size | I | Phase 6a converted. Guarded by EINVAL checks at public entry points. (CAND-49: line moved, site unchanged; CAND-54: moved again by the archivable-field struct addition, site unchanged.) |
+| 180 length + 4 > region_size | I | Phase 6a converted. Guarded by EINVAL checks at public entry points. (CAND-49: line moved, site unchanged; CAND-54: moved again by the archivable-field struct addition, site unchanged; CAND-50: moved again by the torn-tail leading fence, site unchanged.) |
 
 ### indexed_poller.c — 1 (1 I)
 
@@ -177,7 +177,7 @@ ranges_insert start < end assert moved to committed_ranges.c.)
 
 | Line | Disposition | Verified |
 |---|---|---|
-| 226 next: it NULL check | I | Internal dispatch null check. (CAND-49 §3.6 unit.) |
+| 227 next: it NULL check | I | Internal dispatch null check. (CAND-49 §3.6 unit. CAND-50: line moved by the zero-line wording fix, site unchanged.) |
 
 ### committed_ranges.c — 1 (1 I)
 

@@ -29,7 +29,9 @@
  *   At init():
  *     1. Acquire-load the queue start index FIRST, then the archive line
  *        (the D-G publication rule, §3.9); a zero line (<
- *        INITIAL_PAYLOAD_POSITION) is a pre-0.2.0 file: MMAPQ_ECORRUPT.
+ *        INITIAL_PAYLOAD_POSITION) means a corrupt appender meta:
+ *        MMAPQ_ECORRUPT (pre-0.2.0 queues are refused at open with
+ *        MMAPQ_ESCHEMA).
  *     2. Scan headers from the frozen si (D8/S3 floor); for each entry of
  *        this appender, measure the committed batch's span by reading its
  *        count (trusted as written, CAND-23 docs) and walking its messages
@@ -158,8 +160,9 @@ int mmapqi_uncommitted_batch_iterator_create(
  *
  * Returns 0 on success; MMAPQ_ETIMEDOUT on a transient scan timeout
  * (retryable — a NEW factory call); MMAPQ_ECORRUPT on genuine scan
- * truncation or a zero archive line (a pre-0.2.0 file — recreate the
- * queue); MMAPQ_EINVAL if it is NULL.
+ * truncation or a zero archive line — a corrupt appender meta
+ * (pre-0.2.0 queues are refused at open with MMAPQ_ESCHEMA);
+ * MMAPQ_EINVAL if it is NULL.
  */
 int mmapqi_uncommitted_batch_iterator_init(MmapqUncommittedBatchIterator *it);
 

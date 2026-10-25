@@ -176,7 +176,8 @@ int mmapqi_uncommitted_batch_iterator_init(MmapqUncommittedBatchIterator *it)
     int64_t scan_floor = it->queue_start_index(it->queue_start_index_ctx);
     int64_t line       = it->archive_offset(it->stream_ctx);
 
-    /* Legacy zero line: a pre-0.2.0 file — refuse (recreate the queue). */
+    /* Zero line: a corrupt appender meta — refuse (pre-0.2.0 queues are
+     * refused at open with MMAPQ_ESCHEMA). */
     if (line < INITIAL_PAYLOAD_POSITION) return MMAPQ_ECORRUPT;
 
     it->fixed_end_of_stream = it->end_of_stream_offset(it->stream_ctx);

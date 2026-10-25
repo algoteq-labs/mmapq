@@ -167,6 +167,16 @@ static __attribute__((always_inline)) inline int write_payload(
     MmapqIndexedAppender *a, const void *data, int32_t length,
     int64_t *out_offset)
 {
+    /* Order the previous record's payload bytes before this record's
+     * length prefix (and before any padding marker below): the torn-tail
+     * rule — after a crash only the lane's highest-offset uncommitted
+     * record can be torn; every earlier uncommitted record is byte-intact
+     * (CAND-50 item 2) — needs the prior append's payload memcpy complete
+     * in program order before this record's length store. With LTO=1
+     * consecutive appends can be inlined into one stream and plain
+     * memcpys carry no ordering guarantee (the CAND-51c §0 reasoning).
+     * Compiler barrier only — a signal fence emits no instructions. */
+    atomic_signal_fence(memory_order_release);
     MMAP_ASSERT(length + PAYLOAD_LENGTH_SIZE <= queue_meta_region_size(a->queue_meta),
         "write_payload: message too large — must fit within one region. "
         "Increase region_size or reduce message size.");
