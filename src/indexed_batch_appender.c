@@ -995,16 +995,30 @@ int32_t mmapq_mutable_batch_append_remaining_from(MmapqMutableBatch *b, MmapqBat
 
 int32_t mmapq_mutable_batch_message_count(const MmapqMutableBatch *b) { return b->message_count; }
 
-const void *mmapq_mutable_batch_get(MmapqMutableBatch *b, int32_t message_index, int32_t *out_length)
+int mmapq_mutable_batch_get_checked(MmapqMutableBatch *b, int32_t message_index,
+                                    const void **out_data, int32_t *out_length)
 {
-    if (b == NULL || out_length == NULL) return NULL;
+    if (out_data != NULL) *out_data = NULL;
+    if (out_length != NULL) *out_length = 0;
+    if (b == NULL || out_data == NULL || out_length == NULL) return MMAPQ_EINVAL;
+    /* CAND-50 item 3: an out-of-range index is an error, never message 0 —
+     * the negative-index clamp was a positioning-loop artifact, never
+     * deliberate (the D3.0 rule-13 record; Java moveTo has always
+     * thrown). */
+    if (message_index < 0 || message_index >= b->message_count) return MMAPQ_EINVAL;
     MmapqIndexedBatchAppender *a = b->appender;
-    mmapq_batch_iterator_init(&a->batch_iterator, b->batch_offset, b->message_count, message_index);
-    if (mmapq_batch_iterator_advance(&a->batch_iterator)) {
-        *out_length = a->batch_iterator.current_msg_length;
-        return batch_iterator_current_data(&a->batch_iterator);
-    }
-    return NULL;
+    mmapq_batch_iterator_init(&a->batch_iterator, b->batch_offset,
+                              b->message_count, message_index);
+    if (a->batch_iterator.last_error != 0) return a->batch_iterator.last_error;
+    if (!mmapq_batch_iterator_advance(&a->batch_iterator))
+        /* the range check above makes advance-failure here a walk failure
+         * (timeout/corrupt in last_error); the ECORRUPT fallback is
+         * unreachable but keeps the failure causes distinct */
+        return a->batch_iterator.last_error != 0
+                   ? a->batch_iterator.last_error : MMAPQ_ECORRUPT;
+    *out_data   = batch_iterator_current_data(&a->batch_iterator);
+    *out_length = batch_iterator_current_length(&a->batch_iterator);
+    return 0;
 }
 
 MmapqBatchPayloadIterator *mmapq_mutable_batch_iterator(MmapqMutableBatch *b, int32_t start_message_index)

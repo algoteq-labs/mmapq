@@ -43,7 +43,7 @@ typedef struct MmapqUncommittedBatchIterator MmapqUncommittedBatchIterator;
  * and its consumption by complete / complete_uncommitted / discard. Do not
  * retain a pointer to it across a commit or close.
  *
- * The internal iterator used by mmapq_mutable_batch_get() and mmapq_mutable_batch_iterator()
+ * The internal iterator used by mmapq_mutable_batch_get_checked() and mmapq_mutable_batch_iterator()
  * is shared — these two accessors must not be used concurrently on the same batch.
  *
  * Mirrors Java IMutableBatch.
@@ -355,7 +355,7 @@ int32_t mmapq_mutable_batch_append(MmapqMutableBatch *b, const void *data, int32
  *
  * Writes a length prefix and advances the payload cursor by @p length bytes,
  * but does not copy any payload. The reserved slot is included in the batch
- * message count. Use mmapq_mutable_batch_get() or mmapq_mutable_batch_iterator() to
+ * message count. Use mmapq_mutable_batch_get_checked() or mmapq_mutable_batch_iterator() to
  * populate the reserved bytes before calling mmapq_mutable_batch_complete().
  *
  * b:       the in-progress batch
@@ -390,28 +390,32 @@ int32_t mmapq_mutable_batch_append_remaining_from(MmapqMutableBatch *b, MmapqBat
 /* ── Random access within in-progress batch ─────────────────────────────── */
 
 /**
- * Return a pointer to the payload of the message at the given index.
+ * Read the payload of the message at the given index, preserving the
+ * failure code.
  *
  * The returned pointer is into the mapped payload region — it is a flyweight
  * view valid only until the next append, remap, or close. Do not retain it.
  *
- * WARNING: mmapq_mutable_batch_get() and mmapq_mutable_batch_iterator() share the
- * appender's internal iterator state and must not be used concurrently
- * with an active iteration.
+ * WARNING: mmapq_mutable_batch_get_checked() and mmapq_mutable_batch_iterator()
+ * share the appender's internal iterator state and must not be used
+ * concurrently on the same batch.
  *
  * b:             the in-progress batch
- * message_index: zero-based index of the message (must be < message_count)
- * out_length:    set to the length of the message on return
- * Returns: pointer to the raw payload bytes; NULL if index is out of range.
- *         NULL for an in-range index means an internal failure; discard
- *         the batch.
+ * message_index: zero-based index of the message
+ * out_data:      receives the payload pointer (cleared on failure)
+ * out_length:    receives the message length (cleared on failure)
+ * Returns: 0 on success; MMAPQ_EINVAL for a NULL argument or an index
+ *         outside [0, message_count); MMAPQ_ETIMEDOUT on a transient
+ *         mapping timeout (retryable); MMAPQ_ECORRUPT on genuine framing
+ *         corruption. On any nonzero return both outputs are cleared.
  */
-const void *mmapq_mutable_batch_get(MmapqMutableBatch *b, int32_t message_index, int32_t *out_length);
+int mmapq_mutable_batch_get_checked(MmapqMutableBatch *b, int32_t message_index,
+                                    const void **out_data, int32_t *out_length);
 
 /**
  * Return a MmapqBatchPayloadIterator positioned at the given message index.
  *
- * Shares the same internal state as mmapq_mutable_batch_get() — the two must not
+ * Shares the same internal state as mmapq_mutable_batch_get_checked() — the two must not
  * be used simultaneously.
  *
  * b:                  the in-progress batch

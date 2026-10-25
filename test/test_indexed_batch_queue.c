@@ -1739,6 +1739,97 @@ void test_batch_iterator_init_null_returns_null(void)
     TEST_ASSERT_NULL(mmapq_batch_iterator_init(NULL, 0, 1, 0));
 }
 
+/* ── D3.3 pins (CAND-50 item 3, owner ruling 2026-10-25) ────────────────
+ * The checked in-batch accessor distinguishes the failure causes the
+ * unchecked get collapsed to NULL (a negative index silently read message
+ * 0 — the clamp the D3.0 rule-13 record shows was never deliberate; Java
+ * moveTo has always thrown on < 0). The -1 refusal was fail-first
+ * observed against the clamp (scratch mutant, transcript in the task
+ * report). */
+
+static void d33_batch(MmapqIndexedBatchAppender **a, MmapqMutableBatch **b)
+{
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, a));
+    *b = mmapq_indexed_batch_appender_start_batch(*a);
+    TEST_ASSERT_NOT_NULL(*b);
+    static char m0[16], m1[24];
+    memset(m0, 0x31, sizeof m0);
+    memset(m1, 0x32, sizeof m1);
+    TEST_ASSERT_EQUAL_INT32(0, mmapq_mutable_batch_append(*b, m0, (int32_t)sizeof m0));
+    TEST_ASSERT_EQUAL_INT32(1, mmapq_mutable_batch_append(*b, m1, (int32_t)sizeof m1));
+}
+
+void test_mutable_batch_get_checked_in_range_exact(void)
+{
+    MmapqIndexedBatchAppender *a = NULL;
+    MmapqMutableBatch *b = NULL;
+    d33_batch(&a, &b);
+    const void *data = NULL; int32_t len = -1;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_get_checked(b, 0, &data, &len));
+    TEST_ASSERT_EQUAL_INT32(16, len);
+    char exp[24];
+    memset(exp, 0x31, 16);
+    TEST_ASSERT_EQUAL_MEMORY(exp, data, 16);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_get_checked(b, 1, &data, &len));
+    TEST_ASSERT_EQUAL_INT32(24, len);
+    memset(exp, 0x32, 24);
+    TEST_ASSERT_EQUAL_MEMORY(exp, data, 24);
+    mmapq_indexed_batch_appender_close(a);
+}
+
+void test_mutable_batch_get_checked_out_of_range_refused(void)
+{
+    MmapqIndexedBatchAppender *a = NULL;
+    MmapqMutableBatch *b = NULL;
+    d33_batch(&a, &b);
+    const void *data = (const void *)1; int32_t len = -1;
+    TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL,
+                          mmapq_mutable_batch_get_checked(b, -1, &data, &len));
+    TEST_ASSERT_NULL(data);
+    TEST_ASSERT_EQUAL_INT32(0, len);
+    data = (const void *)1; len = -1;
+    /* message_count (2) is out of range — the high bound */
+    TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL,
+                          mmapq_mutable_batch_get_checked(b, 2, &data, &len));
+    TEST_ASSERT_NULL(data);
+    TEST_ASSERT_EQUAL_INT32(0, len);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL,
+                          mmapq_mutable_batch_get_checked(NULL, 0, &data, &len));
+    TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL,
+                          mmapq_mutable_batch_get_checked(b, 0, NULL, &len));
+    TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL,
+                          mmapq_mutable_batch_get_checked(b, 0, &data, NULL));
+    mmapq_indexed_batch_appender_close(a);
+}
+
+void test_mutable_batch_get_checked_timeout_propagates(void)
+{
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
+    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    TEST_ASSERT_NOT_NULL(b);
+    /* msg0 fills region 0 exactly to the boundary, so advancing to
+     * message 1 forces a REAL wrap into region 1 — the seam's firing
+     * point (an intra-region wrap is served by the accessor's fast path
+     * and never reaches the vtable — the P4 precedent). */
+    static char m0[65464], m1[24];      /* 64 + 4 + (4+65464) == REGION_SZ */
+    memset(m0, 0x31, sizeof m0);
+    memset(m1, 0x32, sizeof m1);
+    TEST_ASSERT_EQUAL_INT32(0, mmapq_mutable_batch_append(b, m0, (int32_t)sizeof m0));
+    TEST_ASSERT_EQUAL_INT32(1, mmapq_mutable_batch_append(b, m1, (int32_t)sizeof m1));
+    const int64_t msg1 = INITIAL_PAYLOAD_POSITION + MMAPQ_BATCH_MSG_COUNT_SIZE
+                         + PAYLOAD_LENGTH_SIZE + (int64_t)sizeof m0;
+    TEST_ASSERT_EQUAL_INT64(REGION_SZ, msg1);   /* exactly the boundary */
+    bq_arm_oneshot(b, msg1);
+    const void *data = (const void *)1; int32_t len = -1;
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ETIMEDOUT,
+                          mmapq_mutable_batch_get_checked(b, 1, &data, &len));
+    TEST_ASSERT_NULL(data);
+    TEST_ASSERT_EQUAL_INT32(0, len);
+    TEST_ASSERT_EQUAL_INT(1, bq_oneshot_hits);
+    mmapq_indexed_batch_appender_close(a);
+}
+
 void test_batch_iterator_huge_count_walks_to_ecorrupt(void)
 {
     MmapqIndexedBatchAppender *a = NULL;
@@ -2835,6 +2926,9 @@ int main(void)
     RUN_TEST(test_batch_start_recovers_orphaned_open_batch);
     RUN_TEST(test_batch_uncommitted_dg_line_respected);
     RUN_TEST(test_batch_uncommitted_zero_archive_offset_refused);
+    RUN_TEST(test_mutable_batch_get_checked_in_range_exact);
+    RUN_TEST(test_mutable_batch_get_checked_out_of_range_refused);
+    RUN_TEST(test_mutable_batch_get_checked_timeout_propagates);
     RUN_TEST(test_append_and_commit_failure_leaves_lane_usable);
 
     /* CAND-51b F-REC-3 guard pins */
