@@ -220,7 +220,8 @@ static void id_fork_kill(IdChildFn fn)
 /* Run the real mmapq-ids binary: exit code exactly 0, the operator warning
  * on stderr. Fail-closed when MMAPQ_IDS_BIN is unset (a test.sh wiring bug,
  * not a skip). */
-static void id_run_tool_unset(unsigned id)
+static void id_run_tool_unset_expect(unsigned id, int expected_exit,
+                                     int expect_warning)
 {
     const char *bin = getenv("MMAPQ_IDS_BIN");
     TEST_ASSERT_NOT_NULL_MESSAGE(bin,
@@ -254,8 +255,12 @@ static void id_run_tool_unset(unsigned id)
         poll(&pfd, 0, 50);
     }
     TEST_ASSERT_TRUE_MESSAGE(WIFEXITED(st), "ids: mmapq-ids killed by signal");
-    TEST_ASSERT_EQUAL_INT_MESSAGE(0, WEXITSTATUS(st),
-        "ids: mmapq-ids --unset must exit exactly 0");
+    if (WEXITSTATUS(st) != expected_exit) {
+        char m[96];
+        snprintf(m, sizeof m, "ids: mmapq-ids --unset exit %d, expected %d",
+                 WEXITSTATUS(st), expected_exit);
+        TEST_FAIL_MESSAGE(m);
+    }
 
     char warning[512] = {0};
     int ef = open(err_path, O_RDONLY);
@@ -263,8 +268,17 @@ static void id_run_tool_unset(unsigned id)
     ssize_t n = read(ef, warning, sizeof(warning) - 1);
     TEST_ASSERT_NOT_EQUAL(-1, n);
     close(ef);
-    TEST_ASSERT_NOT_NULL_MESSAGE(strstr(warning, "does not verify ownership"),
-        "ids: the operator warning must be printed to stderr");
+    if (expect_warning)
+        TEST_ASSERT_NOT_NULL_MESSAGE(strstr(warning, "does not verify ownership"),
+            "ids: the operator warning must be printed to stderr on a release");
+    else
+        TEST_ASSERT_NULL_MESSAGE(strstr(warning, "does not verify ownership"),
+            "ids: a no-op --unset must not print the operator warning");
+}
+
+static void id_run_tool_unset(unsigned id)
+{
+    id_run_tool_unset_expect(id, 0, 1);
 }
 
 /* ── children (no Unity; _exit codes name the step) ──────────────────────── */
@@ -467,12 +481,30 @@ static void test_ids_release_damaged_meta_normal(void)
     free(after);
 }
 
+/* CAND-56 (walkthrough D4): --unset on a free ID is a no-op (exit 1) and
+ * must NOT print the operator warning — the warning marks an actual
+ * release; printing it on a no-op trains operators to ignore it. */
+static void test_ids_unset_free_id_is_quiet_noop(void)
+{
+    MmapqIndexedQueue *q = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create(DIR_BUF, ID_QUEUE,
+        ID_REG, ID_RING, 1, 16LL * ID_REG, 0, ID_TIMEOUT, 0, NULL, NULL, &q));
+    MmapqIndexedAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_queue_create_appender_with_id(q, ID_LANE, &a));
+    mmapq_indexed_appender_close(a);    /* clean close releases the bit */
+    mmapq_indexed_queue_close(q);
+
+    id_run_tool_unset_expect(ID_LANE, 1, 0);
+}
+
 #endif /* ID_DRIVERS */
 
 #ifndef ID_DRIVERS
 static void test_ids_release_reattach_normal(void)        { TEST_IGNORE_MESSAGE("excluded under TSan"); }
 static void test_ids_release_reattach_batch(void)         { TEST_IGNORE_MESSAGE("excluded under TSan"); }
 static void test_ids_release_damaged_meta_normal(void)    { TEST_IGNORE_MESSAGE("excluded under TSan"); }
+static void test_ids_unset_free_id_is_quiet_noop(void)    { TEST_IGNORE_MESSAGE("excluded under TSan"); }
 #endif
 
 int main(void)
@@ -481,5 +513,6 @@ int main(void)
     RUN_TEST(test_ids_release_reattach_normal);
     RUN_TEST(test_ids_release_reattach_batch);
     RUN_TEST(test_ids_release_damaged_meta_normal);
+    RUN_TEST(test_ids_unset_free_id_is_quiet_noop);
     return UNITY_END();
 }

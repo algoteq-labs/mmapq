@@ -75,7 +75,12 @@ int main(int argc, char **argv)
     if (errno == ERANGE || id >= MMAPQ_APPENDER_ID_ADMIN_COUNT) {
         fputs("error: expected an appender ID from 0 to 255\n", stderr); return 2;
     }
-    fputs(responsibility, stderr);
+    /* The warning marks an actual release: a no-op --unset on a free ID
+     * stays quiet so the warning keeps its meaning (CAND-56). */
+    MmapqAppenderIdFacts facts[MMAPQ_APPENDER_ID_ADMIN_COUNT];
+    if (mmapq_appender_id_admin_inspect(argv[1], argv[2], facts) == 0
+        && facts[id].taken)
+        fputs(responsibility, stderr);
     int released = 0;
     int error = mmapq_appender_id_admin_release(argv[1], argv[2], (unsigned)id, &released);
     if (error) {

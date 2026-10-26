@@ -36,6 +36,30 @@ int mmapqi_queue_files_get_appender_ids(
     uint8_t    *ids,
     int         max_ids);
 
+/* ── Payload file listing ─────────────────────────────────────────────────── */
+
+/**
+ * Scan the queue directory for `payload_<appender_id>_<N>` files and
+ * populate @p indices with the found file indices, ascending.
+ *
+ * Gap-tolerant by construction (directory scan, not an index walk): after
+ * a reclamation removed the low-numbered files, the survivors are still
+ * reported (CAND-56).
+ *
+ * directory:   queue root directory
+ * queue_name:  queue name
+ * appender_id: the lane to list
+ * indices:     caller-allocated array to populate (capacity max_indices)
+ * max_indices: capacity of @p indices
+ * Returns: number of indices written (capped at max_indices)
+ */
+int mmapqi_queue_files_get_payload_file_indices(
+    const char *directory,
+    const char *queue_name,
+    uint8_t     appender_id,
+    int64_t    *indices,
+    int         max_indices);
+
 /* ── Archive lock ─────────────────────────────────────────────────────────── */
 
 /**

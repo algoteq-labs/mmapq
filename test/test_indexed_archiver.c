@@ -2346,6 +2346,47 @@ void test_reclaim_deletes_only_marked_still_archivable(void)
     mmapq_indexed_archiver_close(arch);
 }
 
+
+/* CAND-56 (walkthrough D5): print_summary must report the payload files
+ * that survive a reclamation of the low-numbered ones — the listing loop
+ * must skip missing file indices, not stop at the first gap. */
+void test_c56_print_summary_lists_surviving_payload_files(void)
+{
+    char big[TINY_BIG_LEN]; memset(big, 'G', sizeof(big));
+    MmapqIndexedAppender *a = tiny_archivable_appender();
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_appender_append(a, big, (int32_t)sizeof(big)));
+    TEST_ASSERT_EQUAL_INT64(1, mmapq_indexed_appender_append(a, big, (int32_t)sizeof(big)));
+    TEST_ASSERT_EQUAL_INT64(2, mmapq_indexed_appender_append(a, big, (int32_t)sizeof(big)));
+    mmapq_indexed_appender_close(a);
+
+    MmapqIndexedArchiver *arch = tiny_archiver();
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_archiver_archive_up_to_index(arch, 2));
+
+    /* boundary = end of index 1's payload at 65444: only payload_0_0 is
+     * wholly below it and listed; payload_0_1 (to 65536) straddles. */
+    char *paths[16] = {0};
+    int n = mmapq_indexed_archiver_archivable_files(arch, paths, 16);
+    TEST_ASSERT_EQUAL_INT(1, n);
+    TEST_ASSERT_TRUE(list_contains(paths, n, "payload_0_0"));
+    TEST_ASSERT_EQUAL_INT(1, mmapq_indexed_archiver_reclaim_files(arch, paths, n));
+    free_paths(paths, n);
+
+    TEST_ASSERT_FALSE(queue_file_present("payload_0_0"));
+    TEST_ASSERT_TRUE(queue_file_present("payload_0_1"));
+    TEST_ASSERT_TRUE(queue_file_present("payload_0_2"));
+
+    char sb[8192];
+    int w = mmapq_indexed_archiver_print_summary(arch, sb, (int)sizeof sb);
+    TEST_ASSERT_GREATER_THAN(0, w);
+    TEST_ASSERT_NOT_NULL_MESSAGE(strstr(sb, "payload_0_1"),
+        "summary must list surviving payload_0_1");
+    TEST_ASSERT_NOT_NULL_MESSAGE(strstr(sb, "payload_0_2"),
+        "summary must list surviving payload_0_2");
+    TEST_ASSERT_NULL_MESSAGE(strstr(sb, "payload_0_0"),
+        "summary must not list the reclaimed payload_0_0");
+    mmapq_indexed_archiver_close(arch);
+}
+
 /* P2: a mark that an undo restored drops out of the re-list and is NOT
  * deleted — the re-list, not the mark, decides. */
 void test_reclaim_relist_excludes_undo_restored_files(void)
@@ -3052,6 +3093,7 @@ int main(void)
     RUN_TEST(test_archiver_live_pass_failure_restores_boundary);
     RUN_TEST(test_archive_publish_cas_survives_racing_commit_min);
     RUN_TEST(test_reclaim_deletes_only_marked_still_archivable);
+    RUN_TEST(test_c56_print_summary_lists_surviving_payload_files);
     RUN_TEST(test_reclaim_relist_excludes_undo_restored_files);
     RUN_TEST(test_reclaim_unlink_excludes_concurrent_undo);
     RUN_TEST(test_reclaim_lock_is_shared);

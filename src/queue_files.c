@@ -3,6 +3,7 @@
 #include <sys/stat.h>
 #include <sys/file.h>
 #include <dirent.h>
+#include <stdlib.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <errno.h>
@@ -39,6 +40,43 @@ int mmapqi_queue_files_get_appender_ids(
             ids[count++] = (uint8_t)id;
     }
     closedir(d);
+    return count;
+}
+
+/* ── Payload file listing ─────────────────────────────────────────────────── */
+
+static int cmp_i64(const void *a, const void *b)
+{
+    int64_t x = *(const int64_t *)a, y = *(const int64_t *)b;
+    return (x > y) - (x < y);
+}
+
+int mmapqi_queue_files_get_payload_file_indices(
+    const char *directory,
+    const char *queue_name,
+    uint8_t     appender_id,
+    int64_t    *indices,
+    int         max_indices)
+{
+    char dir_path[4096];
+    snprintf(dir_path, sizeof(dir_path), "%s/%s", directory, queue_name);
+
+    DIR *d = opendir(dir_path);
+    if (!d) return 0;
+
+    int count = 0;
+    struct dirent *entry;
+    while ((entry = readdir(d)) != NULL && count < max_indices) {
+        unsigned int id;
+        long n;
+        int len = 0;
+        if (sscanf(entry->d_name, "payload_%u_%ld%n", &id, &n, &len) == 2
+            && len > 0 && entry->d_name[len] == '\0'
+            && id == appender_id)
+            indices[count++] = (int64_t)n;
+    }
+    closedir(d);
+    qsort(indices, (size_t)count, sizeof(int64_t), cmp_i64);
     return count;
 }
 

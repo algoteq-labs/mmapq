@@ -812,13 +812,14 @@ int mmapq_indexed_archiver_print_summary(MmapqIndexedArchiver *a, char *sb, int 
             a->directory, a->queue_name, ids, MAX_APPENDERS);
         for (int k = 0; k < n_ids; k++) {
             APPEND("  Appender %u:\n", (unsigned)ids[k]);
-            for (int64_t fi = 0; ; fi++) {
-                char path[4096];
-                snprintf(path, sizeof(path), "%s/%s/payload_%u_%ld",
-                         a->directory, a->queue_name, (unsigned)ids[k], (long)fi);
-                if (!mmapqi_queue_file_exists(path)) break;
-                APPEND("    payload_%u_%ld\n", (unsigned)ids[k], (long)fi);
-            }
+            /* Directory scan, not a 0..N walk: after a reclamation removed
+             * the low-numbered files, the survivors are a suffix and must
+             * still be listed (CAND-56). */
+            int64_t fis[4096];
+            int n_fi = mmapqi_queue_files_get_payload_file_indices(
+                a->directory, a->queue_name, ids[k], fis, 4096);
+            for (int j = 0; j < n_fi; j++)
+                APPEND("    payload_%u_%ld\n", (unsigned)ids[k], (long)fis[j]);
         }
     }
 
