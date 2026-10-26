@@ -36,6 +36,8 @@ interop_producer
 interop_consumer
 clock_bench
 demo
+examples/mktsim/mktsim
+examples/mktsim/__pycache__/
 
 # Code graph (codeloom)
 .codeloom/

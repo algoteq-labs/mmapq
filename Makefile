@@ -64,6 +64,12 @@ batch_echo_server: $(LIB)
 	$(CC) $(CFLAGS) -Wno-missing-prototypes examples/batch_echo_server.c -L. -lmmapq $(LDFLAGS) -o batch_echo_server
 	@echo "built: batch_echo_server"
 
+# DEMO-01: the end-to-end demo lives next to its driver; not part of the
+# default build or test.sh (spec: audit/DEMO-01-spec.md v3).
+mktsim: $(LIB)
+	$(CC) $(CFLAGS) -Wno-missing-prototypes examples/mktsim/mktsim.c -L. -lmmapq $(LDFLAGS) -o examples/mktsim/mktsim
+	@echo "built: examples/mktsim/mktsim"
+
 bench-suite: bench echo_server
 	@echo "Running single-message queue benchmark suite..."
 	@bash scripts/bench.sh
