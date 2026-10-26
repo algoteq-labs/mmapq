@@ -8,9 +8,11 @@ disagree, follow the rules and flag the disagreement in your summary.
 ## What this project is
 
 A small, frozen-scope, low-latency C library: a persistent, indexed,
-multi-appender shared-memory queue over memory-mapped files, binary-compatible
-with Algoteq's Java implementation (an evolved derivative of tools4j/mmap;
-NOT compatible with upstream tools4j). Cross-process correctness under
+multi-appender shared-memory queue over memory-mapped files. Its file format
+derives from Algoteq's Java implementation (an evolved derivative of
+tools4j/mmap; not compatible with upstream tools4j); 0.2.0 does not share
+queues with Java (Java-written queues are refused at open; see README).
+Cross-process correctness under
 contention is the entire value of this code. Nanoseconds matter on the hot
 path. The on-disk format is a compatibility contract.
 

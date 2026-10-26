@@ -593,10 +593,10 @@ absorb dirty-bit penalties before the hot loop reaches the new region.
   appender_id_pool      CAS bitset — allocates appender IDs
 ```
 
-All files are plain OS files. The format is binary-compatible with
-Algoteq's Java implementation — an Algoteq Java producer and C consumer
-(or vice versa) can share the same queue directory. (Evolved derivative
-of tools4j/mmap; NOT compatible with upstream tools4j.)
+All files are plain OS files. The format derives from Algoteq's Java
+implementation (evolved derivative of tools4j/mmap; NOT compatible with
+upstream tools4j); 0.2.0 does not share queues with Java — Java-written
+queues are refused at open (see the compatibility note above).
 
 ---
 
