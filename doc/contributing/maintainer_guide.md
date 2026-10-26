@@ -34,13 +34,13 @@ and payload in one region; a batch count slot could fit in exactly 4 bytes
 but deliberately does not use them — four zero bytes at a region end must
 mean only padding, because an open batch's count slot is also zero and
 recovery could not tell them apart (the rejoin wedge found by the
-crash-composition suite). Wire-format details: `doc/wire-format.md`.
+crash-composition suite). Wire-format details: `../reference/wire-format.md`.
 
 **Schema version rule (0.2.0):** schema 2 is a protocol contract, not just
 a layout — the wire format plus the geometry rule, the unified tail rule,
 the archive-line/intent write rules, the commit slow path, the
 archiver/lister rules, the join anchor, and the ID-lease precondition
-(contract C0–C7 in `doc/wire-format.md`). An implementation may write
+(contract C0–C7 in `../reference/wire-format.md`). An implementation may write
 schema 2 only if it implements the whole contract. Any later change to
 the contract is a schema bump — never a silent semantic change under the
 same version.
@@ -88,7 +88,7 @@ Always `memset` any large results/timestamp arrays (e.g. 160MB for 20M iteration
 To achieve deterministic sub-300ns performance on Linux:
 *   **Core Isolation**: Use the `5, 7, 9` pattern. Pin the client loop to core 5, the server loop to core 7, and the background `MmapqRuntime` mapper to core 9.
 *   **External Process Rule**: When running client and server in separate processes, **never** pin multiple mappers to the same isolated core. If cores are scarce, it is better to let the mappers float on the OS housekeeping cores than to oversubscribe an isolated core, which triggers disruptive Inter-Processor Interrupt (IPI) noise.
-*   **Async core requirement**: the async `MmapqRuntime` mapper needs a core it can occupy. On a 1-vCPU or oversubscribed host the caller must `sched_yield()` in any wait-for-mapper loop, or the waiter busy-spins the mapper thread out of its scheduler timeslice and the mapping appears to hang (see 13a in `region_async.c` and the region-ring deregistration path). This is why `async` is not a free default — see `doc/shape-decision.md` for the sync-vs-async mapping guidance.
+*   **Async core requirement**: the async `MmapqRuntime` mapper needs a core it can occupy. On a 1-vCPU or oversubscribed host the caller must `sched_yield()` in any wait-for-mapper loop, or the waiter busy-spins the mapper thread out of its scheduler timeslice and the mapping appears to hang (see 13a in `region_async.c` and the region-ring deregistration path). This is why `async` is not a free default (the sync-vs-async mapping shape decision, 2026-08-12 — git history).
 *   **Huge Pages**: Transparent Huge Pages (THP) should be enabled. The library calls `huge_pages_hint` (MADV_HUGEPAGE) on data segments to reduce TLB pressure.
 *   **VDSO Timing**: Use `CLOCK_MONOTONIC`. Bypassing the VDSO path can add ~50-100ns of overhead per clock read.
 

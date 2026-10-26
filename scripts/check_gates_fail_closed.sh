@@ -26,6 +26,7 @@ REGISTRY+=("mmapq/scripts/check_strdup_guards.sh||mmapq/src")
 REGISTRY+=("mmapq/scripts/check_cmake_sources.sh||mmapq/src")
 REGISTRY+=("mmapq/scripts/audit_asserts.sh|--verify|mmapq/src mmapq/src/internal")
 REGISTRY+=("mmapq/scripts/check_doc_citations.sh||mmapq/doc")
+REGISTRY+=("mmapq/scripts/check_doc_links.sh||mmapq/doc mmapq-rs/README.md mmapq-py/README.md")
 REGISTRY+=("mmapq/scripts/check_error_codes.sh||mmapq/include/mmap_platform.h mmapq-rs/src/error.rs mmapq-py/src/mmapq/_errors.py")
 REGISTRY+=("mmapq/scripts/check_binding_symbols.sh||mmapq/include mmapq-rs/src/ffi.rs mmapq-py/setup.py")
 REGISTRY+=("mmapq/scripts/check_readme_examples.sh|mmapq/README.md mmapq-rs/README.md mmapq-py/README.md|mmapq/README.md mmapq-rs/Cargo.toml mmapq-py/src/mmapq/__init__.py")
@@ -121,6 +122,12 @@ copy_subsets() {
     cp -a "$ROOT/mmapq/scripts/." "$WORK/mmapq/scripts/"
     cp -a "$ROOT/mmapq/doc/." "$WORK/mmapq/doc/"
     cp "$ROOT/mmapq/README.md" "$WORK/mmapq/README.md"
+    # DOC-02 (check_doc_links.sh): the subset must carry every relative-link
+    # target the scanned Markdown points at, or the link gate's pristine
+    # control fails on subset incompleteness rather than on a real defect.
+    cp "$ROOT/mmapq/LICENSE" "$WORK/mmapq/LICENSE"
+    mkdir -p "$WORK/mmapq/tools"
+    cp -a "$ROOT/mmapq/tools/." "$WORK/mmapq/tools/"
 
     mkdir -p "$WORK/mmapq-py/src/mmapq" "$WORK/mmapq-py/scripts"
     cp -a "$ROOT/mmapq-py/src/mmapq/." "$WORK/mmapq-py/src/mmapq/"
@@ -134,6 +141,10 @@ copy_subsets() {
     cp -a "$ROOT/mmapq-rs/c/include/." "$WORK/mmapq-rs/c/include/"
     cp "$ROOT/mmapq-rs/Cargo.toml" "$WORK/mmapq-rs/Cargo.toml"
     cp "$ROOT/mmapq-rs/README.md" "$WORK/mmapq-rs/README.md"
+    cp "$ROOT/mmapq-rs/LICENSE" "$WORK/mmapq-rs/LICENSE"
+    mkdir -p "$WORK/mmapq-rs/doc"
+    cp -a "$ROOT/mmapq-rs/doc/." "$WORK/mmapq-rs/doc/"
+    cp "$ROOT/mmapq-py/LICENSE" "$WORK/mmapq-py/LICENSE"
     cp "$ROOT/mmapq-rs/build.rs" "$WORK/mmapq-rs/build.rs"
     cp "$ROOT/mmapq-rs/.gitmodules" "$WORK/mmapq-rs/.gitmodules"
     cp "$ROOT/mmapq-py/.gitmodules" "$WORK/mmapq-py/.gitmodules"

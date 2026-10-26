@@ -28,7 +28,7 @@
  *   Short padding: when remaining capacity at region end <= 4 bytes,
  *                  skip to next region (no length field written).
  *
- *   Alignment contract (see doc/payload_alignment_design.md):
+ *   Alignment contract (see doc/design/payload_alignment_design.md):
  *     Regions are 8-byte and page aligned. Individual messages within a
  *     region are packed densely and have no alignment guarantee. Consumers
  *     must use offset-based accessors (like memcpy or flyweights) to read

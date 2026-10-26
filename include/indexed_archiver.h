@@ -16,7 +16,7 @@
  * the marks, then reclaim_files() deletes the marks that a fresh COMPLETE
  * listing still reports — the re-list and the unlink happen in a single
  * shared hold of archive.lock, so an undo cannot slip between them and lose
- * its restored files (CAND-36; see doc/archiving-design.md, "Deleting
+ * its restored files (CAND-36; see doc/design/archiving-design.md, "Deleting
  * files"). There is no wait: CAND-54's commit-intent protocol bounds each
  * lane's listing at the least of start_offset, the live floor and the
  * intent, so a file a
@@ -163,7 +163,7 @@ int mmapq_indexed_archiver_start_offset(
  * by its stored intent — a file such a commit is about to publish into is
  * never listed, with no timing assumption (the pre-CAND-54 deletion wait
  * is retired). Only files that actually exist on disk are included.
- * See doc/archiving-design.md.
+ * See doc/design/archiving-design.md.
  *
  * a:         the archiver
  * paths_out: caller-allocated array of char* to populate

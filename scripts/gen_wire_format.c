@@ -1,6 +1,6 @@
 /*
  * gen_wire_format.c — emit the wire-format constants as resolved NAME=value
- * lines, for embedding in doc/wire-format.md.
+ * lines, for embedding in doc/reference/wire-format.md.
  *
  * This probe is not part of the library. It exists so that the constants in
  * the installed specification are DERIVED from the authoritative headers

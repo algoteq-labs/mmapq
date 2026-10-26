@@ -194,7 +194,7 @@ static void rollback_start_offsets(MmapqIndexedArchiver *a, const int64_t *old)
  * what keeps a commit's lowering that lands between the snapshot and the
  * publish from being erased by the publish (CAND-37). The residual window
  * — a commit between its CAS and its re-check — is covered by the caller's
- * deletion re-validation (doc/archiving-design.md). */
+ * deletion re-validation (doc/design/archiving-design.md). */
 static int archive_forward_variable(MmapqIndexedArchiver *a,
                                     int64_t current, int64_t index)
 {

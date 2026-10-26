@@ -1,7 +1,7 @@
 # Protocol model: archive, commit, join, delete
 
 `MmapqArchive.tla` is a TLA+ model of the protocol described in
-`doc/archiving-design.md`: resequenced (out-of-order) commits, forward
+`doc/design/archiving-design.md`: resequenced (out-of-order) commits, forward
 archiving with its live-header pass and rollback, undo, appender join, and
 the caller-side deletion protocol. TLC checks it exhaustively at small
 bounds. It found three data-loss interleavings in the protocol as landed
@@ -47,13 +47,13 @@ be narrowed to the pre-CAS window.
 | Crash | `Crash` at any appender step; pending payloads become dead | process death (kill -9) |
 | Forward archive | `ForwardStart` (validate, candidate = end of highest-position archived message, snapshot `old`), `Publish` (CAS from the snapshot per lane — CAND-37), `PublishSi`, `Fence`, `PassStep` (checked header read, atomic-min), `PassFail` (rollback to `old`), `Finish` | `archive_forward_variable` (publish via `appender_meta_start_offset_cas`), `rollback_start_offsets` in `indexed_archiver.c` |
 | Undo | `UndoStart` (check files exist, lower to lowest restored position), `UndoSi` | backward branch of `archive_up_to_index_locked` |
-| Listing / deletion | `List1` (mark), `List2`+`Delete` fused under `AtomicDelete=TRUE` (re-list, intersect, unlink in one step); unfused (`Delete` outside the lock) for the hand protocol; `Bound(a)` = `min(so[a], LowestLive(a))` under `ListingLivePass` | `archivable_files` (mark); `mmapq_indexed_archiver_reclaim_files` + batch twin (fused); the hand-deleter protocol in `archiving-design.md` "Deleting files" (unfused); the cap: the live-header scan in `archivable_files_locked` (both twins), checked reads, first `HEADER_NULL` ends the scan |
-| Hand-deleter undo rule | `UndoStart` guard (`UndoRule`) | the hand-deleter paragraph in `archiving-design.md` "Deleting files" |
+| Listing / deletion | `List1` (mark), `List2`+`Delete` fused under `AtomicDelete=TRUE` (re-list, intersect, unlink in one step); unfused (`Delete` outside the lock) for the hand protocol; `Bound(a)` = `min(so[a], LowestLive(a))` under `ListingLivePass` | `archivable_files` (mark); `mmapq_indexed_archiver_reclaim_files` + batch twin (fused); the hand-deleter protocol in `../design/archiving-design.md` "Deleting files" (unfused); the cap: the live-header scan in `archivable_files_locked` (both twins), checked reads, first `HEADER_NULL` ends the scan |
+| Hand-deleter undo rule | `UndoStart` guard (`UndoRule`) | the hand-deleter paragraph in `../design/archiving-design.md` "Deleting files" |
 | Memory | `Flush` drains the archiver's buffered `start_offset`/`archive_offset` stores | store buffer, closed by the archiver's seq_cst fence |
 | Uncommitted iteration (CAND-49) | `IterateUncommitted` refills the pending set from the lane's surviving uncommitted positions at or above the archive line (`IterEffAoffChoices`: acquire si first, then the line — the D-G publication rule; the harmless early-line direction is a modelled nondeterministic choice) | the `_checked` iterator factories (snapshot at init; refill on yield) |
 | The pending flag (CAND-49) | `flag[a]` — the `last_pending_offset` tail; set only by `AppendUncommitted`, cleared on commit success/overtake and by `Crash`/`Join`; the set is uniform, the flag is modelled | `indexed_appender.c` `last_pending_offset` (§3.3/§3.4 double conjunct) |
 | The archive line (D-G) | `aoff[a]` — raised only by a forward archive (`Publish`/`Flush`, `Max2`); never lowered. `ArchiveLineMonotonic` pins it | `appender_meta.archive_offset` — see `doc/design/archive-boundaries.md` |
-| Commit intent (CAND-54 proposal; spec `audit/CAND-54-spec.md` — NOT yet landed in code) | `CommitIntent`: slow-path commit stores `intent[a]` before the pre-check (`SlowIntent`, c0), clears it last (`SlowClear`, c5; refusal path c5r); crash leaves it stale, `Join` clears it (plain). The re-list is decomposed (`RLoadSo` → `RLoadIntents` → `RScan` → `RCompute`) with `Bound` gaining the inflight term, the SH hold transcribed as the `UndoStart` mid-round guard; `WaitAssumption` is off. Amendment H: `MinSkipArchived` — the commit min is skipped when the committed entry is already archived (`cidx[a] < si`; in code the si read runs under a brief `archive.lock` SH hold taken on the fired re-check path only) | proposal: `indexed_appender.c:787-829` slow path + `indexed_batch_appender.c:736-776` twin; the intent slot at appender-meta byte 24; `archivable_files_locked` load order; `reclaim_files` SH hold |
+| Commit intent (CAND-54 proposal; spec `audit/CAND-54-spec.md` — NOT yet landed in code) | `CommitIntent`: slow-path commit stores `intent[a]` before the pre-check (`SlowIntent`, c0), clears it last (`SlowClear`, c5; refusal path c5r); crash leaves it stale, `Join` clears it (plain). The re-list is decomposed (`RLoadSo` → `RLoadIntents` → `RScan` → `RCompute`) with `Bound` gaining the inflight term, the SH hold transcribed as the `UndoStart` mid-round guard; `WaitAssumption` is off. Amendment H: `MinSkipArchived` — the commit min is skipped when the committed entry is already archived (`cidx[a] < si`; in code the si read runs under a brief `archive.lock` SH hold taken on the fired re-check path only) | proposal: the `indexed_appender.c` slow path + its `indexed_batch_appender.c` twin; the intent slot at appender-meta byte 24; `archivable_files_locked` load order; `reclaim_files` SH hold |
 
 **Abstractions.** Each appender owns a payload lane; a message occupies
 one position and ends at `p+1`; payload file `f` holds positions
@@ -330,7 +330,7 @@ stores the line (seq_cst) before raising the boundary, so
 `sbAoff` before `sbSo`); (iv) the commit min is unchanged. The line is
 monotone, so the case-1 chain's "later value" can never be lower — both
 holes close at the root. Semantics change (owner ruling, rule 13 —
-`archive-boundaries.md:95-96` kept commit on `start_offset`): an
+`../design/archive-boundaries.md` kept commit on `start_offset`): an
 uncommitted payload below the line becomes uncommittable (EINVAL),
 consistent with the iterator's chop.
 

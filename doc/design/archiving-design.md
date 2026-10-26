@@ -255,7 +255,7 @@ assumption. The listing cap (CAND-35) additionally covers a writer that
 dies after publishing its header (single-message and deferred batch
 commits alike).
 
-Never truncate or rewrite a mapped file (see `persistence-contract.md`).
+Never truncate or rewrite a mapped file (see `../reference/persistence-contract.md`).
 Undo is possible only while the files it needs still exist.
 
 ## Concurrency summary
@@ -300,7 +300,7 @@ a queue only with all clients closed.
 Mixed C/Java access is not supported in 0.2.0: 0.2.0 refuses Java-written
 queues at open (schema_version 1), and Java does not yet follow this
 protocol. It becomes possible when Java implements the schema-2 contract
-(`doc/wire-format.md`); mixed queues would be safe only when Java follows
+(`doc/reference/wire-format.md`); mixed queues would be safe only when Java follows
 the same rules:
 
 1. Exclusive archive lock; listing takes it shared and caps each appender

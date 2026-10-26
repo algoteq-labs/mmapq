@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# gen_wire_format.sh — emit the GENERATED constants block for doc/wire-format.md.
+# gen_wire_format.sh — emit the GENERATED constants block for doc/reference/wire-format.md.
 #
 # Derives the constants from the authoritative internal headers so the
 # installed specification cannot drift from the implementation (P1).
 #
 # Usage: bash scripts/gen_wire_format.sh
 # Output: the block between <!-- GENERATED ... --> and <!-- /GENERATED -->
-#   in doc/wire-format.md (opening marker + NAME=value lines).
+#   in doc/reference/wire-format.md (opening marker + NAME=value lines).
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"

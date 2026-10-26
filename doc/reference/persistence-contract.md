@@ -40,7 +40,7 @@ They do not provide power-loss-durable commit acknowledgments.
   harmless, because the listing already reflects it. (CAND-54 retired the
   deletion wait: the commit-intent protocol never lists a file a stalled —
   or stopped — commit is about to publish into.)
-  See `archiving-design.md`.
+  See `../design/archiving-design.md`.
 - `archive.lock` is locked by inode. Deleting or recreating the queue
   directory while an archiver or lister has it open lets two processes
   hold locks on different files. Recreate a queue only with all clients
@@ -68,7 +68,7 @@ They do not provide power-loss-durable commit acknowledgments.
   example, it does not maintain the archive line). This applies to both
   queue types. Read Java-written queues with the Java library. Java
   support is planned at schema 2, under the same protocol contract (see
-  `doc/wire-format.md`).
+  `../reference/wire-format.md`).
 
 `mmapq-py/tests/test_persistence_contract.py` runs producers and consumers
 in separate interpreters, checks the backing filesystem with `findmnt`,

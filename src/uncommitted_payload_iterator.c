@@ -22,7 +22,7 @@ static int scan_committed_ranges(MmapqUncommittedPayloadIterator *it,
      * files may have been reclaimed, and entries below start_of_stream are
      * archived by definition, never uncommitted. One frozen value per scan
      * (read by init before the archive line); a concurrent archive advancing
-     * it further is covered by the deletion protocol (archiving-design.md),
+     * it further is covered by the deletion protocol (doc/design/archiving-design.md),
      * mirroring the appender join's scan_floor. */
     int64_t current_start = PAYLOAD_ITERATOR_NOT_SET;
     int64_t current_end   = PAYLOAD_ITERATOR_NOT_SET;

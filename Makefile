@@ -104,7 +104,7 @@ install: $(LIB)
 	install -d $(DESTDIR)$(LIBDIR)
 	install -m 644 $(LIB) $(DESTDIR)$(LIBDIR)/
 	install -d $(DESTDIR)$(DATADIR)/doc/mmapq
-	install -m 644 doc/wire-format.md $(DESTDIR)$(DATADIR)/doc/mmapq/
+	install -m 644 doc/reference/wire-format.md $(DESTDIR)$(DATADIR)/doc/mmapq/
 
 clean:
 	rm -f $(OBJS) $(LIB) demo latency_bench echo_server batch_demo batch_latency_bench batch_echo_server

@@ -22,8 +22,11 @@ set -euo pipefail
 
 cd "$(dirname "$0")/../.."
 
+# DOC-02: doc/ is now layered (guide/reference/design/contributing/model) —
+# the glob must be recursive or the moved pages escape the scan.
+shopt -s globstar
 DOCS=(
-    mmapq/doc/*.md
+    mmapq/doc/**/*.md
     mmapq-py/docs/*.md
     mmapq/README.md
     mmapq-py/README.md

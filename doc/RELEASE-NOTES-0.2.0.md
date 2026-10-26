@@ -293,4 +293,4 @@ tools4j). In 0.2.0, C, Rust and Python do not share queues with Java:
 Java implementation does not yet follow the 0.2.0 protocol (for example,
 it does not maintain the archive line). This applies to both queue types.
 Read Java-written queues with the Java library. Java support is planned
-at schema 2, under the same protocol contract (see `wire-format.md`).
+at schema 2, under the same protocol contract (see `reference/wire-format.md`).

@@ -6,7 +6,7 @@
 #   SECTION 2: setup.py cdef declarations
 #   SECTION 3: headers with zero binding usage
 #
-# --presence-matrix: emit a generated feature-coverage table for feature-matrix.md
+# --presence-matrix: emit a generated feature-coverage table for doc/reference/feature-matrix.md
 #   (C headers × Rust binding × Python binding).
 #
 # The call-site count excludes ffi.rs itself. A function with

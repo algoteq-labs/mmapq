@@ -19,7 +19,7 @@ fi
 VERIFY="${1:-}"
 
 # Doc path is parameterizable so --self-test can run against a mutated copy.
-DOC="${ASSERT_AUDIT_DOC:-doc/ASSERT_AUDIT.md}"
+DOC="${ASSERT_AUDIT_DOC:-doc/contributing/ASSERT_AUDIT.md}"
 
 # ── Parse a line-list string like "30, 269, 309, 323, 342, 358, 366"
 #    or "81, 152-153, 157, 179-181" into sorted space-separated numbers.

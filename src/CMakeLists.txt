@@ -98,7 +98,7 @@ install(DIRECTORY ${PROJECT_SOURCE_DIR}/include/
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/mmapq
     FILES_MATCHING PATTERN "*.h"
 )
-install(FILES ${PROJECT_SOURCE_DIR}/doc/wire-format.md
+install(FILES ${PROJECT_SOURCE_DIR}/doc/reference/wire-format.md
     DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/mmapq
 )
 

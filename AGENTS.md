@@ -22,7 +22,7 @@ This file is the upstream authority for the whole ecosystem: the wrappers'
 AGENTS.md files defer to it, and where they differ, this file wins.
 
 Before touching the header layout, payload framing, memory orderings, or
-anything performance-adjacent, read `doc/maintainer_guide.md` — it is the
+anything performance-adjacent, read `doc/contributing/maintainer_guide.md` — it is the
 design authority, including an Anti-Pattern Ledger (§4) of optimizations
 that were tried, measured, rejected, and must not be re-attempted. This
 file governs conduct; that file governs design.
@@ -170,7 +170,7 @@ file governs conduct; that file governs design.
 - If your change makes an existing comment false, fixing that comment is in
   scope; rewriting comments that are still true is not.
 - Changes to the public surface (factory signatures, error codes, types)
-  update `doc/feature-matrix.md` in the same task.
+  update `doc/reference/feature-matrix.md` in the same task.
 - **A feature-matrix cell may be marked ✓ only when both an implementation
   symbol AND a test exercising it are cited** (file:line for each). A cell
   claiming support backed by an absent or empty implementation is the
@@ -201,7 +201,7 @@ Exit code zero or the task is not done. Do not hand-eye it.
 
 - `archivable` is a creation-time factory parameter (default 0). Existing
   queues keep their on-disk value on reopen. Archivable reads pay an
-  acquire load on `start_index` — see doc/maintainer_guide.md before
+  acquire load on `start_index` — see doc/contributing/maintainer_guide.md before
   touching those paths.
 - Fixed-8-byte payload mode (`queue_type == 1`) is Java-only; the C library
   refuses to open such queues. Do not implement it.
@@ -222,7 +222,7 @@ Exit code zero or the task is not done. Do not hand-eye it.
   filesystems, so the check can reject valid, committed messages. A corrupt
   header pointing past payload EOF is accepted risk (SIGBUS) — recreate the
   queue. Header accessors keep the check. This was tried as a fix (audit
-  C-07) and rolled back; see doc/maintainer_guide.md §4 Anti-Pattern E.
+  C-07) and rolled back; see doc/contributing/maintainer_guide.md §4 Anti-Pattern E.
   Do not add the check.
 - Target platform is Linux x86-64/ARM64, little-endian, POSIX. Do not add
   Windows/macOS conditionals unless the task asks.

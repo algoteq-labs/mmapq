@@ -396,7 +396,7 @@ static int initialise_append_position(MmapqIndexedAppender *a, int64_t start_ind
 
     /* I5: never read headers below start_index — those files may have been
      * deleted (P12). One acquire load; a concurrent archive advancing it
-     * further is covered by the deletion protocol (archiving-design.md). */
+     * further is covered by the deletion protocol (doc/design/archiving-design.md). */
     int64_t scan_floor = queue_meta_start_index(a->queue_meta);
 
     if (last_index == HEADER_NULL_INDEX) {

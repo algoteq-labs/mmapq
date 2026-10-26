@@ -40,17 +40,17 @@ What you get:
   implementation does not yet follow the 0.2.0 protocol (for example, it
   does not maintain the archive line). This applies to both queue types.
   Read Java-written queues with the Java library. Java support is planned
-  at schema 2, under the same protocol contract (see `doc/wire-format.md`)
+  at schema 2, under the same protocol contract (see `doc/reference/wire-format.md`)
 
 Rust and Python bindings live in the companion repositories `mmapq-rs` and
-`mmapq-py`; see `doc/feature-matrix.md` for exact coverage per language.
+`mmapq-py`; see `doc/reference/feature-matrix.md` for exact coverage per language.
 
 This library was extracted from production trading infrastructure, where
 its Java ancestor carried FX flows for years. The design target is not
 "fast messaging" in the abstract — it is the storage layer for
 **event-sourced systems**: sequenced command queues, replicated event logs,
 and deterministic replay, where the answer to "what happened in production"
-is *re-run it*. `doc/event-sourcing-guide.md` describes the pattern this
+is *re-run it*. `doc/guide/event-sourcing.md` describes the pattern this
 library was built to serve.
 
 ---
@@ -75,7 +75,7 @@ Java interop is not supported in 0.2.0).
   history. mmapq queues are named, persistent streams, not a topic
   fabric.
 - **You want a full application framework** rather than a storage layer —
-  see the references in `doc/event-sourcing-guide.md`.
+  see the references in `doc/guide/event-sourcing.md`.
 - **You need guaranteed durability through power loss.** mmapq writes
   reach the page cache, not the platter; the OS persists them eventually.
   Queues here are transport-plus-recent-history; long-term data belongs in
@@ -103,7 +103,7 @@ position, not a maturity disclaimer:
   is unchanged. Each release states the schema versions it reads; a file
   of any other version is refused at open with `MMAPQ_ESCHEMA`. A version
   change is always a clean refusal, never a silent misread. The format is
-  specified in `doc/wire-format.md`
+  specified in `doc/reference/wire-format.md`
   (installed with the library at `share/doc/mmapq/wire-format.md`); the
   authoritative implementation lives in the source distribution at
   `src/internal/header_codec.h` and `src/internal/queue_meta.h`.
@@ -244,7 +244,7 @@ mmapq_indexed_batch_queue_close(q);
 ## Core concepts
 
 
-See [doc/feature-matrix.md](doc/feature-matrix.md) for the full feature
+See [doc/reference/feature-matrix.md](doc/reference/feature-matrix.md) for the full feature
 matrix across the C, Rust, and Python implementations, including
 compatibility scope.
 
@@ -333,7 +333,7 @@ Transparent Huge Pages enabled:
 1. **Core isolation** — kernel boot parameter `isolcpus=5,7,9` (or equivalent) to reserve cores for the client loop, server loop, and region mapper.
 2. **Transparent Huge Pages** — the library calls `madvise(MADV_HUGEPAGE)` on mapped regions to reduce TLB pressure.
 3. **VDSO clock** — use `CLOCK_MONOTONIC` (the library default) to bypass the syscall overhead on timing.
-4. **Thread affinity** — always spawn background threads *before* pinning the calling thread; see Anti-Pattern D in `doc/maintainer_guide.md`.
+4. **Thread affinity** — always spawn background threads *before* pinning the calling thread; see Anti-Pattern D in `doc/contributing/maintainer_guide.md`.
 
 ---
 
@@ -353,7 +353,7 @@ payload position (commit order is not write order — `append_uncommitted` +
 `start_index` atomically in the queue meta, then makes one pass over the
 live headers, lowering the boundary below any live payload that sits under
 it. All `poll()` / `read()` calls immediately see the boundary. See
-[doc/archiving-design.md](doc/archiving-design.md).
+[doc/design/archiving-design.md](doc/design/archiving-design.md).
 
 **Backward archiving / undo** (`index < current start_index`):
 Restores access to previously archived entries by scanning headers
@@ -518,7 +518,7 @@ refusal prevents: a queue created by C but archived by Java would keep a
 stale non-zero archive line, and recovery could reopen without any error
 — a Java archiver must not be run against 0.2.0 queues. Read Java-written
 queues with the Java library. Java support is planned at schema 2, under
-the same protocol contract (see `doc/wire-format.md`).
+the same protocol contract (see `doc/reference/wire-format.md`).
 
 ---
 
@@ -776,14 +776,12 @@ and `REBASE` / `PRESERVE` start index mode.
 
 ## Documentation
 
-*   [Persistence contract](doc/persistence-contract.md) — publication, process restart/replay, application checkpoints, and power-loss durability
-*   [Hardening implementation report](doc/hardening-implementation.md) — upcoming source-compatibility changes and their validation
-*   [Feature matrix](doc/feature-matrix.md) — feature coverage across C, Rust, and Python, including compatibility scope
-*   [Event-sourcing guide](doc/event-sourcing-guide.md) — building sequenced command/event architectures on mmapq: batch commits as transactions, replay, recovery, replication
-*   [Header layout design](doc/header_layout_design.md) — full derivation of the vertical walk, worked example, and verification trace
-*   [Payload alignment design](doc/payload_alignment_design.md) — payload framing and alignment rationale
-*   [Maintainer guide](doc/maintainer_guide.md) — anti-pattern ledger, performance tuning baseline, thread affinity rules, metadata protocol
-*   [Queue type specification](doc/queue-type-spec-for-implementation.md), [archivable parameter specification](doc/archivable-param-spec.md) — design records of the two post-extraction changes, retained as history
+*   [Persistence contract](doc/reference/persistence-contract.md) — publication, process restart/replay, application checkpoints, and power-loss durability
+*   [Feature matrix](doc/reference/feature-matrix.md) — feature coverage across C, Rust, and Python, including compatibility scope
+*   [Event-sourcing guide](doc/guide/event-sourcing.md) — building sequenced command/event architectures on mmapq: batch commits as transactions, replay, recovery, replication
+*   [Header layout design](doc/design/header_layout_design.md) — full derivation of the vertical walk, worked example, and verification trace
+*   [Payload alignment design](doc/design/payload_alignment_design.md) — payload framing and alignment rationale
+*   [Maintainer guide](doc/contributing/maintainer_guide.md) — anti-pattern ledger, performance tuning baseline, thread affinity rules, metadata protocol
 
 ---
 

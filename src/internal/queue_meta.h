@@ -47,7 +47,7 @@
  * appender-meta archive line at byte 16 and commit intent at byte 24
  * with their write rules, the commit slow path, the archiver/lister
  * rules, the join anchor, and the appender-ID lease precondition
- * (contract C0-C7 in doc/wire-format.md).  An implementation may write
+ * (contract C0-C7 in doc/reference/wire-format.md).  An implementation may write
  * schema 2 only if it implements the whole contract; any later change
  * to the contract is a schema bump.  Version-1 files (0.1.0, and
  * Java-written queues until Java implements the contract) are refused

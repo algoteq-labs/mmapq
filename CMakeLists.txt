@@ -47,7 +47,7 @@ option(MMAP_ENABLE_TSAN    "Enable ThreadSanitizer"   OFF)
 
 # ── Platform guard ────────────────────────────────────────────────────────
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    message(FATAL_ERROR "mmapq supports Linux only - see doc/shape-decision.md")
+    message(FATAL_ERROR "mmapq supports Linux only")
 endif()
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
