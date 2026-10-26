@@ -37,7 +37,8 @@ static MmapqNextMove echo_handler(
     if (hdr->sequence == SHUTDOWN_SEQ)
         s->shutdown_requested = 1;
 
-    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(s->response_appender);
+    MmapqMutableBatch *b = NULL;
+    mmapq_indexed_batch_appender_start_batch_checked(s->response_appender, &b);   /* failure flow unchanged: the NULL batch fails the appends/complete below (the pre-migration shape) */
     mmapq_mutable_batch_append(b, batch_iterator_current_data(ctx->iterator),
                             batch_iterator_current_length(ctx->iterator));
     mmapq_mutable_batch_append_remaining_from(b, ctx->iterator);

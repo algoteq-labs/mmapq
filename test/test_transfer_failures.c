@@ -254,7 +254,8 @@ static void make_two_message_source_batch(const char *directory)
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create(directory, "source", 32768, 16, 1, 32768 * 8, 0, 1000000000, 0, NULL, NULL, &batch));
     MmapqIndexedBatchAppender *appender = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender_with_id(batch, 0, &appender));
-    MmapqMutableBatch *mb = mmapq_indexed_batch_appender_start_batch(appender);
+    MmapqMutableBatch *mb = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(appender, &mb));
     TEST_ASSERT_NOT_NULL(mb);
     TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(mb, "m-one", 6));
     TEST_ASSERT_EQUAL_INT(1, mmapq_mutable_batch_append(mb, "m-two", 6));

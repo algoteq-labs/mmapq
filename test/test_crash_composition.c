@@ -323,8 +323,8 @@ static void cc_b_child_batch(MmapqIndexedBatchAppender *a,
                              int64_t exp_start)
 {
     static char buf[CC_REG];              /* child-local scratch */
-    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
-    if (b == NULL) _exit(3);
+    MmapqMutableBatch *b = NULL;
+    if (mmapq_indexed_batch_appender_start_batch_checked(a, &b) != 0) _exit(3);
     if (b->batch_offset != exp_start) _exit(4);
     for (int i = 0; i < n; i++) {
         memset(buf, cc_fill(tag + i), (size_t)lens[i]);
@@ -352,8 +352,8 @@ static void cc_b_child_artifact(MmapqIndexedBatchAppender *a, int which,
     static char buf[CC_REG];
     switch (which) {
     case BP_OPEN_EMPTY: {
-        MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
-        if (b == NULL) _exit(20);
+        MmapqMutableBatch *b = NULL;
+        if (mmapq_indexed_batch_appender_start_batch_checked(a, &b) != 0) _exit(20);
         if (b->batch_offset != exp_start) _exit(21);
         return;
     }
@@ -361,8 +361,8 @@ static void cc_b_child_artifact(MmapqIndexedBatchAppender *a, int which,
         cc_b_child_batch(a, lens, n, 100, 0, exp_start);
         return;
     case BP_OPEN_PARTIAL: {
-        MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
-        if (b == NULL) _exit(22);
+        MmapqMutableBatch *b = NULL;
+        if (mmapq_indexed_batch_appender_start_batch_checked(a, &b) != 0) _exit(22);
         if (b->batch_offset != exp_start) _exit(23);
         memset(buf, cc_fill(110), (size_t)lens[0]);
         if (mmapq_mutable_batch_append(b, buf, lens[0]) != 0) _exit(24);
@@ -372,8 +372,8 @@ static void cc_b_child_artifact(MmapqIndexedBatchAppender *a, int which,
         return;                                            /* open, count 0 */
     }
     case BP_MARKER_FAULT: {
-        MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
-        if (b == NULL) _exit(26);
+        MmapqMutableBatch *b = NULL;
+        if (mmapq_indexed_batch_appender_start_batch_checked(a, &b) != 0) _exit(26);
         if (b->batch_offset != exp_start) _exit(27);
         memset(buf, cc_fill(120), (size_t)lens[0]);
         if (mmapq_mutable_batch_append(b, buf, lens[0]) != 0) _exit(28);
@@ -850,7 +850,8 @@ static void run_batch_case(int pre, int residue, int k, int j, int64_t file_size
         MmapqIndexedBatchQueue *q = NULL;
         MmapqIndexedBatchAppender *a = NULL;
         TEST_ASSERT_EQUAL_INT(0, cc_b_open(CUR.dir, file_size, &q, &a));
-        MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+        MmapqMutableBatch *b = NULL;
+        TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
         TEST_ASSERT_NOT_NULL(b);
         TEST_ASSERT_EQUAL_INT64(cc_batch_start(CUR.exp_pos3), b->batch_offset);
         TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_discard(b));
@@ -1262,7 +1263,8 @@ static void run_misfit_case(int batch, int at_boundary)
         MmapqIndexedBatchQueue *q = NULL;
         MmapqIndexedBatchAppender *a = NULL;
         TEST_ASSERT_EQUAL_INT(0, cc_b_open(CUR.dir, CC_FILE_G1, &q, &a));
-        MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+        MmapqMutableBatch *b = NULL;
+        TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
         TEST_ASSERT_NOT_NULL(b);
         TEST_ASSERT_EQUAL_INT64(INITIAL_PAYLOAD_POSITION, b->batch_offset);
         int64_t m0 = INITIAL_PAYLOAD_POSITION + MMAPQ_BATCH_MSG_COUNT_SIZE;
@@ -1330,8 +1332,8 @@ static void cc_r4_child(void)
     int32_t l[1] = { L };
     cc_b_child_batch(a, l, 1, 800, 3, INITIAL_PAYLOAD_POSITION);
     /* the next batch: the unified rule skips the 4-byte tail */
-    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
-    if (b == NULL) _exit(3);
+    MmapqMutableBatch *b = NULL;
+    if (mmapq_indexed_batch_appender_start_batch_checked(a, &b) != 0) _exit(3);
     if (b->batch_offset != CC_REG) _exit(41);   /* pre-fix: REG-4 */
     static char buf[CC_REG];
     memset(buf, cc_fill(801), 8);
@@ -1485,7 +1487,8 @@ void test_cc_batch_header_cap4_next_region(void)
     MmapqIndexedBatchQueue *q = NULL;
     MmapqIndexedBatchAppender *a = NULL;
     TEST_ASSERT_EQUAL_INT(0, cc_b_open(CUR.dir, CC_FILE_G1, &q, &a));
-    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    MmapqMutableBatch *b = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
     TEST_ASSERT_NOT_NULL(b);
     TEST_ASSERT_EQUAL_INT64(CC_REG + 2 * MMAPQ_BATCH_MSG_COUNT_SIZE + 8,
                             b->batch_offset);
@@ -1547,7 +1550,8 @@ void test_cc_orphan_recovery_end4(void)
     MmapqIndexedBatchAppender *a = NULL;
     TEST_ASSERT_EQUAL_INT(0, cc_b_open(CUR.dir, CC_FILE_G1, &q, &a));
 
-    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    MmapqMutableBatch *b = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
     TEST_ASSERT_NOT_NULL(b);
     TEST_ASSERT_EQUAL_INT64(INITIAL_PAYLOAD_POSITION, b->batch_offset);
     int64_t m0 = INITIAL_PAYLOAD_POSITION + MMAPQ_BATCH_MSG_COUNT_SIZE;
@@ -1562,7 +1566,8 @@ void test_cc_orphan_recovery_end4(void)
     /* the next start_batch recovers the orphan to staged (count 1) and
      * starts the new batch past the recovered batch — post-fix past the
      * 4-byte tail as well */
-    MmapqMutableBatch *b2 = mmapq_indexed_batch_appender_start_batch(a);
+    MmapqMutableBatch *b2 = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b2));
     TEST_ASSERT_NOT_NULL(b2);
     TEST_ASSERT_EQUAL_INT64(CC_REG, b2->batch_offset);
     int64_t off = -1;
@@ -1713,7 +1718,8 @@ void test_cc_batch_bounded_gap_end_padding(void)
         MmapqIndexedBatchAppender *a = NULL;
         TEST_ASSERT_EQUAL_INT(0, cc_b_open(CUR.dir, CC_FILE_G1, &q, &a));
 
-        MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+        MmapqMutableBatch *b = NULL;
+        TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
         TEST_ASSERT_NOT_NULL(b);
         TEST_ASSERT_EQUAL_INT64(INITIAL_PAYLOAD_POSITION, b->batch_offset);
         static char buf[CC_REG];
@@ -1741,7 +1747,8 @@ void test_cc_batch_bounded_gap_end_padding(void)
         TEST_ASSERT_EQUAL_INT64(INITIAL_PAYLOAD_POSITION,
                                 mmapq_mutable_batch_complete_uncommitted(b));
         /* C committed at the next region start */
-        MmapqMutableBatch *c = mmapq_indexed_batch_appender_start_batch(a);
+        MmapqMutableBatch *c = NULL;
+        TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &c));
         TEST_ASSERT_NOT_NULL(c);
         TEST_ASSERT_EQUAL_INT64(CC_REG, c->batch_offset);
         memset(buf, 0x64, 16);

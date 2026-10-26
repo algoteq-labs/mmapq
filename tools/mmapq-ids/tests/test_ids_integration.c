@@ -290,11 +290,12 @@ static void id_child_batch(void)
             16LL * ID_REG, 0, ID_TIMEOUT, 0, NULL, NULL, &q) != 0) _exit(3);
     if (mmapq_indexed_batch_queue_create_appender_with_id(q, ID_LANE, &a) != 0)
         _exit(4);
-    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    MmapqMutableBatch *b = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
     if (!b) _exit(7);
     if (mmapq_mutable_batch_append(b, "before", 6) != 0) _exit(8);
     if (mmapq_mutable_batch_complete(b) != 0) _exit(9);     /* batch index 0 */
-    b = mmapq_indexed_batch_appender_start_batch(a);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
     if (!b) _exit(10);
     if (mmapq_mutable_batch_append(b, "uncb", 4) != 0) _exit(11);
     if (mmapq_mutable_batch_complete_uncommitted(b) < 0) _exit(12);

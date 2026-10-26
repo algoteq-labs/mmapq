@@ -94,8 +94,8 @@ int main(void)
 
     /* Batch 0: 1 message */
     {
-        MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(appender);
-        if (!b) { fprintf(stderr, "start_batch failed\n"); return 1; }
+        MmapqMutableBatch *b = NULL;
+        if (mmapq_indexed_batch_appender_start_batch_checked(appender, &b) != 0) { fprintf(stderr, "start_batch failed\n"); return 1; }
         if (mmapq_mutable_batch_append(b, "hello", 5) < 0) { fprintf(stderr, "append failed\n"); return 1; }
         int64_t off = mmapq_mutable_batch_complete(b);
         if (off < 0) { fprintf(stderr, "complete failed\n"); return 1; }
@@ -106,8 +106,8 @@ int main(void)
 
     /* Batch 1: 2 messages */
     {
-        MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(appender);
-        if (!b) { fprintf(stderr, "start_batch failed\n"); return 1; }
+        MmapqMutableBatch *b = NULL;
+        if (mmapq_indexed_batch_appender_start_batch_checked(appender, &b) != 0) { fprintf(stderr, "start_batch failed\n"); return 1; }
         if (mmapq_mutable_batch_append(b, "foo", 3) < 0) { fprintf(stderr, "append failed\n"); return 1; }
         if (mmapq_mutable_batch_append(b, "bar", 3) < 0) { fprintf(stderr, "append failed\n"); return 1; }
         int64_t off = mmapq_mutable_batch_complete(b);
@@ -119,8 +119,8 @@ int main(void)
 
     /* Batch 2: 3 messages */
     {
-        MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(appender);
-        if (!b) { fprintf(stderr, "start_batch failed\n"); return 1; }
+        MmapqMutableBatch *b = NULL;
+        if (mmapq_indexed_batch_appender_start_batch_checked(appender, &b) != 0) { fprintf(stderr, "start_batch failed\n"); return 1; }
         if (mmapq_mutable_batch_append(b, "alpha", 5) < 0) { fprintf(stderr, "append failed\n"); return 1; }
         if (mmapq_mutable_batch_append(b, "beta", 4) < 0) { fprintf(stderr, "append failed\n"); return 1; }
         if (mmapq_mutable_batch_append(b, "gamma", 5) < 0) { fprintf(stderr, "append failed\n"); return 1; }

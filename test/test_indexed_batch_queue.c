@@ -135,7 +135,8 @@ void test_batch_poll_single_batch(void)
 
     TEST_ASSERT_NOT_NULL(p);
 
-    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    MmapqMutableBatch *b = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
     mmapq_mutable_batch_append(b, "msg0", 4);
     mmapq_mutable_batch_append(b, "msg1", 4);
     mmapq_mutable_batch_append(b, "msg2", 4);
@@ -167,7 +168,8 @@ void test_batch_poll_header_timeout_is_error_not_eos(void)
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
     TEST_ASSERT_NOT_NULL(a);
 
-    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    MmapqMutableBatch *b = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
     mmapq_mutable_batch_append(b, "hello", 5);
     TEST_ASSERT_EQUAL_INT64(0, mmapq_mutable_batch_complete(b));
     mmapq_indexed_batch_appender_close(a);
@@ -219,12 +221,13 @@ void test_batch_poll_multiple_batches(void)
 
     TEST_ASSERT_NOT_NULL(p);
 
-    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    MmapqMutableBatch *b = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
     mmapq_mutable_batch_append(b, "b0m0", 4);
     mmapq_mutable_batch_append(b, "b0m1", 4);
     mmapq_mutable_batch_complete(b);
 
-    b = mmapq_indexed_batch_appender_start_batch(a);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
     mmapq_mutable_batch_append(b, "b1m0", 4);
     mmapq_mutable_batch_complete(b);
 
@@ -264,7 +267,8 @@ void test_batch_poll_advance_all_messages(void)
 
     TEST_ASSERT_NOT_NULL(p);
 
-    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    MmapqMutableBatch *b = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
     mmapq_mutable_batch_append(b, "m0", 2);
     mmapq_mutable_batch_append(b, "m1", 2);
     mmapq_mutable_batch_append(b, "m2", 2);
@@ -294,7 +298,8 @@ void test_batch_poll_stop(void)
 
     TEST_ASSERT_NOT_NULL(p);
 
-    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    MmapqMutableBatch *b = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
     mmapq_mutable_batch_append(b, "msg", 3);
     mmapq_mutable_batch_complete(b);
 
@@ -322,11 +327,12 @@ void test_batch_poll_retreat(void)
 
     TEST_ASSERT_NOT_NULL(p);
 
-    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    MmapqMutableBatch *b = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
     mmapq_mutable_batch_append(b, "batch0", 6);
     mmapq_mutable_batch_complete(b);
 
-    b = mmapq_indexed_batch_appender_start_batch(a);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
     mmapq_mutable_batch_append(b, "batch1", 6);
     mmapq_mutable_batch_complete(b);
 
@@ -365,7 +371,8 @@ void test_batch_poll_retreat_at_start(void)
 
     TEST_ASSERT_NOT_NULL(p);
 
-    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    MmapqMutableBatch *b = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
     mmapq_mutable_batch_append(b, "msg", 3);
     mmapq_mutable_batch_complete(b);
 
@@ -394,7 +401,8 @@ void test_batch_poller_exists(void)
 
     TEST_ASSERT_FALSE(mmapq_indexed_batch_poller_exists(p, 0));
 
-    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    MmapqMutableBatch *b = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
     mmapq_mutable_batch_append(b, "x", 1);
     mmapq_mutable_batch_complete(b);
 
@@ -422,11 +430,12 @@ void test_batch_poller_move_to_last_existing(void)
 
     TEST_ASSERT_FALSE(mmapq_indexed_batch_poller_move_to_last_existing_batch(p));
 
-    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    MmapqMutableBatch *b = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
     mmapq_mutable_batch_append(b, "first", 5);
     mmapq_mutable_batch_complete(b);
 
-    b = mmapq_indexed_batch_appender_start_batch(a);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
     mmapq_mutable_batch_append(b, "second", 6);
     mmapq_mutable_batch_complete(b);
 
@@ -454,12 +463,13 @@ void test_reader_read_by_index(void)
 
     TEST_ASSERT_NOT_NULL(r);
 
-    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    MmapqMutableBatch *b = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
     mmapq_mutable_batch_append(b, "first0", 6);
     mmapq_mutable_batch_append(b, "second0", 7);
     mmapq_mutable_batch_complete(b);
 
-    b = mmapq_indexed_batch_appender_start_batch(a);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
     mmapq_mutable_batch_append(b, "first1", 6);
     mmapq_mutable_batch_append(b, "second1", 7);
     mmapq_mutable_batch_append(b, "third1", 6);
@@ -512,11 +522,12 @@ void test_reader_read_first_and_last(void)
 
     TEST_ASSERT_NOT_NULL(r);
 
-    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    MmapqMutableBatch *b = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
     mmapq_mutable_batch_append(b, "only", 4);
     mmapq_mutable_batch_complete(b);
 
-    b = mmapq_indexed_batch_appender_start_batch(a);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
     mmapq_mutable_batch_append(b, "last_a", 6);
     mmapq_mutable_batch_append(b, "last_b", 6);
     mmapq_mutable_batch_complete(b);
@@ -574,7 +585,8 @@ void test_reader_has_entry(void)
 
     TEST_ASSERT_FALSE(mmapq_indexed_batch_reader_has_entry(r, 0));
 
-    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    MmapqMutableBatch *b = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
     mmapq_mutable_batch_append(b, "x", 1);
     mmapq_mutable_batch_complete(b);
 
@@ -592,7 +604,8 @@ void test_batch_append_rejects_zero_length(void)
     TEST_ASSERT_EQUAL_INT(0, rc_a);
     TEST_ASSERT_NOT_NULL(a);
 
-    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    MmapqMutableBatch *b = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
 
     int32_t ok = mmapq_mutable_batch_append(b, "valid", 5);
     TEST_ASSERT_EQUAL_INT(0, ok);
@@ -614,7 +627,8 @@ void test_batch_append_rejects_oversized_message(void)
     TEST_ASSERT_EQUAL_INT(0, rc_a);
     TEST_ASSERT_NOT_NULL(a);
 
-    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    MmapqMutableBatch *b = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
     TEST_ASSERT_NOT_NULL(b);
 
     int32_t ok = mmapq_mutable_batch_append(b, "small", 5);
@@ -638,7 +652,8 @@ void test_open_batch_as_normal_refused(void)
     TEST_ASSERT_EQUAL_INT(0, rc_a);
     TEST_ASSERT_NOT_NULL(a);
 
-    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    MmapqMutableBatch *b = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
     mmapq_mutable_batch_append(b, "msg", 3);
     mmapq_mutable_batch_complete(b);
     mmapq_indexed_batch_appender_close(a);
@@ -665,7 +680,8 @@ void test_batch_roundtrip_type_stamped(void)
     TEST_ASSERT_EQUAL_INT(0, rc_a);
     TEST_ASSERT_NOT_NULL(a);
 
-    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    MmapqMutableBatch *b = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
     mmapq_mutable_batch_append(b, "x", 1);
     mmapq_mutable_batch_complete(b);
     mmapq_indexed_batch_appender_close(a);
@@ -715,7 +731,8 @@ static void test_batch_poll_detects_corrupt_payload(void)
     TEST_ASSERT_NOT_NULL(a);
 
     TEST_ASSERT_NOT_NULL(a);
-    MmapqMutableBatch *mb = mmapq_indexed_batch_appender_start_batch(a);
+    MmapqMutableBatch *mb = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &mb));
     TEST_ASSERT_NOT_NULL(mb);
     int32_t r = mmapq_mutable_batch_append(mb, "hello", 5);
     TEST_ASSERT(r >= 0);
@@ -782,7 +799,8 @@ static void rec_append_two_batches(MmapqIndexedBatchAppender *a)
 {
     int64_t off = -1;
     for (int64_t b = 0; b < 2; b++) {
-        MmapqMutableBatch *mb = mmapq_indexed_batch_appender_start_batch(a);
+        MmapqMutableBatch *mb = NULL;
+        TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &mb));
         TEST_ASSERT_NOT_NULL(mb);
         for (int i = 0; i < 3; i++) {
             char buf[32];
@@ -860,7 +878,8 @@ static void test_batch_recovery_refuses_long_truncated_scan(void)
 /* Completes one more batch after the two-batch fixture; returns its offset. */
 static int64_t rec_complete_third_batch(MmapqIndexedBatchAppender *a)
 {
-    MmapqMutableBatch *mb = mmapq_indexed_batch_appender_start_batch(a);
+    MmapqMutableBatch *mb = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &mb));
     TEST_ASSERT_NOT_NULL(mb);
     TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(mb, "AFTER-RECOVERY", 14));
     int64_t off = mmapq_mutable_batch_complete_uncommitted(mb);
@@ -995,7 +1014,8 @@ static void test_batch_reader_rejects_zero_message_count(void)
 {
     MmapqIndexedBatchAppender *appender = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender_with_id(q, 0, &appender));
-    MmapqMutableBatch *batch = mmapq_indexed_batch_appender_start_batch(appender);
+    MmapqMutableBatch *batch = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(appender, &batch));
     TEST_ASSERT_NOT_NULL(batch);
     TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(batch, "message", 7));
     int64_t offset = mmapq_mutable_batch_complete_uncommitted(batch);
@@ -1150,7 +1170,8 @@ static void d3_commit_one_batch(MmapqIndexedBatchAppender **out)
 {
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, out));
     TEST_ASSERT_NOT_NULL(*out);
-    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(*out);
+    MmapqMutableBatch *b = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(*out, &b));
     mmapq_mutable_batch_append(b, "d3-batch0", 9);
     TEST_ASSERT_EQUAL_INT64(0,
         mmapq_mutable_batch_complete(b));
@@ -1366,7 +1387,8 @@ static int c32_rejoin(const char *qname, MmapqIndexedBatchQueue **out_q,
  * the batch offset for commit_batch. */
 static int64_t c32_complete_hello_batch(MmapqIndexedBatchAppender *a)
 {
-    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    MmapqMutableBatch *b = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
     TEST_ASSERT_NOT_NULL(b);
     TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(b, "HELLO", 5));
     return mmapq_mutable_batch_complete_uncommitted(b);
@@ -1563,7 +1585,8 @@ void test_c32_batch_p8_region_boundary_end_offset_legitimate(void)
 
     char msg[C32_REGION_SIZE - MMAPQ_BATCH_MSG_COUNT_SIZE - PAYLOAD_LENGTH_SIZE];
     memset(msg, 'L', sizeof(msg));
-    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    MmapqMutableBatch *b = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
     TEST_ASSERT_NOT_NULL(b);
     TEST_ASSERT_EQUAL_INT(0,
         mmapq_mutable_batch_append(b, msg, (int32_t)sizeof(msg)));
@@ -1628,7 +1651,8 @@ void test_c32_batch_p7_commit_batch_2pow57_refused(void)
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
     TEST_ASSERT_NOT_NULL(a);
 
-    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    MmapqMutableBatch *b = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
     TEST_ASSERT_NOT_NULL(b);
     TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(b, "small", 5));
     int64_t off = mmapq_mutable_batch_complete_uncommitted(b);
@@ -1668,7 +1692,8 @@ void test_c32_batch_p9_commit_batch_above_last_written_refused(void)
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
     TEST_ASSERT_NOT_NULL(a);
 
-    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    MmapqMutableBatch *b = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
     TEST_ASSERT_NOT_NULL(b);
     TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(b, "small", 5));
     int64_t off = mmapq_mutable_batch_complete_uncommitted(b);
@@ -1750,7 +1775,7 @@ void test_batch_iterator_init_null_returns_null(void)
 static void d33_batch(MmapqIndexedBatchAppender **a, MmapqMutableBatch **b)
 {
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, a));
-    *b = mmapq_indexed_batch_appender_start_batch(*a);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(*a, b));
     TEST_ASSERT_NOT_NULL(*b);
     static char m0[16], m1[24];
     memset(m0, 0x31, sizeof m0);
@@ -1806,7 +1831,8 @@ void test_mutable_batch_get_checked_timeout_propagates(void)
 {
     MmapqIndexedBatchAppender *a = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
-    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    MmapqMutableBatch *b = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
     TEST_ASSERT_NOT_NULL(b);
     /* msg0 fills region 0 exactly to the boundary, so advancing to
      * message 1 forces a REAL wrap into region 1 — the seam's firing
@@ -1914,7 +1940,8 @@ void test_batch_iterator_huge_count_walks_to_ecorrupt(void)
 {
     MmapqIndexedBatchAppender *a = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
-    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    MmapqMutableBatch *b = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
     mmapq_mutable_batch_append(b, "first0", 6);
     mmapq_mutable_batch_append(b, "second0", 7);
     mmapq_mutable_batch_append(b, "third0", 6);
@@ -1954,7 +1981,8 @@ void test_batch_spanning_regions_commits_polls_recovers(void)
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create(DIR, SQ, 32768, RING_SZ, 1, (int64_t)32768 * 64, 0, TIMEOUT, 0, rt, rt, &sq));
     MmapqIndexedBatchAppender *a = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(sq, &a));
-    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    MmapqMutableBatch *b = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
     for (int i = 0; i < 6553; i++) { uint8_t x = (uint8_t)(i & 0xFF); TEST_ASSERT_EQUAL_INT(i, mmapq_mutable_batch_append(b, &x, 1)); }
     TEST_ASSERT_EQUAL_INT64(0, mmapq_mutable_batch_complete(b));
     MmapqIndexedBatchPoller *p = NULL;
@@ -1976,7 +2004,7 @@ void test_batch_spanning_regions_commits_polls_recovers(void)
     /* appender recovery on reopen walks the batch via probe_batch + init(-1) + exhaust */
     a = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(sq, &a));
-    b = mmapq_indexed_batch_appender_start_batch(a);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
     TEST_ASSERT_NOT_NULL(b);
     TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(b, "z", 1));
     TEST_ASSERT_EQUAL_INT64(1, mmapq_mutable_batch_complete(b));
@@ -2011,7 +2039,8 @@ static void bq_msg(char *buf, int k) { snprintf(buf, 8, "m%dxx", k); }
 static int64_t bq_stage(MmapqIndexedBatchAppender *a, int k)   /* returns the offset */
 {
     char b[8]; bq_msg(b, k);
-    MmapqMutableBatch *mb = mmapq_indexed_batch_appender_start_batch(a);
+    MmapqMutableBatch *mb = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &mb));
     TEST_ASSERT_NOT_NULL(mb);
     TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(mb, b, 4));
     return mmapq_mutable_batch_complete_uncommitted(mb);
@@ -2020,7 +2049,8 @@ static int64_t bq_stage(MmapqIndexedBatchAppender *a, int k)   /* returns the of
 static int64_t bq_publish(MmapqIndexedBatchAppender *a, int k)  /* returns the index */
 {
     char b[8]; bq_msg(b, k);
-    MmapqMutableBatch *mb = mmapq_indexed_batch_appender_start_batch(a);
+    MmapqMutableBatch *mb = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &mb));
     TEST_ASSERT_NOT_NULL(mb);
     TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(mb, b, 4));
     return mmapq_mutable_batch_complete(mb);
@@ -2171,7 +2201,8 @@ void test_batch_commit_never_staged_rejected(void)
 {
     MmapqIndexedBatchAppender *a = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
-    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    MmapqMutableBatch *b = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
     TEST_ASSERT_NOT_NULL(b);
     TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(b, "m0xx", 4));
     TEST_ASSERT_EQUAL_INT64(INITIAL_PAYLOAD_POSITION, b->batch_offset);
@@ -2200,7 +2231,8 @@ void test_batch_complete_empty_rejected(void)
 {
     MmapqIndexedBatchAppender *a = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
-    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    MmapqMutableBatch *b = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
     TEST_ASSERT_NOT_NULL(b);
     TEST_ASSERT_EQUAL_INT64(MMAPQ_EINVAL, mmapq_mutable_batch_complete(b));
     TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_discard(b));
@@ -2213,7 +2245,8 @@ void test_batch_complete_uncommitted_empty_rejected(void)
 {
     MmapqIndexedBatchAppender *a = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
-    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    MmapqMutableBatch *b = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
     TEST_ASSERT_NOT_NULL(b);
     TEST_ASSERT_EQUAL_INT64(MMAPQ_EINVAL, mmapq_mutable_batch_complete_uncommitted(b));
     TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_discard(b));
@@ -2225,7 +2258,8 @@ void test_batch_complete_twice_rejected(void)
 {
     MmapqIndexedBatchAppender *a = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
-    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    MmapqMutableBatch *b = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
     TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(b, "m0xx", 4));
     TEST_ASSERT_EQUAL_INT64(0, mmapq_mutable_batch_complete(b));
     TEST_ASSERT_EQUAL_INT64(MMAPQ_EINVAL, mmapq_mutable_batch_complete(b));
@@ -2237,7 +2271,8 @@ void test_batch_discard_after_complete_rejected(void)
 {
     MmapqIndexedBatchAppender *a = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
-    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    MmapqMutableBatch *b = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
     TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(b, "m0xx", 4));
     TEST_ASSERT_EQUAL_INT64(0, mmapq_mutable_batch_complete(b));
     TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL, mmapq_mutable_batch_discard(b));
@@ -2249,7 +2284,8 @@ void test_batch_discard_after_complete_uncommitted_rejected(void)
 {
     MmapqIndexedBatchAppender *a = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
-    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    MmapqMutableBatch *b = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
     TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(b, "m0xx", 4));
     TEST_ASSERT_EQUAL_INT64(64, mmapq_mutable_batch_complete_uncommitted(b));
     TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL, mmapq_mutable_batch_discard(b));
@@ -2262,7 +2298,8 @@ void test_batch_discard_in_session_is_final(void)
 {
     MmapqIndexedBatchAppender *a = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
-    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    MmapqMutableBatch *b = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
     TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(b, "m0xx", 4));
     TEST_ASSERT_EQUAL_INT(1, mmapq_mutable_batch_append(b, "m1xx", 4));
     int64_t off = b->batch_offset;
@@ -2277,7 +2314,8 @@ void test_batch_commit_after_open_discard_rejected(void)
 {
     MmapqIndexedBatchAppender *a = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
-    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    MmapqMutableBatch *b = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
     TEST_ASSERT_EQUAL_INT64(INITIAL_PAYLOAD_POSITION, b->batch_offset);
     TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_discard(b));
     TEST_ASSERT_EQUAL_INT64(MMAPQ_EINVAL,
@@ -2291,7 +2329,8 @@ void test_batch_start_while_open_rejected(void)
 {
     MmapqIndexedBatchAppender *a = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
-    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    MmapqMutableBatch *b = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
     TEST_ASSERT_NOT_NULL(b);
     TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(b, "m0xx", 4));
     MmapqMutableBatch *b2 = NULL;
@@ -2373,13 +2412,15 @@ void test_batch_de_mode1_discard_overlay(void)
     MmapqIndexedBatchAppender *a = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
     char big[200]; memset(big, 'A', sizeof big);
-    MmapqMutableBatch *ba = mmapq_indexed_batch_appender_start_batch(a);
+    MmapqMutableBatch *ba = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &ba));
     for (int i = 0; i < 3; i++)
         TEST_ASSERT_EQUAL_INT(i, mmapq_mutable_batch_append(ba, big, 200));
     TEST_ASSERT_EQUAL_INT64(64, ba->batch_offset);
     TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_discard(ba));   /* staged-discarded */
 
-    MmapqMutableBatch *bb = mmapq_indexed_batch_appender_start_batch(a);
+    MmapqMutableBatch *bb = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &bb));
     TEST_ASSERT_EQUAL_INT64(680, bb->batch_offset);   /* forward-only: no reset */
     TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(bb, "y", 1));
     TEST_ASSERT_EQUAL_INT64(0, mmapq_mutable_batch_complete(bb));
@@ -2423,7 +2464,8 @@ void test_batch_de_mode2_rejoin_completes_open_batch(void)
     MmapqIndexedBatchAppender *a = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
     char big[200]; memset(big, 'A', sizeof big);
-    MmapqMutableBatch *ba = mmapq_indexed_batch_appender_start_batch(a);
+    MmapqMutableBatch *ba = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &ba));
     for (int i = 0; i < 3; i++)
         TEST_ASSERT_EQUAL_INT(i, mmapq_mutable_batch_append(ba, big, 200));
     mmapq_indexed_batch_appender_close(a);   /* "crash" with A open */
@@ -2434,7 +2476,8 @@ void test_batch_de_mode2_rejoin_completes_open_batch(void)
     TEST_ASSERT_EQUAL_INT64(64, joined);
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_join_completed_open_batch(a, &joined));  /* read-and-clear */
     /* The position is after A: the next batch starts at 680. */
-    MmapqMutableBatch *bb = mmapq_indexed_batch_appender_start_batch(a);
+    MmapqMutableBatch *bb = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &bb));
     TEST_ASSERT_EQUAL_INT64(680, bb->batch_offset);
     TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(bb, "y", 1));
     TEST_ASSERT_EQUAL_INT64(0, mmapq_mutable_batch_complete(bb));
@@ -2471,14 +2514,16 @@ void test_batch_de_mode2_empty_open_batch(void)
 {
     MmapqIndexedBatchAppender *a = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
-    MmapqMutableBatch *ba = mmapq_indexed_batch_appender_start_batch(a);
+    MmapqMutableBatch *ba = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &ba));
     TEST_ASSERT_EQUAL_INT64(64, ba->batch_offset);
 
     /* In-session: discard resets the position to the batch start — the next
      * batch overwrites the slot (mutant M12: a stored count-0 record leaves
      * the position past the slot, and the validator's count-0 rule fires). */
     TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_discard(ba));
-    MmapqMutableBatch *bb = mmapq_indexed_batch_appender_start_batch(a);
+    MmapqMutableBatch *bb = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &bb));
     TEST_ASSERT_EQUAL_INT64(64, bb->batch_offset);
     TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(bb, "y", 1));
     TEST_ASSERT_EQUAL_INT64(0, mmapq_mutable_batch_complete(bb));
@@ -2488,14 +2533,16 @@ void test_batch_de_mode2_empty_open_batch(void)
     /* Rejoin half: an empty open batch abandoned by a "crash" — the
      * position stays at the slot; the next batch overwrites it. */
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
-    MmapqMutableBatch *bc = mmapq_indexed_batch_appender_start_batch(a);
+    MmapqMutableBatch *bc = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &bc));
     TEST_ASSERT_EQUAL_INT64(73, bc->batch_offset);
     mmapq_indexed_batch_appender_close(a);   /* "crash" with an empty open batch */
 
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
     int64_t joined = -1;
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_join_completed_open_batch(a, &joined));
-    MmapqMutableBatch *bd = mmapq_indexed_batch_appender_start_batch(a);
+    MmapqMutableBatch *bd = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &bd));
     TEST_ASSERT_EQUAL_INT64(73, bd->batch_offset);
     TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(bd, "z", 1));
     TEST_ASSERT_EQUAL_INT64(1, mmapq_mutable_batch_complete(bd));
@@ -2512,7 +2559,8 @@ void test_batch_de_mode4_count0_hole(void)
     MmapqIndexedBatchAppender *a = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
     char big[200]; memset(big, 'A', sizeof big);
-    MmapqMutableBatch *ba = mmapq_indexed_batch_appender_start_batch(a);
+    MmapqMutableBatch *ba = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &ba));
     for (int i = 0; i < 3; i++)
         TEST_ASSERT_EQUAL_INT(i, mmapq_mutable_batch_append(ba, big, 200));
 
@@ -2522,7 +2570,7 @@ void test_batch_de_mode4_count0_hole(void)
     TEST_ASSERT_NULL(bb);
     TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_discard(ba));       /* A staged-discarded */
 
-    bb = mmapq_indexed_batch_appender_start_batch(a);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &bb));
     TEST_ASSERT_EQUAL_INT64(680, bb->batch_offset);
     TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(bb, "y", 1));
     TEST_ASSERT_EQUAL_INT64(680, mmapq_mutable_batch_complete_uncommitted(bb));  /* B staged */
@@ -2571,7 +2619,8 @@ void test_batch_de_f1_boundary_padding_marker(void)
     /* B @64: m0 (4 bytes) @68; m1 is 32632 bytes — the remaining region
      * capacity at 80 is 32768-80 = 32688, short by 4+... marker fills
      * [80, 32768); the re-wrap at the next region (32768) is failed. */
-    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    MmapqMutableBatch *b = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
     TEST_ASSERT_EQUAL_INT64(64, b->batch_offset);
     TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(b, "m0xx", 4));
     char big[REGION_SZ - 79]; memset(big, 'Z', sizeof big);  /* len+4 > cap(76)=REGION_SZ-76 */
@@ -2626,7 +2675,8 @@ void test_batch_start_recovers_orphaned_open_batch(void)
 {
     MmapqIndexedBatchAppender *a = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
-    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    MmapqMutableBatch *b = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
     TEST_ASSERT_EQUAL_INT64(64, b->batch_offset);
     TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(b, "m0xx", 4));
     TEST_ASSERT_EQUAL_INT(1, mmapq_mutable_batch_append(b, "m1xx", 4));
@@ -2638,7 +2688,8 @@ void test_batch_start_recovers_orphaned_open_batch(void)
 
     /* The next start_batch recovers the orphan (count stored, staged) and
      * starts a new batch after it. */
-    MmapqMutableBatch *b2 = mmapq_indexed_batch_appender_start_batch(a);
+    MmapqMutableBatch *b2 = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b2));
     TEST_ASSERT_NOT_NULL(b2);
     TEST_ASSERT_EQUAL_INT64(84, b2->batch_offset);
     int64_t joined = -1;
@@ -2816,7 +2867,8 @@ static void test_batch_complete_publish_failure_stages(void)
 {
     MmapqIndexedBatchAppender *a = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
-    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    MmapqMutableBatch *b = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
     TEST_ASSERT_NOT_NULL(b);
     TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(b, "hello", 5));
     bq_arm_oneshot_header(a, 0);   /* the publish wraps header position 0 */
@@ -2834,7 +2886,8 @@ static void test_batch_commit_batch_publish_failure_retains_member(void)
 {
     MmapqIndexedBatchAppender *a = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
-    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    MmapqMutableBatch *b = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
     TEST_ASSERT_NOT_NULL(b);
     TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(b, "hello", 5));
     TEST_ASSERT_EQUAL_INT64(64, mmapq_mutable_batch_complete_uncommitted(b));
@@ -2896,7 +2949,8 @@ static void test_batch_poll_mid_batch_corrupt_length_is_corrupt(void)
 {
     MmapqIndexedBatchAppender *a = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
-    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    MmapqMutableBatch *b = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
     TEST_ASSERT_NOT_NULL(b);
     TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(b, "hello", 5));
     TEST_ASSERT_EQUAL_INT(1, mmapq_mutable_batch_append(b, "world", 5));

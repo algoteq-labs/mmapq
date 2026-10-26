@@ -2337,7 +2337,8 @@ void test_reader_last_error_reports_eschema(void)
     rc = mmapq_indexed_batch_queue_create_appender(bq, &ba);
     TEST_ASSERT_EQUAL_INT(0, rc);
     TEST_ASSERT_NOT_NULL(ba);
-    MmapqMutableBatch *mb = mmapq_indexed_batch_appender_start_batch(ba);
+    MmapqMutableBatch *mb = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(ba, &mb));
     TEST_ASSERT_NOT_NULL(mb);
     mmapq_mutable_batch_append(mb, "x", 1);
     mmapq_mutable_batch_complete(mb);   /* CAND-49: complete publishes */

@@ -185,7 +185,8 @@ static void stage_three_big_single(MmapqIndexedAppender *a)
 static int64_t stage_batch(MmapqIndexedBatchAppender *a, const void *msg,
                            int32_t len)
 {
-    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    MmapqMutableBatch *b = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
     TEST_ASSERT_NOT_NULL(b);
     TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(b, msg, len));
     return mmapq_mutable_batch_complete_uncommitted(b);

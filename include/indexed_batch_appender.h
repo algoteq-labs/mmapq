@@ -11,7 +11,8 @@
  *
  * Batches are constructed and committed in a two-phase flow:
  *
- *   1. Start a new batch:   MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+ *   1. Start a new batch:   MmapqMutableBatch *b = NULL;
+ *                           mmapq_indexed_batch_appender_start_batch_checked(a, &b);
  *   2. Append messages:     mmapq_mutable_batch_append(b, data, length);
  *   3. Publish the batch:   int64_t index  = mmapq_mutable_batch_complete(b);
  *
@@ -39,8 +40,9 @@ typedef struct MmapqUncommittedBatchIterator MmapqUncommittedBatchIterator;
 /**
  * MmapqMutableBatch — an in-progress batch being constructed before commit.
  *
- * Owned by the appender. Valid only between mmapq_indexed_batch_appender_start_batch()
- * and its consumption by complete / complete_uncommitted / discard. Do not
+ * Owned by the appender. Valid only between
+ * mmapq_indexed_batch_appender_start_batch_checked() and its consumption by
+ * complete / complete_uncommitted / discard. Do not
  * retain a pointer to it across a commit or close.
  *
  * The internal iterator used by mmapq_mutable_batch_get_checked() and
@@ -122,36 +124,31 @@ int mmapq_indexed_batch_appender_create_with_id(
 /* ── Batch lifecycle ─────────────────────────────────────────────────────── */
 
 /**
- * Start a new batch.
+ * Start a new batch, preserving the failure code. Clear the output on
+ * failure.
  *
  * The returned MmapqMutableBatch is in-progress. Messages must be appended,
  * then the batch published with mmapq_mutable_batch_complete(), staged with
  * mmapq_mutable_batch_complete_uncommitted(), or discarded with
  * mmapq_mutable_batch_discard().
  *
- * Producer invariant (CAND-51a): every path that calls start_batch must end
- * in exactly one of complete, complete_uncommitted or discard. Rust and
- * Python enforce this by discarding on scope exit; C callers must do it
- * explicitly.
+ * Producer invariant (CAND-51a): every path that calls start_batch_checked
+ * must end in exactly one of complete, complete_uncommitted or discard.
+ * Rust and Python enforce this by discarding on scope exit; C callers must
+ * do it explicitly.
  *
  * Only one batch may be in progress at a time per appender: starting while
- * one is open returns NULL (MMAPQ_EINVAL via the checked variant). Starting
- * after a discard's pre-store failure first recovers the orphaned open
- * batch to staged (see mmapq_indexed_batch_appender_join_completed_open_batch).
- *
- * Returns: pointer to the appender-owned MmapqMutableBatch (valid until
- *         complete/complete_uncommitted/discard or close),
- *         or NULL on a closed appender or mapping timeout
- *         (the checked variant distinguishes the codes)
- */
-MmapqMutableBatch *mmapq_indexed_batch_appender_start_batch(MmapqIndexedBatchAppender *a);
-
-/**
- * Start a batch, preserving the failure code. Clear the output on failure.
+ * one is open fails with MMAPQ_EINVAL. Starting after a discard's
+ * pre-store failure first recovers the orphaned open batch to staged (see
+ * mmapq_indexed_batch_appender_join_completed_open_batch).
  *
  * appender: owner of the reusable mutable batch
- * out:      required output pointer; batch is borrowed until complete/discard
- * Returns: 0 on success, or an existing negative MMAPQ_* code.
+ * out:      required output pointer; batch is borrowed until
+ *           complete/complete_uncommitted/discard or close
+ * Returns: 0 on success; MMAPQ_EINVAL for a NULL argument or a second
+ *         start while a batch is open; MMAPQ_ECLOSED on a closed appender;
+ *         MMAPQ_ETIMEDOUT on a mapping timeout; MMAPQ_ECORRUPT from the
+ *         orphan recovery.
  */
 int mmapq_indexed_batch_appender_start_batch_checked(
     MmapqIndexedBatchAppender *appender, MmapqMutableBatch **out);
@@ -318,7 +315,8 @@ int mmapq_uncommitted_batch_next(
  * in one call.
  *
  * Equivalent to:
- *   MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+ *   MmapqMutableBatch *b = NULL;
+ *   mmapq_indexed_batch_appender_start_batch_checked(a, &b);
  *   mmapq_mutable_batch_append(b, data, length);
  *   return mmapq_mutable_batch_complete(b);
  *

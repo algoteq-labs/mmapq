@@ -567,13 +567,6 @@ int mmapq_indexed_batch_appender_start_batch_checked(
     return 0;
 }
 
-MmapqMutableBatch *mmapq_indexed_batch_appender_start_batch(MmapqIndexedBatchAppender *a)
-{
-    MmapqMutableBatch *batch = NULL;
-    mmapq_indexed_batch_appender_start_batch_checked(a, &batch);
-    return batch;
-}
-
 static int move_to_last_header(MmapqIndexedBatchAppender *a)
 {
     int attempts = 0;

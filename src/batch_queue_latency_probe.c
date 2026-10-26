@@ -2,6 +2,7 @@
 #include "mmap_platform.h"
 #include "internal/mmap_assert.h"
 #include "internal/batch_payload_iterator_internal.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdatomic.h>
@@ -134,7 +135,14 @@ uint64_t mmapqi_batch_queue_latency_probe_execute(BatchQueueLatencyProbe *p)
 
     uint64_t start = mmapq_monotonic_nanos();
 
-    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(p->request_appender);
+    MmapqMutableBatch *b = NULL;
+    int sb_rc = mmapq_indexed_batch_appender_start_batch_checked(p->request_appender, &b);
+    if (sb_rc != 0) {
+        /* a measurement that never started must not return a sentinel
+         * elapsed through the uint64_t stats path */
+        fprintf(stderr, "batch latency probe: start_batch_checked failed: %d\n", sb_rc);
+        exit(1);
+    }
     mmapq_mutable_batch_append(b, p->msg_buffer, p->message_size);
     mmapq_mutable_batch_complete(b);   /* CAND-49 §3.5: complete publishes */
 
@@ -159,7 +167,9 @@ void mmapqi_batch_queue_latency_probe_send_shutdown(BatchQueueLatencyProbe *p)
     hdr->instance_id = p->instance_id;
     hdr->sequence    = SHUTDOWN_SEQ;
 
-    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(p->request_appender);
+    MmapqMutableBatch *b = NULL;
+    if (mmapq_indexed_batch_appender_start_batch_checked(p->request_appender, &b) != 0)
+        return;   /* the shutdown is best-effort; the caller's join bounded-waits */
     mmapq_mutable_batch_append(b, p->msg_buffer, p->message_size);
     mmapq_mutable_batch_complete(b);   /* CAND-49 §3.5: complete publishes */
 

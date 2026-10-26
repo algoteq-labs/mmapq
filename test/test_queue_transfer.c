@@ -179,7 +179,8 @@ static MmapqIndexedBatchQueue *create_batch_queue(const char *name, const char *
     TEST_ASSERT_EQUAL_INT(0, rc_a);
     TEST_ASSERT_NOT_NULL(a);
     for (int b = 0; b < nb; b++) {
-        MmapqMutableBatch *mb = mmapq_indexed_batch_appender_start_batch(a);
+        MmapqMutableBatch *mb = NULL;
+        TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &mb));
         for (int m = 0; m < batch_sizes[b]; m++) {
             mmapq_mutable_batch_append(mb, batches[b][m], (int32_t)strlen(batches[b][m]) + 1);
         }
@@ -1752,7 +1753,8 @@ void test_copy_batch_to_normal_preserve_nonzero(void)
     int rc_ba = mmapq_indexed_batch_queue_create_appender(src, &ba);
     TEST_ASSERT_EQUAL_INT(0, rc_ba);
     TEST_ASSERT_NOT_NULL(ba);
-    MmapqMutableBatch *mb = mmapq_indexed_batch_appender_start_batch(ba);
+    MmapqMutableBatch *mb = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(ba, &mb));
     mmapq_mutable_batch_append(mb, "hello", 6);
     mmapq_mutable_batch_complete(mb);   /* CAND-49: complete publishes */
     mmapq_indexed_batch_appender_close(ba);
@@ -1811,7 +1813,8 @@ void test_import_batch_stream_preserve_nonzero(void)
     int rc_ba = mmapq_indexed_batch_queue_create_appender(src, &ba);
     TEST_ASSERT_EQUAL_INT(0, rc_ba);
     TEST_ASSERT_NOT_NULL(ba);
-    MmapqMutableBatch *mb = mmapq_indexed_batch_appender_start_batch(ba);
+    MmapqMutableBatch *mb = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(ba, &mb));
     mmapq_mutable_batch_append(mb, "test", 5);
     mmapq_mutable_batch_complete(mb);   /* CAND-49: complete publishes */
     mmapq_indexed_batch_appender_close(ba);
@@ -1905,11 +1908,12 @@ void test_batch_import_preserves_appender_ids(void)
     uint8_t id1 = mmapq_indexed_batch_appender_id(a1);
     TEST_ASSERT(id0 != id1);
 
-    MmapqMutableBatch *mb = mmapq_indexed_batch_appender_start_batch(a0);
+    MmapqMutableBatch *mb = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a0, &mb));
     mmapq_mutable_batch_append(mb, "a0-msg", 7);
     mmapq_mutable_batch_complete(mb);   /* CAND-49: complete publishes */
 
-    mb = mmapq_indexed_batch_appender_start_batch(a1);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a1, &mb));
     mmapq_mutable_batch_append(mb, "a1-msg", 7);
     mmapq_mutable_batch_complete(mb);   /* CAND-49: complete publishes */
 

@@ -878,14 +878,16 @@ void test_alloc_faults_batch_complete_uncommitted_grow(void)
 
     int64_t offs[16];
     for (int k = 0; k < 15; k++) {
-        MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+        MmapqMutableBatch *b = NULL;
+        TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
         TEST_ASSERT_NOT_NULL(b);
         TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(b, "data", 4));
         offs[k] = mmapq_mutable_batch_complete_uncommitted(b);
         TEST_ASSERT_EQUAL_INT64(64 + 12 * k, offs[k]);
     }
 
-    MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+    MmapqMutableBatch *b = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
     TEST_ASSERT_NOT_NULL(b);
     TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(b, "data", 4));
     arm(1);

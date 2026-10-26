@@ -207,7 +207,9 @@ MmapqIndexedBatchAppender *a = NULL;
 rc = mmapq_indexed_batch_queue_create_appender(q, &a);
 assert(rc == 0);
 
-MmapqMutableBatch *b = mmapq_indexed_batch_appender_start_batch(a);
+MmapqMutableBatch *b = NULL;
+rc = mmapq_indexed_batch_appender_start_batch_checked(a, &b);
+assert(rc == 0);
 mmapq_mutable_batch_append(b, "msg0", 4);
 mmapq_mutable_batch_append(b, "msg1", 4);
 mmapq_mutable_batch_append(b, "msg2", 4);
@@ -692,7 +694,7 @@ BENCH_ITER=5000000 BENCH_MAPPER=11 ./scripts/bench.sh
 | `mmapq_indexed_appender_append(a, data, len)` | Write and commit a message |
 | `mmapq_indexed_poller_poll(p, handler, ctx)` | Process one message via callback |
 | `mmapq_indexed_batch_queue_create_default(dir, name, wrt, rrt, &q)` | Open or create a batch queue |
-| `mmapq_indexed_batch_appender_start_batch()` | Begin a new batch |
+| `mmapq_indexed_batch_appender_start_batch_checked()` | Begin a new batch (0 or a negative `MMAPQ_*` code) |
 | `mmapq_mutable_batch_append()` | Add a message to an in-progress batch |
 | `mmapq_indexed_batch_appender_commit_batch()` | Commit the batch atomically |
 
