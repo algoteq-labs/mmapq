@@ -87,6 +87,22 @@ MmapqBatchPayloadIterator *mmapq_batch_iterator_init(
     it->next_message_position = batch_offset + MMAPQ_BATCH_MSG_COUNT_SIZE;
     it->exhausted            = it->last_error != 0;
 
+    /* CAND-50 item 3b: a start outside [0, message_count] is refused —
+     * the clamp-to-0 was a positioning-loop artifact, never deliberate
+     * (the D3.0 rule-13 record; Java moveTo has always thrown), and an
+     * over-run start was indistinguishable from the legal empty
+     * iteration. The upper bound is checked only when the count is
+     * known-good — a failed count read keeps its own error.
+     * start_msg_index == message_count stays a legal empty iteration
+     * (the loop below walks to the end; the first advance then reports
+     * exhaustion with last_error 0). */
+    if (start_msg_index < 0 ||
+        (it->last_error == 0 && start_msg_index > it->message_count)) {
+        it->last_error = MMAPQ_EINVAL;
+        it->exhausted  = 1;
+        return it;
+    }
+
     while (it->current_msg_index < start_msg_index - 1) {
         if (!mmapq_batch_iterator_advance(it)) break;
     }

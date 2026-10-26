@@ -43,8 +43,10 @@ typedef struct MmapqUncommittedBatchIterator MmapqUncommittedBatchIterator;
  * and its consumption by complete / complete_uncommitted / discard. Do not
  * retain a pointer to it across a commit or close.
  *
- * The internal iterator used by mmapq_mutable_batch_get_checked() and mmapq_mutable_batch_iterator()
- * is shared — these two accessors must not be used concurrently on the same batch.
+ * The internal iterator used by mmapq_mutable_batch_get_checked() and
+ * mmapq_mutable_batch_iterator() is shared: a call to either repositions
+ * the iterator returned by mmapq_mutable_batch_iterator(); do not
+ * interleave them, even on one thread.
  *
  * Mirrors Java IMutableBatch.
  */
@@ -396,9 +398,9 @@ int32_t mmapq_mutable_batch_append_remaining_from(MmapqMutableBatch *b, MmapqBat
  * The returned pointer is into the mapped payload region — it is a flyweight
  * view valid only until the next append, remap, or close. Do not retain it.
  *
- * WARNING: mmapq_mutable_batch_get_checked() and mmapq_mutable_batch_iterator()
- * share the appender's internal iterator state and must not be used
- * concurrently on the same batch.
+ * WARNING: the internal iterator is shared with
+ * mmapq_mutable_batch_iterator(): a call to either repositions the
+ * iterator it returned; do not interleave them, even on one thread.
  *
  * b:             the in-progress batch
  * message_index: zero-based index of the message
@@ -415,11 +417,16 @@ int mmapq_mutable_batch_get_checked(MmapqMutableBatch *b, int32_t message_index,
 /**
  * Return a MmapqBatchPayloadIterator positioned at the given message index.
  *
- * Shares the same internal state as mmapq_mutable_batch_get_checked() — the two must not
- * be used simultaneously.
+ * Shares the appender's internal iterator with
+ * mmapq_mutable_batch_get_checked(): a call to either repositions the
+ * iterator returned here; do not interleave them, even on one thread.
  *
  * b:                  the in-progress batch
- * start_message_index: zero-based index to begin from
+ * start_message_index: zero-based index to begin from; a start outside
+ *                     [0, message_count] is refused with MMAPQ_EINVAL
+ *                     (the iterator's last_error; the first advance
+ *                     returns false); a start equal to message_count is
+ *                     an empty iteration (CAND-50 item 3b).
  * Returns: pointer to the appender's internal iterator; valid until next append or close
  */
 MmapqBatchPayloadIterator *mmapq_mutable_batch_iterator(MmapqMutableBatch *b, int32_t start_message_index);

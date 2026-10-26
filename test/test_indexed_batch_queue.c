@@ -1830,6 +1830,86 @@ void test_mutable_batch_get_checked_timeout_propagates(void)
     mmapq_indexed_batch_appender_close(a);
 }
 
+/* ── D3b pins (CAND-50 item 3b, owner 2026-10-26): a negative start index
+ * is refused at the source — mmapq_batch_iterator_init sets
+ * last_error = MMAPQ_EINVAL and the first advance returns false (the
+ * clamp-to-0 was the positioning-loop artifact recorded at D3.0; Java
+ * moveTo has always thrown on < 0). start == message_count stays a legal
+ * empty iteration — guards existing behaviour (no fail-first). */
+void test_mutable_batch_iterator_negative_start_refused(void)
+{
+    MmapqIndexedBatchAppender *a = NULL;
+    MmapqMutableBatch *b = NULL;
+    d33_batch(&a, &b);
+    MmapqBatchPayloadIterator *it = mmapq_mutable_batch_iterator(b, -1);
+    TEST_ASSERT_NOT_NULL(it);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_batch_iterator_advance(it));
+    TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL, it->last_error);
+    mmapq_indexed_batch_appender_close(a);
+}
+
+void test_batch_iterator_init_negative_start_refused(void)
+{
+    /* a framed two-message batch in memory (the D8 stub idiom) */
+    int32_t framed[] = {2, 4, 111, 4, 222};
+    RegionAccessor accessor = {
+        .active_address = (uint8_t *)framed,
+        .active_base = 0,
+        .fast_path_end = sizeof(framed),
+        .mapped_capacity = sizeof(framed),
+    };
+    MmapqBatchPayloadIterator it = {.payload_acc = &accessor};
+    TEST_ASSERT_EQUAL_PTR(&it, mmapq_batch_iterator_init(&it, 0, 2, -1));
+    TEST_ASSERT_EQUAL_INT(0, mmapq_batch_iterator_advance(&it));
+    TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL, it.last_error);
+}
+
+void test_batch_iterator_init_start_at_count_is_empty(void)
+{
+    int32_t framed[] = {2, 4, 111, 4, 222};
+    RegionAccessor accessor = {
+        .active_address = (uint8_t *)framed,
+        .active_base = 0,
+        .fast_path_end = sizeof(framed),
+        .mapped_capacity = sizeof(framed),
+    };
+    MmapqBatchPayloadIterator it = {.payload_acc = &accessor};
+    TEST_ASSERT_EQUAL_PTR(&it, mmapq_batch_iterator_init(&it, 0, 2, 2));
+    TEST_ASSERT_EQUAL_INT(0, mmapq_batch_iterator_advance(&it)); /* no message */
+    TEST_ASSERT_EQUAL_INT(0, it.last_error);
+}
+
+/* D3b upper bound (owner addition 2026-10-26): a start beyond
+ * message_count is refused the same way — before the fix it was
+ * indistinguishable from the legal empty iteration (advance false,
+ * last_error 0; fail-first transcript "Expected -2 Was 0"). */
+void test_mutable_batch_iterator_start_beyond_count_refused(void)
+{
+    MmapqIndexedBatchAppender *a = NULL;
+    MmapqMutableBatch *b = NULL;
+    d33_batch(&a, &b);      /* a two-message batch: message_count == 2 */
+    MmapqBatchPayloadIterator *it = mmapq_mutable_batch_iterator(b, 3);
+    TEST_ASSERT_NOT_NULL(it);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_batch_iterator_advance(it));
+    TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL, it->last_error);
+    mmapq_indexed_batch_appender_close(a);
+}
+
+void test_batch_iterator_init_start_beyond_count_refused(void)
+{
+    int32_t framed[] = {2, 4, 111, 4, 222};
+    RegionAccessor accessor = {
+        .active_address = (uint8_t *)framed,
+        .active_base = 0,
+        .fast_path_end = sizeof(framed),
+        .mapped_capacity = sizeof(framed),
+    };
+    MmapqBatchPayloadIterator it = {.payload_acc = &accessor};
+    TEST_ASSERT_EQUAL_PTR(&it, mmapq_batch_iterator_init(&it, 0, 2, 3));
+    TEST_ASSERT_EQUAL_INT(0, mmapq_batch_iterator_advance(&it));
+    TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL, it.last_error);
+}
+
 void test_batch_iterator_huge_count_walks_to_ecorrupt(void)
 {
     MmapqIndexedBatchAppender *a = NULL;
@@ -2929,6 +3009,11 @@ int main(void)
     RUN_TEST(test_mutable_batch_get_checked_in_range_exact);
     RUN_TEST(test_mutable_batch_get_checked_out_of_range_refused);
     RUN_TEST(test_mutable_batch_get_checked_timeout_propagates);
+    RUN_TEST(test_mutable_batch_iterator_negative_start_refused);
+    RUN_TEST(test_batch_iterator_init_negative_start_refused);
+    RUN_TEST(test_batch_iterator_init_start_at_count_is_empty);
+    RUN_TEST(test_mutable_batch_iterator_start_beyond_count_refused);
+    RUN_TEST(test_batch_iterator_init_start_beyond_count_refused);
     RUN_TEST(test_append_and_commit_failure_leaves_lane_usable);
 
     /* CAND-51b F-REC-3 guard pins */

@@ -52,7 +52,12 @@ typedef struct MmapqBatchPayloadIterator MmapqBatchPayloadIterator;
  * batch_offset:    absolute payload offset where the batch begins
  * message_count:   total messages in the batch; pass -1 to read from disk;
  *                  trusted as written — see mmapq_batch_iterator_read_message_count
- * start_msg_index: zero-based message index to start iteration from
+ * start_msg_index: zero-based message index to start iteration from; a
+ *                  start outside [0, message_count] is refused with
+ *                  MMAPQ_EINVAL (last_error set, the first advance
+ *                  returns false; a failed count read keeps its own
+ *                  error); a start equal to message_count is an empty
+ *                  iteration (CAND-50 item 3b).
  * Returns: it (for chaining); NULL if it is NULL
  */
 MmapqBatchPayloadIterator *mmapq_batch_iterator_init(
