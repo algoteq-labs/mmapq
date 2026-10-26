@@ -49,7 +49,6 @@ must not be interpreted as an existing queue's authoritative disk geometry.
 | Appender with specific ID (single-message + batch) | ✓ | ✓ | ✓ |
 | Appender ID / current index / start offset accessors | ✓ | ✓ | ◐ id only |
 | Uncommitted payload iterator (recovery walk, archive line → end) | ✓ `mmapq_indexed_appender_uncommitted_iterator_checked` + `mmapq_uncommitted_iterator_next` in `src/indexed_appender.c`; test `test_uncommitted_iterator_finds_uncommitted` in `test/test_indexed_queue.c` | ✓ `uncommitted_iter` in `../mmapq-rs/src/appender.rs` + `UncommittedIter::next` in `../mmapq-rs/src/uncommitted.rs`; test `uncommitted_iter_finds_uncommitted` in `../mmapq-rs/tests/recovery.rs` | ✓ `uncommitted` in `../mmapq-py/src/mmapq/single_appender.py`; test `test_uncommitted_finds_uncommitted` in `../mmapq-py/tests/test_recovery.py` |
-| All-payloads iterator (`mmapq_indexed_appender_iterator`) | ◐ incomplete — factory only, no public advance/current accessors; CAND-50 owns the open question | ◐ via FFI layer (same caveat) | — |
 | Zero-length append rejected (`MMAPQ_EINVAL`) at runtime | ✓ | ✓ `Err(InvalidArgument)` | ✓ raises `ValueError` |
 | Crash recovery: appender resumes position after restart | ✓ | ✓ (via C) | ✓ (via C) |
 
@@ -156,7 +155,7 @@ Regression: `../mmapq-py/tests/test_reader_borrowing.py`
 |---|---|---|
 | `batch_payload_iterator.h` | 7/12 | 6/12 |
 | `batch_queue_transfer.h` | 7/7 | 6/7 |
-| `indexed_appender.h` | 12/18 | 8/18 |
+| `indexed_appender.h` | 11/17 | 8/17 |
 | `indexed_archiver.h` | 6/14 | 7/14 |
 | `indexed_batch_appender.h` | 17/22 | 12/22 |
 | `indexed_batch_archiver.h` | 4/11 | 6/11 |

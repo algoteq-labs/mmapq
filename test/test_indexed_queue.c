@@ -7,6 +7,9 @@
 #include "internal/header_codec.h"
 #include "internal/header_reader.h"
 #include "internal/payload_iterator.h"
+#include "internal/file_mapper.h"
+#include "internal/region_ring.h"
+#include "internal/region_ring_accessor.h"
 #include "mmap_platform.h"
 #include "internal/uncommitted_payload_iterator.h"
 #include "indexed_batch_queue.h"
@@ -817,36 +820,89 @@ void test_uncommitted_iterator_finds_uncommitted(void)
 
 /* ── C-03 regression: out-of-range iterator offsets must not double-free ──── */
 
+/* ── D5 payload access (CAND-50 item 5): a caller-owned payload iterator
+ * over the live queue's payload files — the re-scope target for the pins
+ * that used the removed appender factory. The bounds callbacks answer
+ * fixed, test-known positions (each pin controls the on-disk state). */
+typedef struct { int64_t sos; int64_t eos; } D5Bounds;
+static int64_t d5_sos(void *ctx) { return ((D5Bounds *)ctx)->sos; }
+static int64_t d5_eos(void *ctx) { return ((D5Bounds *)ctx)->eos; }
+
+typedef struct {
+    FileMapper     *fm;
+    RegionRing     *ring;
+    RegionAccessor *acc;
+} D5PayloadAccess;
+
+static void d5_open_payload_access(D5PayloadAccess *px)
+{
+    char prefix[256];
+    snprintf(prefix, sizeof prefix, "%s/%s/payload_0", DIR, QUEUE);
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapqi_file_mapper_rolled_create(prefix, MAX_FILE, REGION_SZ,
+            mmapqi_file_init_zeros, NULL, MAP_MODE_READ_WRITE, 6, 1, &px->fm));
+    TEST_ASSERT_NOT_NULL(px->fm);
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapqi_region_ring_async_create(RING_SZ, REGION_SZ, px->fm,
+            TIMEOUT_NS, rt, &px->ring));
+    TEST_ASSERT_NOT_NULL(px->ring);
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapqi_region_ring_accessor_create(px->ring, REGION_SZ, 1, 0.5,
+            &px->acc));
+    TEST_ASSERT_NOT_NULL(px->acc);
+}
+
+static void d5_close_payload_access(D5PayloadAccess *px)
+{
+    /* the async ring and its mapper are runtime-managed — the house test
+     * idiom destroys the accessor only (test_payload_walk.c precedent;
+     * the process exits reclaims the rest) */
+    mmapqi_region_ring_accessor_destroy(px->acc);
+}
+
 /* start_of_stream for a fresh appender is 64, so offset 0 violates the
  * iterator contract (offsets must be >= start_of_stream or NOT_SET).
- * Pre-fix, mmapqi_payload_iterator_init() freed the appender-owned iterator
- * on the out-of-range offset and returned NULL, leaving a->payload_iter
- * dangling: the second call ran init on freed memory and
- * mmapq_indexed_appender_close() freed it again (SIGABRT / ASan
- * double-free). Post-fix the factory rejects out-of-range offsets before
- * touching the appender's iterator. */
-static void test_appender_iterator_out_of_range_offset_no_double_free(void)
+ * CAND-50 item 5: re-scoped from the removed public appender factory to
+ * the internal entry points over a test-side accessor on the live queue's
+ * payload files. Pre-fix, mmapqi_payload_iterator_init() freed the
+ * iterator on the out-of-range offset (the appender-owned field then
+ * dangled and close freed it again — SIGABRT / ASan double-free); the
+ * pinned guarantee is unchanged: a rejected init leaves the iterator
+ * reusable. */
+void test_appender_iterator_out_of_range_offset_no_double_free(void)
 {
     MmapqIndexedAppender *a = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(q, &a));
     TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_appender_append(a, "data", 4));
 
-    TEST_ASSERT_NULL(mmapq_indexed_appender_iterator(a, 0, PAYLOAD_ITERATOR_NOT_SET));
-    /* The first NULL must not have freed the appender-owned iterator: a
-     * second identical call must return NULL without touching freed memory. */
-    TEST_ASSERT_NULL(mmapq_indexed_appender_iterator(a, 0, PAYLOAD_ITERATOR_NOT_SET));
-
-    /* The rejection must not be over-broad: a valid call creates the
-     * appender-owned iterator and finds the appended message. */
-    MmapqPayloadIterator *it =
-        mmapq_indexed_appender_iterator(a, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET);
+    D5PayloadAccess px;
+    d5_open_payload_access(&px);
+    D5Bounds bounds = { INITIAL_PAYLOAD_POSITION, INITIAL_PAYLOAD_POSITION + 8 };
+    MmapqPayloadIterator *it = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapqi_payload_iterator_create(QUEUE, px.acc, d5_sos, d5_eos,
+                                       &bounds, 0, &it));
     TEST_ASSERT_NOT_NULL(it);
+
+    /* Out-of-range rejected — and the rejection frees nothing: a second
+     * identical init is rejected just the same. */
+    TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL,
+        mmapqi_payload_iterator_init(it, 0, PAYLOAD_ITERATOR_NOT_SET));
+    TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL,
+        mmapqi_payload_iterator_init(it, 0, PAYLOAD_ITERATOR_NOT_SET));
+
+    /* The rejection is not over-broad: a valid init walks the appended
+     * message. */
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapqi_payload_iterator_init(it, PAYLOAD_ITERATOR_NOT_SET,
+                                     PAYLOAD_ITERATOR_NOT_SET));
     TEST_ASSERT_EQUAL_INT(1, mmapqi_payload_iterator_advance(it));
     Buffer *buf = mmapqi_payload_iterator_current(it);
     TEST_ASSERT_EQUAL_INT32(4, buf->capacity);
     TEST_ASSERT_EQUAL_MEMORY("data", buf->data, 4);
     TEST_ASSERT_EQUAL_INT(0, mmapqi_payload_iterator_advance(it));
 
+    d5_close_payload_access(&px);
     mmapq_indexed_appender_close(a);
 }
 
@@ -976,10 +1032,21 @@ void test_payload_iterator_advance_timeout_propagates(void)
     TEST_ASSERT_EQUAL_INT64(1, mmapq_indexed_appender_append(a, "d1", 2));
     const int64_t p1 = INITIAL_PAYLOAD_POSITION + 6;
 
-    MmapqPayloadIterator *it =
-        mmapq_indexed_appender_iterator(a, PAYLOAD_ITERATOR_NOT_SET,
-                                        PAYLOAD_ITERATOR_NOT_SET);
+    /* CAND-50 item 5: re-scoped from the removed appender factory to the
+     * internal factory over a test-side accessor (the D5 helper). */
+    D5PayloadAccess px;
+    d5_open_payload_access(&px);
+    D5Bounds bounds = { INITIAL_PAYLOAD_POSITION, p1 + 6 };
+    MmapqPayloadIterator *it = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapqi_payload_iterator_create(QUEUE, px.acc, d5_sos, d5_eos,
+                                       &bounds, 0, &it));
     TEST_ASSERT_NOT_NULL(it);
+    /* the removed factory initialised internally; the internal entry
+     * points split create and init */
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapqi_payload_iterator_init(it, PAYLOAD_ITERATOR_NOT_SET,
+                                     PAYLOAD_ITERATOR_NOT_SET));
 
     TEST_ASSERT_EQUAL_INT(1, mmapqi_payload_iterator_advance(it));   /* d0 */
     Buffer *buf = mmapqi_payload_iterator_current(it);
@@ -999,6 +1066,7 @@ void test_payload_iterator_advance_timeout_propagates(void)
     TEST_ASSERT_EQUAL_MEMORY("d1", buf->data, 2);
     TEST_ASSERT_EQUAL_INT(0, mmapqi_payload_iterator_advance(it));   /* end of stream */
 
+    d5_close_payload_access(&px);
     mmapq_indexed_appender_close(a);
 }
 

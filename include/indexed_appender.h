@@ -182,29 +182,6 @@ int64_t mmapq_indexed_appender_commit(
 /* ── Iterators ───────────────────────────────────────────────────────────── */
 
 /**
- * mmapq_indexed_appender_iterator — create a payload iterator over this appender's stream.
- *
- * Iterates ALL payloads (committed and uncommitted) in the payload file.
- * start_offset: first offset to iterate from, or PAYLOAD_ITERATOR_NOT_SET.
- * end_offset:   last offset to iterate to (inclusive), or PAYLOAD_ITERATOR_NOT_SET.
- *
- * Returns the appender's internal MmapqPayloadIterator, or NULL if
- * start_offset or end_offset is below the appender's start of stream. The
- * iterator is owned by the appender and freed by mmapq_indexed_appender_close().
- * Do not destroy it manually (there is no public payload_iterator_destroy).
- *
- * INVARIANT: The appending context must not be active while iterating.
- *
- * INCOMPLETE SURFACE (CAND-49 §5.4): there are no public advance/current
- * accessors for this iterator; its purpose is an open owner question under
- * CAND-50. New code should not use it.
- */
-MmapqPayloadIterator *mmapq_indexed_appender_iterator(
-    MmapqIndexedAppender *a,
-    int64_t          start_offset,
-    int64_t          end_offset);
-
-/**
  * mmapq_indexed_appender_uncommitted_iterator_checked — iterate only
  * uncommitted payloads (CAND-49: checked, three-way factory).
  *

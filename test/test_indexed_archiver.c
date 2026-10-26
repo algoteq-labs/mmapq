@@ -8,6 +8,9 @@
 #include "internal/appender_meta.h"
 #include "internal/header_codec.h"
 #include "internal/payload_iterator.h"
+#include "internal/file_mapper.h"
+#include "internal/region_ring.h"
+#include "internal/region_ring_accessor.h"
 #include "internal/uncommitted_payload_iterator.h"
 #include "internal/queue_files.h"
 #include "internal/test_hooks.h"
@@ -994,11 +997,54 @@ void test_archive_offset_not_lowered_by_shorter_forward(void)
     mmapq_indexed_appender_close(a);
 }
 
+/* ── D5 payload access (CAND-50 item 5): a caller-owned payload iterator
+ * over the live queue's payload files — the re-scope target for the pin
+ * that used the removed appender factory. The bounds callbacks answer
+ * fixed, test-known positions (the pin controls the on-disk state). */
+typedef struct { int64_t sos; int64_t eos; } D5Bounds;
+static int64_t d5_sos(void *ctx) { return ((D5Bounds *)ctx)->sos; }
+static int64_t d5_eos(void *ctx) { return ((D5Bounds *)ctx)->eos; }
+
+typedef struct {
+    FileMapper     *fm;
+    RegionRing     *ring;
+    RegionAccessor *acc;
+} D5PayloadAccess;
+
+static void d5_open_payload_access(D5PayloadAccess *px)
+{
+    char prefix[512];
+    snprintf(prefix, sizeof prefix, "%s/%s/payload_0", DIR, QUEUE);
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapqi_file_mapper_rolled_create(prefix, MAX_FILE, REGION_SZ,
+            mmapqi_file_init_zeros, NULL, MAP_MODE_READ_WRITE, 6, 1, &px->fm));
+    TEST_ASSERT_NOT_NULL(px->fm);
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapqi_region_ring_async_create(RING_SZ, REGION_SZ, px->fm,
+            TIMEOUT, rt, &px->ring));
+    TEST_ASSERT_NOT_NULL(px->ring);
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapqi_region_ring_accessor_create(px->ring, REGION_SZ, 1, 0.5,
+            &px->acc));
+    TEST_ASSERT_NOT_NULL(px->acc);
+}
+
+static void d5_close_payload_access(D5PayloadAccess *px)
+{
+    /* the async ring and its mapper are runtime-managed — the house test
+     * idiom destroys the accessor only (test_payload_walk.c precedent;
+     * the process exits reclaims the rest) */
+    mmapqi_region_ring_accessor_destroy(px->acc);
+}
+
 /* Ownership pin — the acceptance gate for the A5 contract fix. Route pins
  * pass on a skip-only partial fix; this one fails on it. Rejection must
  * return MMAPQ_EINVAL AND leave the caller-owned iterator usable: a valid
  * re-init afterwards is the discriminating line (a free-on-reject init
- * turns the re-init into a use-after-free). */
+ * turns the re-init into a use-after-free).
+ * CAND-50 item 5: re-scoped from the removed public appender factory to
+ * the internal entry points over a test-side accessor on the live queue's
+ * payload files (the D5 helper). */
 void test_payload_iterator_init_rejects_out_of_range(void)
 {
     MmapqIndexedAppender *a = create_archivable_appender();
@@ -1018,11 +1064,17 @@ void test_payload_iterator_init_rejects_out_of_range(void)
         mmapq_indexed_archiver_archive_up_to_index(arch, 2));
     mmapq_indexed_archiver_close(arch);
 
-    MmapqPayloadIterator *it = mmapq_indexed_appender_iterator(
-        a, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET);
+    D5PayloadAccess px;
+    d5_open_payload_access(&px);
+    /* start_of_stream is now 80 (messages at 64/72/80/88, end 96) */
+    D5Bounds bounds = { 80, INITIAL_PAYLOAD_POSITION + 4 * 8 };
+    MmapqPayloadIterator *it = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapqi_payload_iterator_create(QUEUE, px.acc, d5_sos, d5_eos,
+                                       &bounds, 0, &it));
     TEST_ASSERT_NOT_NULL(it);
 
-    /* start_of_stream is now 80; offset 64 is archived. Reject. */
+    /* offset 64 is archived. Reject. */
     TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL,
         mmapqi_payload_iterator_init(it, 64, PAYLOAD_ITERATOR_NOT_SET));
 
@@ -1036,6 +1088,7 @@ void test_payload_iterator_init_rejects_out_of_range(void)
     TEST_ASSERT_EQUAL_INT32(4, buf->capacity);
     TEST_ASSERT_EQUAL_MEMORY("msg2", buf->data, 4);
 
+    d5_close_payload_access(&px);
     mmapq_indexed_appender_close(a);
 }
 

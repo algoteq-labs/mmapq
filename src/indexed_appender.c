@@ -51,8 +51,7 @@ struct MmapqIndexedAppender {
     Buffer header_buf;
     Buffer payload_buf;
 
-    /* Iterators — created lazily on first iterator() call */
-    MmapqPayloadIterator            *payload_iter;
+    /* Iterators — created lazily on first iterator call */
     MmapqPayloadIterator            *uncommitted_inner;
     MmapqUncommittedPayloadIterator *uncommitted_iter;
 
@@ -905,36 +904,6 @@ int64_t mmapq_indexed_appender_commit(
     return committed;
 }
 
-MmapqPayloadIterator *mmapq_indexed_appender_iterator(
-    MmapqIndexedAppender *a,
-    int64_t          start_offset,
-    int64_t          end_offset)
-{
-    if (a == NULL) return NULL;
-
-    /* Reject out-of-range caller offsets at the boundary, before the
-     * appender-owned iterator is created or touched. */
-    int64_t sos = appender_start_of_stream(a);
-    if ((start_offset != PAYLOAD_ITERATOR_NOT_SET && start_offset < sos) ||
-        (end_offset   != PAYLOAD_ITERATOR_NOT_SET && end_offset   < sos))
-        return NULL;
-
-    if (a->payload_iter == NULL) {
-        mmapqi_payload_iterator_create(
-            a->queue_name,
-            a->payload_acc,
-            appender_start_of_stream,
-            appender_end_of_stream,
-            a,
-            0, /* live end-of-stream */
-            &a->payload_iter);
-    }
-
-    if (mmapqi_payload_iterator_init(a->payload_iter, start_offset, end_offset) != 0)
-        return NULL;
-    return a->payload_iter;
-}
-
 int mmapq_indexed_appender_uncommitted_iterator_checked(
     MmapqIndexedAppender *a,
     int64_t          start_offset,
@@ -1044,11 +1013,6 @@ void mmapq_indexed_appender_close(MmapqIndexedAppender *a)
         mmapqi_payload_iterator_destroy(a->uncommitted_inner);
         a->uncommitted_inner = NULL;
     }
-    if (a->payload_iter != NULL) {
-        mmapqi_payload_iterator_destroy(a->payload_iter);
-        a->payload_iter = NULL;
-    }
-
     if (a->appender_meta != NULL) {
         mmapqi_appender_meta_close(a->appender_meta);
         a->appender_meta = NULL;
