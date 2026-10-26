@@ -184,7 +184,9 @@ schema bump.
   56-bit position header encoding; payload framing (`[int32 length]`
   `[payload]`, zero length = end-of-stream sentinel, negative = long
   padding); the padding markers; the meta layouts (queue meta 64 B here;
-  appender meta 64 B in `src/internal/appender_meta.h`).
+  appender meta 64 B in `src/internal/appender_meta.h`); the export
+  stream format (the "Export stream" section below — stream version 2 is
+  the canonical little-endian form).
 - **C1 — geometry (CAND-38):** `region_size` a power of two, a multiple of
   32 KB (one transposed header block) and a multiple of the host page
   size; `max_file_size` a multiple of `region_size`; pre-rule geometry is
@@ -212,3 +214,45 @@ schema bump.
 - **C7 — appender-ID lease:** a SIGKILLed writer's lane stays occupied
   (`MMAPQ_EIDCONFLICT`); release only via `mmapq-ids --unset`, valid only
   when the holding process is dead.
+
+## Export stream
+
+The export/import stream (QueueTransfer) is a byte-level contract like the
+queue format itself. Reference implementation: `src/queue_transfer.c` and
+`src/batch_queue_transfer.c`; the header layout is
+`src/internal/export_meta.h`. **All multi-byte fields are little-endian.**
+
+**Header: 64 bytes.**
+
+| Offset | Size | Field |
+|---|---|---|
+| 0 | 4 | stream version (int32) |
+| 4 | 4 | region_size (int32) |
+| 8 | 8 | start_index (int64) |
+| 16 | 8 | max_file_size (int64) |
+| 24 | 8 | total_entries (int64) |
+| 32 | 1 | archivable (uint8) |
+| 33 | 1 | queue_type (uint8: 0 normal, 2 batch) |
+| 34 | 30 | reserved (zero on write; ignored on read) |
+
+**Entry framing, flat stream** (queue_type 0): per entry,
+`[uint16 appender_id][int32 payload_length][payload bytes]`,
+× total_entries. `payload_length > 0` and ≤ region_size − 4.
+
+**Entry framing, batch stream** (queue_type 2): per entry,
+`[uint16 appender_id][int32 message_count]`, then per message
+`[int32 length][payload bytes]`.
+
+**Stream versions.** Version 2 is the canonical little-endian stream,
+written by C 0.2.0 (and by Java implementations fixed for the 0.2.0
+contract). Version 1 was written by C 0.1.0 and early 0.2.0 (little-endian)
+and by older Java (big-endian framing). Readers accept versions 1 and 2 and
+refuse anything else with `MMAPQ_ESCHEMA`. A version-1 stream whose frames
+fail to parse (`MMAPQ_ECORRUPT`) may be a legacy big-endian Java export —
+re-export it with a fixed Java (version 2).
+
+The framing is pinned byte-for-byte by golden-block tests
+(`test_c57_export_golden_bytes_flat` / `_batch` in
+`test/test_queue_transfer.c`); the version rules by
+`test_c57_import_rejects_stream_version_3` and
+`test_c57_import_accepts_v1_stream`.

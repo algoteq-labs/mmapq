@@ -106,6 +106,8 @@ _Static_assert(ATOMIC_LLONG_LOCK_FREE == 2,
     "mmapq requires lock-free 64-bit atomics: header slots, appender-meta int64s (incl. the CAND-54 commit intent), queue_meta start_index, mapper pretouch");
 _Static_assert(ATOMIC_INT_LOCK_FREE == 2,
     "mmapq requires lock-free 32-bit atomics: the appender-id-pool words");
+_Static_assert(__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__,
+    "mmapq's wire format and export stream are little-endian; a big-endian host would silently write big-endian files");
 
 #define PAYLOAD_LENGTH_OFFSET    ((int32_t)0)
 #define PAYLOAD_LENGTH_SIZE      ((int32_t)4)

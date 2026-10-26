@@ -11,9 +11,17 @@
  *   [ExportMeta header: 64 bytes]
  *   [entry: uint16 appender_id][int32 payload_length][uint8 payload...] ... (× total_entries)
  *
- * All multi-byte fields are in native byte order.  Since the primary target
- * platforms are Linux x86-64 and ARM64 (both little-endian), this is compatible
- * with the Java export format without byte swapping.
+ * All multi-byte fields are little-endian — asserted at build by the
+ * _Static_assert on __BYTE_ORDER__ in internal/header_codec.h.  The
+ * normative specification is doc/reference/wire-format.md, "The export
+ * stream".
+ *
+ * Stream version history (the schema_version field of this header):
+ *   1  C 0.1.0/0.2.0-pre-CAND-57 (little-endian); Java up to the CAND-57 fix
+ *      (BIG-endian framing — a v1 stream whose frames fail to parse may be a
+ *      legacy Java export; re-export with a fixed Java).
+ *   2  CAND-57 canonical little-endian, written by C 0.2.0 and fixed Java.
+ * Readers accept 1 and 2 and refuse anything else with MMAPQ_ESCHEMA.
  *
  * FIELD LAYOUT (mirrors Java QueueExportMeta.ENCODED_LENGTH):
  *   Offset  Size  Field
@@ -29,6 +37,12 @@
  */
 
 #define EXPORT_META_SIZE                 64
+
+/* The canonical stream version written today (CAND-57).  Readers accept
+ * versions 1 and 2; both are little-endian on the C side. */
+#define EXPORT_STREAM_VERSION            2
+#define EXPORT_STREAM_VERSION_MIN_READ   1
+#define EXPORT_STREAM_VERSION_MAX_READ   2
 
 #define EXPORT_META_SCHEMA_VERSION_OFF   0
 #define EXPORT_META_SCHEMA_VERSION_SIZE  4

@@ -2429,6 +2429,117 @@ void test_batch_export_stream_header_reserved_bytes_zero(void)
     mmapq_indexed_batch_queue_close(src);
 }
 
+
+/* ── CAND-57: the export stream format is a byte-level contract ────────────
+ * Golden blocks generated from the specification (wire-format.md "The
+ * export stream"), NOT from the C writer — a writer drift fails these.
+ * Flat: version 2, region 32768, max_file 262144, 2 entries (id 0, "g0",
+ * "g1"). Batch: version 2, queue_type 2, one batch of "b0","b1". */
+static const uint8_t C57_GOLDEN_FLAT[82] = {
+    0x02, 0x00, 0x00, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x67, 0x30,
+    0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x67, 0x31, 0x00,
+};
+
+static const uint8_t C57_GOLDEN_BATCH[84] = {
+    0x02, 0x00, 0x00, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x03, 0x00,
+    0x00, 0x00, 0x62, 0x30, 0x00, 0x03, 0x00, 0x00, 0x00, 0x62, 0x31, 0x00,
+};
+
+void test_c57_export_golden_bytes_flat(void)
+{
+    const char *msgs[] = {"g0", "g1"};
+    MmapqIndexedQueue *src = create_queue(QUEUE, msgs, 2, 0);
+    MmapqIndexedReader *reader = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_reader(src, &reader));
+
+    uint8_t buf[256];
+    memset(buf, 0xAA, sizeof buf);
+    FILE *out = fmemopen(buf, sizeof buf, "wb");
+    TEST_ASSERT_NOT_NULL(out);
+    TEST_ASSERT_EQUAL_INT64(2, mmapq_queue_transfer_export(reader, out, 0, 1,
+        MMAPQ_QUEUE_TRANSFER_REBASE, NULL, NULL, NULL));
+    fclose(out);
+    mmapq_indexed_reader_close(reader);
+    mmapq_indexed_queue_close(src);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, memcmp(buf, C57_GOLDEN_FLAT, sizeof C57_GOLDEN_FLAT),
+        "flat export stream differs from the golden bytes");
+    /* the byte after the stream is untouched (stream length is exact) */
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(0xAA, buf[sizeof C57_GOLDEN_FLAT],
+        "flat export wrote past the declared stream");
+}
+
+void test_c57_export_golden_bytes_batch(void)
+{
+    const char *batches[][3] = {{"b0", "b1", NULL}};
+    int sizes[] = {2};
+    MmapqIndexedBatchQueue *src = create_batch_queue(BQ_QUEUE, batches, sizes, 1);
+    MmapqIndexedBatchReader *reader = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_reader(src, &reader));
+
+    uint8_t buf[256];
+    memset(buf, 0xAA, sizeof buf);
+    FILE *out = fmemopen(buf, sizeof buf, "wb");
+    TEST_ASSERT_NOT_NULL(out);
+    TEST_ASSERT_EQUAL_INT64(1, mmapq_batch_queue_transfer_export(reader, out, 0, 0,
+        MMAPQ_BATCH_QUEUE_TRANSFER_REBASE, NULL, NULL, NULL));
+    fclose(out);
+    mmapq_indexed_batch_reader_close(reader);
+    mmapq_indexed_batch_queue_close(src);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, memcmp(buf, C57_GOLDEN_BATCH, sizeof C57_GOLDEN_BATCH),
+        "batch export stream differs from the golden bytes");
+    TEST_ASSERT_EQUAL_UINT8(0xAA, buf[sizeof C57_GOLDEN_BATCH]);
+}
+
+/* Version 3 is refused with ESCHEMA (fail-first: the pre-change importer
+ * never checked the field and accepted it). */
+void test_c57_import_rejects_stream_version_3(void)
+{
+    uint8_t buf[sizeof C57_GOLDEN_FLAT];
+    memcpy(buf, C57_GOLDEN_FLAT, sizeof buf);
+    buf[0] = 3;                 /* version field, little-endian int32 */
+
+    cleanup_queue(COPY_Q);
+    FILE *in = fmemopen(buf, sizeof buf, "rb");
+    TEST_ASSERT_NOT_NULL(in);
+    int64_t rc = mmapq_queue_transfer_import(in, TEST_DIR, COPY_Q,
+        MMAPQ_QUEUE_TRANSFER_REBASE, rt, rt, 0, NULL, NULL, MMAPQ_CONFLICT_AUTO);
+    fclose(in);
+    TEST_ASSERT_EQUAL_INT64(MMAPQ_ESCHEMA, rc);
+}
+
+/* A version-1 stream (C 0.1.0/0.2.0 legacy) still imports, byte-exact. */
+void test_c57_import_accepts_v1_stream(void)
+{
+    uint8_t buf[sizeof C57_GOLDEN_FLAT];
+    memcpy(buf, C57_GOLDEN_FLAT, sizeof buf);
+    buf[0] = 1;
+
+    cleanup_queue(COPY_Q);
+    FILE *in = fmemopen(buf, sizeof buf, "rb");
+    TEST_ASSERT_NOT_NULL(in);
+    TEST_ASSERT_EQUAL_INT64(2, mmapq_queue_transfer_import(in, TEST_DIR, COPY_Q,
+        MMAPQ_QUEUE_TRANSFER_REBASE, rt, rt, 0, NULL, NULL, MMAPQ_CONFLICT_AUTO));
+    fclose(in);
+
+    char loaded[10][100];
+    int cnt = load_messages(COPY_Q, loaded, 10);
+    TEST_ASSERT_EQUAL_INT(2, cnt);
+    TEST_ASSERT_EQUAL_STRING("g0", loaded[0]);
+    TEST_ASSERT_EQUAL_STRING("g1", loaded[1]);
+}
+
 void test_import_accepts_nonzero_reserved_bytes(void)
 {
     const char *msgs[] = {"c1", "c2", "c3"};
@@ -3150,6 +3261,10 @@ int main(void)
     RUN_TEST(test_export_meta_encode_zeroes_reserved);
     RUN_TEST(test_export_stream_header_reserved_bytes_zero);
     RUN_TEST(test_batch_export_stream_header_reserved_bytes_zero);
+    RUN_TEST(test_c57_export_golden_bytes_flat);
+    RUN_TEST(test_c57_export_golden_bytes_batch);
+    RUN_TEST(test_c57_import_rejects_stream_version_3);
+    RUN_TEST(test_c57_import_accepts_v1_stream);
     RUN_TEST(test_import_accepts_nonzero_reserved_bytes);
     RUN_TEST(test_batch_import_accepts_nonzero_reserved_bytes);
     RUN_TEST(test_transfer_import_archivable_rebase);

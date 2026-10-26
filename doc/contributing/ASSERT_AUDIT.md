@@ -92,11 +92,11 @@ Lines 55. Internal dispatch fatal check (WRAP_UNWRAPPED in mmapqi_header_read).
 
 | Line | Disposition | Verified |
 |---|---|---|
-| 136 | I | ASSERT_HEADER_ALIGNED macro definition — counted per the wrapper-macro rule; its invocation is not a separate site. Platform/mapping alignment invariant. |
-| 147 | I | header_encode NULL_HEADER check — a non-positive on-disk start_offset is refused at appender_meta open (CAND-32 C1) before header_encode is reached. |
-| 149 | I | header_encode 56-bit field check — guarded by MMAPQ_ECORRUPT runtime checks at both append commit paths (indexed_appender.c commit_header, indexed_batch_appender.c commit_batch) and the appender_meta open-time start_offset validation (CAND-32). |
-| 227 | I | header_position: non-negativity of internally computed index. |
-| 250 | I | header_index: non-negativity of internally computed position. |
+| 138 | I | ASSERT_HEADER_ALIGNED macro definition — counted per the wrapper-macro rule; its invocation is not a separate site. Platform/mapping alignment invariant. |
+| 149 | I | header_encode NULL_HEADER check — a non-positive on-disk start_offset is refused at appender_meta open (CAND-32 C1) before header_encode is reached. |
+| 151 | I | header_encode 56-bit field check — guarded by MMAPQ_ECORRUPT runtime checks at both append commit paths (indexed_appender.c commit_header, indexed_batch_appender.c commit_batch) and the appender_meta open-time start_offset validation (CAND-32). |
+| 229 | I | header_position: non-negativity of internally computed index. |
+| 252 | I | header_index: non-negativity of internally computed position. |
 
 ### indexed_appender.c — 1 (V→I, Phase 6a)
 

@@ -57,6 +57,7 @@ granularity" argument in `../design/archiving-design.md`.
 | Claim | Class | Evidence |
 |---|---|---|
 | Naturally aligned lock-free atomics over `MAP_SHARED` are relied on for x86-64 and ARM64 | A + C | Stated assumption (address-free lock-free atomics); **asserted at build**: `_Static_assert(ATOMIC_LLONG_LOCK_FREE == 2)` in `src/internal/header_codec.h` |
+| All on-disk and stream fields are little-endian | C | **Asserted at build**: `_Static_assert(__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)` in `src/internal/header_codec.h`; the export stream's bytes are pinned by the golden-block pins (`test_c57_export_golden_bytes_flat`/`_batch`) |
 | Cross-process happens-before through `flock` handover | A | Outside C11; stated in `doc/model/README.md` |
 | Up to 256 concurrent writers | C | `MAX_APPENDERS = 256` (`src/internal/header_codec.h`); the ID pool is 8 × 32-bit words in a 64-byte file (`src/internal/appender_id_pool.h`) |
 | `archivable` is fixed at creation; reopen keeps the on-disk value; transfers preserve it | C + P | `src/queue_meta.c` (no writer after creation); transfer preservation pins across export/import/copy in both cross-type directions (test_queue_transfer.c) |

@@ -649,7 +649,7 @@ static void exercise_empty_export(int batch_source, int populated, int after, in
     TEST_ASSERT_EQUAL_INT64(EXPORT_META_SIZE, bytes);
     TEST_ASSERT_EQUAL_UINT64(EXPORT_META_SIZE, header_bytes);
     TEST_ASSERT_EQUAL_INT64(0, meta.total_entries);
-    TEST_ASSERT_EQUAL_INT(1, meta.schema_version);
+    TEST_ASSERT_EQUAL_INT(EXPORT_STREAM_VERSION, meta.schema_version);  /* CAND-57: version 2 */
     TEST_ASSERT_EQUAL_INT(32768, meta.region_size);
     TEST_ASSERT_EQUAL_INT64(32768 * 8, meta.max_file_size);
     TEST_ASSERT_EQUAL_INT(1, meta.archivable);

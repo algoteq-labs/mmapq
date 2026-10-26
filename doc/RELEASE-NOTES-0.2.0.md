@@ -15,7 +15,10 @@ guarantees are the C library's to state).
   what 0.1.0 files mean and accept — the archive-line field, the geometry
   rule, and the unified tail rule. **0.1.0 queues must be recreated or
   migrated: export with a 0.1.0 library and import into a fresh 0.2.0
-  queue — the export stream format is unchanged, and the stream carries
+  queue — the export stream's framing is unchanged; 0.2.0 writes stream
+  version 2 and checks the version on import (1 and 2 accepted); a 0.1.0
+  importer reads version-2 streams, since it never checked the field.
+  The stream carries
   the source queue's archivable flag: the imported 0.2.0 queue keeps
   it.** (The export(0.1.0) → import(0.2.0) round-trip is verified
   byte-exact for both queue types, and verified for an archivable 0.1.0

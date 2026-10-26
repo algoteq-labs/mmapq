@@ -97,7 +97,7 @@ int64_t mmapq_queue_transfer_export(
         /* Empty queue: write a valid header with 0 entries */
         ExportMeta meta;
         export_meta_init(&meta);
-        meta.schema_version    = 1;
+        meta.schema_version    = EXPORT_STREAM_VERSION;
         meta.region_size       = queue_meta_region_size(qm);
         meta.max_file_size     = queue_meta_max_file_size(qm);
         meta.start_index       = (start_index_mode == MMAPQ_QUEUE_TRANSFER_REBASE) ? 0 : start;
@@ -134,7 +134,7 @@ int64_t mmapq_queue_transfer_export(
     /* Write ExportMeta header */
     ExportMeta meta;
     export_meta_init(&meta);
-    meta.schema_version    = 1;
+    meta.schema_version    = EXPORT_STREAM_VERSION;
     meta.region_size       = queue_meta_region_size(qm);
     meta.max_file_size     = queue_meta_max_file_size(qm);
     meta.start_index       = (start_index_mode == MMAPQ_QUEUE_TRANSFER_REBASE) ? 0 : start;
@@ -244,7 +244,7 @@ int64_t mmapq_queue_transfer_export_chunked(
         /* Write header */
         ExportMeta meta;
         export_meta_init(&meta);
-        meta.schema_version    = 1;
+        meta.schema_version    = EXPORT_STREAM_VERSION;
         meta.region_size       = queue_meta_region_size(qm);
         meta.max_file_size     = queue_meta_max_file_size(qm);
         meta.start_index       = (start_index_mode == MMAPQ_QUEUE_TRANSFER_REBASE) ? cum_exported : chunks[c].start_idx;
@@ -413,6 +413,12 @@ int64_t mmapq_queue_transfer_import(
 
     ExportMeta meta;
     export_meta_decode(hdr, &meta);
+    /* CAND-57: the version field is checked (it never was).  Versions 1 and
+     * 2 are both little-endian on the C side; anything else is refused as a
+     * version mismatch — ESCHEMA, never a misread. */
+    if (meta.schema_version < EXPORT_STREAM_VERSION_MIN_READ
+        || meta.schema_version > EXPORT_STREAM_VERSION_MAX_READ)
+        return MMAPQ_ESCHEMA;
     if (meta.total_entries < 0) return MMAPQ_ECORRUPT;
     if (meta.queue_type == QUEUE_TYPE_FIXED8) return MMAPQ_ESCHEMA;
     if (meta.queue_type != QUEUE_TYPE_NORMAL) return MMAPQ_ESCHEMA;
@@ -444,6 +450,12 @@ int64_t mmapq_queue_transfer_import_batch_stream(
 
     ExportMeta meta;
     export_meta_decode(hdr, &meta);
+    /* CAND-57: the version field is checked (it never was).  Versions 1 and
+     * 2 are both little-endian on the C side; anything else is refused as a
+     * version mismatch — ESCHEMA, never a misread. */
+    if (meta.schema_version < EXPORT_STREAM_VERSION_MIN_READ
+        || meta.schema_version > EXPORT_STREAM_VERSION_MAX_READ)
+        return MMAPQ_ESCHEMA;
     if (meta.total_entries < 0) return MMAPQ_ECORRUPT;
     if (meta.queue_type == QUEUE_TYPE_FIXED8) return MMAPQ_ESCHEMA;
     if (meta.queue_type != QUEUE_TYPE_BATCH)  return MMAPQ_ESCHEMA;

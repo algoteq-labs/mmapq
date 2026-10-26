@@ -15,8 +15,8 @@ error, or on-disk corruption — retrying the identical call fails again.
 | `MMAPQ_ETIMEDOUT` | -1 | Mapping timeout or I/O wait exceeded (a region was not mapped in time) | **Yes** — transient | `MmapError::MapTimedOut` | `MmapqError` |
 | `MMAPQ_EINVAL` | -2 | Invalid argument (NULL, zero length, index out of range) | No — caller bug | `MmapError::InvalidArgument` | `ValueError` |
 | `MMAPQ_ECLOSED` | -3 | Operation on a closed handle | No | `MmapError::QueueClosed` | `QueueClosedError` |
-| `MMAPQ_ECORRUPT` | -4 | On-disk corruption detected | No — recreate the queue (restore history via export/import) | `MmapError::Corrupt` | `QueueCorruptError` |
-| `MMAPQ_ESCHEMA` | -5 | Schema version or queue-type mismatch, or on-disk geometry not supported by this build/host (a queue is portable only to hosts whose page size divides its region size) | No — the file is refused, never misread | `MmapError::SchemaMismatch` | `SchemaMismatchError` |
+| `MMAPQ_ECORRUPT` | -4 | On-disk corruption detected; also a malformed export stream. Note: a version-1 stream that fails to parse may be a legacy big-endian Java export — re-export it with a fixed Java (version 2) | No — recreate the queue (restore history via export/import) | `MmapError::Corrupt` | `QueueCorruptError` |
+| `MMAPQ_ESCHEMA` | -5 | Schema version or queue-type mismatch, on-disk geometry not supported by this build/host (a queue is portable only to hosts whose page size divides its region size), or an export-stream version mismatch (1 and 2 accepted) | No — the file is refused, never misread | `MmapError::SchemaMismatch` | `SchemaMismatchError` |
 | `MMAPQ_EEXIST` | -6 | Destination queue already exists (transfer without append mode) | No | `MmapError::Exists` | `QueueExistsError` |
 | `MMAPQ_ENOENT` | -7 | File or queue does not exist | No | `MmapError::FileNotFound` | `FileNotFoundError` |
 | `MMAPQ_EIDCONFLICT` | -8 | Requested appender ID already in use (a killed writer's lane stays taken until `mmapq-ids --unset` on the dead process) | No — release the ID first | `MmapError::IdConflict` | `AppenderIdConflictError` |
