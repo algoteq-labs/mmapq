@@ -67,5 +67,12 @@ See `examples/demo.c` for a complete producer/consumer.
   `MMAPQ_ETIMEDOUT`, never end-of-stream).
 - Random access without a cursor: `mmapq_indexed_queue_create_reader()` +
   `mmapq_indexed_reader_read()` / `read_last()`.
+- Appender IDs come from the pool automatically and are released when the
+  appender closes; a killed process's ID stays taken (see
+  [chapter 5](05-crash-and-restart.md)).
+- `region_size` is a creation-time power of two that must be a multiple of
+  both 32 KB (one transposed header block) and the OS page size — so the
+  smallest valid region is 32 KB. The default (4 MB) is right for almost
+  everything.
 - Errors: every fallible call returns 0/non-negative or a negative
   [`MMAPQ_*` code](../reference/error-codes.md).

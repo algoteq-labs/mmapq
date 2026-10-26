@@ -130,5 +130,5 @@ process-crash tests, not reboot or power-loss tests.
 ## License
 
 BSD 3-Clause — see [LICENSE](LICENSE) — carried verbatim from the standalone
-`mmapq-tools` repo at import (the surrounding mmapq repository is MIT; the
-import keeps the tool's original license by owner ruling, 2026-10-22).
+`mmapq-tools` repo at import (the same license as the surrounding mmapq
+repository; owner ruling, 2026-10-22).

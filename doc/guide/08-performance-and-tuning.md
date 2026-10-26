@@ -25,7 +25,7 @@ mapper thread. (Why: the Anti-Pattern Ledger in the
 ## Benchmarks
 
 Measured against the Java implementation the format derives from,
-measured at 0.1.0, on the same machine — the one comparison where every variable
+measured 2026-06-24 (commit `d3cfb28`), on the same machine — the one comparison where every variable
 (format, framing, hardware, cores) is controlled. On isolated cores
 (physical cores 5, 7, 9 on an Intel i7-12700H) with Transparent Huge Pages
 enabled.
