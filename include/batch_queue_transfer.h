@@ -11,6 +11,11 @@
  * remain open; success excludes a later caller flush/close failure.
  * Chunked exports own their files and check close.
  *
+ * The archivable flag travels with the data: export writes the source
+ * queue's flag into the stream header; import and copy create the
+ * destination with it (CAND-50 §11). An existing destination keeps its
+ * on-disk flag — disk wins on every open — and the transfer proceeds.
+ *
  * Exports do not snapshot the source or seek back to rewrite counts. Keep
  * the exported range available and filters deterministic across passes.
  * A mismatch between declared and written entry/message counts returns
@@ -153,6 +158,10 @@ int64_t mmapq_batch_queue_transfer_export_chunked(
  *   - allow_append=1 + PRESERVE → returns MMAPQ_EINVAL
  *   - allow_append=1 + REBASE → appends
  * If destination exists but is a normal queue → returns MMAPQ_ESCHEMA.
+ *
+ * The stream carries the source queue's archivable flag; a created
+ * destination takes it (CAND-50 §11). An existing destination keeps its
+ * on-disk flag — disk wins on every open — and the import proceeds.
  *
  * Each batch in the stream carries a uint16 appender ID (matching the
  * normal queue framing). The mapper controls how these IDs are assigned

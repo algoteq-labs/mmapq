@@ -110,8 +110,8 @@ Regression: `../mmapq-py/tests/test_reader_borrowing.py`
 | Feature | C | Rust | Python |
 |---|---|---|---|
 | Export queue → stream (full + chunked) | ✓ | ✓ | ◐ full only (chunked omitted) |
-| Import stream → queue | ✓ | ✓ | ✓ |
-| Queue-to-queue copy | ✓ | ✓ | ✓ |
+| Import stream → queue (archivable flag preserved on a created destination; an existing destination keeps its on-disk flag) | ✓ pins `test_transfer_import_archivable_{rebase,preserve}`, `test_transfer_import_append_flag_mismatch` + batch twins in `test/test_queue_transfer.c` | ✓ (via C) | ✓ (via C) |
+| Queue-to-queue copy (archivable flag preserved, incl. cross-type) | ✓ pins `test_transfer_copy_preserves_archivable`, `test_transfer_copy_batch_to_normal_preserves_archivable` + batch twins in `test/test_queue_transfer.c` | ✓ (via C) | ✓ (via C) |
 | Batch variants (incl. flat-stream import) | ✓ | ✓ | — |
 | Appender ID mapper callback (identity / remap / merge) | ✓ | ✓ | ✓ |
 | MmapqConflictBehavior (AUTO fallback / ABORT error) | ✓ | ✓ | ✓ |

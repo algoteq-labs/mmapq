@@ -319,7 +319,6 @@ static int64_t do_import(
     MmapqAppenderIdMapper mapper, void *mapper_ctx,
     MmapqConflictBehavior on_conflict)
 {
-    (void)archivable;
     if (total_entries < 0) return MMAPQ_ECORRUPT;
     char dpath[4096];
     snprintf(dpath, sizeof(dpath), "%s/%s", directory, queue_name);
@@ -328,10 +327,13 @@ static int64_t do_import(
     int ring = mmapq_min_ring_size(region_size);
     if (ring < 4) ring = 4;
     MmapqIndexedQueue *q = NULL;
+    /* CAND-50 §11: a created destination takes the stream's archivable
+     * flag; an existing destination keeps its on-disk flag (disk wins on
+     * every open) and the import proceeds. */
     int rc = mmapq_indexed_queue_create(
         directory, queue_name,
         region_size, ring, 1, max_file_size, start_index,
-        10000000000ULL, 0, wrt, rrt, &q);
+        10000000000ULL, archivable, wrt, rrt, &q);
 
     if (rc != 0) return rc;
 
@@ -497,9 +499,11 @@ int64_t mmapq_queue_transfer_copy(
     int ring = mmapq_min_ring_size(queue_meta_region_size(qm));
     if (ring < 4) ring = 4;
     MmapqIndexedQueue *q = NULL;
+    /* CAND-50 §11: a created destination takes the source queue's
+     * archivable flag; an existing destination keeps its on-disk flag. */
     int create_rc = mmapq_indexed_queue_create(dest_dir, dest_queue,
         queue_meta_region_size(qm), ring, 1, queue_meta_max_file_size(qm),
-        dest_start, 10000000000ULL, 0, write_rt, read_rt, &q);
+        dest_start, 10000000000ULL, queue_meta_archivable(qm), write_rt, read_rt, &q);
 
     if (create_rc != 0) return create_rc;
 
@@ -590,9 +594,11 @@ int64_t mmapq_queue_transfer_copy_batch_to_normal(
     int ring = mmapq_min_ring_size(queue_meta_region_size(qm));
     if (ring < 4) ring = 4;
     MmapqIndexedQueue *q = NULL;
+    /* CAND-50 §11: a created destination takes the source queue's
+     * archivable flag; an existing destination keeps its on-disk flag. */
     int rc = mmapq_indexed_queue_create(dest_dir, dest_queue,
         queue_meta_region_size(qm), ring, 1, queue_meta_max_file_size(qm),
-        dest_start, 10000000000ULL, 0, write_rt, read_rt, &q);
+        dest_start, 10000000000ULL, queue_meta_archivable(qm), write_rt, read_rt, &q);
     if (rc != 0) return rc;
 
     void *cache_store[APPENDER_CACHE_SIZE] = {NULL};

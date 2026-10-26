@@ -13,6 +13,8 @@
 #include "mmap_platform.h"
 #include "internal/batch_payload_iterator_internal.h"
 #include "internal/export_meta.h"
+#include "indexed_archiver.h"
+#include "indexed_batch_archiver.h"
 
 #include <unistd.h>
 #include <string.h>
@@ -2535,6 +2537,531 @@ void test_batch_import_accepts_nonzero_reserved_bytes(void)
 
 /* ── Main ────────────────────────────────────────────────────────────────── */
 
+/* ── §11 (CAND-50): the archivable flag through transfer ──────────────────
+ * The REBASE/PRESERVE/copy pins are fail-first against the pre-fix reset
+ * (every transfer created the destination non-archivable — the sweep's
+ * default, not a decision); the non-archivable-source and the
+ * append-into-existing mismatch pins guard existing behaviour (no
+ * fail-first, stated per under-claiming). Geometry: one region per file
+ * (32768/32768), the first message fills region 0 exactly, the second
+ * rolls to file 1 — an archive round then has exactly one reclaimable
+ * file. */
+
+#define D6_BIG_LEN  (32768 - 64 - 4)   /* 64 + 4 + 32700 == 32768 */
+
+static void assert_archive_reclaim_round(const char *name, int64_t up_to_index)
+{
+    MmapqIndexedArchiver *arch = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_archiver_create(TEST_DIR, name, 16, rt, &arch));
+    TEST_ASSERT_NOT_NULL(arch);
+    TEST_ASSERT_EQUAL_INT(1, mmapq_indexed_archiver_archivable(arch));
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_archiver_archive_up_to_index(arch, up_to_index));
+    char *paths[8] = {0};
+    int n = mmapq_indexed_archiver_archivable_files(arch, paths, 8);
+    TEST_ASSERT_EQUAL_INT(1, n);
+    TEST_ASSERT_NOT_NULL(strstr(paths[0], "payload_0_0"));
+    char victim[512];
+    snprintf(victim, sizeof victim, "%s", paths[0]);
+    TEST_ASSERT_EQUAL_INT(0, access(victim, F_OK));     /* listed, present */
+    TEST_ASSERT_EQUAL_INT(1, mmapq_indexed_archiver_reclaim_files(arch, paths, n));
+    TEST_ASSERT_EQUAL_INT(-1, access(victim, F_OK));    /* reclaimed */
+    for (int i = 0; i < n; i++) free(paths[i]);
+    mmapq_indexed_archiver_close(arch);
+}
+
+static void assert_not_archivable(const char *name)
+{
+    MmapqIndexedArchiver *arch = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_archiver_create(TEST_DIR, name, 16, rt, &arch));
+    TEST_ASSERT_NOT_NULL(arch);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_archiver_archivable(arch));
+    mmapq_indexed_archiver_close(arch);
+}
+
+static MmapqIndexedQueue *create_queue_archivable(const char *name, int64_t start_index)
+{
+    cleanup_queue(name);
+    char path[512];
+    snprintf(path, sizeof(path), "%s/%s", TEST_DIR, name);
+    mkdir(path, 0775);
+    MmapqIndexedQueue *q = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_queue_create(TEST_DIR, name, 32768, 16, 1, 32768LL,
+                                   start_index, 5000000000ULL, 1, rt, rt, &q));
+    TEST_ASSERT_NOT_NULL(q);
+    MmapqIndexedAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(q, &a));
+    TEST_ASSERT_NOT_NULL(a);
+    static char big[D6_BIG_LEN];
+    memset(big, 0x41, sizeof big);
+    TEST_ASSERT_EQUAL_INT64(start_index,
+        mmapq_indexed_appender_append(a, big, (int32_t)sizeof big));
+    TEST_ASSERT_EQUAL_INT64(start_index + 1,
+        mmapq_indexed_appender_append(a, "tail", 5));
+    mmapq_indexed_appender_close(a);
+    return q;
+}
+
+static int64_t export_all(MmapqIndexedQueue *src, const char *name,
+                          int64_t first, int64_t last, int mode, char *fpath)
+{
+    MmapqIndexedReader *reader = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_reader(src, &reader));
+    TEST_ASSERT_NOT_NULL(reader);
+    snprintf(fpath, 512, "%s/%s_export.bin", TEST_DIR, name);
+    FILE *out = fopen(fpath, "wb");
+    TEST_ASSERT_NOT_NULL(out);
+    int64_t n = mmapq_queue_transfer_export(reader, out, first, last, mode,
+                                            NULL, NULL, NULL);
+    fclose(out);
+    mmapq_indexed_reader_close(reader);
+    return n;
+}
+
+static int64_t import_stream(const char *fpath, const char *dest, int mode,
+                             int allow_append)
+{
+    FILE *in = fopen(fpath, "rb");
+    TEST_ASSERT_NOT_NULL(in);
+    int64_t n = mmapq_queue_transfer_import(in, TEST_DIR, dest, mode, rt, rt,
+                                            allow_append, NULL, NULL,
+                                            MMAPQ_CONFLICT_AUTO);
+    fclose(in);
+    return n;
+}
+
+void test_transfer_import_archivable_rebase(void)
+{
+    MmapqIndexedQueue *src = create_queue_archivable(QUEUE, 0);
+    char fpath[512];
+    TEST_ASSERT_EQUAL_INT64(2, export_all(src, QUEUE, 0, 1,
+                                          MMAPQ_QUEUE_TRANSFER_REBASE, fpath));
+    mmapq_indexed_queue_close(src);
+
+    cleanup_queue(COPY_Q);
+    TEST_ASSERT_EQUAL_INT64(2, import_stream(fpath, COPY_Q,
+                                             MMAPQ_QUEUE_TRANSFER_REBASE, 0));
+    unlink(fpath);
+    /* the imported queue opens archivable, archives and reclaims */
+    assert_archive_reclaim_round(COPY_Q, 1);
+}
+
+void test_transfer_import_archivable_preserve(void)
+{
+    MmapqIndexedQueue *src = create_queue_archivable(QUEUE, 5);  /* start_index 5 */
+    char fpath[512];
+    TEST_ASSERT_EQUAL_INT64(2, export_all(src, QUEUE, 5, 6,
+                                          MMAPQ_QUEUE_TRANSFER_PRESERVE, fpath));
+    mmapq_indexed_queue_close(src);
+
+    cleanup_queue(COPY_Q);
+    TEST_ASSERT_EQUAL_INT64(2, import_stream(fpath, COPY_Q,
+                                             MMAPQ_QUEUE_TRANSFER_PRESERVE, 0));
+    unlink(fpath);
+
+    /* the index space is preserved AND the queue opens archivable */
+    MmapqIndexedQueue *v = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_queue_create(TEST_DIR, COPY_Q, 32768, 16, 1, 32768LL,
+                                   0, 5000000000ULL, 0, rt, rt, &v));
+    MmapqIndexedReader *vr = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_reader(v, &vr));
+    TEST_ASSERT_EQUAL_INT64(5, mmapq_indexed_reader_start_index(vr));
+    TEST_ASSERT_EQUAL_INT64(6, mmapq_indexed_reader_last_index(vr));
+    mmapq_indexed_reader_close(vr);
+    mmapq_indexed_queue_close(v);
+
+    assert_archive_reclaim_round(COPY_Q, 6);
+}
+
+void test_transfer_copy_preserves_archivable(void)
+{
+    MmapqIndexedQueue *src = create_queue_archivable(QUEUE, 0);
+    MmapqIndexedReader *reader = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_reader(src, &reader));
+    cleanup_queue(COPY_Q);
+    TEST_ASSERT_EQUAL_INT64(2,
+        mmapq_queue_transfer_copy(reader, TEST_DIR, COPY_Q, 0, 1,
+                                  MMAPQ_QUEUE_TRANSFER_REBASE, NULL, NULL, NULL,
+                                  rt, rt, 0, NULL, NULL, MMAPQ_CONFLICT_AUTO));
+    mmapq_indexed_reader_close(reader);
+    mmapq_indexed_queue_close(src);
+    assert_archive_reclaim_round(COPY_Q, 1);
+}
+
+void test_transfer_import_nonarchivable_stays(void)
+{
+    const char *msgs[] = {"m0", "m1"};
+    MmapqIndexedQueue *src = create_queue(QUEUE, msgs, 2, 0);   /* archivable=0 */
+    char fpath[512];
+    TEST_ASSERT_EQUAL_INT64(2, export_all(src, QUEUE, 0, 1,
+                                          MMAPQ_QUEUE_TRANSFER_REBASE, fpath));
+    mmapq_indexed_queue_close(src);
+
+    cleanup_queue(COPY_Q);
+    TEST_ASSERT_EQUAL_INT64(2, import_stream(fpath, COPY_Q,
+                                             MMAPQ_QUEUE_TRANSFER_REBASE, 0));
+    unlink(fpath);
+    assert_not_archivable(COPY_Q);
+}
+
+void test_transfer_import_append_flag_mismatch(void)
+{
+    char fpath[512];
+
+    /* direction 1: an archivable stream appended into an existing
+     * non-archivable queue — the destination's on-disk flag wins and the
+     * import proceeds */
+    MmapqIndexedQueue *src = create_queue_archivable(QUEUE, 0);
+    TEST_ASSERT_EQUAL_INT64(2, export_all(src, QUEUE, 0, 1,
+                                          MMAPQ_QUEUE_TRANSFER_REBASE, fpath));
+    mmapq_indexed_queue_close(src);
+    const char *old1[] = {"old"};
+    MmapqIndexedQueue *dst = create_queue(COPY_Q, old1, 1, 0);  /* archivable=0 */
+    mmapq_indexed_queue_close(dst);
+    TEST_ASSERT_EQUAL_INT64(2, import_stream(fpath, COPY_Q,
+                                             MMAPQ_QUEUE_TRANSFER_REBASE, 1));
+    assert_not_archivable(COPY_Q);
+    unlink(fpath);
+
+    /* direction 2: a non-archivable stream appended into an existing
+     * archivable queue — the destination stays archivable */
+    const char *msgs[] = {"m0", "m1"};
+    src = create_queue(QUEUE, msgs, 2, 0);
+    TEST_ASSERT_EQUAL_INT64(2, export_all(src, QUEUE, 0, 1,
+                                          MMAPQ_QUEUE_TRANSFER_REBASE, fpath));
+    mmapq_indexed_queue_close(src);
+    cleanup_queue(COPY_Q);
+    char path[512];
+    snprintf(path, sizeof path, "%s/%s", TEST_DIR, COPY_Q);
+    mkdir(path, 0775);
+    MmapqIndexedQueue *d2 = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_queue_create(TEST_DIR, COPY_Q, 32768, 16, 1, 32768LL * 8,
+                                   0, 5000000000ULL, 1, rt, rt, &d2));
+    /* the queue files are lazy — a participant must join to materialize the
+     * meta with the flag (an empty participant-less queue has no meta) */
+    MmapqIndexedAppender *da = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(d2, &da));
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_appender_append(da, "old", 4));
+    mmapq_indexed_appender_close(da);
+    mmapq_indexed_queue_close(d2);
+    TEST_ASSERT_EQUAL_INT64(2, import_stream(fpath, COPY_Q,
+                                             MMAPQ_QUEUE_TRANSFER_REBASE, 1));
+    unlink(fpath);
+    MmapqIndexedArchiver *arch = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_archiver_create(TEST_DIR, COPY_Q, 16, rt, &arch));
+    TEST_ASSERT_EQUAL_INT(1, mmapq_indexed_archiver_archivable(arch));
+    mmapq_indexed_archiver_close(arch);
+}
+
+/* ── batch twins ── */
+
+static void assert_batch_archive_reclaim_round(const char *name, int64_t up_to_index)
+{
+    MmapqIndexedBatchArchiver *arch = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_batch_archiver_create(TEST_DIR, name, 16, rt, &arch));
+    TEST_ASSERT_NOT_NULL(arch);
+    TEST_ASSERT_EQUAL_INT(1, mmapq_indexed_batch_archiver_archivable(arch));
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_batch_archiver_archive_up_to_index(arch, up_to_index));
+    char *paths[8] = {0};
+    int n = mmapq_indexed_batch_archiver_archivable_files(arch, paths, 8);
+    TEST_ASSERT_EQUAL_INT(1, n);
+    TEST_ASSERT_NOT_NULL(strstr(paths[0], "payload_0_0"));
+    char victim[512];
+    snprintf(victim, sizeof victim, "%s", paths[0]);
+    TEST_ASSERT_EQUAL_INT(0, access(victim, F_OK));
+    TEST_ASSERT_EQUAL_INT(1,
+        mmapq_indexed_batch_archiver_reclaim_files(arch, paths, n));
+    TEST_ASSERT_EQUAL_INT(-1, access(victim, F_OK));
+    for (int i = 0; i < n; i++) free(paths[i]);
+    mmapq_indexed_batch_archiver_close(arch);
+}
+
+static void assert_batch_not_archivable(const char *name)
+{
+    MmapqIndexedBatchArchiver *arch = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_batch_archiver_create(TEST_DIR, name, 16, rt, &arch));
+    TEST_ASSERT_NOT_NULL(arch);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_archiver_archivable(arch));
+    mmapq_indexed_batch_archiver_close(arch);
+}
+
+static MmapqIndexedBatchQueue *create_batch_queue_archivable(const char *name,
+                                                             int64_t start_index)
+{
+    cleanup_queue(name);
+    char path[512];
+    snprintf(path, sizeof(path), "%s/%s", TEST_DIR, name);
+    mkdir(path, 0775);
+    MmapqIndexedBatchQueue *q = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_batch_queue_create(TEST_DIR, name, 32768, 16, 1, 32768LL,
+                                         start_index, 5000000000ULL, 1, rt, rt, &q));
+    TEST_ASSERT_NOT_NULL(q);
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
+    TEST_ASSERT_NOT_NULL(a);
+    static char big[D6_BIG_LEN - MMAPQ_BATCH_MSG_COUNT_SIZE];
+    memset(big, 0x42, sizeof big);
+    /* batch 0 fills region 0 (count slot + length + payload == 32768);
+     * batch 1 rolls to file 1 */
+    MmapqMutableBatch *b = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_batch_appender_start_batch_checked(a, &b));
+    TEST_ASSERT_EQUAL_INT32(0,
+        mmapq_mutable_batch_append(b, big, (int32_t)sizeof big));
+    TEST_ASSERT_EQUAL_INT64(start_index, mmapq_mutable_batch_complete(b));
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_batch_appender_start_batch_checked(a, &b));
+    TEST_ASSERT_EQUAL_INT32(0, mmapq_mutable_batch_append(b, "tail", 5));
+    TEST_ASSERT_EQUAL_INT64(start_index + 1, mmapq_mutable_batch_complete(b));
+    mmapq_indexed_batch_appender_close(a);
+    return q;
+}
+
+static int64_t export_all_batch(MmapqIndexedBatchQueue *src, const char *name,
+                                int64_t first, int64_t last, int mode, char *fpath)
+{
+    MmapqIndexedBatchReader *reader = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_reader(src, &reader));
+    TEST_ASSERT_NOT_NULL(reader);
+    snprintf(fpath, 512, "%s/%s_export.bin", TEST_DIR, name);
+    FILE *out = fopen(fpath, "wb");
+    TEST_ASSERT_NOT_NULL(out);
+    int64_t n = mmapq_batch_queue_transfer_export(reader, out, first, last, mode,
+                                                  NULL, NULL, NULL);
+    fclose(out);
+    mmapq_indexed_batch_reader_close(reader);
+    return n;
+}
+
+static int64_t import_batch_stream_file(const char *fpath, const char *dest,
+                                        int mode, int allow_append)
+{
+    FILE *in = fopen(fpath, "rb");
+    TEST_ASSERT_NOT_NULL(in);
+    int64_t n = mmapq_batch_queue_transfer_import(in, TEST_DIR, dest, mode,
+                                                  rt, rt, allow_append, NULL,
+                                                  NULL, MMAPQ_CONFLICT_AUTO);
+    fclose(in);
+    return n;
+}
+
+void test_batch_transfer_import_archivable_rebase(void)
+{
+    MmapqIndexedBatchQueue *src = create_batch_queue_archivable(BQ_QUEUE, 0);
+    char fpath[512];
+    TEST_ASSERT_EQUAL_INT64(2, export_all_batch(src, BQ_QUEUE, 0, 1,
+                                                MMAPQ_BATCH_QUEUE_TRANSFER_REBASE,
+                                                fpath));
+    mmapq_indexed_batch_queue_close(src);
+
+    cleanup_queue(BQ_COPY);
+    TEST_ASSERT_EQUAL_INT64(2, import_batch_stream_file(fpath, BQ_COPY,
+                                                        MMAPQ_BATCH_QUEUE_TRANSFER_REBASE, 0));
+    unlink(fpath);
+    assert_batch_archive_reclaim_round(BQ_COPY, 1);
+}
+
+void test_batch_transfer_import_archivable_preserve(void)
+{
+    MmapqIndexedBatchQueue *src = create_batch_queue_archivable(BQ_QUEUE, 5);
+    char fpath[512];
+    TEST_ASSERT_EQUAL_INT64(2, export_all_batch(src, BQ_QUEUE, 5, 6,
+                                                MMAPQ_BATCH_QUEUE_TRANSFER_PRESERVE,
+                                                fpath));
+    mmapq_indexed_batch_queue_close(src);
+
+    cleanup_queue(BQ_COPY);
+    TEST_ASSERT_EQUAL_INT64(2, import_batch_stream_file(fpath, BQ_COPY,
+                                                        MMAPQ_BATCH_QUEUE_TRANSFER_PRESERVE, 0));
+    unlink(fpath);
+    verify_batch_index_space(BQ_COPY, 5, 6);
+    assert_batch_archive_reclaim_round(BQ_COPY, 6);
+}
+
+void test_batch_transfer_copy_preserves_archivable(void)
+{
+    MmapqIndexedBatchQueue *src = create_batch_queue_archivable(BQ_QUEUE, 0);
+    MmapqIndexedBatchReader *reader = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_reader(src, &reader));
+    cleanup_queue(BQ_COPY);
+    TEST_ASSERT_EQUAL_INT64(2,
+        mmapq_batch_queue_transfer_copy(reader, TEST_DIR, BQ_COPY, 0, 1,
+                                        MMAPQ_BATCH_QUEUE_TRANSFER_REBASE,
+                                        NULL, NULL, NULL, rt, rt, 0,
+                                        NULL, NULL, MMAPQ_CONFLICT_AUTO));
+    mmapq_indexed_batch_reader_close(reader);
+    mmapq_indexed_batch_queue_close(src);
+    assert_batch_archive_reclaim_round(BQ_COPY, 1);
+}
+
+void test_batch_transfer_import_nonarchivable_stays(void)
+{
+    const char *batches[][3] = {{"b0"}, {"b1"}};
+    int sizes[] = {1, 1};
+    MmapqIndexedBatchQueue *src = create_batch_queue(BQ_QUEUE, batches, sizes, 2);
+    char fpath[512];
+    TEST_ASSERT_EQUAL_INT64(2, export_all_batch(src, BQ_QUEUE, 0, 1,
+                                                MMAPQ_BATCH_QUEUE_TRANSFER_REBASE,
+                                                fpath));
+    mmapq_indexed_batch_queue_close(src);
+
+    cleanup_queue(BQ_COPY);
+    TEST_ASSERT_EQUAL_INT64(2, import_batch_stream_file(fpath, BQ_COPY,
+                                                        MMAPQ_BATCH_QUEUE_TRANSFER_REBASE, 0));
+    unlink(fpath);
+    assert_batch_not_archivable(BQ_COPY);
+}
+
+void test_batch_transfer_import_append_flag_mismatch(void)
+{
+    char fpath[512];
+
+    /* direction 1: archivable stream → existing non-archivable dest */
+    MmapqIndexedBatchQueue *src = create_batch_queue_archivable(BQ_QUEUE, 0);
+    TEST_ASSERT_EQUAL_INT64(2, export_all_batch(src, BQ_QUEUE, 0, 1,
+                                                MMAPQ_BATCH_QUEUE_TRANSFER_REBASE,
+                                                fpath));
+    mmapq_indexed_batch_queue_close(src);
+    const char *oldb[][3] = {{"old_b"}};
+    int oldsz[] = {1};
+    MmapqIndexedBatchQueue *dst = create_batch_queue(BQ_COPY, oldb, oldsz, 1);
+    mmapq_indexed_batch_queue_close(dst);
+    TEST_ASSERT_EQUAL_INT64(2, import_batch_stream_file(fpath, BQ_COPY,
+                                                        MMAPQ_BATCH_QUEUE_TRANSFER_REBASE, 1));
+    assert_batch_not_archivable(BQ_COPY);
+    unlink(fpath);
+
+    /* direction 2: non-archivable stream → existing archivable dest */
+    const char *batches[][3] = {{"b0"}, {"b1"}};
+    int sizes[] = {1, 1};
+    src = create_batch_queue(BQ_QUEUE, batches, sizes, 2);
+    TEST_ASSERT_EQUAL_INT64(2, export_all_batch(src, BQ_QUEUE, 0, 1,
+                                                MMAPQ_BATCH_QUEUE_TRANSFER_REBASE,
+                                                fpath));
+    mmapq_indexed_batch_queue_close(src);
+    cleanup_queue(BQ_COPY);
+    char path[512];
+    snprintf(path, sizeof path, "%s/%s", TEST_DIR, BQ_COPY);
+    mkdir(path, 0775);
+    MmapqIndexedBatchQueue *d2 = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_batch_queue_create(TEST_DIR, BQ_COPY, 32768, 16, 1,
+                                         32768LL * 8, 0, 5000000000ULL, 1,
+                                         rt, rt, &d2));
+    /* the queue files are lazy — a participant must join to materialize the
+     * meta with the flag */
+    MmapqIndexedBatchAppender *da = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(d2, &da));
+    MmapqMutableBatch *db = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_batch_appender_start_batch_checked(da, &db));
+    TEST_ASSERT_EQUAL_INT32(0, mmapq_mutable_batch_append(db, "old", 4));
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_mutable_batch_complete(db));
+    mmapq_indexed_batch_appender_close(da);
+    mmapq_indexed_batch_queue_close(d2);
+    TEST_ASSERT_EQUAL_INT64(2, import_batch_stream_file(fpath, BQ_COPY,
+                                                        MMAPQ_BATCH_QUEUE_TRANSFER_REBASE, 1));
+    unlink(fpath);
+    MmapqIndexedBatchArchiver *arch = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_batch_archiver_create(TEST_DIR, BQ_COPY, 16, rt, &arch));
+    TEST_ASSERT_EQUAL_INT(1, mmapq_indexed_batch_archiver_archivable(arch));
+    mmapq_indexed_batch_archiver_close(arch);
+}
+
+/* §11 cross-type copies (owner addition 2026-10-26): the flag crosses the
+ * queue-type boundary too. Geometry notes per pin. */
+void test_transfer_copy_batch_to_normal_preserves_archivable(void)
+{
+    /* archivable batch source, one-region files: batch 0's count slot sits
+     * in file 0 and its 32700-byte message padding-skips into file 1
+     * (68 + 4 + 32700 > 32768), batch 1 follows in file 1 */
+    cleanup_queue(BQ_QUEUE);
+    char path[512];
+    snprintf(path, sizeof path, "%s/%s", TEST_DIR, BQ_QUEUE);
+    mkdir(path, 0775);
+    MmapqIndexedBatchQueue *src = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_batch_queue_create(TEST_DIR, BQ_QUEUE, 32768, 16, 1,
+                                         32768LL, 0, 5000000000ULL, 1, rt, rt, &src));
+    TEST_ASSERT_NOT_NULL(src);
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(src, &a));
+    static char big[32700];
+    memset(big, 0x43, sizeof big);
+    MmapqMutableBatch *b = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
+    TEST_ASSERT_EQUAL_INT32(0, mmapq_mutable_batch_append(b, big, (int32_t)sizeof big));
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_mutable_batch_complete(b));
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
+    TEST_ASSERT_EQUAL_INT32(0, mmapq_mutable_batch_append(b, "tail", 5));
+    TEST_ASSERT_EQUAL_INT64(1, mmapq_mutable_batch_complete(b));
+    mmapq_indexed_batch_appender_close(a);
+
+    MmapqIndexedBatchReader *reader = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_reader(src, &reader));
+    cleanup_queue(CROSS_Q);
+    TEST_ASSERT_EQUAL_INT64(2,
+        mmapq_queue_transfer_copy_batch_to_normal(reader, TEST_DIR, CROSS_Q, 0, 1,
+            MMAPQ_QUEUE_TRANSFER_REBASE, NULL, NULL, NULL, rt, rt, 0, NULL, NULL,
+            MMAPQ_CONFLICT_AUTO));
+    mmapq_indexed_batch_reader_close(reader);
+    mmapq_indexed_batch_queue_close(src);
+
+    /* the normal destination opens archivable; its record 0 (4 + 32700)
+     * fills file 0 exactly and record 1 rolls to file 1 — the archive line
+     * is the END of the archived prefix, so archiving index 1 puts the
+     * line at 32768 and makes payload_0_0 reclaimable */
+    assert_archive_reclaim_round(CROSS_Q, 1);
+}
+
+void test_batch_transfer_copy_normal_to_batch_preserves_archivable(void)
+{
+    /* archivable normal source: record 0 (4 + 32696) leaves a 4-byte tail
+     * in region 0, so the second message skips to file 1 */
+    cleanup_queue(QUEUE);
+    char path[512];
+    snprintf(path, sizeof path, "%s/%s", TEST_DIR, QUEUE);
+    mkdir(path, 0775);
+    MmapqIndexedQueue *src = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_queue_create(TEST_DIR, QUEUE, 32768, 16, 1, 32768LL,
+                                   0, 5000000000ULL, 1, rt, rt, &src));
+    TEST_ASSERT_NOT_NULL(src);
+    MmapqIndexedAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(src, &a));
+    static char big[32696];
+    memset(big, 0x44, sizeof big);
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_appender_append(a, big, (int32_t)sizeof big));
+    TEST_ASSERT_EQUAL_INT64(1, mmapq_indexed_appender_append(a, "tail", 5));
+    mmapq_indexed_appender_close(a);
+
+    MmapqIndexedReader *reader = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_reader(src, &reader));
+    cleanup_queue(CROSS_Q);
+    TEST_ASSERT_EQUAL_INT64(2,
+        mmapq_batch_queue_transfer_copy_normal_to_batch(reader, TEST_DIR, CROSS_Q, 0, 1,
+            MMAPQ_BATCH_QUEUE_TRANSFER_REBASE, NULL, NULL, NULL, rt, rt, 0, NULL, NULL,
+            MMAPQ_CONFLICT_AUTO));
+    mmapq_indexed_reader_close(reader);
+    mmapq_indexed_queue_close(src);
+
+    /* the batch destination opens archivable; its batch 0 (count slot +
+     * length + 32696 payload) fills region 0 exactly, batch 1 rolls to
+     * file 1 — archiving index 1 makes payload_0_0 reclaimable */
+    assert_batch_archive_reclaim_round(CROSS_Q, 1);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -2625,6 +3152,18 @@ int main(void)
     RUN_TEST(test_batch_export_stream_header_reserved_bytes_zero);
     RUN_TEST(test_import_accepts_nonzero_reserved_bytes);
     RUN_TEST(test_batch_import_accepts_nonzero_reserved_bytes);
+    RUN_TEST(test_transfer_import_archivable_rebase);
+    RUN_TEST(test_transfer_import_archivable_preserve);
+    RUN_TEST(test_transfer_copy_preserves_archivable);
+    RUN_TEST(test_transfer_import_nonarchivable_stays);
+    RUN_TEST(test_transfer_import_append_flag_mismatch);
+    RUN_TEST(test_batch_transfer_import_archivable_rebase);
+    RUN_TEST(test_batch_transfer_import_archivable_preserve);
+    RUN_TEST(test_batch_transfer_copy_preserves_archivable);
+    RUN_TEST(test_batch_transfer_import_nonarchivable_stays);
+    RUN_TEST(test_batch_transfer_import_append_flag_mismatch);
+    RUN_TEST(test_transfer_copy_batch_to_normal_preserves_archivable);
+    RUN_TEST(test_batch_transfer_copy_normal_to_batch_preserves_archivable);
 
     return UNITY_END();
 }

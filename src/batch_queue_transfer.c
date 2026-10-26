@@ -407,10 +407,13 @@ int64_t mmapq_batch_queue_transfer_import(
     int ring = mmapq_min_ring_size(meta.region_size);
     if (ring < 4) ring = 4;
     MmapqIndexedBatchQueue *q = NULL;
+    /* CAND-50 §11: a created destination takes the stream's archivable
+     * flag; an existing destination keeps its on-disk flag (disk wins on
+     * every open) and the import proceeds. */
     int rc_q = mmapq_indexed_batch_queue_create(
         directory, queue_name,
         meta.region_size, ring, 1, meta.max_file_size, effective,
-        10000000000ULL, 0, write_rt, read_rt, &q);
+        10000000000ULL, meta.archivable, write_rt, read_rt, &q);
     if (rc_q != 0) return rc_q;
 
     void *cache_store[APPENDER_CACHE_SIZE] = {NULL};
@@ -514,10 +517,13 @@ int64_t mmapq_batch_queue_transfer_import_flat_stream(
     int ring = mmapq_min_ring_size(meta.region_size);
     if (ring < 4) ring = 4;
     MmapqIndexedBatchQueue *q = NULL;
+    /* CAND-50 §11: a created destination takes the stream's archivable
+     * flag; an existing destination keeps its on-disk flag (disk wins on
+     * every open) and the import proceeds. */
     int rc_q = mmapq_indexed_batch_queue_create(
         directory, queue_name,
         meta.region_size, ring, 1, meta.max_file_size, effective,
-        10000000000ULL, 0, write_rt, read_rt, &q);
+        10000000000ULL, meta.archivable, write_rt, read_rt, &q);
     if (rc_q != 0) return rc_q;
 
     void *cache_store[APPENDER_CACHE_SIZE] = {NULL};
@@ -626,10 +632,12 @@ int64_t mmapq_batch_queue_transfer_copy(
     int ring = mmapq_min_ring_size(queue_meta_region_size(qm));
     if (ring < 4) ring = 4;
     MmapqIndexedBatchQueue *q = NULL;
+    /* CAND-50 §11: a created destination takes the source queue's
+     * archivable flag; an existing destination keeps its on-disk flag. */
     int rc_q = mmapq_indexed_batch_queue_create(
         dest_dir, dest_queue,
         queue_meta_region_size(qm), ring, 1, queue_meta_max_file_size(qm),
-        dest_start, 10000000000ULL, 0, write_rt, read_rt, &q);
+        dest_start, 10000000000ULL, queue_meta_archivable(qm), write_rt, read_rt, &q);
     if (rc_q != 0) return rc_q;
 
     void *cache_store[APPENDER_CACHE_SIZE] = {NULL};
@@ -753,10 +761,12 @@ int64_t mmapq_batch_queue_transfer_copy_normal_to_batch(
     int ring = mmapq_min_ring_size(queue_meta_region_size(qm));
     if (ring < 4) ring = 4;
     MmapqIndexedBatchQueue *q = NULL;
+    /* CAND-50 §11: a created destination takes the source queue's
+     * archivable flag; an existing destination keeps its on-disk flag. */
     int rc_q = mmapq_indexed_batch_queue_create(
         dest_dir, dest_queue,
         queue_meta_region_size(qm), ring, 1, queue_meta_max_file_size(qm),
-        dest_start, 10000000000ULL, 0, write_rt, read_rt, &q);
+        dest_start, 10000000000ULL, queue_meta_archivable(qm), write_rt, read_rt, &q);
     if (rc_q != 0) return rc_q;
 
     void *cache_store[APPENDER_CACHE_SIZE] = {NULL};

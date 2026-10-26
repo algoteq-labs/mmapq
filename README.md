@@ -388,7 +388,9 @@ Typical usage in production:
 Export flattens queue data into a portable stream format for backup,
 migration, or chunked replay. Each stream begins with a 64-byte metadata
 header (schema version, region size, max file size, start index, entry
-count, archivable flag) followed by framed entries.
+count, archivable flag) followed by framed entries. The archivable flag is
+preserved: a created destination queue takes the source's flag (an
+existing destination keeps its on-disk flag and the import proceeds).
 
 **Chunked export** splits a large export into multiple files of
 approximately `N` MB each. Each chunk is a complete, self-contained stream
