@@ -15,9 +15,11 @@ guarantees are the C library's to state).
   what 0.1.0 files mean and accept — the archive-line field, the geometry
   rule, and the unified tail rule. **0.1.0 queues must be recreated or
   migrated: export with a 0.1.0 library and import into a fresh 0.2.0
-  queue — the export stream format is unchanged.** (The
-  export(0.1.0) → import(0.2.0) round-trip is verified byte-exact for
-  both queue types.)
+  queue — the export stream format is unchanged, and the stream carries
+  the source queue's archivable flag: the imported 0.2.0 queue keeps
+  it.** (The export(0.1.0) → import(0.2.0) round-trip is verified
+  byte-exact for both queue types, and verified for an archivable 0.1.0
+  queue: the import opens archivable, archives and reclaims.)
 - **Removed functions, with replacements:**
   - `mmapq_indexed_queue_start_index` — use the per-participant
     accessors: `mmapq_indexed_poller_start_index`,
@@ -30,6 +32,32 @@ guarantees are the C library's to state).
     `mmapq_uncommitted_iterator_next` (checked, three-way).
   - `mmapq_indexed_batch_appender_discard_batch` (offset-based) —
     replaced by `mmapq_mutable_batch_discard` (handle-based).
+  - `mmapq_mutable_batch_get` (NULL-collapsing) — replaced by
+    `mmapq_mutable_batch_get_checked` (0 or a negative `MMAPQ_*` code;
+    outputs cleared on failure). An out-of-range index — including a
+    negative one, which 0.1.0 silently clamped to message 0 — returns
+    `MMAPQ_EINVAL`.
+  - `mmapq_indexed_batch_appender_start_batch` (NULL-collapsing shim) —
+    replaced by `mmapq_indexed_batch_appender_start_batch_checked`. (The
+    Python `start_batch` keeps its shape and now routes the C failure
+    code; the Rust surface already used the checked call.)
+  - `mmapq_indexed_appender_iterator` (the all-payloads appender
+    iterator, an incomplete factory-only surface since 0.1.0) — removed
+    with no replacement: for committed messages use a poller or reader;
+    for uncommitted ones, the checked uncommitted iterator.
+- **Batch iterator start bounds:** `mmapq_mutable_batch_iterator` and
+  `mmapq_batch_iterator_init` refuse a start index outside
+  `[0, message_count]` — the iterator's `last_error` is `MMAPQ_EINVAL`
+  and the first advance returns false. At 0.1.0 a negative start read
+  from message 0 and an over-run start looked like a legal empty
+  iteration. A start equal to `message_count` remains a legal empty
+  iteration (no message, `last_error` 0).
+- **Transfers preserve the archivable flag** (behaviour change): export
+  writes the source queue's flag into the stream header (as at 0.1.0),
+  and import/copy now create the destination with it — at 0.1.0 every
+  transferred destination was created non-archivable. Appending into an
+  existing queue keeps the destination's on-disk flag (disk wins on
+  every open) and the import proceeds.
 - **`mmapq_runtime_close` returns `int`** (was `void`): 0 if the runtime
   thread stopped and was joined; `MMAPQ_ETIMEDOUT` if the close budget
   was exhausted and the thread was detached (leaked) — on that path
@@ -152,7 +180,10 @@ the 0.2.0 cycle are not listed.
   `src/indexed_appender.c` (v0.1.0: lines 571-582),
   `src/payload_iterator.c` (v0.1.0: lines 65, 71). Tests:
   `test_appender_iterator_out_of_range_offset_no_double_free`,
-  `test_payload_iterator_init_rejects_out_of_range`.)
+  `test_payload_iterator_init_rejects_out_of_range`.) The public
+  all-payloads appender-iterator factory is removed in 0.2.0 (see
+  Breaking); the internal init fix is kept and both pins now run against
+  the internal factory.
 - **Batch iterator init dereferenced NULL.** (Basis: code-read at
   v0.1.0 — `src/batch_payload_iterator.c` (v0.1.0: lines 43-56). Test:
   `test_batch_iterator_init_null_returns_null`.)
