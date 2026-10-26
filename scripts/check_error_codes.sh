@@ -80,6 +80,9 @@ check_all() {
     local errors=0
 
     check_names "mmapq_strerror.c" "$REPO/src/mmapq_strerror.c" || errors=1
+    # DOC-02: doc/reference/error-codes.md must name every code (user-facing
+    # error reference; absent file -> 0 found -> MISMATCH, fail-closed)
+    check_names "error-codes.md" "$REPO/doc/reference/error-codes.md" || errors=1
     check_values_region "map_rc (error.rs)" "$REPO/../mmapq-rs/src/error.rs" \
         '/^pub\(crate\) fn map_rc/,/^}/' || errors=1
     check_values_region "test_map_rc_all_codes (error.rs)" "$REPO/../mmapq-rs/src/error.rs" \

@@ -1,137 +1,75 @@
 # mmapq
 
-**A persistent, indexed, replayable inter-process queue — no broker, no
-daemon, no garbage collector. The queue is just files.**
+**Many processes. One history. No coordinator.**
 
-mmapq passes messages between processes on the same Linux machine through
-memory-mapped files, with sub-microsecond latency and allocation-free,
-syscall-free hot paths. The queue retains file-backed history:
-every message has a stable index, any process can read retained entries,
-and a consumer can resume from an index saved by its application. Unlike
-a log framework, it costs a `memcpy` and one atomic CAS to publish.
+A persistent, indexed, replayable inter-process queue for Linux — no
+broker, no daemon, no garbage collector. The queue is just files: many
+processes append to one ordered history through memory-mapped files, with
+sub-microsecond latency and allocation-free, syscall-free hot paths. The
+queue is the sequencer.
 
-What you get:
+## What happens when a writer dies halfway
 
-- **~280 ns median round-trip** between two processes on isolated cores;
-  P99.999 under 16 µs (measured, tables below)
-- **Indexed and replayable** — messages are addressable by index forever
-  (or until you archive them); readers can seek, tail, or re-read from zero.
-  Replay is the same mechanism as recovery and replication
-- **Up to 256 concurrent writers**, lock-free, each message committed by a
-  single atomic operation — no committed message is ever torn or partial;
-  after a crash, a lane's last *uncommitted* record may be (see the crash
-  caveats on `append_uncommitted` and the uncommitted iterator)
+Nothing special. A writer that is SIGKILLed between one instruction and the
+next loses only its uncommitted tail; every committed message is intact and
+readers never see a partial one. Recovery is a deterministic scan, not a
+repair — and any process can re-read the whole history from any index.
+
+This works because of one rule: **write first, claim last.** The payload is
+fully written before the header that publishes it is committed with a
+single atomic CAS. The claim is the commit.
+
+## What you get
+
+- **~280 ns median round-trip** between two processes on isolated cores
+  (measured 2026-06-24, commit `d3cfb28`; refreshed at the release gate;
+  [tables](doc/guide/08-performance-and-tuning.md))
+- **Indexed and replayable** — every message is addressable by index;
+  readers can seek, tail, or re-read from zero. Replay is the same
+  mechanism as recovery and replication
+- **Up to 256 concurrent writers**, lock-free, one atomic commit per
+  message — no committed message is ever torn or partial
 - **Batch queues with atomic multi-message commit** — append N messages,
-  commit once; consumers never observe a partial batch. This is a
-  transaction boundary, designed for command → event-batch architectures
+  commit once; consumers never observe a partial batch. A transaction
+  boundary, designed for command → event-batch architectures
 - **Crash-safe by construction** — a killed producer loses only its
-  uncommitted tail; recovery is a deterministic scan, not a repair. A
-  SIGKILLed producer's lane stays occupied; an operator releases it with
-  `mmapq-ids --unset`, valid only when the process is dead (see Appender
-  ID inspection and manual release)
-- **No infrastructure** — two processes and a directory. No media driver,
-  no broker, no background daemon required (an optional in-process mapper
-  thread hides mmap latency)
-- **File format derived from Algoteq's Java implementation** (an evolved
-  derivative of [tools4j/mmap](https://github.com/tools4j/mmap); not
-  compatible with upstream tools4j — the formats have diverged). In 0.2.0,
-  C, Rust and Python do not share queues with Java: 0.2.0 refuses
-  Java-written queues at open (schema_version 1), and the Java
-  implementation does not yet follow the 0.2.0 protocol (for example, it
-  does not maintain the archive line). This applies to both queue types.
-  Read Java-written queues with the Java library. Java support is planned
-  at schema 2, under the same protocol contract (see `doc/reference/wire-format.md`)
+  uncommitted tail. Its lane stays occupied until an operator releases it
+  with `mmapq-ids --unset` (dead processes only —
+  [the procedure](doc/guide/05-crash-and-restart.md))
+- **No infrastructure** — two processes and a directory (an optional
+  in-process mapper thread hides mmap latency)
 
-Rust and Python bindings live in the companion repositories `mmapq-rs` and
-`mmapq-py`; see `doc/reference/feature-matrix.md` for exact coverage per language.
+Built for **event-sourced systems**: sequenced command queues, replicated
+event logs, deterministic replay — where the answer to "what happened in
+production" is *re-run it*. The
+[event-sourcing guide](doc/guide/event-sourcing.md) describes the pattern.
 
-This library was extracted from production trading infrastructure, where
-its Java ancestor carried FX flows for years. The design target is not
-"fast messaging" in the abstract — it is the storage layer for
-**event-sourced systems**: sequenced command queues, replicated event logs,
-and deterministic replay, where the answer to "what happened in production"
-is *re-run it*. `doc/guide/event-sourcing.md` describes the pattern this
-library was built to serve.
-
----
+The file format derives from Algoteq's Java implementation (an evolved
+derivative of [tools4j/mmap](https://github.com/tools4j/mmap); not
+compatible with upstream tools4j). In 0.2.0, C, Rust and Python do not
+share queues with Java: Java-written queues are refused at open; Java
+support is planned at schema 2 under the same
+[protocol contract](doc/reference/wire-format.md). 0.2.0 writes schema 2
+and refuses 0.1.0 files at open — migrate by export/import
+([release notes](doc/RELEASE-NOTES-0.2.0.md)).
 
 ## When to use it — and when not to
 
-Be suspicious of any infrastructure library that doesn't tell you when to
-avoid it. Honest edges:
-
 **Use mmapq when** you need same-host inter-process messaging where the
 history matters: event-sourced services, sequenced order/command flow,
-market-data capture, sensor/telemetry logs that a second process analyses,
-replay-based testing and debugging, or a migration bridge from a Java
-system to C/Rust/Python (via export/import — not by sharing a live queue;
-Java interop is not supported in 0.2.0).
+market-data capture, telemetry logs a second process analyses,
+replay-based testing and debugging.
 
-**Use something else when:**
+**Use something else when** you need network transport, a dynamic topic
+fabric, a full application framework, durability through power loss, or
+Windows/macOS. The honest list, with every limit stated, is
+[chapter 9 of the guide](doc/guide/09-trade-offs-and-limits.md).
 
-- **You need network transport.** mmapq is same-machine only, by design;
-  the wire path belongs to a network messaging system.
-- **You want pub/sub with many dynamic topics** and no interest in
-  history. mmapq queues are named, persistent streams, not a topic
-  fabric.
-- **You want a full application framework** rather than a storage layer —
-  see the references in `doc/guide/event-sourcing.md`.
-- **You need guaranteed durability through power loss.** mmapq writes
-  reach the page cache, not the platter; the OS persists them eventually.
-  Queues here are transport-plus-recent-history; long-term data belongs in
-  the export format (`QueueTransfer`) or a database.
-- **You need Windows or macOS.** Linux only (x86-64; ARM64 untested).
+## Quick start: single-message
 
-What you give up relative to the alternatives is scope. What you gain is a
-system small enough to audit end-to-end: ~10k lines of dependency-free C11,
-a frozen on-disk format specified in one header, and a test suite that runs
-under the exact release flags that ship.
-
----
-
-## Stability
-
-The feature set and the on-disk format are **frozen**. This is a design
-position, not a maturity disclaimer:
-
-- **Versioned compatibility.** The wire format is frozen within a schema
-  version. 0.2.0 writes `schema_version=2` and refuses 0.1.0 files
-  (`schema_version=1`) at open with `MMAPQ_ESCHEMA`: 0.2.0 changed what
-  0.1.0 files mean and accept (the archive-line field, the geometry rule,
-  the unified tail rule). To move 0.1.0 data forward, export with a 0.1.0
-  library and import into a fresh 0.2.0 queue — the export stream format
-  is unchanged. Each release states the schema versions it reads; a file
-  of any other version is refused at open with `MMAPQ_ESCHEMA`. A version
-  change is always a clean refusal, never a silent misread. The format is
-  specified in `doc/reference/wire-format.md`
-  (installed with the library at `share/doc/mmapq/wire-format.md`); the
-  authoritative implementation lives in the source distribution at
-  `src/internal/header_codec.h` and `src/internal/queue_meta.h`.
-- The public API only grows for one reason: completing parity with the
-  Algoteq Java reference implementation for capability that already exists
-  on disk. No convenience layers, no configuration sprawl, no ecosystem.
-  Higher-level functionality belongs in separate projects built on top.
-- Every open validates the format (`schema_version`, queue type) and
-  refuses mismatches with a distinct error rather than misreading data.
-
-If your evaluation horizon is years, this is the property to weigh: the
-library you audit today is the library you run in five years.
-
----
-
-## Quick start
-
-Create a writable directory on a persistent filesystem first:
-
-```bash
-mkdir -p ./data
-```
-
-`/dev/shm` is volatile and `/tmp` may be cleared on reboot; reserve those
-locations for disposable tests and benchmarks. A commit publishes an entry
-to readers, but does not flush it to stable storage. OS writeback determines
-when file-backed writes reach disk; power-loss durability is not guaranteed.
-Consumers must save their own progress and seek when reopening.
+Use a persistent directory (`./data`, not `/tmp` or `/dev/shm`) for
+anything you mean to keep; a commit publishes to readers but does not
+flush to stable storage.
 
 ```c
 #include "runtime.h"
@@ -139,27 +77,22 @@ Consumers must save their own progress and seek when reopening.
 #include "indexed_appender.h"
 #include "indexed_poller.h"
 
-/* Background mapper thread — handles file mapping asynchronously.
- * It is a process-wide singleton; call once at startup. */
+/* Background mapper thread — a process-wide singleton; call once */
 MmapqRuntime *rt = NULL;
-int rc = mmapq_runtime_region_mapper(&rt);
-assert(rc == 0);
+assert(mmapq_runtime_region_mapper(&rt) == 0);
 
-/* Open or create a queue (separate write and read runtimes — same here) */
+/* Open or create a queue */
 MmapqIndexedQueue *q = NULL;
-rc = mmapq_indexed_queue_create_default("./data", "orders", rt, rt, &q);
-assert(rc == 0);
+assert(mmapq_indexed_queue_create_default("./data", "orders", rt, rt, &q) == 0);
 
 /* Append a message */
 MmapqIndexedAppender *a = NULL;
-rc = mmapq_indexed_queue_create_appender(q, &a);
-assert(rc == 0);
+assert(mmapq_indexed_queue_create_appender(q, &a) == 0);
 int64_t idx = mmapq_indexed_appender_append(a, "hello", 5);
 
 /* Poll messages */
 MmapqIndexedPoller *p = NULL;
-rc = mmapq_indexed_queue_create_poller(q, &p);
-assert(rc == 0);
+assert(mmapq_indexed_queue_create_poller(q, &p) == 0);
 
 static MmapqNextMove my_handler(int64_t index, uint8_t appender_id,
                             const void *data, int32_t length, void *ctx) {
@@ -169,644 +102,128 @@ static MmapqNextMove my_handler(int64_t index, uint8_t appender_id,
 
 MmapqPollResult r = mmapq_indexed_poller_poll(p, my_handler, NULL);
 
-/* Close participants before the queue */
 mmapq_indexed_appender_close(a);
 mmapq_indexed_poller_close(p);
 mmapq_indexed_queue_close(q);
 mmapq_runtime_destroy(rt);
 ```
 
-Save, compile with `make`, and run. See `examples/demo.c` for a complete
-producer/consumer.
+`examples/demo.c` is a complete producer/consumer. Full walkthrough:
+[chapter 2](doc/guide/02-single-message-queue.md).
 
-Public C symbols use `mmapq_*`, types use `Mmapq*`, and constants use
-`MMAPQ_*`. The `i` in `mmapqi_*` means internal: these functions belong to
-the implementation under `src/internal/`, not the installed public API.
+## Quick start: batch
 
----
-
-## Batch queue — quick start
-
-A batch groups multiple messages under a single atomic commit, reducing
-header CAS operations and improving throughput for high-frequency messages.
+A batch groups messages under one atomic commit:
 
 ```c
 #include "runtime.h"
 #include "indexed_batch_queue.h"
 
 MmapqRuntime *rt = NULL;
-int rc = mmapq_runtime_region_mapper(&rt);
-assert(rc == 0);
+assert(mmapq_runtime_region_mapper(&rt) == 0);
 
 MmapqIndexedBatchQueue *q = NULL;
-rc = mmapq_indexed_batch_queue_create_default("/tmp", "events", rt, rt, &q);
-assert(rc == 0);
+assert(mmapq_indexed_batch_queue_create_default("./data", "events", rt, rt, &q) == 0);
 
-/* Batch three messages together (single header commit) */
 MmapqIndexedBatchAppender *a = NULL;
-rc = mmapq_indexed_batch_queue_create_appender(q, &a);
-assert(rc == 0);
+assert(mmapq_indexed_batch_queue_create_appender(q, &a) == 0);
 
 MmapqMutableBatch *b = NULL;
-rc = mmapq_indexed_batch_appender_start_batch_checked(a, &b);
-assert(rc == 0);
+assert(mmapq_indexed_batch_appender_start_batch_checked(a, &b) == 0);
 mmapq_mutable_batch_append(b, "msg0", 4);
 mmapq_mutable_batch_append(b, "msg1", 4);
 mmapq_mutable_batch_append(b, "msg2", 4);
 int64_t batch_idx = mmapq_indexed_batch_appender_commit_batch(a, mmapq_mutable_batch_complete(b));
 
-/* Poll one batch at a time — handler receives the full batch context */
-MmapqIndexedBatchPoller *p = NULL;
-rc = mmapq_indexed_batch_queue_create_poller(q, &p);
-assert(rc == 0);
-
-static MmapqNextMove my_handler(int64_t batch_index, MmapqBatchReadingContext *ctx,
-                            void *user_ctx) {
-    /* Iterate through messages in the batch */
-    MmapqBatchPayloadIterator *it = ctx->iterator;
-    while (mmapq_batch_iterator_advance(it)) {
-        int32_t len = mmapq_batch_iterator_current_length_ffi(it);
-        printf("batch[%ld]: %.*s\n", batch_index, (int)len,
-               (const char *)mmapq_batch_iterator_current_data_ffi(it));
-    }
-    return MMAPQ_NEXT_ADVANCE;
-}
-
-MmapqPollResult r = mmapq_indexed_batch_poller_poll(p, my_handler, NULL);
-
 mmapq_indexed_batch_appender_close(a);
-mmapq_indexed_batch_poller_close(p);
 mmapq_indexed_batch_queue_close(q);
-```
-
----
-
-## Core concepts
-
-
-See [doc/reference/feature-matrix.md](doc/reference/feature-matrix.md) for the full feature
-matrix across the C, Rust, and Python implementations, including
-compatibility scope.
-
-```
-  ─────────────────────────────────────────────► Header
-
-       poll header (1)   ▲          ▲  commit header (2)
-                         │          │
-               POLLER    │          │    APPENDER
-                         │          │
-    resolve payload (2)  ▼          ▼  write payload (1)
-
-  ─────────────────────────────────────────────► Payload
-```
-
-The **appender** writes the message payload to its private payload lane
-first (step 1). Only after the payload is fully written does it commit
-the entry by publishing an 8‑byte header in the shared header lane via
-an atomic CAS operation (step 2). This ordering guarantees that the
-payload is always visible before the header — a reader that sees a
-non‑NULL header is guaranteed to see the complete payload.
-
-The **poller** (sequential consumer) scans the header lane in index
-order. When it finds a committed header (step 1), it decodes the
-`(appenderId, payloadPosition)` from the 8‑byte value, navigates to
-the corresponding payload lane at that position (step 2), and delivers
-the message to the callback. The **reader** (random‑access consumer)
-follows the same two‑step protocol for any index, without advancing a
-cursor.
-
-Multiple appenders coexist with minimal contention because each
-appender writes to its own private payload file, and the vertical‑walk
-layout in the shared header lane spreads concurrent CAS operations
-across different cache lines (512 byte stride).
-
-| Concept | What it is |
-| :--- | :--- |
-| **Appender** | A writer. Appends messages to a per-appender payload file and commits an 8-byte header atomically via CAS. Up to 256 concurrent appenders per queue. |
-| **Poller** | A sequential consumer. Reads headers in index order, follows the payload pointer, and delivers messages to a callback. |
-| **Reader** | A random-access consumer. Reads any entry by index without advancing a cursor. |
-| **MmapqRuntime** | A background thread that maps/unmaps file regions ahead of the hot loop. Absorbs `ftruncate`, page-zeroing, and `MAP_POPULATE` costs so the hot thread normally doesn't stall; a header- or payload-region wrap can block up to the queue's mapping timeout. |
-| **Single-message queue** | One header commit per message. Maximum throughput for large messages, minimum overhead per message. |
-| **Batch queue** | Groups N messages under one header commit. Higher throughput for small messages (fewer CAS operations). Not supported with Java in 0.2.0: Java-written queues are refused at open (schema_version 1); planned at schema 2. |
-| **Deferred commit** | Append payload without committing the header. Commit later, possibly in a different order. Useful for UDP resequencing or pipelined writes. |
-| **Mixed MmapqRuntime** | Use separate runtimes for writing (async) and reading (sync). The writer offloads `ftruncate` to a background thread; the reader runs without any background interference for minimum latency. |
-
----
-
-## Performance
-
-Measured against a mature, heavily-optimised Java implementation of the
-identical wire format, on the same machine — the one comparison where
-every variable (format, framing, hardware, cores) is controlled. On
-isolated cores (physical cores 5, 7, 9 on an Intel i7-12700H) with
-Transparent Huge Pages enabled:
-
-### Single-message queue — roundtrip to echo server in external process, 20M iterations
-
-| Percentile | C (this library) | Java (JMH, same machine) |
-|:-----------|------------------:|-------------------------:|
-| min (p0)   |        **182 ns** |                   265 ns |
-| p50        |        **284 ns** |                   380 ns |
-| p90        |        **333 ns** |                   429 ns |
-| p99        |        **396 ns** |                   591 ns |
-| p99.9      |       **1869 ns** |                 6,792 ns |
-| p99.99     |       **7411 ns** |                16,533 ns |
-| p99.999    |      **14984 ns** |                15,090 ns |
-| throughput | **3.2 M ops/sec** |           2.41 M ops/sec |
-
-### Batch queue — roundtrip to echo server in external process, 20M iterations
-
-| Percentile |  C (this library) |
-|:-----------|------------------:|
-| min (p0)   |        **196 ns** |
-| p50        |        **296 ns** |
-| p90        |        **348 ns** |
-| p95        |        **368 ns** |
-| p99        |        **422 ns** |
-| p99.9      |       **2030 ns** |
-| p99.99     |       **7313 ns** |
-| p99.999    |      **14895 ns** |
-| throughput |   **3 M ops/sec** |
-
-### System configuration for best results
-
-1. **Core isolation** — kernel boot parameter `isolcpus=5,7,9` (or equivalent) to reserve cores for the client loop, server loop, and region mapper.
-2. **Transparent Huge Pages** — the library calls `madvise(MADV_HUGEPAGE)` on mapped regions to reduce TLB pressure.
-3. **VDSO clock** — use `CLOCK_MONOTONIC` (the library default) to bypass the syscall overhead on timing.
-4. **Thread affinity** — always spawn background threads *before* pinning the calling thread; see Anti-Pattern D in `doc/contributing/maintainer_guide.md`.
-
----
-
-## Production features
-
-### Queue archiving
-
-Long-running queues accumulate entries over weeks or months. Archiving
-logically prunes old entries by advancing the queue's `start_index` without
-physically deleting data.
-
-**Forward archiving** (`index > current start_index`):
-Reads and validates every header in the archived range, computes each
-appender's boundary as the end of the archived entry with the maximum
-payload position (commit order is not write order — `append_uncommitted` +
-`commit` may resequence), publishes the boundary, commits the new
-`start_index` atomically in the queue meta, then makes one pass over the
-live headers, lowering the boundary below any live payload that sits under
-it. All `poll()` / `read()` calls immediately see the boundary. See
-[doc/design/archiving-design.md](doc/design/archiving-design.md).
-
-**Backward archiving / undo** (`index < current start_index`):
-Restores access to previously archived entries by scanning headers
-forward, validating that all required header and payload files still exist
-on disk, and lowering each appender's boundary to the lowest restored
-payload position — undo never raises it.
-
-**Archivable file discovery** (`archivable_files()`):
-Returns the set of header and payload files fully covered by the current
-archive boundary at the time of the call — files no live entry can need
-at that moment. Delete them with `reclaim_files()` (always safe). If you
-delete, move or compress them yourself, they are safe provided no undo
-(`archive_up_to_index` below the current `start_index`) runs between the
-listing call and your last unlink; an undo that ran before the call is
-harmless, because the listing already reflects it. There is no deletion
-wait: the commit-intent protocol (CAND-54) never lists a file a stalled —
-or stopped — commit is about to publish into.
-
-Archiving is serialised per queue on `archive.lock` (flock): archiving
-holds it exclusively and listing holds it shared, so a listing never
-observes an archive in progress.
-
-Typical usage in production:
-1. Hourly: call `archiveUpToIndex()` to log the archive boundary.
-2. Call `archivableFiles()` to list fully covered files; mark them.
-3. Upload those files to S3 or Glacier.
-4. Delete the local copies with `reclaim_files()` (it re-lists and
-   unlinks the overlap in one `archive.lock` hold — always safe).
-
-### Export / import (QueueTransfer)
-
-Export flattens queue data into a portable stream format for backup,
-migration, or chunked replay. Each stream begins with a 64-byte metadata
-header (schema version, region size, max file size, start index, entry
-count, archivable flag) followed by framed entries. The archivable flag is
-preserved: a created destination queue takes the source's flag (an
-existing destination keeps its on-disk flag and the import proceeds).
-
-**Chunked export** splits a large export into multiple files of
-approximately `N` MB each. Each chunk is a complete, self-contained stream
-with its own header and embedded index range in the file name
-(`base_path_start-end`). Chunks can be uploaded independently to object
-storage and downloaded on demand during replay.
-
-**Import** reads a stream and reconstructs the queue. Supports all four
-cross-over combinations:
-
-| Import function | Stream format | Destination | Behaviour |
-|:---|---|---|---|
-| `mmapq_queue_transfer_import` | flat (single-message) | normal queue | Direct append |
-| `mmapq_queue_transfer_import_batch_stream` | batched | normal queue | Flatten batches |
-| `mmapq_batch_queue_transfer_import` | batched | batch queue | Direct batch commit |
-| `mmapq_batch_queue_transfer_import_flat_stream` | flat | batch queue | 1-msg batches |
-
-**Start index mode** controls how the stream's `start_index` metadata is
-interpreted:
-- **REBASE** (default): start index resets to 0.
-- **PRESERVE**: start index matches the source range — useful for exact
-  replica restoration and replay systems that track position by index.
-
-**Filters**: Optional include/exclude callbacks allow selective export,
-import, or copy by content or position.
-
-Typical usage in production:
-1. Every hour, export the queue with chunked export (`chunk_size_mb=64`).
-2. Upload each chunk file to S3.
-3. On restart: download the relevant chunks, import with PRESERVE mode,
-   and replay to the point of interest.
-
-### Crash recovery — uncommitted messages and batches
-
-After a restart, messages this lane appended but never committed (and
-batches staged or discarded before a crash) are recoverable by the
-rejoining lane owner. The iterator snapshots at the factory call; the
-appending context must not be active while iterating. Commit found offsets
-with `mmapq_indexed_appender_commit()` — any subset, any order; skipping
-is fine. Archiving may remove messages the walk has not yielded, even
-after an undo; 0.1.0 queues are refused at open with `MMAPQ_ESCHEMA`;
-recreate or migrate them, see the release notes
-(`doc/RELEASE-NOTES-0.2.0.md`).
-
-```c
-#include <inttypes.h>
-#include "runtime.h"
-#include "indexed_queue.h"
-#include "indexed_appender.h"
-
-MmapqRuntime *rt = NULL;
-assert(mmapq_runtime_region_mapper(&rt) == 0);
-
-MmapqIndexedQueue *q = NULL;
-assert(mmapq_indexed_queue_create_default("./data", "orders", rt, rt, &q) == 0);
-
-MmapqIndexedAppender *a = NULL;
-assert(mmapq_indexed_queue_create_appender(q, &a) == 0);
-
-MmapqUncommittedPayloadIterator *it = NULL;
-assert(mmapq_indexed_appender_uncommitted_iterator_checked(
-    a, MMAPQ_PAYLOAD_ITERATOR_NOT_SET, MMAPQ_PAYLOAD_ITERATOR_NOT_SET,
-    &it) == 0);
-
-const void *data; int32_t len; int64_t off; int rc;
-while ((rc = mmapq_uncommitted_iterator_next(it, &data, &len, &off)) == 1) {
-    printf("recovered %d bytes at %" PRId64 "\n", len, off);
-    assert(mmapq_indexed_appender_commit(a, off) >= 0);  /* or skip */
-}
-/* Three-way: 1 message / 0 exhausted / negative MMAPQ_E*. A negative is
- * truthy in C — compare explicitly, never
- * while (mmapq_uncommitted_iterator_next(...)) */
-assert(rc == 0);
-
-mmapq_indexed_appender_close(a);
-mmapq_indexed_queue_close(q);
 mmapq_runtime_destroy(rt);
 ```
 
-Batch lanes: `mmapq_indexed_batch_appender_uncommitted_batches_checked()`
-yields staged-but-uncommitted batches (offset + message iterator);
-`mmapq_indexed_batch_appender_commit_batch()` publishes a found offset;
-discarded batches reappear in recovery after a restart — recovery code
-decides. `mmapq_indexed_batch_appender_join_completed_open_batch()`
-reports a crash-interrupted open batch the rejoin completed to staged.
+Full walkthrough: [chapter 3](doc/guide/03-batch-queue.md).
 
-### Appender ID inspection and manual release (mmapq-ids)
+## Bindings: Rust and Python
 
-A SIGKILLed writer never releases its appender ID: the lane's bit stays
-set in the `appender_id_pool` file and re-acquisition is refused with
-`MMAPQ_EIDCONFLICT`. The operator tool **mmapq-ids** (in
-[`tools/mmapq-ids/`](tools/mmapq-ids/)) inspects lane occupancy and
-releases a specific ID. It is a separate build that does not link
-libmmapq and never opens queue metadata — a damaged meta file does not
-prevent releasing a known ID.
+Rust (`mmapq-rs`): safe wrappers, same queue files.
 
-`--unset` is valid only when the process holding the ID is **dead**
-(owner ruling, CAND-50 item 1; CAND-54 §5): a SIGSTOPped live process
-plus `--unset` means two writers on the lane, and the single-writer
-guarantee — on which the whole commit-intent protocol rests — is void.
+```rust
+use mmapq::{IndexedQueue, NextMove, QueueConfig, Runtime};
 
-```sh
-make mmapq-ids
-tools/mmapq-ids/build/release/mmapq-ids /data orders          # list lanes
-tools/mmapq-ids/build/release/mmapq-ids /data orders --unset 7  # release ID 7
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    std::fs::create_dir_all("./data")?;
+    let rt = Runtime::region_mapper()?;
+    let q = IndexedQueue::create(
+        QueueConfig::new("./data", "my_queue")
+            .write_runtime(&rt)
+            .read_runtime(&rt),
+    )?;
+    let mut appender = q.create_appender()?;
+    let index = appender.append(b"hello world")?;
+    let mut poller = q.create_poller()?;
+    poller.move_to_index(index);
+    poller.poll(|_index, _appender_id, data| {
+        println!("Received: {:?}", std::str::from_utf8(data));
+        NextMove::Advance
+    })?;
+    Ok(())
+}
 ```
 
-**`--unset` verifies nothing about ownership or liveness.** Before
-releasing, the operator must ensure the ID is unused and prevent
-acquisition or restart during reclamation — prefer a maintenance window
-with producers stopped and automatic restarts disabled. Clearing an
-active ID can allow two writers into the same payload lane and corrupt
-the queue. Exit codes: 0 success, 1 already free, 2 error. A successful
-release changes exactly one bit of exactly one file, with checked
-synchronous writeback — not a general power-loss durability guarantee.
-After release, a restarted writer re-acquires its lane with
-`mmapq_indexed_queue_create_appender_with_id()` and recovers its
-uncommitted tail as above.
+Python (`mmapq-py`): the same queues from a scripting environment —
+debug, backtest, audit.
 
-**Java interop is not supported in 0.2.0.** 0.2.0 refuses Java-written
-queues at open (schema_version 1), and the Java implementation does not
-yet follow the 0.2.0 protocol (for example, it does not maintain the
-archive line). This applies to both queue types. The silent case the
-refusal prevents: a queue created by C but archived by Java would keep a
-stale non-zero archive line, and recovery could reopen without any error
-— a Java archiver must not be run against 0.2.0 queues. Read Java-written
-queues with the Java library. Java support is planned at schema 2, under
-the same protocol contract (see `doc/reference/wire-format.md`).
+```python
+from pathlib import Path
+from mmapq import IndexedQueue, NextMove
 
----
+Path("./data").mkdir(exist_ok=True)
 
-## Design
+def handler(index, appender_id, data):
+    print(f"[{index}] {data!r}")
+    return NextMove.ADVANCE
 
-### Header layout — the vertical walk
-
-Each queue entry has an 8-byte header in a shared header file. To
-eliminate false sharing between concurrent appenders, headers use a
-non-linear striding algorithm that transposes the memory walk from
-horizontal to **vertical** across cache lines.
-
-```
-Layout (sectorSize=64, header=8 bytes):
-
-  index 0  →  byte offset 0      (sector 0, word 0)
-  index 1  →  byte offset 512    (sector 1, word 0)  ← new cache line
-  index 2  →  byte offset 1024   (sector 2, word 0)  ← new cache line
-  ...
-  index 63 →  byte offset 32256  (sector 63, word 0)
-  index 64 →  byte offset 8      (sector 0, word 1)  ← back to sector 0
+with IndexedQueue.create("./data", "my_queue") as queue:
+    with queue.create_appender() as appender:
+        index = appender.append(b"hello world")
+    with queue.create_poller() as poller:
+        poller.move_to_index(index)
+        poller.poll(handler)
 ```
 
-Sequential indices land on a new cache line every step.
-Only after 64 indices does the mapping return to a previous sector,
-now at the next 8-byte word within it.
+Each binding has its own README with idiomatic detail; exact per-language
+coverage is the [feature matrix](doc/reference/feature-matrix.md).
 
-The header encodes appender ID and payload position in a single 64-bit
-word committed via atomic CAS:
+## Go deeper
 
-```
-bits[63:56] = appenderId   (0–255, up to 256 concurrent appenders)
-bits[55:0]  = payloadPosition
-0           = HEADER_NULL (slot not yet written)
-```
+- [Guarantees and their evidence](doc/reference/guarantees.md) — every
+  claim, with the test, model or argument behind it
+- The [user guide](doc/guide/01-concepts.md): concepts · single-message ·
+  batch · re-sequenced commits · crash and restart · archiving and
+  reclamation · export/import · performance · trade-offs
+- Reference: [wire format](doc/reference/wire-format.md) (normative) ·
+  [error codes](doc/reference/error-codes.md) ·
+  [feature matrix](doc/reference/feature-matrix.md) ·
+  [API overview](doc/reference/api-overview.md) ·
+  [glossary](doc/reference/glossary.md) ·
+  [persistence contract](doc/reference/persistence-contract.md)
+- Design: [archiving design](doc/design/archiving-design.md) ·
+  [archive boundaries](doc/design/archive-boundaries.md) ·
+  [header layout](doc/design/header_layout_design.md) ·
+  [payload alignment](doc/design/payload_alignment_design.md) ·
+  [protocol model](doc/model/README.md) (TLA+)
+- [Release notes](doc/RELEASE-NOTES-0.2.0.md) — the single source for
+  0.1.0 → 0.2.0 changes
 
-### Payload framing
-
-Each message in the payload file is framed as `[int32 length][payload bytes]`.
-Batch entries add a `[int32 message_count]` prefix before the first message.
-The framing derives from Algoteq's Java implementation; sharing queues with
-Java is not supported in 0.2.0 (see the note above).
-
-### Visibility and commit
-
-A message is **visible** to consumers the instant the header CAS succeeds.
-The atomic release-store on the appender side and the acquire-load on the
-reader side establish the happens-before relationship that guarantees
-payload visibility — no locks, no kernel calls on the hot path.
-
-### Async region mapping
-
-A background thread (`mmapq_runtime_region_mapper`) maps and unmaps file regions
-in advance. Writers trigger premap at the start of each region (ratio 0.0);
-readers trigger premap at the halfway point (ratio 0.5). The writer
-extends the file with `ftruncate` and pre-touches pages via atomic CAS to
-absorb dirty-bit penalties before the hot loop reaches the new region.
-
----
-
-## File layout
-
-```
-<directory>/<queue_name>/
-  meta                  queue config (region_size, max_file_size, schema version,
-                        start_index, archivable flag, queue_type)
-  header_N              shared header file (N = file index 0, 1, 2...; the
-                        highest-indexed file is the current active one)
-  payload_A_N           per-appender payload file (A = appender ID 0–255,
-                        N = file index 0, 1, 2...; same pattern)
-  appender_meta_A       per-appender start_offset (for archiving)
-  appender_id_pool      CAS bitset — allocates appender IDs
-```
-
-All files are plain OS files. The format derives from Algoteq's Java
-implementation (evolved derivative of tools4j/mmap; NOT compatible with
-upstream tools4j); 0.2.0 does not share queues with Java — Java-written
-queues are refused at open (see the compatibility note above).
-
----
-
-## Building
-
-Requires: Linux, gcc, pthread. No external dependencies.
+## Building and tests
 
 ```bash
-# Build the static library and all binaries
-make
-
-# Or build specific targets
-make bench echo_server          # single-message benchmark tools
-make batch_bench batch_echo_server  # batch benchmark tools
+make                    # static library + examples; Linux, gcc, pthread, no dependencies
+./scripts/test.sh       # normal + release-flags loops
 ```
 
-CMake is also supported:
-
-```bash
-mkdir -p build && cd build
-cmake ..
-make -j$(nproc)
-```
-
-CMake builds the library and examples only; `scripts/test.sh` is the test
-runner (see below).
-
----
-
-## Running the tests
-
-```bash
-./scripts/test.sh            # normal + release-flags loops (22 passed, 0 failed each)
-./scripts/test.sh --asan     # AddressSanitizer
-./scripts/test.sh --tsan     # ThreadSanitizer (run with ASLR disabled: setarch $(uname -m) -R ...)
-```
-
----
-
-## Running the benchmarks
-
-```bash
-# Full benchmark suite: single-message + batch, all modes
-./scripts/bench.sh
-./scripts/batch_bench.sh
-
-# Or via make (runs the scripts above):
-make bench-suite
-make batch-bench-suite
-```
-
-Or run individual configurations manually:
-
-```bash
-# Single-message, internal server
-rm -rf /tmp/request /tmp/response
-sleep 3
-./latency_bench 20000000 1000 64 5 7 9
-
-# Single-message, external server
-rm -rf /tmp/request /tmp/response
-sleep 3
-./echo_server /tmp request response 7 9 &
-./latency_bench 20000000 1000 64 5 7 9 --external
-
-# Batch queue, internal server
-rm -rf /tmp/request /tmp/response
-sleep 3
-./batch_latency_bench 20000000 1000 64 5 7 9
-
-# Batch queue, external server
-rm -rf /tmp/request /tmp/response
-sleep 3
-./batch_echo_server /tmp request response 7 9 &
-./batch_latency_bench 20000000 1000 64 5 7 9 --external
-```
-
-Arguments: `<iterations> <warmup> <msg_size> <client_cpu> <server_cpu> <mapper_cpu>`
-
-Override defaults via environment variables:
-```bash
-BENCH_ITER=5000000 BENCH_MAPPER=11 ./scripts/bench.sh
-```
-
----
-
-## API overview
-
-### Start here — core functions
-
-| Function | What it does |
-| :--- | :--- |
-| `mmapq_runtime_region_mapper(&rt)` | Get the singleton background mapping thread (call once at startup) |
-| `mmapq_indexed_queue_create_default(dir, name, wrt, rrt, &q)` | Open or create a single-message queue |
-| `mmapq_indexed_queue_create_appender(q, &a)` | Create a writer |
-| `mmapq_indexed_queue_create_poller(q, &p)` | Create a sequential reader |
-| `mmapq_indexed_appender_append(a, data, len)` | Write and commit a message |
-| `mmapq_indexed_poller_poll(p, handler, ctx)` | Process one message via callback |
-| `mmapq_indexed_batch_queue_create_default(dir, name, wrt, rrt, &q)` | Open or create a batch queue |
-| `mmapq_indexed_batch_appender_start_batch_checked()` | Begin a new batch (0 or a negative `MMAPQ_*` code) |
-| `mmapq_mutable_batch_append()` | Add a message to an in-progress batch |
-| `mmapq_indexed_batch_appender_commit_batch()` | Commit the batch atomically |
-
-`mmapq_indexed_queue_create` and `mmapq_indexed_batch_queue_create` accept an `archivable` parameter
-(0 = non-archivable, performant; 1 = archivable, atomic start_index reads).
-Applies at creation only; existing queues keep their on-disk value.
-
-### Single-message queue
-
-| Function | Description |
-|---|---|
-| `mmapq_indexed_queue_create()` | Open or create with explicit parameters |
-| `mmapq_indexed_queue_create_reader()` | Create a random-access reader |
-| `mmapq_indexed_queue_create_archiver()` | Create an archiver |
-| `mmapq_indexed_queue_close()` | Close the queue |
-| `mmapq_indexed_appender_append_uncommitted()` | Write without committing |
-| `mmapq_indexed_appender_commit()` | Commit a previously written payload |
-| `mmapq_indexed_poller_move_to_end()` | Jump past the last entry |
-| `mmapq_indexed_poller_move_to_index()` | Jump to a specific index |
-| `mmapq_indexed_reader_read()` | Read entry at a specific index |
-| `mmapq_indexed_reader_read_last()` | Read the last committed entry |
-| `mmapq_indexed_archiver_archive_up_to_index()` | Archive entries up to an index |
-| `mmapq_indexed_archiver_archivable_files()` | List files safe to delete/archive |
-| `mmapq_indexed_archiver_print_summary()` | Print queue file layout summary |
-
-The poll callback returns `MMAPQ_NEXT_ADVANCE`, `MMAPQ_NEXT_STOP`, or `MMAPQ_NEXT_RETREAT`.
-
-### Batch queue
-
-| Function | Description |
-|---|---|
-| `mmapq_indexed_batch_queue_create()` | Open or create a batch queue with explicit parameters |
-| `mmapq_indexed_batch_queue_create_poller()` | Create a batch sequential consumer |
-| `mmapq_indexed_batch_queue_create_reader()` | Create a batch random-access reader |
-| `mmapq_indexed_batch_queue_create_archiver()` | Create a batch archiver |
-| `mmapq_mutable_batch_complete()` | Finalise the batch |
-| `mmapq_mutable_batch_append_reserved()` | Reserve space in a batch and get raw write address |
-| `mmapq_mutable_batch_get_checked()` | Read a message from an in-progress batch by index (0 or a negative `MMAPQ_*` code) |
-| `mmapq_mutable_batch_iterator()` | Iterate over messages in an in-progress batch |
-| `mmapq_indexed_batch_poller_poll()` | Process one message via callback |
-| `mmapq_indexed_batch_reader_read()` | Read a batch at a specific index |
-| `mmapq_indexed_batch_reader_read_last()` | Read the last committed batch |
-| `mmapq_indexed_batch_archiver_archive_up_to_index()` | Archive batches up to an index |
-| `mmapq_indexed_batch_archiver_archivable_files()` | List files safe to delete/archive |
-
-The batch poll callback returns `MMAPQ_NEXT_ADVANCE`, `MMAPQ_NEXT_STOP`, or
-`MMAPQ_NEXT_RETREAT` — the same `MmapqNextMove` enum used by the single-message
-poller.
-
-### Export / import (QueueTransfer)
-
-| Function | Description |
-|---|---|
-| `mmapq_queue_transfer_export()` | Export queue entries to a flat stream |
-| `mmapq_queue_transfer_export_chunked()` | Export split into ~N MB chunk files |
-| `mmapq_queue_transfer_import()` | Import flat stream into a normal queue |
-| `mmapq_queue_transfer_import_batch_stream()` | Import batch stream into a normal queue (flatten) |
-| `mmapq_queue_transfer_copy()` | Copy entries directly between queues |
-| `mmapq_batch_queue_transfer_export()` | Export batch queue entries to a batched stream |
-| `mmapq_batch_queue_transfer_export_chunked()` | Batch export split into ~N MB chunk files |
-| `mmapq_batch_queue_transfer_import()` | Import batched stream into a batch queue |
-| `mmapq_batch_queue_transfer_import_flat_stream()` | Import flat stream into a batch queue (1-msg batches) |
-| `mmapq_batch_queue_transfer_copy()` | Copy batches directly between queues |
-
-All export/copy functions support optional include/exclude filter callbacks
-and `REBASE` / `PRESERVE` start index mode.
-
-### MmapqRuntime
-
-| Function | Description |
-|---|---|
-| `mmapq_runtime_create()` | Create a named runtime with a custom idle strategy |
-| `mmapq_runtime_close()` | Stop the runtime thread |
-| `mmapq_runtime_set_affinity()` | Pin the runtime thread to a CPU core |
-
----
-
-## Documentation
-
-*   [Persistence contract](doc/reference/persistence-contract.md) — publication, process restart/replay, application checkpoints, and power-loss durability
-*   [Feature matrix](doc/reference/feature-matrix.md) — feature coverage across C, Rust, and Python, including compatibility scope
-*   [Event-sourcing guide](doc/guide/event-sourcing.md) — building sequenced command/event architectures on mmapq: batch commits as transactions, replay, recovery, replication
-*   [Header layout design](doc/design/header_layout_design.md) — full derivation of the vertical walk, worked example, and verification trace
-*   [Payload alignment design](doc/design/payload_alignment_design.md) — payload framing and alignment rationale
-*   [Maintainer guide](doc/contributing/maintainer_guide.md) — anti-pattern ledger, performance tuning baseline, thread affinity rules, metadata protocol
-
----
-
-## Corruption recovery
-
-On open, the appender recovery scan validates the committed stream. If it
-finds an inconsistency (for example, a committed entry pointing at an empty
-payload slot), it refuses to open and returns an error instead of risking
-silent overwrites.
-
-Recovery **detects** corruption; it does not repair it. The remediation is
-always the same: recreate the queue, restoring any needed history from the
-export format (`QueueTransfer`). `mmapq-stat --verify` (see tools, if
-present in your build) reports the exact location of an inconsistency.
-
-## Platform
-
-Linux only. Requires naturally aligned lock-free atomics over `MAP_SHARED`
-mmap — verified on x86-64; ARM64 is untested (run `test/multiprocess/` on an
-aarch64 box before shipping an ARM64 claim).
-
----
+CMake is also supported. Details, sanitizers and the gate scripts:
+[building and testing](doc/contributing/building-and-testing.md).
 
 ## License
 
 BSD 3-Clause — see [LICENSE](LICENSE).
-
-Copyright (c) Anton Anufriev, Algoteq Pty Ltd, and contributors.
