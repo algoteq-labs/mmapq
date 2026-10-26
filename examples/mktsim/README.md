@@ -140,3 +140,66 @@ catches it.
 Not measured: how many kills landed inside an append call (as opposed to
 between appends). Kills are random during continuous publishing, so some do,
 but the harness does not count them.
+
+## The batch lane (F4)
+
+Every trader also holds an appender on the batch queue `market_batch` (same
+directory, same fixed-ID scheme under `--reclaim`; the driver releases both
+lanes' IDs). The batch lane mirrors the trader's intent stream, committed
+atomically: the MAX_LIVE eviction path publishes [NEW, CANCEL-oldest] as one
+batch; other intents commit as singleton batches. Batch messages use the
+same wire format and the same (k,H,D) claim scheme, evaluated over the
+batch lane's own message count.
+
+Checks (online in traders, offline in verify over both queues): batch
+atomicity (framing/CRC/claims validate per message and per batch; a reader
+only ever sees whole batches), per-trader batch sequence continuity across
+incarnations, and a batch-lane digest the verifier reproduces exactly
+(`BATCHVERIFY`).
+
+Planted defects (both observed failing with a verify DIVERGENCE →
+RESULT: FAIL): `MKTSIM_BATCH_REORDER=1` applies each batch's messages in
+reverse order; `MKTSIM_BATCH_PARTIAL_READ=1` applies only the first message
+of a multi-message batch.
+
+## The gateway (F5): resequenced commits
+
+A gateway participant (`--gateways N`, default 1) writes to the main queue
+with `append_uncommitted` + `commit`: packets are **appended in arrival
+order** (a deterministic permutation holds every 7th packet back by 2
+positions) and **committed in sequence order** — a late packet is appended
+on arrival and committed when its gap closes. There are no reserved
+offsets. `T_GATEWAY` payloads carry (gateway id, incarnation, seq, payload
+offset); they are book no-ops that enter the digest from payload bytes
+only.
+
+Checks: in the committed log the gateway lane's sequence numbers are
+strictly increasing and gap-free in index order; verify prints a PROOF
+line when the committed offsets are non-monotone in commit order (proof
+that resequencing happened); under churn the gateway is killable like a
+trader, and the rejoining incarnation walks its uncommitted iterator with
+**the queue as the source of truth**: committed seqs are derived by
+scanning the gateway's committed records in the queue (the gap log's
+commit lines are hints only); the walk must yield exactly the lane's
+appended-but-uncommitted set per the log, plus at most one unlogged record
+at the lane's write tail — intact: its seq is taken from its payload and
+it is committed normally; torn: discarded per the chapter-5 recipe (its
+seq is re-derived as the never-logged hole). A seq the log calls
+uncommitted but the queue shows committed is reconciled as committed:
+never re-appended, never re-committed. `GWJOIN` reports the
+walked/reappended counts.
+
+Scenario hooks (deterministic crash windows, fired once per run on a
+counter — the correct result after them is PASS):
+`MKTSIM_GW_KILL_AFTER_APPEND=1` (SIGKILL right after `append_uncommitted`,
+before the log line) and `MKTSIM_GW_KILL_AFTER_COMMIT=1` (right after
+`commit`, before the log line). Fail-first evidence against the pre-rework
+(log-truth) code: same lane — `GWALK MISMATCH: walk yields 1 records, gap
+log recorded 0 uncommitted` / `walk yields 0 records, gap log recorded 1
+uncommitted`; new lane under kill-after-commit — `verify: GATEWAY SEQ gw 0
+… expected 5 got 4` (the duplicate-seq re-append). After the rework: all
+four variants PASS.
+
+Planted defect: `MKTSIM_COMMIT_BEFORE_GAP=1` — the gateway commits a later
+packet before its gap fill. Observed failing: `verify: GATEWAY SEQ gw 0 …
+expected 6 got 7 (gap or inversion)` → RESULT: FAIL.
