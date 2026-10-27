@@ -2,8 +2,8 @@
 (***************************************************************************)
 (* Model of mmapq's archive / commit / join / delete protocol with         *)
 (* resequenced (out-of-order) commits.  Source of truth for the protocol:  *)
-(* doc/archiving-design.md (CAND-30) and the code paths named in the       *)
-(* comments below (mmapq 20a37d1).                                         *)
+(* doc/design/archiving-design.md (CAND-30) and the code paths named in     *)
+(* the comments below (mmapq 20a37d1).                                     *)
 (*                                                                         *)
 (* Abstractions                                                            *)
 (*  - Each appender owns a payload lane.  A message occupies one position  *)
@@ -825,6 +825,25 @@ NoDeleteUnderPending ==
 (* CAND-54 amendment L(iii): the boundary never exceeds the archive line  *)
 (* (the line drains first; every lowering touches only start_offset).     *)
 SoLeLine == \A a \in Appenders : so[a] <= aoff[a]
+
+(* Reachability witness (owner, 2026-10-25), NOT a safety invariant.      *)
+(* Definition-only: not referenced by Next, so no recorded run's state    *)
+(* space changes; the EXPECTED row (FAIL, speed 2) re-confirms the bounds *)
+(* on every --all.  No re-run of other checks is owed under the TLC       *)
+(* economy rule.                                                          *)
+(* cand54l_intent_na2_core runs the two-lane L protocol at reduced bounds *)
+(* (NA=2, NIdx=3, NPos=3).  Those bounds only guard the protocol if the   *)
+(* cross-lane interleaving is reachable: a slow commit past its pre-check *)
+(* on one lane (PreCasWindow, intent set) coexisting with a deleted       *)
+(* payload file of the OTHER lane.  A TLC "is violated" result IS the     *)
+(* witness — the error trace shows the coexisting state.  An exhaustive   *)
+(* pass means the bounds never produce the interleaving: raise NPos to 4. *)
+WitnessSlowCommitCrossDelete ==
+    ~(\E a, b \in Appenders :
+        /\ a # b
+        /\ apc[a] \in PreCasWindow
+        /\ intent[a] # Empty
+        /\ \E f \in Files : <<b, f>> \in delP)
 
 (* I5: a joining appender never writes over existing bytes.                *)
 NoOverwrite == ~overwrite

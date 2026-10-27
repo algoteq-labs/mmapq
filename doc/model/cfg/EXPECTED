@@ -1,4 +1,26 @@
-# name expected speed(0=seconds,1=minutes,2=~1h)
+# name expected speed(0=seconds,1=minutes,2=~1h,3=manual-only)
+# speed 3 rows are never selected by the tier runs (check.sh caps at
+# --all = speed 2); run them by name.  Rationales:
+# - cand54l_intent_na2 (owner, 2026-10-25): not exhaustively runnable on
+#   this hardware — the 2026-10-25 --all attempt filled the disk (TLC
+#   StatePoolWriter, ENOSPC) after ~1.5 h.  Record: "explored 582,263,069
+#   distinct states without violation; incomplete (disk full); total state
+#   space unknown."
+# - cand54l_intent_na2_hand: the hand-deleter twin; simulation only.
+# - cand54l_intent_na2_core: the na2 protocol at reduced bounds (NA=2,
+#   NIdx=3, NPos=3 — bounds witness cfg/cand54l_intent_na2_core_witness.cfg,
+#   violation observed 2026-10-25, re-confirmed 2026-10-27).  Exhaustive
+#   run 2026-10-25 21:58:38 → host crash 2026-10-26 20:52.  Record:
+#   "explored 2,494,110,319 distinct states without violation; incomplete
+#   (host crash); total state space unknown."  It is NOT a passing guard;
+#   no completed exhaustive check has two lanes.  The two-lane evidence is
+#   this partial run plus the two 1-hour -simulate runs of 2026-10-26
+#   (records in ../README.md).
+# The release gate's --all run was taken 2026-10-25 at inputs 5657beb
+# (38/39 ok; the na2 ENOSPC above handled per the owner's ruling).  The
+# model changes since are the definition-only witness (not referenced by
+# Next), EXPECTED tier metadata and new rows, and the na2 cfgs of the
+# follow-up runs, so that run still discharges the gate.
 current PASS 1
 current_no_undo PASS 1
 current_no_undo_no_timeout PASS 1
@@ -34,7 +56,13 @@ cand54l_clear_before_cas FAIL 0
 cand54l_scan_before_intents FAIL 0
 cand54l_no_live_floor FAIL 0
 cand54l_clear_before_min PASS 2
-cand54l_intent_na2 PASS 2
+# not reproducible via check.sh (exhaustive only); command in ../README.md
+cand54l_intent_na2 PASS 3
+# not reproducible via check.sh (exhaustive only); command in ../README.md
+cand54l_intent_na2_hand PASS 3
 cand54l_intent_core PASS 1
 cand54l_intent_hand_core PASS 1
 cand54l_clear_before_min_core PASS 1
+# not reproducible via check.sh (exhaustive only); command in ../README.md
+cand54l_intent_na2_core PASS 3
+cand54l_intent_na2_core_witness FAIL 2

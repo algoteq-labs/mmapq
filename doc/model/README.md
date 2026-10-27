@@ -18,9 +18,13 @@ obligation for every change to the archiver, the commit path, join, or
 ```
 ./check.sh            # all checks except the ~70 min one   (~25 min, 2 cores)
 ./check.sh --quick    # counterexample checks only            (~1 min)
-./check.sh --all      # everything                            (~1.5 h)
+./check.sh --all      # every tier-scheduled check            (~1.5 h)
 ./check.sh fixed      # one named check
 ```
+
+The speed-3 rows in `cfg/EXPECTED` (the `cand54l_intent_na2*` family) are
+manual-only: no tier run, `--all` included, ever schedules them — run them
+by name.
 
 Needs Java 11+. `check.sh` downloads `tla2tools.jar` 1.7.4 on first use and
 verifies its SHA-256. Each check prints `ok` when TLC's verdict matches the
@@ -53,7 +57,7 @@ be narrowed to the pre-CAS window.
 | Uncommitted iteration (CAND-49) | `IterateUncommitted` refills the pending set from the lane's surviving uncommitted positions at or above the archive line (`IterEffAoffChoices`: acquire si first, then the line — the D-G publication rule; the harmless early-line direction is a modelled nondeterministic choice) | the `_checked` iterator factories (snapshot at init; refill on yield) |
 | The pending flag (CAND-49) | `flag[a]` — the `last_pending_offset` tail; set only by `AppendUncommitted`, cleared on commit success/overtake and by `Crash`/`Join`; the set is uniform, the flag is modelled | `indexed_appender.c` `last_pending_offset` (§3.3/§3.4 double conjunct) |
 | The archive line (D-G) | `aoff[a]` — raised only by a forward archive (`Publish`/`Flush`, `Max2`); never lowered. `ArchiveLineMonotonic` pins it | `appender_meta.archive_offset` — see `doc/design/archive-boundaries.md` |
-| Commit intent (CAND-54 proposal; spec `audit/CAND-54-spec.md` — NOT yet landed in code) | `CommitIntent`: slow-path commit stores `intent[a]` before the pre-check (`SlowIntent`, c0), clears it last (`SlowClear`, c5; refusal path c5r); crash leaves it stale, `Join` clears it (plain). The re-list is decomposed (`RLoadSo` → `RLoadIntents` → `RScan` → `RCompute`) with `Bound` gaining the inflight term, the SH hold transcribed as the `UndoStart` mid-round guard; `WaitAssumption` is off. Amendment H: `MinSkipArchived` — the commit min is skipped when the committed entry is already archived (`cidx[a] < si`; in code the si read runs under a brief `archive.lock` SH hold taken on the fired re-check path only) | proposal: the `indexed_appender.c` slow path + its `indexed_batch_appender.c` twin; the intent slot at appender-meta byte 24; `archivable_files_locked` load order; `reclaim_files` SH hold |
+| Commit intent (CAND-54; landed 2026-10-25 as `6ce02cf`; spec `audit/CAND-54-spec.md`) | `CommitIntent`: slow-path commit stores `intent[a]` before the pre-check (`SlowIntent`, c0), clears it last (`SlowClear`, c5; refusal path c5r); crash leaves it stale, `Join` clears it (plain). The re-list is decomposed (`RLoadSo` → `RLoadIntents` → `RScan` → `RCompute`) with `Bound` gaining the inflight term, the SH hold transcribed as the `UndoStart` mid-round guard; `WaitAssumption` is off. Amendment H: `MinSkipArchived` — the commit min is skipped when the committed entry is already archived (`cidx[a] < si`; in code the si read runs under a brief `archive.lock` SH hold taken on the fired re-check path only) | the `indexed_appender.c` slow path + its `indexed_batch_appender.c` twin; the intent slot at appender-meta byte 24; `archivable_files_locked` load order; `reclaim_files` SH hold |
 
 **Abstractions.** Each appender owns a payload lane; a message occupies
 one position and ends at `p+1`; payload file `f` holds positions
@@ -157,6 +161,10 @@ is inert when its switches are FALSE: `current_no_undo` re-run on
 | `cand54l_intent_hand` (L) | PASS | pass | 439,733,123 |
 | `cand54l_clear_before_min` (L) | PASS | pass | 459,672,512 |
 | `cand54l_intent_core` / `cand54l_intent_hand_core` / `cand54l_clear_before_min_core` (L, tier-1 guards) | PASS | pass | 13,908,615 / 15,286,465 / 16,179,432 |
+| `cand54l_intent_na2_core` (L; two lanes, NA=2 NIdx=3 NPos=3) | PASS | **incomplete** | 2,494,110,319 explored without violation at the 2026-10-26 host crash; total state space unknown — **not a passing guard** |
+| `cand54l_intent_na2` (L; two lanes, NA=2 NIdx=4 NPos=4) | PASS | **incomplete** | 582,263,069 explored without violation at the 2026-10-25 disk-full stop (TLC StatePoolWriter ENOSPC after ~1.5 h) |
+| `cand54l_intent_na2_hand` (L; two lanes, NA=2 NIdx=4 NPos=4) | PASS | simulation only | — |
+| `cand54l_intent_na2_core_witness` (bounds witness — reachability, not a safety invariant) | FAIL | `WitnessSlowCommitCrossDelete` violated | 23,707,788 at depth 26 (2026-10-27, 3 min 28 s; 2026-10-25: 23,484,487) |
 | `cand49_iterate_i1` | PASS | pass | 141,812,096 ‡ |
 | `cand49_iterate` | PASS | pass | 878,242,588 †† |
 
@@ -173,6 +181,22 @@ its re-run on the final encoding (the nondeterministic early-line read) is
 deferred to the pre-release `--all` run (owner, 2026-10-19) —
 `cand49_iterate_regression` covers crash + the branch in the default tier.
 
+**Coverage statement (2026-10-27).** Every completed exhaustive check of
+the CAND-54 protocol is single-lane (NA=1): the tier-2 runs
+`cand54l_intent` / `cand54l_intent_hand` / `cand54l_clear_before_min`
+(NIdx=4, NPos=4) and the tier-1 core guards (NIdx=3, NPos=3) above, plus
+the expected-FAIL record and mutant checks, which terminate on their
+recorded counterexamples. **No completed exhaustive check has two lanes.**
+The `cand54l_intent_na2_core` bounds do reach the cross-lane
+commit-vs-reclaim interleaving they were built for — the bounds witness
+`cfg/cand54l_intent_na2_core_witness.cfg` (`WitnessSlowCommitCrossDelete`,
+a reachability witness, not a safety invariant) is violated at 23,484,487
+distinct states (2026-10-25, 2 min 35 s) and, re-run, at 23,707,788
+distinct states at depth 26 (2026-10-27, 3 min 28 s; EXPECTED row FAIL 2,
+so `--all` re-confirms it). The two-lane evidence is the
+incomplete `cand54l_intent_na2_core` run above plus the two 1-hour
+simulations below.
+
 **Random simulation at larger bounds** (6 header slots, 6 positions per
 lane, traces up to depth 120, TLC `-simulate`):
 
@@ -181,9 +205,45 @@ lane, traces up to depth 120, TLC `-simulate`):
 | current protocol (as landed) | 15 | 1,940 | `NoLiveLoss` violated |
 | fixed protocol, undo + timeouts | 847,324 | 129,815,951 | no violation (15 min) |
 | fixed + crashes + listing cap + bounded pass | 674,536 | 102,775,355 | no violation (15 min) |
+| `cand54l_intent_na2` (commit intent, L; two lanes, NA=2 NIdx=4 NPos=4) | not recorded | 899,994,658 | no violation (1 h, 2026-10-26) |
+| `cand54l_intent_na2_hand` (the hand-deleter twin) | not recorded | 889,161,289 | no violation (1 h, 2026-10-26) |
+
+Both na2 simulations ended at the 1 h timeout (exit 124): traces were
+bounded at ≤ 120 steps, the trace counts are not recorded, and no
+max-depth claim is made. The first ran alongside the DEMO-01 stage-(b)
+churn runs and the day's push sequence, the second on an idle machine.
 
 Simulation samples behaviours; it is not exhaustive. Its value here is
 depth at sizes the exhaustive search cannot reach.
+
+### Reproducing the na2 records
+
+The speed-3 rows are not reproducible via `check.sh` (no tier run
+schedules them — `--all` caps at speed 2; see `cfg/EXPECTED`). The exact
+invocations, run from `doc/model/` (`<workers>` and `<metadir>` are
+placeholders; the metadir must be outside the repo, on a disk with room
+for the state queue):
+
+Exhaustive `cand54l_intent_na2_core` (2026-10-25 → host crash 2026-10-26):
+
+```
+java -XX:+UseParallelGC -cp tla2tools.jar tlc2.TLC -deadlock \
+    -workers <workers> -config cfg/cand54l_intent_na2_core.cfg \
+    -metadir <metadir> MmapqArchive.tla
+```
+
+The two 1-hour simulations (2026-10-26), `cand54l_intent_na2` shown,
+`cand54l_intent_na2_hand` likewise:
+
+```
+timeout 3600 java -XX:+UseParallelGC -cp tla2tools.jar tlc2.TLC \
+    -deadlock -workers <workers> -simulate -depth 120 \
+    -config cfg/cand54l_intent_na2.cfg -metadir <metadir> \
+    MmapqArchive.tla
+```
+
+Future simulations end with TLC's own limit (`-simulate num=N`), not
+`timeout`, so the final statistics print (owner, 2026-10-27).
 
 All results are verified with the pinned 1.7.4 via `check.sh`, including
 `cand35_crash_listing_cap` (the ~1 h run): PASS, 195,522,487 distinct
@@ -288,8 +348,8 @@ track to close CAND-33 for the plain appender.
 
 ### CAND-54: the commit intent and the two holes in the wait's replacement
 
-The CAND-54 proposal (spec `audit/CAND-54-spec.md`, not yet landed in
-code) replaces the deletion wait with a per-lane **commit intent** (an
+The CAND-54 protocol (spec `audit/CAND-54-spec.md`; landed 2026-10-25 as
+`6ce02cf`) replaces the deletion wait with a per-lane **commit intent** (an
 appender-meta slot stored before a slow commit's pre-check, released
 after the boundary repair) and a third term in the listing's bound
 (`min(start_offset, live_floor, inflight)`).
