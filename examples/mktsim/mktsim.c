@@ -13,9 +13,22 @@
  * saw different histories or computed different markets.
  *
  * Modes:
- *   mktsim trader  <dir> <queue> <trader_id> <incarnation> <stopfile> [sync|async] [appender_id|-1] [batch 0|1]
- *   mktsim gateway <dir> <queue> <gateway_id> <incarnation> <stopfile> [sync|async] [appender_id|-1]
- *   mktsim verify  <dir> <queue> [trader_log ...]
+ *   mktsim trader   <dir> <queue> <trader_id> <incarnation> <stopfile> [sync|async] [appender_id|-1] [batch 0|1] [archivable 0|1]
+ *   mktsim gateway  <dir> <queue> <gateway_id> <incarnation> <stopfile> [sync|async] [appender_id|-1] [archivable 0|1]
+ *   mktsim archiver <dir> <queue> <stopfile> [hand 0|1]
+ *   mktsim snapjoin <dir> <queue> <snapshot>
+ *   mktsim verify   <dir> <queue> [trader_log ...]
+ *
+ * Archiving (F6/F7, archivable=1): traders write snapshots (<dir>/snaps/)
+ * and progress watermarks (<dir>/progress/); the archiver runs the guide
+ * ch6 loop (archive_up_to_index → archivable_files → copy aside to
+ * <dir>/archive/ with size+CRC → reclaim_files; the hand variant unlinks
+ * the marks itself under the X5 rule). Restarts and the snapshot joiner
+ * rebuild as snapshot + archived tail + live tail; verify replays the
+ * archived copies + the live queue and asserts boundary contiguity
+ * exactly. The gateway restart derives its committed prefix 0..C from the
+ * live range (highest live gateway seq), falling back to the highest
+ * logged commit when none is live (spec v3.2).
  *
  * Batch lane (F4): with batch=1 every trader also drives a batch appender on
  * the queue "market_batch" in the same directory and mirrors its intent stream
@@ -67,7 +80,10 @@
 #include "runtime.h"
 #include "mmap_platform.h"
 
+#include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <stddef.h>
 #include <signal.h>
 #include <sched.h>
 #include <stdint.h>
@@ -150,12 +166,21 @@ typedef struct {
     int64_t  cash[MAX_TRADERS];       /* ticks*lots, sign: buyer pays */
     int64_t  trades, volume, self_trades, rejects, cancel_rejects;
     int32_t  last_trade;
-    /* per-index history for claim checks */
+    /* per-index history for claim checks (slot count-base = state after
+     * `count` messages; base > 0 after a snapshot load: earlier states are
+     * not known and their claims are not checked) */
     uint64_t *hist_input, *hist_digest; int64_t hist_cap;
+    int64_t  base;
+    uint64_t base_input, base_digest;   /* the snapshot-boundary state (count == base) */
     /* per-trader replay facts */
     int64_t  next_seq[MAX_TRADERS];
     uint32_t last_inc[MAX_TRADERS];
     int      tiebreak_bug;            /* test hook: planted divergence */
+    /* MKTSIM_SNAPSHOT_OFF_BY_ONE (planted defect, F6): when snap_shadow is
+     * non-NULL, engine_apply serializes the state at its entry, so the
+     * snapshot writer can write that state with the index of the CURRENT
+     * state — the snapshot records index k but carries the state at k-1. */
+    uint8_t *snap_shadow; size_t snap_shadow_cap, snap_shadow_len;
 } Engine;
 
 static void engine_init(Engine *e)
@@ -170,7 +195,7 @@ static void engine_init(Engine *e)
 
 static void engine_free(Engine *e)
 {
-    free(e->orders); free(e->hist_input); free(e->hist_digest);
+    free(e->orders); free(e->hist_input); free(e->hist_digest); free(e->snap_shadow);
 }
 
 static void ev(Engine *e, uint64_t a, uint64_t b, uint64_t c, uint64_t d)
@@ -180,23 +205,168 @@ static void ev(Engine *e, uint64_t a, uint64_t b, uint64_t c, uint64_t d)
 
 static void hist_push(Engine *e)
 {
-    if (e->applied >= e->hist_cap) {
+    int64_t slot = e->applied - e->base;
+    if (slot >= e->hist_cap) {
         int64_t nc = e->hist_cap ? e->hist_cap * 2 : 65536;
+        while (slot >= nc) nc *= 2;
         e->hist_input  = realloc(e->hist_input,  (size_t)nc * 8);
         e->hist_digest = realloc(e->hist_digest, (size_t)nc * 8);
         if (!e->hist_input || !e->hist_digest) { perror("realloc"); exit(5); }
         e->hist_cap = nc;
     }
-    e->hist_input[e->applied]  = e->input_hash;
-    e->hist_digest[e->applied] = e->digest;
+    e->hist_input[slot]  = e->input_hash;
+    e->hist_digest[slot] = e->digest;
 }
 
-/* state after `count` messages */
+/* state after `count` messages; only defined for count >= e->base */
 static void hist_at(const Engine *e, int64_t count, uint64_t *in, uint64_t *dg)
 {
     if (count == 0) { *in = ENGINE_SEED; *dg = ENGINE_SEED ^ 1; return; }
-    *in = e->hist_input[count - 1];
-    *dg = e->hist_digest[count - 1];
+    if (count == e->base) { *in = e->base_input; *dg = e->base_digest; return; }
+    *in = e->hist_input[count - 1 - e->base];
+    *dg = e->hist_digest[count - 1 - e->base];
+}
+
+/* ── snapshots (F6) ────────────────────────────────────────────────────── */
+
+/* Snapshot wire format (demo-local, single machine): the fixed block below,
+ * then n_orders Orders, then a u64 fnv64 CRC over everything before it. */
+#define SNAP_MAGIC 0x4D4B534E41503130ULL   /* "MKSNAP10" */
+
+#pragma pack(push, 1)
+typedef struct {
+    uint64_t magic;
+    int64_t  applied;          /* index the snapshot claims: state after this many */
+    uint64_t input_hash, digest;
+    int64_t  trades, volume, self_trades, rejects, cancel_rejects;
+    int32_t  last_trade, n_orders;
+    int64_t  position[MAX_TRADERS], cash[MAX_TRADERS], next_seq[MAX_TRADERS];
+    uint32_t last_inc[MAX_TRADERS], pad[MAX_TRADERS];
+} SnapHdr;
+#pragma pack(pop)
+
+static size_t snap_serialize(const Engine *e, uint8_t *buf)
+{
+    SnapHdr h; memset(&h, 0, sizeof h);
+    h.magic = SNAP_MAGIC; h.applied = e->applied;
+    h.input_hash = e->input_hash; h.digest = e->digest;
+    h.trades = e->trades; h.volume = e->volume; h.self_trades = e->self_trades;
+    h.rejects = e->rejects; h.cancel_rejects = e->cancel_rejects;
+    h.last_trade = e->last_trade; h.n_orders = e->n;
+    memcpy(h.position, e->position, sizeof h.position);
+    memcpy(h.cash, e->cash, sizeof h.cash);
+    memcpy(h.next_seq, e->next_seq, sizeof h.next_seq);
+    memcpy(h.last_inc, e->last_inc, sizeof h.last_inc);
+    memcpy(buf, &h, sizeof h);
+    memcpy(buf + sizeof h, e->orders, (size_t)e->n * sizeof(Order));
+    uint64_t crc = fnv64(buf, sizeof h + (size_t)e->n * sizeof(Order));
+    memcpy(buf + sizeof h + (size_t)e->n * sizeof(Order), &crc, 8);
+    return sizeof h + (size_t)e->n * sizeof(Order) + 8;
+}
+
+/* engine_apply entry hook for MKTSIM_SNAPSHOT_OFF_BY_ONE: capture the state
+ * BEFORE this message mutates it (state after e->applied messages). */
+static void snap_capture(Engine *e)
+{
+    size_t need = sizeof(SnapHdr) + (size_t)e->n * sizeof(Order) + 8;
+    if (need > e->snap_shadow_cap) {
+        e->snap_shadow = realloc(e->snap_shadow, need);
+        if (!e->snap_shadow) { perror("realloc"); exit(5); }
+        e->snap_shadow_cap = need;
+    }
+    e->snap_shadow_len = snap_serialize(e, e->snap_shadow);
+}
+
+/* Write <dir>/snaps/t<tid>.snap (tmp+rename); the first snapshot of a trader
+ * id also lands in t<tid>.first.snap, kept so the end-of-run snapshot joiner
+ * can start from a snapshot taken before reclamation (§3). Under
+ * MKTSIM_SNAPSHOT_OFF_BY_ONE the shadow state (one message behind) is written
+ * with the CURRENT index recorded — the planted defect. Returns 0. */
+static int snap_write(const char *dir, uint16_t trader, const Engine *e)
+{
+    char tmp[1100], dst[1100], first[1100];
+    snprintf(tmp, sizeof tmp, "%s/snaps/t%02d.snap.tmp", dir, trader);
+    snprintf(dst, sizeof dst, "%s/snaps/t%02d.snap", dir, trader);
+    snprintf(first, sizeof first, "%s/snaps/t%02d.first.snap", dir, trader);
+    size_t cap = sizeof(SnapHdr) + (size_t)e->n * sizeof(Order) + 8;
+    uint8_t *buf = malloc(cap);
+    if (!buf) { perror("malloc"); return 2; }
+    size_t len;
+    if (e->snap_shadow && e->snap_shadow_len) {
+        /* plant: shadow state at k-1 (or earlier), recorded as k */
+        if (e->snap_shadow_len > cap) {
+            buf = realloc(buf, e->snap_shadow_len);
+            if (!buf) { perror("realloc"); return 2; }
+        }
+        memcpy(buf, e->snap_shadow, e->snap_shadow_len);
+        int64_t k = e->applied;
+        memcpy(buf + offsetof(SnapHdr, applied), &k, 8);   /* record the CURRENT index */
+        uint64_t crc = fnv64(buf, e->snap_shadow_len - 8);
+        memcpy(buf + e->snap_shadow_len - 8, &crc, 8);
+        len = e->snap_shadow_len;
+    } else {
+        len = snap_serialize(e, buf);
+    }
+    FILE *f = fopen(tmp, "w");
+    if (!f || fwrite(buf, 1, len, f) != len) { perror("snap write"); free(buf); return 2; }
+    fclose(f);
+    free(buf);
+    if (rename(tmp, dst)) { perror("snap rename"); return 2; }
+    if (access(first, F_OK) != 0) {   /* keep the first-ever snapshot per trader id */
+        if (link(dst, first) != 0) {
+            /* link failed (unlikely): fall back to a plain copy */
+            FILE *in = fopen(dst, "r"), *out = fopen(first, "w");
+            if (in && out) {
+                uint8_t b[65536]; size_t r;
+                while ((r = fread(b, 1, sizeof b, in))) fwrite(b, 1, r, out);
+            }
+            if (in) fclose(in);
+            if (out) fclose(out);
+        }
+    }
+    return 0;
+}
+
+/* Load a snapshot into e; the history base moves to the snapshot's index. */
+static int snap_load(const char *path, Engine *e)
+{
+    FILE *f = fopen(path, "r");
+    if (!f) return -1;
+    if (fseek(f, 0, SEEK_END)) { fclose(f); return -2; }
+    long sz = ftell(f);
+    if (sz < (long)(sizeof(SnapHdr) + 8)) { fclose(f); return -2; }
+    rewind(f);
+    uint8_t *buf = malloc((size_t)sz);
+    if (!buf) { fclose(f); return -2; }
+    if (fread(buf, 1, (size_t)sz, f) != (size_t)sz) { free(buf); fclose(f); return -2; }
+    fclose(f);
+    uint64_t crc; memcpy(&crc, buf + sz - 8, 8);
+    if (crc != fnv64(buf, (size_t)sz - 8)) { free(buf); return -2; }
+    SnapHdr h; memcpy(&h, buf, sizeof h);
+    if (h.magic != SNAP_MAGIC || h.n_orders < 0 || h.applied < 0 ||
+        (int64_t)sizeof h + (int64_t)h.n_orders * (int64_t)sizeof(Order) + 8 != (int64_t)sz) {
+        free(buf); return -2;
+    }
+    free(e->orders);
+    e->orders = malloc((size_t)(h.n_orders ? h.n_orders : 1) * sizeof(Order));
+    if (!e->orders) { perror("malloc"); exit(5); }
+    e->n = e->cap = h.n_orders;
+    memcpy(e->orders, buf + sizeof h, (size_t)h.n_orders * sizeof(Order));
+    e->applied = h.applied;
+    e->input_hash = h.input_hash; e->digest = h.digest;
+    e->trades = h.trades; e->volume = h.volume; e->self_trades = h.self_trades;
+    e->rejects = h.rejects; e->cancel_rejects = h.cancel_rejects;
+    e->last_trade = h.last_trade;
+    memcpy(e->position, h.position, sizeof e->position);
+    memcpy(e->cash, h.cash, sizeof e->cash);
+    memcpy(e->next_seq, h.next_seq, sizeof e->next_seq);
+    memcpy(e->last_inc, h.last_inc, sizeof e->last_inc);
+    free(e->hist_input); free(e->hist_digest);
+    e->hist_input = e->hist_digest = NULL; e->hist_cap = 0;
+    e->base = h.applied;
+    e->base_input = h.input_hash; e->base_digest = h.digest;
+    free(buf);
+    return 0;
 }
 
 static int best_index(const Engine *e, int side)
@@ -243,6 +413,7 @@ static const char *validate(const void *data, int32_t len, MsgHdr *h)
 /* Apply message at `index`. The caller has validated it. */
 static void engine_apply(Engine *e, int64_t index, const void *data, int32_t len, const MsgHdr *h)
 {
+    if (e->snap_shadow_cap || e->snap_shadow) snap_capture(e);   /* plant hook (F6) */
     e->input_hash = mix64(e->input_hash ^ mix64((uint64_t)index) ^ fnv64(data, (size_t)len));
 
     if (h->type == T_NEW) {
@@ -355,21 +526,26 @@ static MmapqNextMove on_msg(int64_t index, uint8_t appender_id, const void *data
         engine_apply(e, index, data, len, &h);
         return MMAPQ_NEXT_ADVANCE;
     }
-    /* claim: the writer's state after seen_count messages */
+    /* claim: the writer's state after seen_count messages. A replay from a
+     * snapshot (base > 0) cannot know states below the base, so the (k,H,D)
+     * equality is skipped for them — and only that: sequence and incarnation
+     * tracking always run. The offline verifier (base 0) checks every claim. */
     if (h.seen_count < 0 || h.seen_count > index) {
         fprintf(stderr, "%s: CAUSALITY at %lld: seen_count %lld\n", r->who, (long long)index, (long long)h.seen_count);
         r->fatal = 1; return MMAPQ_NEXT_STOP;
     }
-    uint64_t in, dg; hist_at(e, h.seen_count, &in, &dg);
-    if (in != h.seen_input || dg != h.seen_digest) {
-        fprintf(stderr, "%s: DIVERGENCE at %lld: trader %u inc %u claims state@%lld input=%016llx digest=%016llx, "
-                        "mine input=%016llx digest=%016llx\n",
-                r->who, (long long)index, h.trader, h.incarnation, (long long)h.seen_count,
-                (unsigned long long)h.seen_input, (unsigned long long)h.seen_digest,
-                (unsigned long long)in, (unsigned long long)dg);
-        r->fatal = 1; return MMAPQ_NEXT_STOP;
+    if (h.seen_count >= e->base) {
+        uint64_t in, dg; hist_at(e, h.seen_count, &in, &dg);
+        if (in != h.seen_input || dg != h.seen_digest) {
+            fprintf(stderr, "%s: DIVERGENCE at %lld: trader %u inc %u claims state@%lld input=%016llx digest=%016llx, "
+                            "mine input=%016llx digest=%016llx\n",
+                    r->who, (long long)index, h.trader, h.incarnation, (long long)h.seen_count,
+                    (unsigned long long)h.seen_input, (unsigned long long)h.seen_digest,
+                    (unsigned long long)in, (unsigned long long)dg);
+            r->fatal = 1; return MMAPQ_NEXT_STOP;
+        }
+        r->claims_checked++;
     }
-    r->claims_checked++;
     /* per-trader sequence continuity across incarnations */
     if (h.seq != (uint64_t)e->next_seq[h.trader]) {
         fprintf(stderr, "%s: SEQ trader %u at %lld: expected %lld got %llu (inc %u)\n", r->who, h.trader,
@@ -399,6 +575,113 @@ static int drain(MmapqIndexedPoller *p, Replay *r, int64_t *n_out)
                 mmapq_indexed_poller_last_error(p), (long long)r->e->applied);
         return 4;
     }
+    if (n_out) *n_out = n;
+    return 0;
+}
+
+/* ── archived-copy replay (F7): raw parsing per doc/reference/wire-format.md ─
+ *
+ * The archiver's copy-aside leaves fully-archived files in <dir>/archive/;
+ * boundary-crossing files stay live. Replay of an archived index reads its
+ * header entry (vertical walk mapping) and its payload frame, taking each
+ * file from the archive copy if present, else from the live queue. A file
+ * absent from BOTH is missing history (the F7 plant's effect) — never a
+ * silent skip. */
+
+/* header byte position of index i across the rolled header_N sequence */
+static int64_t hdr_pos(int64_t i)
+{
+    int64_t block = i >> 12, inb = i & 4095;   /* 4096-header blocks, 64-sector stride */
+    return ((block << 12) + ((inb & 63) << 6) + (inb >> 6)) * 8;
+}
+
+/* open <name> from the archive copies, else the live queue; -1 if in neither */
+static int raw_open(const char *dir, const char *qname, const char *name, const char **where)
+{
+    char path[1100];
+    snprintf(path, sizeof path, "%s/archive/%s", dir, name);
+    int fd = open(path, O_RDONLY);
+    if (fd >= 0) { if (where) *where = "archive"; return fd; }
+    snprintf(path, sizeof path, "%s/%s/%s", dir, qname, name);
+    fd = open(path, O_RDONLY);
+    if (fd >= 0) { if (where) *where = "live"; return fd; }
+    return -1;
+}
+
+static int raw_pread(int fd, void *buf, size_t n, int64_t off)
+{
+    size_t got = 0;
+    while (got < n) {
+        ssize_t r = pread(fd, (uint8_t *)buf + got, n - got, (off_t)off + (off_t)got);
+        if (r <= 0) return -1;
+        got += (size_t)r;
+    }
+    return 0;
+}
+
+/* Replay one archived index through the shared checks.
+ * Returns 0 on success; 1 on check failure (r->fatal set); 2 on missing
+ * history or corrupt framing (reported, r->fatal set). buf holds >= REGION_SIZE. */
+static int replay_archived_one(const char *dir, const char *qname, Replay *r, int64_t i, uint8_t *buf)
+{
+    char name[64];
+    int64_t hp = hdr_pos(i);
+    snprintf(name, sizeof name, "header_%lld", (long long)(hp / MAX_FILE_SIZE));
+    const char *where = NULL;
+    int fd = raw_open(dir, qname, name, &where);
+    if (fd < 0) {
+        fprintf(stderr, "%s: MISSING HISTORY at index %lld: %s absent from archive/ and the live queue\n",
+                r->who, (long long)i, name);
+        r->fatal = 1; return 2;
+    }
+    uint64_t ent;
+    int rc = raw_pread(fd, &ent, 8, hp % MAX_FILE_SIZE);
+    close(fd);
+    if (rc || ent == 0) {
+        fprintf(stderr, "%s: MISSING HISTORY at index %lld: no header entry (%s)\n",
+                r->who, (long long)i, rc ? "read failed" : "NULL header");
+        r->fatal = 1; return 2;
+    }
+    uint8_t aid = (uint8_t)(ent >> 56);
+    uint64_t pos = ent & 0x00FFFFFFFFFFFFFFULL;   /* HEADER_PAYLOAD_MASK */
+    snprintf(name, sizeof name, "payload_%u_%lld", aid, (long long)(pos / (uint64_t)MAX_FILE_SIZE));
+    fd = raw_open(dir, qname, name, &where);
+    if (fd < 0) {
+        fprintf(stderr, "%s: MISSING HISTORY at index %lld: %s absent from archive/ and the live queue\n",
+                r->who, (long long)i, name);
+        r->fatal = 1; return 2;
+    }
+    int32_t len;
+    rc = raw_pread(fd, &len, 4, (int64_t)(pos % (uint64_t)MAX_FILE_SIZE));
+    if (rc || len <= 0 || len > REGION_SIZE) {
+        close(fd);
+        fprintf(stderr, "%s: CORRUPT archived payload at index %lld (%s, length %d)\n",
+                r->who, (long long)i, name, len);
+        r->fatal = 1; return 2;
+    }
+    rc = raw_pread(fd, buf, (size_t)len, (int64_t)(pos % (uint64_t)MAX_FILE_SIZE) + 4);
+    close(fd);
+    if (rc) {
+        fprintf(stderr, "%s: CORRUPT archived payload at index %lld (%s, short read)\n",
+                r->who, (long long)i, name);
+        r->fatal = 1; return 2;
+    }
+    on_msg(i, aid, buf, len, r);
+    return r->fatal != 0;
+}
+
+/* Replay [from, to) from archived copies (+ live boundary files). */
+static int replay_archived_range(const char *dir, const char *qname, Replay *r,
+                                 int64_t from, int64_t to, int64_t *n_out)
+{
+    uint8_t *buf = malloc(REGION_SIZE);
+    if (!buf) { perror("malloc"); exit(5); }
+    int64_t n = 0;
+    for (int64_t i = from; i < to; i++) {
+        if (replay_archived_one(dir, qname, r, i, buf)) { free(buf); return 3; }
+        n++;
+    }
+    free(buf);
     if (n_out) *n_out = n;
     return 0;
 }
@@ -572,8 +855,57 @@ static int publish_batch(MmapqIndexedBatchAppender *ba, Engine *be, uint16_t tra
     return 0;
 }
 
+/* ── snapshots + progress (F6/F7, archivable runs only) ─────────────────── */
+
+#define SNAP_EVERY 4096      /* snapshot cadence, in applied messages */
+
+/* The participant's read watermark for the archiver: the highest index it has
+ * applied. Written throttled; the archiver archives only up to the minimum
+ * over live progress files, so a lagging reader is never archived over. */
+static int progress_write(const char *dir, uint16_t trader, int64_t applied)
+{
+    char tmp[1100], dst[1100];
+    snprintf(tmp, sizeof tmp, "%s/progress/t%02d.tmp", dir, trader);
+    snprintf(dst, sizeof dst, "%s/progress/t%02d", dir, trader);
+    FILE *f = fopen(tmp, "w");
+    if (!f) return 2;
+    fprintf(f, "%lld\n", (long long)applied);
+    fclose(f);
+    if (rename(tmp, dst)) return 2;
+    return 0;
+}
+
+/* The latest snapshot across all participants (deterministic engine: at a
+ * given index every snapshot is identical). Returns 0 and fills `path`, or
+ * 1 when no snapshot exists. */
+static int snap_latest(const char *dir, char *path, size_t n)
+{
+    char sdir[1100];
+    snprintf(sdir, sizeof sdir, "%s/snaps", dir);
+    DIR *d = opendir(sdir);
+    if (!d) return 1;
+    int64_t best = -1;
+    struct dirent *de;
+    while ((de = readdir(d))) {
+        size_t l = strlen(de->d_name);
+        /* t<NN>.snap only: not .tmp, not .first.snap (kept for the joiner) */
+        if (l != 8 || de->d_name[0] != 't' || strcmp(de->d_name + 3, ".snap")) continue;
+        char p[1100]; snprintf(p, sizeof p, "%s/snaps/%s", dir, de->d_name);
+        FILE *f = fopen(p, "r");
+        if (!f) continue;
+        SnapHdr h;
+        if (fread(&h, sizeof h, 1, f) == 1 && h.magic == SNAP_MAGIC && h.applied > best) {
+            best = h.applied;
+            snprintf(path, n, "%s", p);
+        }
+        fclose(f);
+    }
+    closedir(d);
+    return best < 0 ? 1 : 0;
+}
+
 static int run_trader(const char *dir, const char *qname, int trader, uint32_t inc,
-                      const char *stopfile, int async, int want_id, int batch_on)
+                       const char *stopfile, int async, int want_id, int batch_on, int archivable)
 {
     char who[64]; snprintf(who, sizeof who, "trader %d/%u", trader, inc);
     rng_state = mix64(((uint64_t)trader << 32) ^ inc ^ (uint64_t)getpid());
@@ -582,7 +914,7 @@ static int run_trader(const char *dir, const char *qname, int trader, uint32_t i
     if (async && mmapq_runtime_region_mapper(&rt) != 0) { fprintf(stderr, "%s: runtime\n", who); return 2; }
     MmapqIndexedQueue *q = NULL;
     int rc = mmapq_indexed_queue_create(dir, qname, REGION_SIZE, RING_SIZE, 1, MAX_FILE_SIZE, 0,
-                                        TIMEOUT_NS, 0, rt, rt, &q);
+                                        TIMEOUT_NS, archivable, rt, rt, &q);
     if (rc) { fprintf(stderr, "%s: queue create rc=%d\n", who, rc); return 2; }
     MmapqIndexedAppender *a = NULL;
     if (want_id >= 0) {
@@ -631,13 +963,48 @@ static int run_trader(const char *dir, const char *qname, int trader, uint32_t i
     }
 
     Engine e; engine_init(&e);
+    if (archivable) {
+        const char *obo = getenv("MKTSIM_SNAPSHOT_OFF_BY_ONE");
+        if (obo && atoi(obo) != 0) e.snap_shadow_cap = 1;   /* armed; buffer grows on capture */
+    }
     Replay r = { .e = &e, .who = who, .self = (uint16_t)trader };
 
-    /* JOIN: learn the last committed index, rebuild exactly up to it. */
+    /* JOIN: learn the committed range, rebuild exactly up to its end.
+     * Archivable runs (F6): start from the latest snapshot (any participant —
+     * the engine is deterministic, so identical at a given index), replay the
+     * range the live queue no longer has from the archived copies (§3), then
+     * the live tail. With no snapshot the replay starts at index 0 from the
+     * copies. */
     MmapqIndexedReader *rd = NULL;
     if (mmapq_indexed_queue_create_reader(q, &rd)) { fprintf(stderr, "%s: reader\n", who); return 2; }
     int64_t last = mmapq_indexed_reader_last_index(rd);
+    int64_t start_idx = archivable ? mmapq_indexed_reader_start_index(rd) : 0;
     mmapq_indexed_reader_close(rd);
+    if (archivable) {
+        char spath[1100];
+        if (snap_latest(dir, spath, sizeof spath) == 0) {
+            if (snap_load(spath, &e)) {
+                fprintf(stderr, "%s: snapshot %s unreadable\n", who, spath);
+                return 3;
+            }
+            if (e.applied > last + 1) {
+                fprintf(stderr, "%s: snapshot at %lld is ahead of the log (last %lld)\n",
+                        who, (long long)e.applied, (long long)last);
+                return 3;
+            }
+        }
+        if (progress_write(dir, (uint16_t)trader, e.applied)) { fprintf(stderr, "%s: progress write\n", who); return 2; }
+        if (e.applied < start_idx) {
+            int arc = replay_archived_range(dir, qname, &r, e.applied, start_idx, NULL);
+            if (arc) return arc;
+        }
+        int64_t live_from = e.applied > start_idx ? e.applied : start_idx;
+        if (live_from <= last && !mmapq_indexed_poller_move_to_index(p, live_from)) {
+            fprintf(stderr, "%s: move_to_index %lld failed\n", who, (long long)live_from);
+            return 4;
+        }
+    }
+    int64_t prog_mark = e.applied, snap_mark = e.applied / SNAP_EVERY;
     while (e.applied <= last) {
         MmapqPollResult pr = mmapq_indexed_poller_poll(p, on_msg, &r);
         if (r.fatal) return 3;
@@ -645,6 +1012,10 @@ static int run_trader(const char *dir, const char *qname, int trader, uint32_t i
             fprintf(stderr, "%s: rebuild poll %d at %lld (target last=%lld)\n", who, (int)pr,
                     (long long)e.applied, (long long)last);
             return 4;
+        }
+        if (archivable && e.applied - prog_mark >= 4096) {
+            if (progress_write(dir, (uint16_t)trader, e.applied)) return 2;
+            prog_mark = e.applied;
         }
     }
     uint64_t in, dg; hist_at(&e, e.applied, &in, &dg);
@@ -683,6 +1054,16 @@ static int run_trader(const char *dir, const char *qname, int trader, uint32_t i
     while (access(stopfile, F_OK) != 0) {
         if ((rcode = drain(p, &r, NULL))) break;
         if (batch_on && (rcode = drain_batch(bp, &br, NULL))) break;
+        if (archivable) {
+            if (e.applied - prog_mark >= 4096) {
+                if ((rcode = progress_write(dir, (uint16_t)trader, e.applied))) break;
+                prog_mark = e.applied;
+            }
+            if (e.applied / SNAP_EVERY > snap_mark) {
+                if ((rcode = snap_write(dir, (uint16_t)trader, &e))) break;
+                snap_mark = e.applied / SNAP_EVERY;
+            }
+        }
 
         /* decide from the derived view: own live orders, top of book */
         int own = 0, oldest = -1;
@@ -751,6 +1132,10 @@ static int run_trader(const char *dir, const char *qname, int trader, uint32_t i
     if (rcode == 0) {
         printf("QUIESCED %d %u\n", trader, inc);
         fflush(stdout);
+        if (archivable) {
+            if ((rcode = progress_write(dir, (uint16_t)trader, e.applied))) return rcode;
+            if (snap_write(dir, (uint16_t)trader, &e)) return 2;   /* final snapshot */
+        }
         char final_flag[1024];
         snprintf(final_flag, sizeof final_flag, "%s.final", stopfile);
         while (access(final_flag, F_OK) != 0) {
@@ -1000,7 +1385,7 @@ static int gw_in_dis(const GwLog *L, int64_t off)
 }
 
 static int run_gateway(const char *dir, const char *qname, int gw, uint32_t inc,
-                       const char *stopfile, int async, int want_id)
+                       const char *stopfile, int async, int want_id, int archivable)
 {
     char who[64]; snprintf(who, sizeof who, "gateway %d/%u", gw, inc);
     rng_state = mix64(((uint64_t)gw << 32) ^ inc ^ (uint64_t)getpid());   /* timing jitter only */
@@ -1009,7 +1394,7 @@ static int run_gateway(const char *dir, const char *qname, int gw, uint32_t inc,
     if (async && mmapq_runtime_region_mapper(&rt) != 0) { fprintf(stderr, "%s: runtime\n", who); return 2; }
     MmapqIndexedQueue *q = NULL;
     int rc = mmapq_indexed_queue_create(dir, qname, REGION_SIZE, RING_SIZE, 1, MAX_FILE_SIZE, 0,
-                                        TIMEOUT_NS, 0, rt, rt, &q);
+                                        TIMEOUT_NS, archivable, rt, rt, &q);
     if (rc) { fprintf(stderr, "%s: queue create rc=%d\n", who, rc); return 2; }
     MmapqIndexedAppender *a = NULL;
     if (want_id >= 0) {
@@ -1047,11 +1432,18 @@ static int run_gateway(const char *dir, const char *qname, int gw, uint32_t inc,
     g.delayed = -1;
     g.next_off = mmapq_indexed_appender_start_offset(a);
 
-    /* The queue is the source of truth (owner, stage-b rework): committed
-     * seqs are derived by scanning this gateway's committed records in the
-     * queue. The gap log's GAPCOMMIT lines are hints only — a kill between
-     * a commit and its log line leaves the log short, and the queue is
-     * right. */
+    /* The queue is the source of truth (owner, stage-b rework; committed-
+     * prefix design for archiving, spec v3.2): the gateway commits in seq
+     * order, so its committed seqs are the prefix 0..C. C is the highest
+     * gateway seq in the LIVE range (the scan below); when none is live, C
+     * is the highest logged commit — the archived range is the only one
+     * where the log is trusted, because the queue can no longer contradict
+     * it. The log-ahead check applies only to the live range. A kill
+     * between a commit and its log line leaves the log short, and the
+     * queue is right. */
+    int64_t committed_prefix = -1;       /* C (-1: nothing committed) */
+    int nlive_committed = 0, chopped = 0;
+    uint64_t live_min = 0;
     uint64_t *qcom = NULL; int nqcom = 0, capqc = 0;
     MmapqIndexedReader *qrd = NULL;
     if (mmapq_indexed_queue_create_reader(q, &qrd)) { fprintf(stderr, "%s: reader\n", who); return 2; }
@@ -1092,10 +1484,71 @@ static int run_gateway(const char *dir, const char *qname, int gw, uint32_t inc,
     }
     mmapq_indexed_reader_close(qrd);
 
-    if (L.napp > 0 || nqcom > 0) {
+    /* C: highest live gateway seq; if none is live, the highest logged
+     * commit (the log is trusted at/below the archived boundary) — with one
+     * correction: the log can be SHORT by the at-most-one unlogged
+     * committed record (a kill between the commit and its log line), and
+     * that record may itself be archived. The archived copies are the
+     * queue's content below start_index, so they outrank the log: scan
+     * them backward from start_index-1 for this gateway's last archived
+     * record. Without that, the unlogged committed seq is re-appended and
+     * duplicated. */
+    nlive_committed = nqcom;
+    if (nqcom > 0) {
+        committed_prefix = (int64_t)qcom[0]; live_min = qcom[0];
+        for (int i = 1; i < nqcom; i++) {
+            if ((int64_t)qcom[i] > committed_prefix) committed_prefix = (int64_t)qcom[i];
+            if (qcom[i] < live_min) live_min = qcom[i];
+        }
+    } else {
+        for (int i = 0; i < L.ncom; i++)
+            if ((int64_t)L.com[i] > committed_prefix) committed_prefix = (int64_t)L.com[i];
+        if (qfirst > 0) {
+            /* lane ids this gateway has used (every logged append carries one) */
+            for (int64_t i = qfirst - 1; i >= 0 && L.napp > 0; i--) {
+                int64_t hp = hdr_pos(i);
+                char name[64];
+                snprintf(name, sizeof name, "header_%lld", (long long)(hp / MAX_FILE_SIZE));
+                int fd = raw_open(dir, qname, name, NULL);
+                if (fd < 0) {
+                    fprintf(stderr, "%s: committed scan: archived header file %s missing\n", who, name);
+                    return 2;
+                }
+                uint64_t ent = 0;
+                int rd2 = raw_pread(fd, &ent, 8, hp % MAX_FILE_SIZE);
+                close(fd);
+                if (rd2 || ent == 0) continue;   /* NULL: not committed */
+                uint8_t aid = (uint8_t)(ent >> 56);
+                int ours = 0;
+                for (int j = 0; j < L.napp; j++) if (L.app[j].aid == aid) { ours = 1; break; }
+                if (!ours) continue;
+                uint64_t pos = ent & 0x00FFFFFFFFFFFFFFULL;
+                snprintf(name, sizeof name, "payload_%u_%lld", aid, (long long)(pos / (uint64_t)MAX_FILE_SIZE));
+                fd = raw_open(dir, qname, name, NULL);
+                if (fd < 0) {
+                    fprintf(stderr, "%s: committed scan: archived payload file %s missing\n", who, name);
+                    return 2;
+                }
+                uint8_t buf[sizeof(MsgHdr) + MAX_PAD + 8];
+                int32_t mlen = 0;
+                MsgHdr h;
+                if (raw_pread(fd, &mlen, 4, (int64_t)(pos % (uint64_t)MAX_FILE_SIZE)) == 0 &&
+                    mlen > 0 && mlen <= (int32_t)sizeof buf &&
+                    raw_pread(fd, buf, (size_t)mlen, (int64_t)(pos % (uint64_t)MAX_FILE_SIZE) + 4) == 0 &&
+                    !validate(buf, mlen, &h) && h.type == T_GATEWAY && h.trader == (uint16_t)gw) {
+                    if ((int64_t)h.seq > committed_prefix) committed_prefix = (int64_t)h.seq;
+                    close(fd);
+                    break;   /* the highest: seqs are index-ordered on the lane */
+                }
+                close(fd);
+            }
+        }
+    }
+
+    if (L.napp > 0 || nqcom > 0 || committed_prefix >= 0) {
         uint64_t maxseq = 0;
         for (int i = 0; i < L.napp; i++) if (L.app[i].seq > maxseq) maxseq = L.app[i].seq;
-        for (int i = 0; i < nqcom; i++) if (qcom[i] > maxseq) maxseq = qcom[i];
+        if (committed_prefix >= 0 && (uint64_t)committed_prefix > maxseq) maxseq = (uint64_t)committed_prefix;
         int64_t *latest_app = malloc((maxseq + 1) * sizeof *latest_app);
         uint8_t *is_committed = calloc(maxseq + 1, 1);
         int64_t *exp_off = malloc((size_t)(L.napp + 1) * sizeof *exp_off);
@@ -1104,19 +1557,43 @@ static int run_gateway(const char *dir, const char *qname, int gw, uint32_t inc,
         if (!latest_app || !is_committed || !exp_off || !exp_seq || !emark) { perror("alloc"); return 5; }
         for (uint64_t s = 0; s <= maxseq; s++) latest_app[s] = -1;
         for (int i = 0; i < L.napp; i++) latest_app[L.app[i].seq] = i;
-        for (int i = 0; i < nqcom; i++) is_committed[qcom[i]] = 1;   /* queue truth */
-        /* hint consistency: a logged commit the queue does not show means the
-         * log is ahead of the queue — corrupt. */
-        for (int i = 0; i < L.ncom; i++)
-            if (L.com[i] <= maxseq && !is_committed[L.com[i]]) {
-                fprintf(stderr, "%s: GWALK MISMATCH: gap log calls seq %llu committed but the queue does not have it\n",
-                        who, (unsigned long long)L.com[i]);
+        /* queue truth, prefix form: committed ⟺ seq ≤ C */
+        for (uint64_t s = 0; committed_prefix >= 0 && s <= (uint64_t)committed_prefix; s++) is_committed[s] = 1;
+        /* The log-ahead check, live range only: a logged commit beyond C is
+         * ahead of the queue — corrupt. A logged commit inside the live
+         * range [live_min, C] must be shown by the queue. Below live_min
+         * (archived) the log is trusted unchecked. */
+        for (int i = 0; i < L.ncom; i++) {
+            uint64_t s = L.com[i];
+            if ((int64_t)s > committed_prefix) {
+                fprintf(stderr, "%s: GWALK MISMATCH: gap log calls seq %llu committed, beyond the committed prefix 0..%lld (log ahead of queue)\n",
+                        who, (unsigned long long)s, (long long)committed_prefix);
                 return 3;
             }
+            if (nqcom > 0 && s >= live_min) {
+                int shown = 0;
+                for (int j = 0; j < nqcom; j++) if (qcom[j] == s) { shown = 1; break; }
+                if (!shown) {
+                    fprintf(stderr, "%s: GWALK MISMATCH: gap log calls seq %llu committed; it is in the live range but the queue does not show it\n",
+                            who, (unsigned long long)s);
+                    return 3;
+                }
+            }
+        }
         /* this lane's write tail = end of its last logged append */
         int64_t lane_tail = -1;
         for (int i = L.napp - 1; i >= 0; i--)
             if (L.app[i].aid == appender_id) { lane_tail = L.app[i].off + 4 + L.app[i].len; g.next_off = lane_tail; break; }
+
+        /* walk results, visible to the pending build below: a same-lane
+         * record is kept pending only if the walk actually yielded it (the
+         * iterator's refill is what makes the offset committable again) */
+        int64_t woff[GW_MAX_PENDING];
+        uint64_t wseq[GW_MAX_PENDING];
+        int32_t wlen[GW_MAX_PENDING];
+        int wok[GW_MAX_PENDING], nw = 0;
+        int *echop = calloc((size_t)(L.napp + 1), sizeof *echop);   /* exp entries chopped by archiving */
+        if (!echop) { perror("alloc"); return 5; }
 
         if (same_lane) {
             /* The restart walk against queue truth: the lane's uncommitted
@@ -1137,10 +1614,6 @@ static int run_gateway(const char *dir, const char *qname, int gw, uint32_t inc,
             rc = mmapq_indexed_appender_uncommitted_iterator_checked(
                 a, MMAPQ_PAYLOAD_ITERATOR_NOT_SET, MMAPQ_PAYLOAD_ITERATOR_NOT_SET, &it);
             if (rc) { fprintf(stderr, "%s: uncommitted iterator rc=%d\n", who, rc); return 2; }
-            int64_t woff[GW_MAX_PENDING];
-            uint64_t wseq[GW_MAX_PENDING];
-            int32_t wlen[GW_MAX_PENDING];
-            int wok[GW_MAX_PENDING], nw = 0;
             const void *data; int32_t len; int64_t off;
             while ((rc = mmapq_uncommitted_iterator_next(it, &data, &len, &off)) == 1) {
                 if (nw == GW_MAX_PENDING) { fprintf(stderr, "%s: walk exceeds %d records\n", who, GW_MAX_PENDING); return 3; }
@@ -1191,9 +1664,15 @@ static int run_gateway(const char *dir, const char *qname, int gw, uint32_t inc,
                     return 3;
                 }
             }
-            /* every log-recorded uncommitted record must have been yielded */
+            /* every log-recorded uncommitted record must have been yielded —
+             * except under archiving, where the walk starts at the archive
+             * line: a record below the line was chopped by the archiver and
+             * is re-appended by policy (never committable again — a commit
+             * below the line is EINVAL). On a non-archivable queue a missing
+             * record is a real mismatch. */
             for (int i = 0; i < nexp; i++) {
                 if (!emark[i]) {
+                    if (archivable) { echop[i] = 1; chopped++; continue; }
                     fprintf(stderr, "%s: GWALK MISMATCH: log-recorded uncommitted offset %lld (seq %llu) not yielded by the walk\n",
                             who, (long long)exp_off[i], (unsigned long long)exp_seq[i]);
                     return 3;
@@ -1234,8 +1713,10 @@ static int run_gateway(const char *dir, const char *qname, int gw, uint32_t inc,
                     L.dis[L.ndis++] = unlogged_off;
                 }
             } else {
+                /* the conservative discard picks the highest-offset logged
+                 * record — never a chopped one (archived, not torn) */
                 int64_t torn_off = -1;
-                for (int i = 0; i < nexp; i++) if (exp_off[i] > torn_off) torn_off = exp_off[i];
+                for (int i = 0; i < nexp; i++) if (!echop[i] && exp_off[i] > torn_off) torn_off = exp_off[i];
                 if (torn_off >= 0) {
                     uint64_t tseq = 0;
                     for (int i = 0; i < nexp; i++) if (exp_off[i] == torn_off) tseq = exp_seq[i];
@@ -1248,12 +1729,15 @@ static int run_gateway(const char *dir, const char *qname, int gw, uint32_t inc,
         }
 
         /* Build the pending set in seq order: keep intact same-lane records
-         * (the walk refilled them committable), re-append everything else
-         * (the torn seq, and seqs stranded on a dead lane). */
+         * the walk yielded (the refill makes them committable), re-append
+         * everything else (the torn seq, chopped records, and seqs stranded
+         * on a dead lane). */
         for (uint64_t s = 0; s <= maxseq; s++) {
             int64_t i = latest_app[s];
             if (i < 0 || is_committed[s]) continue;
-            if (same_lane && L.app[i].aid == appender_id && !gw_in_dis(&L, L.app[i].off)) {
+            int yielded = 0;
+            for (int j = 0; j < nw; j++) if (woff[j] == L.app[i].off) { yielded = 1; break; }
+            if (same_lane && yielded && L.app[i].aid == appender_id && !gw_in_dis(&L, L.app[i].off)) {
                 if (g.npend == GW_MAX_PENDING) { fprintf(stderr, "%s: pending table full at load\n", who); return 2; }
                 g.pend[g.npend++] = L.app[i];
             } else {
@@ -1272,15 +1756,16 @@ static int run_gateway(const char *dir, const char *qname, int gw, uint32_t inc,
             g.delayed = (int64_t)s; g.delay_left = 0;
         }
         free(latest_app); free(is_committed); free(exp_off); free(exp_seq); free(emark);
-        free(qcom);
+        free(echop); free(qcom);
     }
     /* the commit cursor resumes at the lowest uncommitted seq — a pending
      * record or a held (never appended) packet alike */
     uint64_t next_commit = g.next_emit;
     for (int i = 0; i < g.npend; i++) if (g.pend[i].seq < next_commit) next_commit = g.pend[i].seq;
     if (g.delayed >= 0 && (uint64_t)g.delayed < next_commit) next_commit = (uint64_t)g.delayed;
-    printf("GWJOIN %d %u %d lane=%s walked=%lld reappended=%d resume_emit=%llu resume_commit=%llu\n",
+    printf("GWJOIN %d %u %d lane=%s walked=%lld reappended=%d prefix=%lld live_committed=%d chopped=%d resume_emit=%llu resume_commit=%llu\n",
            gw, inc, appender_id, same_lane ? "same" : "new", (long long)g.walked, g.reappended,
+           (long long)committed_prefix, nlive_committed, chopped,
            (unsigned long long)g.next_emit, (unsigned long long)next_commit);
     fflush(stdout);
 
@@ -1333,6 +1818,267 @@ static int run_gateway(const char *dir, const char *qname, int gw, uint32_t inc,
     return rcode;
 }
 
+/* ── archiver (F7): the guide-ch6 loop under churn ─────────────────────── */
+
+/* Copy one file into <dir>/archive/ (tmp+rename), verifying size and an
+ * fnv64 of the content against a re-read of the copy. Returns 0, or 2. */
+static int arch_copy(const char *src, const char *dir, const char *base,
+                     uint64_t *crc_out, int64_t *size_out)
+{
+    FILE *in = fopen(src, "r");
+    if (!in) { perror(src); return 2; }
+    if (fseek(in, 0, SEEK_END)) { perror("fseek"); fclose(in); return 2; }
+    long sz = ftell(in);
+    if (sz < 0) { perror("ftell"); fclose(in); return 2; }
+    rewind(in);
+    uint8_t *buf = malloc((size_t)(sz ? sz : 1));
+    if (!buf) { perror("malloc"); fclose(in); return 2; }
+    if (fread(buf, 1, (size_t)sz, in) != (size_t)sz) { perror("read"); free(buf); fclose(in); return 2; }
+    fclose(in);
+    uint64_t crc = fnv64(buf, (size_t)sz);
+    char tmp[1100], dst[1100];
+    snprintf(tmp, sizeof tmp, "%s/archive/%s.tmp", dir, base);
+    snprintf(dst, sizeof dst, "%s/archive/%s", dir, base);
+    FILE *out = fopen(tmp, "w");
+    if (!out || fwrite(buf, 1, (size_t)sz, out) != (size_t)sz) { perror("archive write"); free(buf); return 2; }
+    fclose(out);
+    /* re-read the copy and compare */
+    FILE *chk = fopen(tmp, "r");
+    if (!chk) { perror("archive re-read"); free(buf); return 2; }
+    uint8_t *b2 = malloc((size_t)(sz ? sz : 1));
+    if (!b2 || fread(b2, 1, (size_t)sz, chk) != (size_t)sz) { perror("archive verify"); free(buf); free(b2); fclose(chk); return 2; }
+    fclose(chk);
+    int bad = memcmp(buf, b2, (size_t)sz) != 0 || fnv64(b2, (size_t)sz) != crc;
+    free(buf); free(b2);
+    if (bad) { fprintf(stderr, "archiver: copy of %s failed size+CRC verification\n", base); return 2; }
+    if (rename(tmp, dst)) { perror("archive rename"); return 2; }
+    *crc_out = crc; *size_out = sz;
+    return 0;
+}
+
+/* The archiving watermark: the minimum over the participants' progress
+ * files (their highest applied index). Archiving never goes past it, so a
+ * lagging live reader is never archived over. -1 when no file exists. */
+static int64_t arch_watermark(const char *dir)
+{
+    char pdir[1100];
+    snprintf(pdir, sizeof pdir, "%s/progress", dir);
+    DIR *d = opendir(pdir);
+    if (!d) return -1;
+    int64_t best = -1;
+    struct dirent *de;
+    while ((de = readdir(d))) {
+        if (de->d_name[0] != 't') continue;
+        char p[1100]; snprintf(p, sizeof p, "%s/progress/%s", dir, de->d_name);
+        FILE *f = fopen(p, "r");
+        if (!f) continue;
+        long long v;
+        if (fscanf(f, "%lld", &v) == 1 && (best < 0 || v < best)) best = v;
+        fclose(f);
+    }
+    closedir(d);
+    return best;
+}
+
+static int run_archiver(const char *dir, const char *qname, const char *stopfile, int hand)
+{
+    char qdir[1100];
+    snprintf(qdir, sizeof qdir, "%s/%s", dir, qname);
+    const char *plant = getenv("MKTSIM_RECLAIM_AHEAD_OF_MARK");
+    int plant_armed = plant && atoi(plant) != 0, plant_fired = 0;
+
+    MmapqIndexedArchiver *a = NULL;
+    if (mmapq_indexed_archiver_create(dir, qname, RING_SIZE, NULL, &a) || !a) {
+        fprintf(stderr, "archiver: create failed\n"); return 2;
+    }
+    int rounds = 0, errors = 0;
+    int64_t copied = 0, reclaimed = 0;
+    for (;;) {
+        int stopping = access(stopfile, F_OK) == 0;
+        if (access(qdir, F_OK) != 0) {   /* queue not created yet */
+            if (stopping) break;
+            struct timespec ts = {0, 100000000}; nanosleep(&ts, NULL);
+            continue;
+        }
+        if (!mmapq_indexed_archiver_archivable(a)) {
+            fprintf(stderr, "archiver: queue %s is not archivable\n", qname);
+            mmapq_indexed_archiver_close(a);
+            return 2;
+        }
+        /* the guide ch6 loop: archive → mark → copy aside → reclaim */
+        int64_t wm = arch_watermark(dir);
+        int64_t cur = mmapq_indexed_archiver_start_index(a);
+        if (wm >= 0 && wm > cur) {
+            int rc = mmapq_indexed_archiver_archive_up_to_index(a, wm);
+            if (rc) {
+                fprintf(stderr, "archiver: archive_up_to_index(%lld) rc=%d\n", (long long)wm, rc);
+                mmapq_indexed_archiver_close(a);
+                return 2;
+            }
+            cur = wm;
+        }
+        char **marks = malloc(512 * sizeof *marks);
+        if (!marks) { perror("malloc"); mmapq_indexed_archiver_close(a); return 2; }
+        int n = mmapq_indexed_archiver_archivable_files(a, marks, 512);
+        if (n < 0) {
+            /* a live-header read can time out under load: retry next round */
+            free(marks);
+            if (++errors > 100) {
+                fprintf(stderr, "archiver: archivable_files failing repeatedly (last rc=%d)\n", n);
+                mmapq_indexed_archiver_close(a);
+                return 2;
+            }
+            if (stopping) break;
+            struct timespec ts = {0, 50000000}; nanosleep(&ts, NULL);
+            continue;
+        }
+        errors = 0;
+        if (n == 512) {   /* listing truncated: reclaim this batch, re-list next round */
+            fprintf(stderr, "archiver: listing truncated at 512 marks\n");
+            mmapq_indexed_archiver_close(a);
+            free(marks);
+            return 2;
+        }
+        rounds++;
+        for (int i = 0; i < n; i++) {
+            const char *base = strrchr(marks[i], '/');
+            base = base ? base + 1 : marks[i];
+            uint64_t crc; int64_t sz;
+            if (arch_copy(marks[i], dir, base, &crc, &sz)) {
+                for (int j = 0; j < n; j++) free(marks[j]);
+                free(marks);
+                mmapq_indexed_archiver_close(a);
+                return 2;
+            }
+            printf("ARCHCOPY %s size=%lld crc=%016llx\n", base, (long long)sz, (unsigned long long)crc);
+            copied++;
+        }
+        fflush(stdout);
+        if (n > 0) {
+            if (hand) {
+                /* the X5 hand-deletion rule: steps 1–3 as usual, then unlink
+                 * the marks by hand — no undo runs between the listing and
+                 * the last unlink (this archiver never undoes) */
+                for (int i = 0; i < n; i++) {
+                    if (unlink(marks[i]) && errno != ENOENT) {
+                        perror("archiver: hand unlink");
+                        for (int j = 0; j < n; j++) free(marks[j]);
+                        free(marks);
+                        mmapq_indexed_archiver_close(a);
+                        return 2;
+                    }
+                    printf("HANDDELETE %s\n", marks[i]);
+                }
+            } else {
+                int rc = mmapq_indexed_archiver_reclaim_files(a, marks, n);
+                if (rc < 0) {
+                    fprintf(stderr, "archiver: reclaim_files rc=%d\n", rc);
+                    for (int j = 0; j < n; j++) free(marks[j]);
+                    free(marks);
+                    mmapq_indexed_archiver_close(a);
+                    return 2;
+                }
+                reclaimed += rc;
+            }
+        }
+        /* planted defect MKTSIM_RECLAIM_AHEAD_OF_MARK: unlink one payload
+         * file beyond the mark (not listed, not copied) — the verifier must
+         * fail with the missing range identified. */
+        if (plant_armed && !plant_fired && n > 0) {
+            DIR *qd = opendir(qdir);
+            if (qd) {
+                char victim[280] = {0};
+                int64_t vbest = -1;
+                struct dirent *de;
+                while ((de = readdir(qd))) {
+                    unsigned aid; long long fn;
+                    if (sscanf(de->d_name, "payload_%u_%lld", &aid, &fn) != 2) continue;
+                    int marked = 0;
+                    for (int i = 0; i < n; i++) {
+                        const char *b = strrchr(marks[i], '/');
+                        if (!strcmp(b ? b + 1 : marks[i], de->d_name)) { marked = 1; break; }
+                    }
+                    if (!marked && (vbest < 0 || fn < vbest)) { vbest = fn; snprintf(victim, sizeof victim, "%s", de->d_name); }
+                }
+                closedir(qd);
+                if (victim[0]) {
+                    char vp[1100 + 280];
+                    snprintf(vp, sizeof vp, "%s/%s", qdir, victim);
+                    if (unlink(vp) == 0) {
+                        plant_fired = 1;
+                        printf("PLANT reclaim-ahead-of-mark: unlinked live file %s\n", victim);
+                        fflush(stdout);
+                    }
+                }
+            }
+        }
+        for (int i = 0; i < n; i++) free(marks[i]);
+        free(marks);
+        if (stopping) break;
+        struct timespec ts = {0, 50000000}; nanosleep(&ts, NULL);   /* 50 ms between rounds */
+    }
+    printf("ARCHFINAL rounds=%d start_index=%lld copied=%lld reclaimed=%lld hand=%d plant_fired=%d\n",
+           rounds, (long long)mmapq_indexed_archiver_start_index(a),
+           (long long)copied, (long long)reclaimed, hand, plant_fired);
+    fflush(stdout);
+    mmapq_indexed_archiver_close(a);
+    return 0;
+}
+
+/* ── snapshot joiner (F6): snapshot + archived tail + live tail ────────── */
+
+static int run_snapjoin(const char *dir, const char *qname, const char *snap_path)
+{
+    MmapqIndexedQueue *q = NULL;
+    if (mmapq_indexed_queue_create(dir, qname, REGION_SIZE, RING_SIZE, 1, MAX_FILE_SIZE, 0,
+                                   TIMEOUT_NS, 0, NULL, NULL, &q)) { fprintf(stderr, "snapjoin: queue\n"); return 1; }
+    MmapqIndexedReader *rd = NULL;
+    if (mmapq_indexed_queue_create_reader(q, &rd)) { fprintf(stderr, "snapjoin: reader\n"); return 1; }
+    int64_t last = mmapq_indexed_reader_last_index(rd);
+    int64_t start_idx = mmapq_indexed_reader_start_index(rd);
+    mmapq_indexed_reader_close(rd);
+
+    Engine e; engine_init(&e);
+    if (snap_load(snap_path, &e)) { fprintf(stderr, "snapjoin: snapshot %s unreadable\n", snap_path); return 1; }
+    int64_t base = e.applied;
+    if (base > last + 1) {
+        fprintf(stderr, "snapjoin: snapshot at %lld is ahead of the log (last %lld)\n",
+                (long long)base, (long long)last);
+        return 1;
+    }
+    Replay r = { .e = &e, .who = "snapjoin", .self = 0xFFFF, .strict_seq = 1 };
+    int64_t arch_n = 0;
+    int bad = 0;
+    if (e.applied < start_idx)
+        bad = replay_archived_range(dir, qname, &r, e.applied, start_idx, &arch_n) != 0;
+    MmapqIndexedPoller *p = NULL;
+    if (!bad && mmapq_indexed_queue_create_poller(q, &p)) { fprintf(stderr, "snapjoin: poller\n"); return 1; }
+    if (!bad) {
+        int64_t live_from = e.applied > start_idx ? e.applied : start_idx;
+        if (live_from <= last && !mmapq_indexed_poller_move_to_index(p, live_from)) {
+            fprintf(stderr, "snapjoin: move_to_index %lld failed\n", (long long)live_from);
+            bad = 1;
+        }
+    }
+    while (!bad && e.applied <= last) {
+        MmapqPollResult pr = mmapq_indexed_poller_poll(p, on_msg, &r);
+        if (r.fatal) { bad = 1; break; }
+        if (pr != MMAPQ_POLL_ADVANCED) {
+            fprintf(stderr, "snapjoin: poll %d at %lld (target last=%lld)\n",
+                    (int)pr, (long long)e.applied, (long long)last);
+            bad = 1; break;
+        }
+    }
+    printf("SNAPJOIN base=%lld start_index=%lld archived=%lld messages=%lld input=%016llx digest=%016llx result=%s\n",
+           (long long)base, (long long)start_idx, (long long)arch_n, (long long)e.applied,
+           (unsigned long long)e.input_hash, (unsigned long long)e.digest, bad ? "FAIL" : "PASS");
+    fflush(stdout);
+    mmapq_indexed_poller_close(p);
+    mmapq_indexed_queue_close(q);
+    engine_free(&e);
+    return bad;
+}
+
 /* ── verify ─────────────────────────────────────────────────────────────── */
 
 static int check_log_lines(const Engine *e, const char *path, const char *kind1, const char *kind2)
@@ -1365,14 +2111,45 @@ static int run_verify(const char *dir, const char *qname, int nlogs, char **logs
     MmapqIndexedReader *rd = NULL;
     if (mmapq_indexed_queue_create_reader(q, &rd)) { fprintf(stderr, "verify: reader\n"); return 1; }
     int64_t last = mmapq_indexed_reader_last_index(rd);
+    int64_t start_idx = mmapq_indexed_reader_start_index(rd);
     mmapq_indexed_reader_close(rd);
     MmapqIndexedPoller *p = NULL;
     if (mmapq_indexed_queue_create_poller(q, &p)) { fprintf(stderr, "verify: poller\n"); return 1; }
 
     Engine e; engine_init(&e);
     Replay r = { .e = &e, .who = "verify", .self = 0xFFFF, .strict_seq = 1 };
+    int bad = 0;
+    /* F7 (§3): replay the archived prefix from the copy-aside files (with
+     * the boundary-crossing files still live) before the live tail.
+     * Boundary contiguity is exact: every index in [0, start_index) must
+     * reconstruct, and the live replay starts at start_index. */
+    int64_t arch_n = 0;
+    if (start_idx > 0) {
+        /* the raw parser is written against the demo's geometry; confirm it */
+        char meta[1100];
+        snprintf(meta, sizeof meta, "%s/%s/meta", dir, qname);
+        FILE *mf = fopen(meta, "r");
+        int32_t rs = 0; int64_t mfs = 0;
+        if (mf) {
+            uint8_t mb[24];
+            if (fread(mb, 1, 24, mf) == 24) { memcpy(&rs, mb + 4, 4); memcpy(&mfs, mb + 16, 8); }
+            fclose(mf);
+        }
+        if (rs != REGION_SIZE || mfs != MAX_FILE_SIZE) {
+            fprintf(stderr, "verify: queue geometry (%d, %lld) is not the demo's (%d, %lld)\n",
+                    rs, (long long)mfs, REGION_SIZE, (long long)MAX_FILE_SIZE);
+            return 1;
+        }
+        if (replay_archived_range(dir, qname, &r, 0, start_idx, &arch_n)) return 1;
+        printf("ARCHVERIFY archived=%lld boundary=%lld contiguity=OK result=PASS\n",
+               (long long)arch_n, (long long)start_idx);
+        if (!mmapq_indexed_poller_move_to_index(p, start_idx)) {
+            fprintf(stderr, "verify: move_to_index %lld failed\n", (long long)start_idx);
+            return 1;
+        }
+    }
     int64_t n = 0;
-    int bad = drain(p, &r, &n) != 0;
+    bad = drain(p, &r, &n) != 0;
     if (!bad && e.applied != last + 1) {
         fprintf(stderr, "verify: replayed %lld messages but last_index is %lld\n", (long long)e.applied, (long long)last);
         bad = 1;
@@ -1459,23 +2236,31 @@ int main(int argc, char **argv)
         int async = argc >= 8 ? !strcmp(argv[7], "async") : 0;
         int want_id = argc >= 9 ? atoi(argv[8]) : -1;
         int batch_on = argc >= 10 ? atoi(argv[9]) : 0;
+        int archivable = argc >= 11 ? atoi(argv[10]) : 0;
         int t = atoi(argv[4]);
         if (t < 0 || t >= MAX_TRADERS) { fprintf(stderr, "trader id 0..%d\n", MAX_TRADERS - 1); return 2; }
         if (want_id > 255) { fprintf(stderr, "appender id 0..255 or -1\n"); return 2; }
-        return run_trader(argv[2], argv[3], t, (uint32_t)strtoul(argv[5], NULL, 10), argv[6], async, want_id, batch_on);
+        return run_trader(argv[2], argv[3], t, (uint32_t)strtoul(argv[5], NULL, 10), argv[6], async, want_id, batch_on, archivable);
     }
     if (argc >= 7 && !strcmp(argv[1], "gateway")) {
         int async = argc >= 8 ? !strcmp(argv[7], "async") : 0;
         int want_id = argc >= 9 ? atoi(argv[8]) : -1;
+        int archivable = argc >= 10 ? atoi(argv[9]) : 0;
         int g = atoi(argv[4]);
         if (g < 0 || g >= MAX_TRADERS) { fprintf(stderr, "gateway id 0..%d\n", MAX_TRADERS - 1); return 2; }
         if (want_id > 255) { fprintf(stderr, "appender id 0..255 or -1\n"); return 2; }
-        return run_gateway(argv[2], argv[3], g, (uint32_t)strtoul(argv[5], NULL, 10), argv[6], async, want_id);
+        return run_gateway(argv[2], argv[3], g, (uint32_t)strtoul(argv[5], NULL, 10), argv[6], async, want_id, archivable);
     }
+    if (argc >= 5 && !strcmp(argv[1], "archiver"))
+        return run_archiver(argv[2], argv[3], argv[4], argc >= 6 ? atoi(argv[5]) : 0);
+    if (argc >= 5 && !strcmp(argv[1], "snapjoin"))
+        return run_snapjoin(argv[2], argv[3], argv[4]);
     if (argc >= 4 && !strcmp(argv[1], "verify"))
         return run_verify(argv[2], argv[3], argc - 4, argv + 4);
-    fprintf(stderr, "usage:\n  %s trader  <dir> <queue> <trader_id> <incarnation> <stopfile> [sync|async] [appender_id|-1] [batch 0|1]\n"
-                    "  %s gateway <dir> <queue> <gateway_id> <incarnation> <stopfile> [sync|async] [appender_id|-1]\n"
-                    "  %s verify  <dir> <queue> [trader_log ...]\n", argv[0], argv[0], argv[0]);
+    fprintf(stderr, "usage:\n  %s trader   <dir> <queue> <trader_id> <incarnation> <stopfile> [sync|async] [appender_id|-1] [batch 0|1] [archivable 0|1]\n"
+                    "  %s gateway  <dir> <queue> <gateway_id> <incarnation> <stopfile> [sync|async] [appender_id|-1] [archivable 0|1]\n"
+                    "  %s archiver <dir> <queue> <stopfile> [hand 0|1]\n"
+                    "  %s snapjoin <dir> <queue> <snapshot>\n"
+                    "  %s verify   <dir> <queue> [trader_log ...]\n", argv[0], argv[0], argv[0], argv[0], argv[0]);
     return 2;
 }
