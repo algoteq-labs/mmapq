@@ -102,7 +102,7 @@ Lines 55. Internal dispatch fatal check (WRAP_UNWRAPPED in mmapqi_header_read).
 
 | Line | Disposition | Verified |
 |---|---|---|
-| 179 length + 4 > region_size | I | Phase 6a converted. Guarded by EINVAL checks at public entry points. (CAND-49: line moved, site unchanged; CAND-54: moved again by the archivable-field struct addition, site unchanged; CAND-50: moved by the torn-tail leading fence, then back by the item-5 payload_iter field removal, site unchanged.) |
+| 202 length + 4 > region_size | I | Phase 6a converted. Guarded by EINVAL checks at public entry points. (CAND-49: line moved, site unchanged; CAND-54: moved again by the archivable-field struct addition, site unchanged; CAND-50: moved by the torn-tail leading fence, then back by the item-5 payload_iter field removal, site unchanged; CAND-58: moved by the walk-accessor struct fields, site unchanged.) |
 
 ### indexed_poller.c — 1 (1 I)
 
@@ -118,7 +118,7 @@ Lines 55. Internal dispatch fatal check (WRAP_UNWRAPPED in mmapqi_header_read).
 
 ### payload_iterator.c — 4 (all I)
 
-Lines 97, 110, 148-149. Internal dispatch null checks. (A5/CAND-22: init
+Lines 97, 110, 149-150. Internal dispatch null checks. (CAND-58: moved one line by the map-miss comment in advance, sites unchanged. A5/CAND-22: init
 and rewind gained `int` return channels; their NULL/not-initialised checks
 became MMAPQ_EINVAL returns. D8: advance gained the three-way error
 propagation — comment lines only above the catalogued sites.)
@@ -136,7 +136,7 @@ CAND-32.)
 
 ### queue_region_accessor.h — 2 (all I)
 
-Lines 138-139.
+Lines 170-171. (CAND-58: moved by the payload_checked field + the walk-accessor factory comment, sites unchanged.)
 Internal dispatch NULL checks.
 
 ### region_async.c — 8 (all I)
@@ -165,7 +165,7 @@ room for giving up.)
 
 ### uncommitted_payload_iterator.c — 3 (all I)
 
-Lines 364, 475, 491. Internal dispatch null checks. (CAND-51e: the
+Lines 529, 694, 710. Internal dispatch null checks. (CAND-58: moved by the classification/restart logic, sites unchanged. CAND-51e: the
 gap-end padding-skip check shifted the last two from 434/450. A5/CAND-22:
 init and rewind NULL checks became MMAPQ_EINVAL returns. D8: scan floor,
 checked header read, and three-way advance propagation shifted the
@@ -177,7 +177,7 @@ ranges_insert start < end assert moved to committed_ranges.c.)
 
 | Line | Disposition | Verified |
 |---|---|---|
-| 227 next: it NULL check | I | Internal dispatch null check. (CAND-49 §3.6 unit. CAND-50: line moved by the zero-line wording fix, site unchanged.) |
+| 346 next: it NULL check | I | Internal dispatch null check. (CAND-49 §3.6 unit. CAND-50: line moved by the zero-line wording fix, site unchanged; CAND-58: moved by the classification/restart logic, site unchanged.) |
 
 ### committed_ranges.c — 1 (1 I)
 

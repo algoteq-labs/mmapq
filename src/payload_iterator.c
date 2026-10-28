@@ -128,7 +128,8 @@ int mmapqi_payload_iterator_advance(MmapqPayloadIterator *it)
 
     /* D8: walk errors propagate — a transient timeout (MMAPQ_ETIMEDOUT) and
      * corruption (MMAPQ_ECORRUPT) are NOT end of stream; their remedies are
-     * opposite. */
+     * opposite. CAND-58: a map miss (MMAPQI_WALK_MAP_MISS) propagates too —
+     * the uncommitted iterator's classification resolves it. */
     if (length < 0) return length;
 
     it->current_message_offset = message_offset;

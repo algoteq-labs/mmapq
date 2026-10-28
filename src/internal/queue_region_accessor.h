@@ -68,6 +68,8 @@ typedef struct QueueRegionAccessor {
     char               *directory;
     char               *queue_name;
     int                 read_only;
+    int                 payload_checked;   /* CAND-58 walk accessor: RO but
+                                            * size-checked payload maps */
     int32_t             region_size;
     int                 ring_size;
     int                 regions_to_map_ahead;
@@ -118,6 +120,36 @@ int mmapqi_queue_region_accessor_create_rw(
  * Sets *out to NULL on failure.
  */
 int mmapqi_queue_region_accessor_create_ro(
+    const char *directory,
+    const char *queue_name,
+    int32_t     region_size,
+    int         ring_size,
+    int         regions_to_map_ahead,
+    int64_t     max_file_size,
+    uint64_t    timeout_ns,
+    MmapqRuntime    *runtime,
+    QueueRegionAccessor **out);
+
+/**
+ * mmapqi_queue_region_accessor_create_walk — the CAND-58 walk accessor.
+ *
+ * Read-only everywhere (never creates, never extends), but the payload side
+ * is size-checked (check_file_size = 1): the writer walks/scans probe past
+ * committed data, where the RO readers' no-check premise (Anti-Pattern E)
+ * does not hold. The appender holds it next to rw_acc/ro_acc; the
+ * uncommitted factory's span walk and header scan, the iterator's use
+ * phase, and the join's payload walks map through it. The append path keeps
+ * the RW accessors — only the append position ever creates or extends a
+ * file (CAND-51e's rule, now by construction).
+ *
+ * runtime: the region mapper runtime for async mapping.
+ * out:     out-parameter for the created accessor (NULL on failure)
+ *
+ * Returns 0 on success, MMAPQ_EINVAL for NULL/invalid args,
+ * MMAPQ_ENOMEM on allocation failure, MMAPQ_ETIMEDOUT on I/O error.
+ * Sets *out to NULL on failure.
+ */
+int mmapqi_queue_region_accessor_create_walk(
     const char *directory,
     const char *queue_name,
     int32_t     region_size,

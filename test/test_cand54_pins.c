@@ -49,6 +49,7 @@
 #include "internal/header_codec.h"
 #include "internal/region_accessor.h"
 #include "internal/test_hooks.h"
+#include "internal/test_reach.h"
 #include "runtime.h"
 
 #include <stdlib.h>
@@ -1112,10 +1113,11 @@ void test_c54_refusal_batch_nonarchivable(void)  { refusal_batch(); }
  * every failure return in commit_header / batch_publish precedes a
  * successful CAS, so nothing was published and the intent is cleared; a
  * retry stores it again. The header-wrap fault is the wrap_fault_oneshot
- * idiom armed at the commit's target header slot, reached through the
- * lazily created uncommitted iterators, which share the appender's RW
- * header accessor (indexed_appender.c / indexed_batch_appender.c pass
- * a->header_acc to the walker factories). No MMAPQ_TEST_HOOKS dependency —
+ * idiom armed at the commit's target header slot, reached via
+ * mmapqi_appender_header_acc / mmapqi_batch_appender_header_acc
+ * (internal/test_reach.h — CAND-58 removed the iterator alias
+ * it->header_accessor == a->header_acc when the walker factories moved to
+ * the walk accessor). No MMAPQ_TEST_HOOKS dependency —
  * runs in both build configs. Fail-first evidence: the mutant "no clear
  * on publish failure" fails both pins at the slot assert (stage-2
  * report, mutant M7).
@@ -1147,12 +1149,10 @@ void test_c54_publish_failure_clears_intent_single(void)
     TEST_ASSERT_EQUAL_INT64(0,
         mmapq_indexed_appender_append(a, msg_big, sizeof msg_big));
 
-    MmapqUncommittedPayloadIterator *it = NULL;
-    TEST_ASSERT_EQUAL_INT(0,
-        mmapq_indexed_appender_uncommitted_iterator_checked(a,
-            PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET, &it));
-    TEST_ASSERT_NOT_NULL(it);
-    RegionAccessor *acc = it->header_accessor;
+    /* CAND-58 removed the iterator alias (it->header_accessor ==
+     * a->header_acc) this reach relied on — the commit path's header
+     * accessor comes from internal/test_reach.h now. */
+    RegionAccessor *acc = mmapqi_appender_header_acc(a);
     TEST_ASSERT_NOT_NULL(acc);
     c54_oneshot_real_wrap = acc->wrap;
     c54_oneshot_pos       = header_position(1);   /* the commit's CAS slot */
@@ -1182,11 +1182,9 @@ void test_c54_publish_failure_clears_intent_batch(void)
     TEST_ASSERT_EQUAL_INT64(0,
         mmapq_indexed_batch_appender_append_and_commit(a, msg_big, sizeof msg_big));
 
-    MmapqUncommittedBatchIterator *it = NULL;
-    TEST_ASSERT_EQUAL_INT(0,
-        mmapq_indexed_batch_appender_uncommitted_batches_checked(a, &it));
-    TEST_ASSERT_NOT_NULL(it);
-    RegionAccessor *acc = it->header_accessor;
+    /* the commit path's header accessor via internal/test_reach.h
+     * (CAND-58 removed the iterator alias) */
+    RegionAccessor *acc = mmapqi_batch_appender_header_acc(a);
     TEST_ASSERT_NOT_NULL(acc);
     c54_oneshot_real_wrap = acc->wrap;
     c54_oneshot_pos       = header_position(1);

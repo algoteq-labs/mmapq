@@ -9,7 +9,9 @@
 #include "internal/payload_iterator.h"
 #include "internal/offset_set.h"
 #include "internal/uncommitted_payload_iterator.h"
+#include "internal/walk_classify.h"
 #include "internal/test_hooks.h"
+#include "internal/test_reach.h"
 #include "internal/mmap_assert.h"
 #include "mmap_platform.h"
 
@@ -39,6 +41,19 @@ struct MmapqIndexedAppender {
     QueueRegionAccessor *ro_acc;
     RegionAccessor      *ro_header;
     Buffer               ro_buf;
+
+    /* CAND-58 (spec §4.1): the walk accessor — RO + size-checked. The
+     * uncommitted factory's span walk and header scan, the iterator's use
+     * phase, and the join's payload walks map through it; it never creates,
+     * so a probe of a reclaimed file misses (and classifies) instead of
+     * re-creating the file as zeros. */
+    QueueRegionAccessor *walk_acc;
+    RegionAccessor      *walk_header;
+    RegionAccessor      *walk_payload;
+
+    /* The floor that classified the join walk's current overtaken failure
+     * (the create-time restart loop's no-progress record). */
+    int64_t             walk_ovt_floor;
 
     /* Append position state */
     int64_t current_index;
@@ -92,6 +107,14 @@ static int64_t appender_archive_offset(void *ctx)
 {
     MmapqIndexedAppender *a = (MmapqIndexedAppender *)ctx;
     return appender_meta_archive_offset(a->appender_meta);
+}
+
+/* CAND-58: the classification's payload floor — the archive line re-read
+ * seq_cst AFTER a walk failure (spec §4.2; never start_offset, L(iv)). */
+static int64_t appender_archive_offset_sc(void *ctx)
+{
+    MmapqIndexedAppender *a = (MmapqIndexedAppender *)ctx;
+    return appender_meta_archive_offset_sc(a->appender_meta);
 }
 
 /* Refill helper (CAND-49 §3.3): make an iterator-yielded offset
@@ -302,20 +325,24 @@ static __attribute__((always_inline)) inline int commit_header(MmapqIndexedAppen
 
 /* ── Initialise append position after (re)start ──────────────────────────── */
 
-/* Walk forward from `from` to the end of the payload stream. The walk
- * uses the writer's RW payload accessor (CAND-51e, below): it may extend
- * a region file at a wrap site, but it never RE-CREATES a reclaimed file,
- * because it starts at or above the readability floor
- * max(start_offset, archive_offset) (CAND-54 L(ii)) — files below the
- * floor are never probed (pinned by test_c54_hole1_single and
- * test_doc01_rejoin_after_reclaim_recreates_nothing). It never writes at
- * start_offset (CAND-30, I5: bytes there may belong to a dead payload,
- * and writing a shorter message over a longer one leaves stale bytes a
- * later recovery would misread). A position with no file yet, or beyond a
- * file's end, is the end of the stream. The pre-wrap is required:
- * post-D8 the walk maps a missing or too-short file at a wrap site to
- * MMAPQ_ECORRUPT (F1) — only this pre-wrap makes "no file" the end of the
- * stream here. */
+/* Walk forward from `from` to the end of the payload stream. CAND-58 (spec
+ * §4.1): the walk maps through the WALK accessor — read-only and
+ * size-checked — not the writer's RW accessor. The RW wrap was size-checked
+ * but created/extended (the CAND-51e shape), and on a reclaimed file it
+ * RE-CREATED the file as zeros (CAND-58); the plain RO payload path skips
+ * the file-size check (Anti-Pattern E — correct for header-driven readers,
+ * wrong for a walk that probes past committed data: a message ending exactly
+ * at an in-file region end with the next region never grown SIGBUSed, and a
+ * tail padding marker whose skip-target file was never created read as
+ * ECORRUPT instead of EOS). The walk accessor's RO + check_file_size=1 wrap
+ * preserves both corrections (EOS at the frontier, no SIGBUS) and never
+ * creates: a map miss classifies (mmapqi_walk_classify, §4.2) — below the
+ * re-read line → MMAPQI_WALK_RESTART (the join recomputes JoinBase);
+ * at/above → EOS (positions >= `from` are past everything this walk knows
+ * written: the frontier). It never writes at start_offset (CAND-30, I5).
+ * The pre-wrap is required: post-D8 the walk maps a missing or too-short
+ * file at a wrap site to the map-miss outcome — only this pre-wrap makes
+ * "no file" the end of the stream here. */
 #ifdef MMAPQ_TEST_HOOKS
 static int     appender_walk_site = -1;
 static int32_t appender_walk_rc;
@@ -328,32 +355,39 @@ int mmapq_test_hook_appender_walk_fired(void) { return appender_walk_fired; }
 #define WALK_HOOK(site, v) do { } while (0)
 #endif
 
+/* Classification of a join-walk map miss at `probing` (CAND-58 §4.2):
+ * below the re-read line → MMAPQI_WALK_RESTART (the floor recorded in
+ * a->walk_ovt_floor); at/above → EOS (0) or, at a known-written position,
+ * MMAPQ_ECORRUPT. */
+static int join_walk_classify(MmapqIndexedAppender *a, int64_t probing,
+                              int64_t known_written_end)
+{
+    int64_t f;
+    MmapqiWalkClass c = mmapqi_walk_classify(probing, known_written_end,
+                                             appender_archive_offset_sc, a, &f);
+    if (c == MMAPQI_WALK_OVERTAKEN) {
+        a->walk_ovt_floor = f;
+        return MMAPQI_WALK_RESTART;
+    }
+    if (c == MMAPQI_WALK_EOS) return 0;
+    return MMAPQ_ECORRUPT;
+}
+
 static int walk_payload_to_end(MmapqIndexedAppender *a, int64_t from,
                                int64_t *out_end)
 {
-    /* CAND-51e: the rejoin walk uses the WRITER'S RW payload accessor, not
-     * the RO one. Anti-Pattern E (no file-size check on the RO payload path)
-     * is correct for header-driven readers, which only map where a committed
-     * header points; this walk PROBES past committed data, where that
-     * premise fails. The RO accessor neither extends nor size-checks, so a
-     * probe at a region the writer never touched SIGBUSed (a message ending
-     * exactly at an in-file region end) and a tail marker whose skip target
-     * file was never created read as ECORRUPT instead of EOS. The RW wrap is
-     * size-checked and creates/extends the region (zeros -> EOS), matching
-     * the batch twin's walk. It can never re-create a reclaimed file: the
-     * walk starts at this lane's last live header or at the join anchor
-     * max(start_offset, archive_line) (CAND-54 L(ii)) — reclaimed files
-     * are wholly below the archive line, and the line never moves back.
-     * (The pre-L argument anchored at start_offset; hole 1 of spec §7.1 —
-     * a commit min lowering start_offset into the reclaimed region after
-     * the reclaim — broke it.) */
-    RegionAccessor *rw_payload = a->payload_acc;
+    RegionAccessor *walk_payload = a->walk_payload;
     int64_t probing = from;
     while (1) {
-        WrapResult wr = region_accessor_wrap_no_premap(rw_payload, probing,
+        C58_HOOK_JOIN_WALK_STEP(probing);
+        WrapResult wr = region_accessor_wrap_no_premap(walk_payload, probing,
                                                        &a->payload_buf);
-        if (wr == WRAP_FILE_NOT_FOUND || wr == WRAP_BEYOND_FILE_SIZE)
-            break;   /* end of stream */
+        if (wr == WRAP_FILE_NOT_FOUND || wr == WRAP_BEYOND_FILE_SIZE) {
+            int crc = join_walk_classify(a, probing, from);
+            if (crc == MMAPQI_WALK_RESTART) return MMAPQI_WALK_RESTART;
+            if (crc != 0) return crc;
+            break;   /* EOS: the frontier */
+        }
         if (wr == WRAP_MAP_TIMED_OUT)
             return MMAPQ_ETIMEDOUT;
         if (wr != WRAP_SUCCESS)
@@ -361,8 +395,14 @@ static int walk_payload_to_end(MmapqIndexedAppender *a, int64_t from,
         int64_t msg_off = PAYLOAD_ITERATOR_NOT_SET;
         int32_t len = mmapqi_payload_walk_advance(a->queue_name, &probing,
                                                   &msg_off,
-                                                  rw_payload, &a->payload_buf);
+                                                  walk_payload, &a->payload_buf);
         WALK_HOOK(0, len);
+        if (len == MMAPQI_WALK_MAP_MISS) {
+            int crc = join_walk_classify(a, probing, from);
+            if (crc == MMAPQI_WALK_RESTART) return MMAPQI_WALK_RESTART;
+            if (crc != 0) return crc;
+            break;   /* EOS: probing is the failing (padding-adopted) position */
+        }
         if (len == 0) break;
         if (len < 0) return len;   /* D8: timeout vs corruption propagates */
     }
@@ -370,7 +410,16 @@ static int walk_payload_to_end(MmapqIndexedAppender *a, int64_t from,
     return 0;
 }
 
-static int initialise_append_position(MmapqIndexedAppender *a, int64_t start_index)
+/* walk_floor (CAND-58 §4.4): 0 on the first pass; on a restart, the floor
+ * that classified the failure — the restart-floor rule: the payload walks
+ * begin at or above it (the tail between a below-line last live header and
+ * the line is uncommittable by L(i), and the line is always a record
+ * boundary, so walking from the line reaches the same EOS). The walks map
+ * through the walk accessor (RO, size-checked); a map miss classifies via
+ * join_walk_classify — OVERTAKEN returns MMAPQI_WALK_RESTART to the
+ * create-time restart loop. */
+static int initialise_append_position(MmapqIndexedAppender *a, int64_t start_index,
+                                      int64_t walk_floor)
 {
     /* CAND-54 ruling 2: the join clears a stale commit intent. A writer
      * killed after its intent store would otherwise pin this lane's
@@ -404,7 +453,9 @@ static int initialise_append_position(MmapqIndexedAppender *a, int64_t start_ind
          * the join anchor to the end of stream (no file yet = the
          * offset). */
         a->current_index = start_index;
-        int wrc = walk_payload_to_end(a, appender_join_anchor(a->appender_meta),
+        int64_t anchor = appender_join_anchor(a->appender_meta);
+        if (anchor < walk_floor) anchor = walk_floor;   /* the restart floor */
+        int wrc = walk_payload_to_end(a, anchor,
                                       &a->current_payload_position);
         if (wrc != 0) return wrc;
     } else {
@@ -431,45 +482,76 @@ static int initialise_append_position(MmapqIndexedAppender *a, int64_t start_ind
             /* No committed entry in the live range for this appender —
              * walk forward from the join anchor (CAND-54 L(ii)) to the
              * end of the stream */
-            int wrc = walk_payload_to_end(a, appender_join_anchor(a->appender_meta),
+            int64_t anchor = appender_join_anchor(a->appender_meta);
+            if (anchor < walk_floor) anchor = walk_floor;   /* the restart floor */
+            int wrc = walk_payload_to_end(a, anchor,
                                           &a->current_payload_position);
             if (wrc != 0) return wrc;
         } else {
             /*
              * Step 3: Walk payload forward past the committed message
              *         and any uncommitted tail, to find the true end
-             *         of the payload stream. CAND-51e: the WRITER'S RW
-             *         payload accessor, like walk_payload_to_end — this
-             *         walk probes past committed data, where the RO path's
-             *         no-size-check premise (Anti-Pattern E is for
-             *         header-driven readers) does not hold.
+             *         of the payload stream. CAND-58: the walk accessor,
+             *         like walk_payload_to_end — RO + size-checked, never
+             *         creating; a map miss classifies (the committed
+             *         record's position is known-written by header
+             *         evidence; the tail past its end is the frontier).
              */
-            RegionAccessor *rw_payload = a->payload_acc;
-            Buffer         *rw_buf     = &a->payload_buf;
+            RegionAccessor *walk_payload = a->walk_payload;
+            Buffer         *walk_buf     = &a->payload_buf;
 
-            int64_t probing = committed_payload_pos;
+            /* The restart-floor rule (§4.4): when the last live header sits
+             * below the classifying floor, its record is archived (the line
+             * never moves back) — walk from the floor instead. */
+            int64_t probing = committed_payload_pos < walk_floor
+                              ? walk_floor : committed_payload_pos;
             int64_t msg_off = PAYLOAD_ITERATOR_NOT_SET;
+            int64_t tail_known_written = probing;   /* past it: the frontier */
 
-            /* Walk past the committed message itself first */
-            int32_t len = mmapqi_payload_walk_advance(a->queue_name,
-                                                &probing, &msg_off,
-                                                rw_payload, rw_buf);
-            WALK_HOOK(1, len);
-            if (len < 0) return len;   /* D8: timeout vs corruption propagates */
-            if (len == 0) {
-                /* End of stream where a committed message must exist */
-                return MMAPQ_ECORRUPT;
+            /* Walk past the committed message itself first (skipped when the
+             * restart floored past it — its bytes are legitimately gone) */
+            if (probing == committed_payload_pos) {
+                C58_HOOK_JOIN_WALK_STEP(probing);
+                int32_t len = mmapqi_payload_walk_advance(a->queue_name,
+                                                    &probing, &msg_off,
+                                                    walk_payload, walk_buf);
+                WALK_HOOK(1, len);
+                if (len == MMAPQI_WALK_MAP_MISS) {
+                    int crc = join_walk_classify(a, committed_payload_pos,
+                                                 committed_payload_pos + 1);
+                    if (crc != 0) return crc;   /* RESTART or ECORRUPT */
+                    /* EOS is impossible here: the committed record is
+                     * known-written, so a miss at it classified CORRUPT */
+                    return MMAPQ_ECORRUPT;
+                }
+                if (len < 0) return len;   /* D8: timeout vs corruption propagates */
+                if (len == 0) {
+                    /* End of stream where a committed message must exist */
+                    return MMAPQ_ECORRUPT;
+                }
+                tail_known_written = probing;   /* the committed record's end */
             }
 
             /* Walk past any uncommitted tail */
             while (1) {
                 int64_t next_probing = probing;
                 int64_t next_msg_off = PAYLOAD_ITERATOR_NOT_SET;
+                C58_HOOK_JOIN_WALK_STEP(next_probing);
                 int32_t next_len = mmapqi_payload_walk_advance(a->queue_name,
                                                           &next_probing,
                                                           &next_msg_off,
-                                                          rw_payload, rw_buf);
+                                                          walk_payload, walk_buf);
                 WALK_HOOK(2, next_len);
+                if (next_len == MMAPQI_WALK_MAP_MISS) {
+                    int crc = join_walk_classify(a, next_probing,
+                                                 tail_known_written);
+                    if (crc == MMAPQI_WALK_RESTART) return MMAPQI_WALK_RESTART;
+                    if (crc != 0) return crc;
+                    probing = next_probing;   /* EOS: adopt the failing
+                        (padding-adopted) position, as the zeros-read EOS
+                        adoption did pre-CAND-58 */
+                    break;
+                }
                 /* CAND-51e: adopt the final advance's position at EOS too —
                  * payload_walk sets it past a terminal padding skip (short
                  * or marker), and the walker must apply the writer's rule at
@@ -632,10 +714,64 @@ static int appender_create_internal(
     }
     a->ro_header = queue_region_accessor_header(a->ro_acc);
 
-    /* Find where to resume appending */
-    int init_rc = initialise_append_position(a, start_index);
+    /* CAND-58: the walk accessor (RO + size-checked) for the walks/scans */
+    rc = mmapqi_queue_region_accessor_create_walk(
+        directory, queue_name,
+        reconciled_region_size, ring_size,
+        REGION_RING_ACCESSOR_DEFAULT_REGIONS_AHEAD,
+        reconciled_max_file_size, timeout_ns, runtime,
+        &a->walk_acc);
+    if (rc != 0) {
+        mmapqi_offset_set_destroy(&a->outstanding);
+        mmapqi_queue_region_accessor_close(a->ro_acc);
+        mmapqi_queue_region_accessor_close(a->rw_acc);
+        mmapqi_appender_meta_close(a->appender_meta);
+        if (a->queue_meta) mmapqi_queue_meta_close(a->queue_meta);
+        mmapqi_appender_id_pool_release(a->id_pool, a->appender_id);
+        mmapqi_appender_id_pool_close(a->id_pool);
+        free(a->directory);
+        free(a->queue_name);
+        free(a);
+        return rc;
+    }
+    a->walk_header  = queue_region_accessor_header(a->walk_acc);
+    a->walk_payload = mmapqi_queue_region_accessor_payload(a->walk_acc, appender_id);
+    if (a->walk_payload == NULL) {
+        mmapqi_offset_set_destroy(&a->outstanding);
+        mmapqi_queue_region_accessor_close(a->walk_acc);
+        mmapqi_queue_region_accessor_close(a->ro_acc);
+        mmapqi_queue_region_accessor_close(a->rw_acc);
+        mmapqi_appender_meta_close(a->appender_meta);
+        if (a->queue_meta) mmapqi_queue_meta_close(a->queue_meta);
+        mmapqi_appender_id_pool_release(a->id_pool, a->appender_id);
+        mmapqi_appender_id_pool_close(a->id_pool);
+        free(a->directory);
+        free(a->queue_name);
+        free(a);
+        return MMAPQ_ETIMEDOUT;   /* the lazy payload creation's only
+                                   * failure channel (rolled-create ETIMEDOUT) */
+    }
+
+    /* Find where to resume appending. CAND-58 §4.4: an overtaken join walk
+     * recomputes JoinBase — a fresh pass floored at the classifying line —
+     * inside the library, never surfaced; bounded by the no-progress
+     * detector + the last-resort cap. */
+    int64_t walk_floor = 0, last_line_floor = INT64_MIN;
+    int     restarts = 0;
+    int     init_rc;
+    for (;;) {
+        init_rc = initialise_append_position(a, start_index, walk_floor);
+        if (init_rc != MMAPQI_WALK_RESTART) break;
+        if (mmapqi_walk_restart_permitted(a->walk_ovt_floor, &last_line_floor,
+                                          &restarts) != 0) {
+            init_rc = MMAPQ_ECORRUPT;
+            break;
+        }
+        walk_floor = a->walk_ovt_floor;
+    }
     if (init_rc != 0) {
         mmapqi_offset_set_destroy(&a->outstanding);
+        mmapqi_queue_region_accessor_close(a->walk_acc);
         mmapqi_queue_region_accessor_close(a->ro_acc);
         mmapqi_queue_region_accessor_close(a->rw_acc);
         mmapqi_appender_meta_close(a->appender_meta);
@@ -914,11 +1050,12 @@ int mmapq_indexed_appender_uncommitted_iterator_checked(
     *out = NULL;
     if (a == NULL) return MMAPQ_EINVAL;
 
-    /* Create inner iterator with fixed end-of-stream */
+    /* Create inner iterator with fixed end-of-stream — over the CAND-58
+     * walk accessor (RO, size-checked; never creates) */
     if (a->uncommitted_inner == NULL) {
         int rc = mmapqi_payload_iterator_create(
             a->queue_name,
-            a->payload_acc,
+            a->walk_payload,
             appender_start_of_stream,
             appender_end_of_stream,
             a,
@@ -935,7 +1072,8 @@ int mmapq_indexed_appender_uncommitted_iterator_checked(
             appender_end_of_stream,
             a,
             appender_archive_offset,          /* CAND-49 §3.9: the archive line */
-            a->header_acc,
+            appender_archive_offset_sc,       /* CAND-58 §4.2: the classification floor */
+            a->walk_header,
             a->uncommitted_inner,
             appender_start_index_from_meta,   /* D8/S3: header scan floor */
             a->queue_meta,
@@ -1023,6 +1161,14 @@ void mmapq_indexed_appender_close(MmapqIndexedAppender *a)
         a->queue_meta = NULL;
     }
 
+    if (a->walk_acc != NULL) {
+        /* walk_header/walk_payload are owned by walk_acc — no separate close */
+        mmapqi_queue_region_accessor_close(a->walk_acc);
+        a->walk_acc     = NULL;
+        a->walk_header  = NULL;
+        a->walk_payload = NULL;
+    }
+
     if (a->rw_acc != NULL) {
         mmapqi_queue_region_accessor_close(a->rw_acc);
         a->rw_acc = NULL;
@@ -1044,4 +1190,14 @@ void mmapq_indexed_appender_close(MmapqIndexedAppender *a)
     free(a->directory);
     free(a->queue_name);
     free(a);
+}
+
+/* Test-only reach (see internal/test_reach.h). */
+RegionAccessor *mmapqi_appender_header_acc(MmapqIndexedAppender *a)
+{
+    return a == NULL ? NULL : a->header_acc;
+}
+RegionAccessor *mmapqi_appender_payload_acc(MmapqIndexedAppender *a)
+{
+    return a == NULL ? NULL : a->payload_acc;
 }

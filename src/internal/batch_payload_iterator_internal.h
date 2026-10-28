@@ -31,6 +31,12 @@ struct MmapqBatchPayloadIterator {
 
     int             exhausted;
     int             last_error;
+
+    /* CAND-58: when set (the writer walks' iterators only), a wrap that
+     * misses the file reports MMAPQI_WALK_MAP_MISS (walk_classify.h) instead
+     * of collapsing to MMAPQ_ECORRUPT — the walk's caller classifies. Never
+     * set on reader/poller iterators; their miss-as-ECORRUPT is unchanged. */
+    int             walk_mode;
 };
 
 static inline int batch_iterator_has_current(const MmapqBatchPayloadIterator *it)

@@ -198,11 +198,15 @@ It never raises it.
 4. Start writing there.
 
 A position with no file yet, or beyond the end of a file, is the end of
-the stream. The walk uses the writer's read-write mappings: it may extend
-a region file at a wrap site, but it never re-creates a reclaimed file,
-because it starts at or above the readability floor
-`max(start_offset, archive_offset)` — files below the floor are never
-probed.
+the stream. CAND-58: the join walk (like every writer walk/scan) maps
+read-only and size-checked through the walk accessor — it never creates,
+extends, or re-creates a file, by construction. A probe that misses
+classifies against the re-read archive line: below it (the walk's snapshot
+was overtaken) the join recomputes from fresh state at or above the
+classifying floor; at/above it the position is the end of the stream, or
+MMAPQ_ECORRUPT at a position known written. The walk starts at or above
+the readability floor `max(start_offset, archive_offset)` (CAND-54 L(ii))
+— files below the floor are never probed.
 Walking (rather than writing at `start_offset`) matters: bytes at
 `start_offset` may belong to a dead payload, and writing a shorter message
 over a longer one leaves stale bytes that a later recovery would misread.

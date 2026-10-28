@@ -79,6 +79,11 @@ typedef struct MmapqUncommittedBatchIterator {
      * queue_start_index — the D-G publication rule. */
     int64_t       (*archive_offset)(void *ctx);
 
+    /* CAND-58: the classification's payload floor — the archive line
+     * re-read with seq_cst AFTER a walk failure (never start_offset, L(iv)).
+     * Shares stream_ctx. */
+    int64_t       (*archive_offset_sc)(void *ctx);
+
     /* Queue start index supplier (D8/S3 floor) — read once per init, first. */
     int64_t       (*queue_start_index)(void *ctx);
     void           *queue_start_index_ctx;
@@ -104,6 +109,12 @@ typedef struct MmapqUncommittedBatchIterator {
 
     int64_t         archive_line;
     int64_t         fixed_end_of_stream;
+
+    /* CAND-58: the floor that classified the current overtaken failure,
+     * with its domain (walk_classify.h's MMAPQI_WALK_DOM_*) — the restart
+     * loop's no-progress record. */
+    int64_t         walk_ovt_floor;
+    int             walk_ovt_domain;
 
     /* Walk position: the next batch boundary to probe. When
      * pending_advance is set, the previously yielded batch at
@@ -131,8 +142,10 @@ typedef struct MmapqUncommittedBatchIterator {
  * end_of_stream_offset:    callback returning current append position
  * stream_ctx:              context for both callbacks and archive_offset
  * archive_offset:          callback returning the appender's archive line
- * header_accessor:         RO accessor for the queue header file
- * payload_acc:             accessor for this appender's payload files
+ * archive_offset_sc:       the archive line re-read seq_cst AFTER a walk
+ *                          failure — the CAND-58 classification floor (§4.2)
+ * header_accessor:         the walk accessor's RO header side (CAND-58 §4.1)
+ * payload_acc:             the walk accessor's RO, size-checked payload side
  * queue_start_index:       callback returning the queue's current start index
  * queue_start_index_ctx:   context for queue_start_index
  * refill:                  callback making a yielded batch offset committable
@@ -147,6 +160,7 @@ int mmapqi_uncommitted_batch_iterator_create(
     int64_t       (*end_of_stream_offset)(void *ctx),
     void           *stream_ctx,
     int64_t       (*archive_offset)(void *ctx),
+    int64_t       (*archive_offset_sc)(void *ctx),
     RegionAccessor *header_accessor,
     RegionAccessor *payload_acc,
     int64_t       (*queue_start_index)(void *ctx),

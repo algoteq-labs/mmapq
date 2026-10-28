@@ -86,6 +86,12 @@ typedef struct MmapqUncommittedPayloadIterator {
      * Read at init AFTER queue_start_index — the D-G publication rule. */
     int64_t       (*archive_offset)(void *ctx);
 
+    /* CAND-58: the classification's payload floor — the archive line
+     * re-read with seq_cst AFTER a walk failure (appender_meta
+     * archive_offset_sc; spec §4.2 — never start_offset, L(iv)). Shares
+     * stream_ctx. */
+    int64_t       (*archive_offset_sc)(void *ctx);
+
     /* Queue start index supplier (D8/S3): the header scan's floor. Read once
      * per init, BEFORE archive_offset, and frozen into the scan. */
     int64_t       (*queue_start_index)(void *ctx);
@@ -119,6 +125,12 @@ typedef struct MmapqUncommittedPayloadIterator {
     /* Snapshot of end-of-stream at init() */
     int64_t         fixed_end_of_stream;
 
+    /* CAND-58: the floor that classified the current overtaken failure,
+     * with its domain (walk_classify.h's MMAPQI_WALK_DOM_*) — the restart
+     * loop's no-progress record. */
+    int64_t         walk_ovt_floor;
+    int             walk_ovt_domain;
+
     /* Saved init parameters for rewind() */
     int64_t         init_start_offset;
     int64_t         init_end_offset;
@@ -137,8 +149,11 @@ typedef struct MmapqUncommittedPayloadIterator {
  * stream_ctx:              context for both callbacks and archive_offset
  * archive_offset:          callback returning the appender's archive line
  *                          (appender_meta archive_offset, CAND-49 §3.9)
- * header_accessor:         RO accessor for the queue header file
- * inner:                   MmapqPayloadIterator for gap traversal (ownership NOT taken;
+ * archive_offset_sc:       the same line re-read seq_cst AFTER a walk
+ *                          failure — the CAND-58 classification floor (§4.2)
+ * header_accessor:         the walk accessor's RO header side (CAND-58 §4.1)
+ * inner:                   MmapqPayloadIterator for gap traversal over the
+ *                          walk accessor's payload side (ownership NOT taken;
  *                          caller must keep it alive for the iterator's lifetime)
  * queue_start_index:       callback returning the queue's current start index —
  *                          the header scan's floor (D8/S3)
@@ -159,6 +174,7 @@ int mmapqi_uncommitted_iterator_create(
     int64_t       (*end_of_stream_offset)(void *ctx),
     void           *stream_ctx,
     int64_t       (*archive_offset)(void *ctx),
+    int64_t       (*archive_offset_sc)(void *ctx),
     RegionAccessor *header_accessor,
     MmapqPayloadIterator *inner,
     int64_t       (*queue_start_index)(void *ctx),
@@ -180,6 +196,11 @@ int mmapqi_uncommitted_iterator_create(
  *
  * Performs the full header scan at each call. Rewind is equivalent to
  * calling init() again with the same parameters.
+ *
+ * CAND-58: a walk-ending failure that classifies OVERTAKEN (the snapshot
+ * overtaken by the archive line or start_index) restarts the init from
+ * fresh state inside the library — never surfaced (§4.2/§4.4, bounded by
+ * the no-progress detector and the last-resort cap).
  *
  * Returns 0 on success; MMAPQ_EINVAL if it is NULL, an explicit offset
  * is below start_of_stream_offset(), or start_offset > end_offset when both

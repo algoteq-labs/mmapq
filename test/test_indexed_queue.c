@@ -15,6 +15,7 @@
 #include "indexed_batch_queue.h"
 #include "internal/queue_meta.h"
 #include "internal/test_hooks.h"
+#include "internal/test_reach.h"
 #include <stdio.h>
 #include <time.h>
 
@@ -1530,12 +1531,10 @@ void test_commit_slow_path_timeout_retryable(void)
     TEST_ASSERT_EQUAL_INT64(64, x);
     TEST_ASSERT_EQUAL_INT64(0, commit_msg(a, 1));      /* atomic append: last_appended moves past X */
 
-    /* Reach the appender's header accessor (shared with the iterator). */
-    MmapqUncommittedPayloadIterator *it = NULL;
-    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_appender_uncommitted_iterator_checked(
-        a, PAYLOAD_ITERATOR_NOT_SET, PAYLOAD_ITERATOR_NOT_SET, &it));
-    TEST_ASSERT_NOT_NULL(it);
-    RegionAccessor *acc = it->header_accessor;
+    /* Reach the appender's commit-path header accessor (CAND-58 removed the
+     * iterator alias this used; internal/test_reach.h). */
+    RegionAccessor *acc = mmapqi_appender_header_acc(a);
+    TEST_ASSERT_NOT_NULL(acc);
     oneshot_real_wrap = acc->wrap;
     oneshot_pos = header_position(1);   /* the commit's header slot (idx 1) */
     oneshot_hits = 0;

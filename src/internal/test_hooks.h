@@ -92,6 +92,56 @@ void mmapq_test_hook_header_wrap_inject(int wrap_result);
 void mmapq_test_hook_set_page_size(long page_size);
 void mmapq_test_hook_set_appender_walk_result(int site, int32_t rc);
 int  mmapq_test_hook_appender_walk_fired(void);
+
+/* CAND-58 walk pins (audit/CAND-58-spec.md v2.2 §6). The four setters
+ * install process-global callbacks (NULL disarms); the counter getter backs
+ * the retry pins' restart-count assertions. State lives in walk_classify.c;
+ * the fire entry points are shared across the single-message and batch call
+ * sites (four TUs).
+ *
+ * uncommitted_scan_span_pre_walk (P1a/P1b/P2): invoked in the uncommitted
+ *   factory's committed-span processing — single-message: both span sites in
+ *   scan_committed_ranges, AFTER the span's inner init and BEFORE the advance
+ *   (the init↔advance seam); batch: before the span measurement — with
+ *   (span_start, stream_start, archive_line).
+ * uncommitted_scan_header_pre_read (P6): invoked in the factory's header
+ *   scan loop, immediately before the checked header read, with the index.
+ * uncommitted_use_phase_step (P5): invoked at the top of each use-phase
+ *   advance/next call, with the probing offset (batch: the gap position).
+ * join_walk_step (P4/P4b): invoked at each join payload-walk step —
+ *   walk_payload_to_end's loop, the step-3 first and tail walks, and the
+ *   batch twins (skip_to_end_of_stream's loop, recover_open_batch's walk
+ *   loop) — with the probing offset.
+ * walk_restart_count: the process-global walk-restart counter (the retry
+ *   pins assert a >= 1 delta; a vacuously-green first pass fails). */
+void mmapq_test_hook_set_uncommitted_scan_span_pre_walk(
+    void (*fn)(int64_t header_offset, int64_t stream_start, int64_t archive_line));
+void mmapq_test_hook_set_uncommitted_scan_header_pre_read(
+    void (*fn)(int64_t header_index));
+void mmapq_test_hook_set_uncommitted_use_phase_step(
+    void (*fn)(int64_t next_probing_offset));
+void mmapq_test_hook_set_join_walk_step(void (*fn)(int64_t probing_offset));
+int  mmapq_test_hook_walk_restart_count(void);
+void mmapqi_c58_hook_scan_span_pre_walk(int64_t, int64_t, int64_t);
+void mmapqi_c58_hook_scan_header_pre_read(int64_t);
+void mmapqi_c58_hook_use_phase_step(int64_t);
+void mmapqi_c58_hook_join_walk_step(int64_t);
+void mmapqi_c58_walk_restart_note(void);
+#define C58_HOOK_SCAN_SPAN_PRE_WALK(off, ss, line) \
+    mmapqi_c58_hook_scan_span_pre_walk((off), (ss), (line))
+#define C58_HOOK_SCAN_HEADER_PRE_READ(idx) \
+    mmapqi_c58_hook_scan_header_pre_read((idx))
+#define C58_HOOK_USE_PHASE_STEP(off) \
+    mmapqi_c58_hook_use_phase_step((off))
+#define C58_HOOK_JOIN_WALK_STEP(off) \
+    mmapqi_c58_hook_join_walk_step((off))
+#define C58_WALK_RESTART_NOTE() mmapqi_c58_walk_restart_note()
+#else
+#define C58_HOOK_SCAN_SPAN_PRE_WALK(off, ss, line) ((void)0)
+#define C58_HOOK_SCAN_HEADER_PRE_READ(idx)         ((void)0)
+#define C58_HOOK_USE_PHASE_STEP(off)               ((void)0)
+#define C58_HOOK_JOIN_WALK_STEP(off)               ((void)0)
+#define C58_WALK_RESTART_NOTE()                    ((void)0)
 #endif
 
 #endif /* TEST_HOOKS_H */

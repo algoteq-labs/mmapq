@@ -1,6 +1,7 @@
 #include "batch_payload_iterator.h"
 #include "mmap_platform.h"
 #include "internal/header_codec.h"
+#include "internal/walk_classify.h"
 #include "internal/mmap_assert.h"
 #include "internal/batch_payload_iterator_internal.h"
 #include <string.h>
@@ -9,7 +10,13 @@ static int wrap_or_fail(MmapqBatchPayloadIterator *it, int64_t position)
 {
     WrapResult r = region_accessor_wrap(it->payload_acc, position, &it->payload_buf);
     if (r == WRAP_SUCCESS) return 1;
-    it->last_error = r == WRAP_MAP_TIMED_OUT ? MMAPQ_ETIMEDOUT : MMAPQ_ECORRUPT;
+    /* CAND-58: in walk_mode a file miss surfaces as MMAPQI_WALK_MAP_MISS so
+     * the walk's caller classifies it (EOS vs restart vs corruption) */
+    if (it->walk_mode &&
+        (r == WRAP_FILE_NOT_FOUND || r == WRAP_BEYOND_FILE_SIZE))
+        it->last_error = MMAPQI_WALK_MAP_MISS;
+    else
+        it->last_error = r == WRAP_MAP_TIMED_OUT ? MMAPQ_ETIMEDOUT : MMAPQ_ECORRUPT;
     it->exhausted = 1;
     return 0;
 }
@@ -18,9 +25,18 @@ int32_t mmapq_batch_iterator_read_message_count(MmapqBatchPayloadIterator *it, i
 {
     WrapResult result = region_accessor_wrap(it->payload_acc, batch_offset, &it->payload_buf);
     if (result == WRAP_MAP_TIMED_OUT) return MMAPQ_ETIMEDOUT;
+    if (result != WRAP_SUCCESS) {
+        /* CAND-58: in walk_mode a file miss surfaces for classification —
+         * checked only on the failure path; the success path is the public
+         * reader path and is unchanged from baseline */
+        if (it->walk_mode &&
+            (result == WRAP_FILE_NOT_FOUND || result == WRAP_BEYOND_FILE_SIZE))
+            return MMAPQI_WALK_MAP_MISS;
+        return MMAPQ_ECORRUPT;
+    }
     /* capacity <= 4: a batch count never occupies a region tail (the
      * CAND-51e unified tail rule) — a batch offset there is corrupt. */
-    if (result != WRAP_SUCCESS || it->payload_buf.capacity <= MMAPQ_BATCH_MSG_COUNT_SIZE)
+    if (it->payload_buf.capacity <= MMAPQ_BATCH_MSG_COUNT_SIZE)
         return MMAPQ_ECORRUPT;
     int32_t count;
     memcpy(&count, it->payload_buf.data + MMAPQ_BATCH_MSG_COUNT_OFFSET, sizeof(int32_t));

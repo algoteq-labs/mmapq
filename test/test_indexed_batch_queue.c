@@ -11,6 +11,7 @@
 #include "internal/queue_meta.h"
 #include "internal/batch_payload_iterator_internal.h"
 #include "internal/uncommitted_batch_iterator.h"
+#include "internal/test_reach.h"
 #include "wrap_fault_oneshot.h"
 #include <stdio.h>
 #include <time.h>
@@ -2840,17 +2841,15 @@ static void test_append_and_commit_failure_leaves_lane_usable(void)
 
 /* ── CAND-51b F-REC-3 guard pins ───────────────────────────────────────────
  * All four assert pre-existing behaviour (guards, not fail-first). The
- * header-side one-shot fault reaches the appender's header accessor through
- * the lazily created uncommitted-batches walker, which shares the object
- * (the factory receives a->header_acc). */
+ * header-side one-shot fault reaches the appender's header accessor via
+ * mmapqi_batch_appender_header_acc (internal/test_reach.h — CAND-58 removed
+ * the walker alias this used). */
 
 static void bq_arm_oneshot_header(MmapqIndexedBatchAppender *a, int64_t fail_pos)
 {
-    MmapqUncommittedBatchIterator *it = NULL;
-    TEST_ASSERT_EQUAL_INT(0,
-        mmapq_indexed_batch_appender_uncommitted_batches_checked(a, &it));
-    TEST_ASSERT_NOT_NULL(it);
-    RegionAccessor *acc = it->header_accessor;
+    /* CAND-58 removed the walker/alias reach this used
+     * (it->header_accessor == a->header_acc) — internal/test_reach.h */
+    RegionAccessor *acc = mmapqi_batch_appender_header_acc(a);
     TEST_ASSERT_NOT_NULL(acc);
     bq_oneshot_real_wrap = acc->wrap;
     bq_oneshot_pos = fail_pos;
@@ -2910,11 +2909,11 @@ static void test_append_and_commit_mid_append_failure_discards(void)
     MmapqIndexedBatchAppender *a = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
 
+    /* CAND-58: the walker's payload_acc moved to the walk accessor — the
+     * append path's payload accessor comes from internal/test_reach.h (the
+     * walker itself is exercised below, after the fault) */
     MmapqUncommittedBatchIterator *it = NULL;
-    TEST_ASSERT_EQUAL_INT(0,
-        mmapq_indexed_batch_appender_uncommitted_batches_checked(a, &it));
-    TEST_ASSERT_NOT_NULL(it);
-    RegionAccessor *acc = it->payload_acc;
+    RegionAccessor *acc = mmapqi_batch_appender_payload_acc(a);
     TEST_ASSERT_NOT_NULL(acc);
     bq_oneshot_real_wrap = acc->wrap;
     bq_oneshot_pos = REGION_SZ;   /* the append re-wraps into the next region */

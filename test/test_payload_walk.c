@@ -1,5 +1,6 @@
 #include "unity.h"
 #include "internal/payload_walk.h"
+#include "internal/walk_classify.h"
 #include "internal/file_mapper.h"
 #include "internal/file_initialiser.h"
 #include "internal/region_ring.h"
@@ -278,16 +279,18 @@ static void stub_accessor_init(StubAccessor *s, RegionAccessor *real,
 }
 
 /* D8: at every wrap site the walk maps WRAP_MAP_TIMED_OUT to MMAPQ_ETIMEDOUT
- * (numerically -1, unchanged) and every other wrap failure
- * (FILE_NOT_FOUND / BEYOND_FILE_SIZE / UNWRAPPED — F1) to MMAPQ_ECORRUPT.
- * Pre-fix all four collapsed to -1. */
+ * (numerically -1, unchanged). CAND-58: the file-miss results
+ * (FILE_NOT_FOUND / BEYOND_FILE_SIZE — F1) surface as MMAPQI_WALK_MAP_MISS
+ * for the caller's classification (the F1-era collapse to MMAPQ_ECORRUPT is
+ * superseded — the walk never decides EOS/restart/corruption itself);
+ * UNWRAPPED stays MMAPQ_ECORRUPT. */
 static void assert_walk_maps_wrap_result(int64_t probing_start, int64_t stub_pos)
 {
     const struct { WrapResult w; int32_t expect; } cases[4] = {
-        { WRAP_MAP_TIMED_OUT,     MMAPQ_ETIMEDOUT },
-        { WRAP_FILE_NOT_FOUND,    MMAPQ_ECORRUPT  },
-        { WRAP_BEYOND_FILE_SIZE,  MMAPQ_ECORRUPT  },
-        { WRAP_UNWRAPPED,         MMAPQ_ECORRUPT  },
+        { WRAP_MAP_TIMED_OUT,     MMAPQ_ETIMEDOUT      },
+        { WRAP_FILE_NOT_FOUND,    MMAPQI_WALK_MAP_MISS },
+        { WRAP_BEYOND_FILE_SIZE,  MMAPQI_WALK_MAP_MISS },
+        { WRAP_UNWRAPPED,         MMAPQ_ECORRUPT       },
     };
     for (int i = 0; i < 4; i++) {
         StubAccessor s;

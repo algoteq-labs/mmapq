@@ -19,6 +19,7 @@ add_library(mmapq STATIC
     queue_region_accessor.c
     header_reader.c
     payload_walk.c
+    walk_classify.c
     payload_iterator.c
     committed_ranges.c
     offset_set.c

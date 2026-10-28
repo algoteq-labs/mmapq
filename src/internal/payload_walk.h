@@ -49,10 +49,14 @@
  *   > 0  : message payload length (bytes, excluding 4-byte length prefix)
  *   == 0 : end of stream at probing_offset
  *   < 0  : MMAPQ_ETIMEDOUT on a transient mapping timeout (retryable);
- *          MMAPQ_ECORRUPT on a corrupt on-disk length/padding or any other
- *          mapping failure — including a missing or too-short file at a
- *          wrap site (F1). Timeout and corruption are never collapsed into
- *          one value: their remedies (retry vs recreate) are opposite.
+ *          MMAPQ_ECORRUPT on a corrupt on-disk length/padding or a wrap
+ *          failure that is not a file miss; MMAPQI_WALK_MAP_MISS
+ *          (walk_classify.h) when the wrap missed the file (F1's missing or
+ *          too-short case) — the failing position is left in
+ *          probing_offset and the CALLER's classification decides EOS vs
+ *          restart vs corruption (CAND-58; the F1-era ECORRUPT collapse is
+ *          superseded). Timeout, miss and corruption are never collapsed
+ *          into one value: their remedies are opposite.
  *          Same convention as the batch payload iterator's last_error
  *          channel (batch_payload_iterator.c).
  */

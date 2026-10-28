@@ -33,6 +33,7 @@ TESTS=(
     test_alloc_faults
     test_crash_composition
     test_cand54_pins
+    test_c58_walk_pins
 )
 
 # MMAPQ_TEST_HOOKS enables the deterministic race/failure-injection hooks

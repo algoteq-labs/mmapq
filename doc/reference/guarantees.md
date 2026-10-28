@@ -33,7 +33,7 @@ granularity" argument in `../design/archiving-design.md`.
 | After a crash, only the lane's highest-offset uncommitted record can be torn; earlier uncommitted records are byte-intact | P | `test_cc_sm_torn_tail_earlier_intact` (test/test_crash_composition.c). Write-side order: the previous record's data precedes the next record's length store |
 | A rejoin at an exact in-file region end does not SIGBUS | P | `test_c51e_rejoin_exact_infile_region_end_sync` / `_async` (test_indexed_queue.c) |
 | A joining appender never writes over existing bytes | M + P | Model `NoOverwrite`; `test_appender_rejoin_over_abandoned_payload` (test_indexed_archiver.c); batch `test_batch_appender_rejoin_over_abandoned_batch` |
-| A rejoin after a payload file was legitimately reclaimed succeeds and never re-creates the file | P | `test_appender_rejoin_after_payload_file_deleted` (test_indexed_archiver.c); batch twin |
+| A rejoin after a payload file was legitimately reclaimed succeeds and never re-creates the file | P | Holds by construction since CAND-58: every writer walk/scan maps read-only and size-checked through the walk accessor (never `O_CREAT`), and a map miss classifies against the re-read archive line (overtaken → in-library restart) — `test_c58_p1a/p1b/p2/p3/p4/p4b/p5/p6` (test_c58_walk_pins.c, both runtimes, batch twins, fail-firsted against the pre-fix tree). Pre-CAND-58 evidence: `test_appender_rejoin_after_payload_file_deleted` (test_indexed_archiver.c); batch twin |
 | Durability is across process restarts, **not** power loss | A | No commit path calls `msync`/`fsync`/`fdatasync` (grep `src/`); the one sync call is `msync` on appender-ID release (`src/appender_id_pool.c`) |
 
 ## Archiving and deletion

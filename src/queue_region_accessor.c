@@ -83,7 +83,8 @@ static QueueRegionAccessor *acc_alloc(
     int64_t     max_file_size,
     uint64_t    timeout_ns,
     MmapqRuntime    *runtime,
-    int         read_only)
+    int         read_only,
+    int         payload_checked)
 {
     QueueRegionAccessor *acc = calloc(1, sizeof(QueueRegionAccessor));
     if (acc == NULL) return NULL;
@@ -93,6 +94,7 @@ static QueueRegionAccessor *acc_alloc(
     acc->queue_name          = strdup(queue_name);
     if (acc->queue_name == NULL) { free(acc->directory); free(acc); return NULL; }
     acc->read_only           = read_only;
+    acc->payload_checked     = payload_checked;
     acc->region_size         = region_size;
     acc->ring_size           = ring_size;
     acc->regions_to_map_ahead = regions_to_map_ahead;
@@ -124,7 +126,8 @@ int mmapqi_queue_region_accessor_create_rw(
 
     QueueRegionAccessor *acc = acc_alloc(directory, queue_name, region_size,
                                           ring_size, regions_to_map_ahead,
-                                          max_file_size, timeout_ns, runtime, 0);
+                                          max_file_size, timeout_ns, runtime,
+                                          0, 0);
     if (acc == NULL) return MMAPQ_ENOMEM;
 
     /* ── RW header accessor ─────────────────────────────────────────────── */
@@ -209,10 +212,76 @@ int mmapqi_queue_region_accessor_create_ro(
 
     QueueRegionAccessor *acc = acc_alloc(directory, queue_name, region_size,
                                           ring_size, regions_to_map_ahead,
-                                          max_file_size, timeout_ns, runtime, 1);
+                                          max_file_size, timeout_ns, runtime,
+                                          1, 0);
     if (acc == NULL) return MMAPQ_ENOMEM;
 
     /* ── RO header accessor ─────────────────────────────────────────────── */
+    char hdr_path[4096];
+    header_file_path(directory, queue_name, hdr_path, sizeof(hdr_path));
+
+    FileMapper *hdr_mapper = NULL;
+    {
+        int rc = mmapqi_file_mapper_rolled_create(
+            hdr_path, max_file_size, region_size,
+            mmapqi_file_init_none, NULL,
+            MAP_MODE_READ_ONLY,
+            ring_size + 2, 1, &hdr_mapper);
+        if (rc != 0) { free(acc->queue_name); free(acc->directory); free(acc); return rc; }
+    }
+
+    {
+        int rc = make_ring_accessor(hdr_mapper, region_size, ring_size,
+                                     regions_to_map_ahead,
+                                     QUEUE_RO_PREMAP_RATIO,
+                                     timeout_ns, runtime, &acc->header);
+        if (rc != 0) {
+            /* hdr_mapper destroyed by make_ring_accessor — do not touch */
+            free(acc->queue_name); free(acc->directory); free(acc);
+            return rc;
+        }
+    }
+
+    /* Payload accessors are created lazily in mmapqi_queue_region_accessor_payload() */
+    *out = acc;
+    return 0;
+}
+
+/* ── mmapqi_queue_region_accessor_create_walk ────────────────────────────────────── */
+
+/*
+ * CAND-58 (spec v2.2 §4.1): the walk accessor — the writer walks' and scans'
+ * own accessor. Read-only everywhere (never creates, never extends), but
+ * unlike the poller's RO accessor its payload side is size-checked
+ * (check_file_size = 1): a walk probes past committed data, where the
+ * header-driven readers' no-check premise (Anti-Pattern E) fails — the
+ * check is what turns a probe of a never-grown region into
+ * BEYOND_FILE_SIZE instead of SIGBUS (CAND-51e's corrections, preserved).
+ * The header side is the RO checked accessor, as before.
+ */
+int mmapqi_queue_region_accessor_create_walk(
+    const char *directory,
+    const char *queue_name,
+    int32_t     region_size,
+    int         ring_size,
+    int         regions_to_map_ahead,
+    int64_t     max_file_size,
+    uint64_t    timeout_ns,
+    MmapqRuntime    *runtime,
+    QueueRegionAccessor **out)
+{
+    if (out == NULL) return MMAPQ_EINVAL;
+    *out = NULL;
+    if (directory  == NULL) return MMAPQ_EINVAL;
+    if (queue_name == NULL) return MMAPQ_EINVAL;
+
+    QueueRegionAccessor *acc = acc_alloc(directory, queue_name, region_size,
+                                           ring_size, regions_to_map_ahead,
+                                           max_file_size, timeout_ns, runtime,
+                                           1, 1);
+    if (acc == NULL) return MMAPQ_ENOMEM;
+
+    /* ── RO header accessor (checked, as on the poller side) ────────────── */
     char hdr_path[4096];
     header_file_path(directory, queue_name, hdr_path, sizeof(hdr_path));
 
@@ -274,7 +343,12 @@ RegionAccessor *mmapqi_queue_region_accessor_payload(QueueRegionAccessor *acc,
      * above), where BEYOND_FILE_SIZE bounds re-wrap attempts on
      * out-of-range seeks.
      */
-    int check_file_size = acc->read_only ? 0 : 1;
+    /* CAND-58: the walk accessor (create_walk) is read-only but
+     * size-checked on the payload side — the walks probe past committed
+     * data, where the no-check premise does not hold (§3.2/§3.3 of the
+     * spec); the RO mapper never creates, so a probe of a reclaimed file
+     * misses instead of re-creating it. */
+    int check_file_size = acc->read_only ? acc->payload_checked : 1;
     FileMapper *pay_mapper = NULL;
     if (mmapqi_file_mapper_rolled_create(
             pay_path, acc->max_file_size, acc->region_size,

@@ -11,6 +11,9 @@
 #include "internal/uncommitted_batch_iterator.h"
 #include "batch_payload_iterator.h"
 #include "internal/batch_payload_iterator_internal.h"
+#include "internal/walk_classify.h"
+#include "internal/test_hooks.h"
+#include "internal/test_reach.h"
 #include "internal/mmap_assert.h"
 #include "mmap_platform.h"
 
@@ -38,6 +41,16 @@ struct MmapqIndexedBatchAppender {
     RegionAccessor      *ro_header;
     Buffer               ro_buf;
 
+    /* CAND-58 (spec §4.1): the walk accessor — RO + size-checked; the batch
+     * twins of the single-message walk sites map through it (see the twin
+     * comment in indexed_appender.c). */
+    QueueRegionAccessor *walk_acc;
+    RegionAccessor      *walk_header;
+    RegionAccessor      *walk_payload;
+
+    /* The floor that classified the join walk's current overtaken failure. */
+    int64_t             walk_ovt_floor;
+
     int64_t current_index;
     int64_t current_header_position;
     int64_t current_payload_position;
@@ -46,7 +59,12 @@ struct MmapqIndexedBatchAppender {
     Buffer payload_buf;
 
     MmapqMutableBatch         current_batch;
+    /* batch_iterator is shared with the PUBLIC mutable-batch read path
+     * (mmapq_mutable_batch_iterator) — it stays on the RW payload accessor.
+     * walk_batch_iterator is the CAND-58 join walk's own (walk accessor +
+     * walk_mode). */
     MmapqBatchPayloadIterator batch_iterator;
+    MmapqBatchPayloadIterator walk_batch_iterator;
 
     int closed;
 
@@ -134,6 +152,14 @@ static void (*batch_recover_walk_step_hook)(int);
 void mmapq_test_hook_set_batch_recover_walk_step(void (*fn)(int)) { batch_recover_walk_step_hook = fn; }
 #endif
 
+/* CAND-58: the classification's payload floor — the archive line re-read
+ * seq_cst AFTER a walk failure (spec §4.2; never start_offset, L(iv)). */
+static int64_t batch_appender_archive_offset_sc(void *ctx)
+{
+    MmapqIndexedBatchAppender *a = (MmapqIndexedBatchAppender *)ctx;
+    return appender_meta_archive_offset_sc(a->appender_meta);
+}
+
 /* §3.7 join completion of a trailing open batch (D-E fix), shared by rejoin
  * and the start_batch ORPHANED recovery. Walks messages from just past the
  * count slot at `p` until a zero length (end of stream), applying the
@@ -151,12 +177,32 @@ void mmapq_test_hook_set_batch_recover_walk_step(void (*fn)(int)) { batch_recove
  * next batch overwrites the slot. */
 static int recover_open_batch(MmapqIndexedBatchAppender *a, int64_t p, int64_t *out_pos)
 {
+    /* CAND-58: the message walk maps through the walk accessor (RO,
+     * size-checked); a map miss classifies — below the re-read line →
+     * MMAPQI_WALK_RESTART (the open batch is uncommittable there, L(i));
+     * at/above → EOS (the §4.5 hand-deleted-staged limitation, unchanged
+     * from today) — the count slot at p is known-written, the messages past
+     * it are not. The count store below stays RW (the append path). */
     int64_t probing = p + MMAPQ_BATCH_MSG_COUNT_SIZE;
     int32_t walked = 0;
     while (1) {
         int64_t msg_off = PAYLOAD_ITERATOR_NOT_SET;
+        C58_HOOK_JOIN_WALK_STEP(probing);
         int32_t len = mmapqi_payload_walk_advance(a->queue_name, &probing, &msg_off,
-                                                  a->payload_acc, &a->payload_buf);
+                                                  a->walk_payload, &a->payload_buf);
+        if (len == MMAPQI_WALK_MAP_MISS) {
+            int64_t f;
+            MmapqiWalkClass c = mmapqi_walk_classify(probing,
+                                                     p + MMAPQ_BATCH_MSG_COUNT_SIZE,
+                                                     batch_appender_archive_offset_sc,
+                                                     a, &f);
+            if (c == MMAPQI_WALK_OVERTAKEN) {
+                a->walk_ovt_floor = f;
+                return MMAPQI_WALK_RESTART;
+            }
+            if (c == MMAPQI_WALK_CORRUPT) return MMAPQ_ECORRUPT;
+            break;   /* EOS: the frontier */
+        }
         if (len < 0) return len;   /* D8: timeout (retryable) vs corruption propagates */
         if (len == 0) break;       /* end of stream */
         walked++;
@@ -185,17 +231,45 @@ static int recover_open_batch(MmapqIndexedBatchAppender *a, int64_t p, int64_t *
  * INVALID return cannot distinguish a wrap failure from a count-0 record,
  * and the §3.7 join completion needs that distinction. The §3.8 boundary
  * padding-marker rule (D-F) applies at every count slot here. */
-static int skip_to_end_of_stream(MmapqIndexedBatchAppender *a, int64_t offset,
-                                 int64_t *out_end)
+/* CAND-58: the batch join walk's classification of a map miss at
+ * `probing` — below the re-read line → MMAPQI_WALK_RESTART; at/above → EOS
+ * or, at a known-written position (a committed batch's span start), ECORRUPT. */
+static int batch_join_walk_classify(MmapqIndexedBatchAppender *a, int64_t probing,
+                                    int64_t known_written_end)
 {
+    int64_t f;
+    MmapqiWalkClass c = mmapqi_walk_classify(probing, known_written_end,
+                                             batch_appender_archive_offset_sc, a, &f);
+    if (c == MMAPQI_WALK_OVERTAKEN) {
+        a->walk_ovt_floor = f;
+        return MMAPQI_WALK_RESTART;
+    }
+    if (c == MMAPQI_WALK_EOS) return 0;
+    return MMAPQ_ECORRUPT;
+}
+
+static int skip_to_end_of_stream(MmapqIndexedBatchAppender *a, int64_t offset,
+                                 int64_t known_written_end, int64_t *out_end)
+{
+    /* CAND-58: maps through the walk accessor (RO, size-checked) — never
+     * creates; a position with no file yet, or beyond a file's end, is no
+     * longer automatically the end of the stream: it classifies first.
+     * known_written_end: offset + 1 when walking from a committed batch
+     * (its start is known-written — a miss there at/above the line is
+     * ECORRUPT); offset from the join anchor (a fresh anchor's file may
+     * legitimately not exist — EOS). */
     int64_t end_of_stream = offset;
     while (1) {
-        WrapResult wr = region_accessor_wrap(a->payload_acc, end_of_stream,
+        C58_HOOK_JOIN_WALK_STEP(end_of_stream);
+        WrapResult wr = region_accessor_wrap(a->walk_payload, end_of_stream,
                                              &a->payload_buf);
-        /* A position with no file yet, or beyond a file's end, is the end
-         * of the stream; a timeout is transient (retryable) and corruption
-         * is not — the D8 join contract, never collapsed. */
-        if (wr == WRAP_FILE_NOT_FOUND || wr == WRAP_BEYOND_FILE_SIZE) break;
+        if (wr == WRAP_FILE_NOT_FOUND || wr == WRAP_BEYOND_FILE_SIZE) {
+            int crc = batch_join_walk_classify(a, end_of_stream, known_written_end);
+            if (crc == MMAPQI_WALK_RESTART) return MMAPQI_WALK_RESTART;
+            if (crc != 0) return crc;
+            break;   /* EOS: the frontier (positions past `offset` are past
+                      * everything this walk knows written) */
+        }
         if (wr == WRAP_MAP_TIMED_OUT) return MMAPQ_ETIMEDOUT;
         if (wr != WRAP_SUCCESS) return MMAPQ_ECORRUPT;
 
@@ -233,10 +307,20 @@ static int skip_to_end_of_stream(MmapqIndexedBatchAppender *a, int64_t offset,
          * committed data (short) or past it in unreachable space (long).
          * Matches indexed_batch_archiver.c and indexed_appender.c, both of
          * which refuse here. */
-        mmapq_batch_iterator_init(&a->batch_iterator, end_of_stream, count, 0);
-        mmapq_batch_iterator_exhaust(&a->batch_iterator);
-        if (a->batch_iterator.last_error != 0) return a->batch_iterator.last_error;
-        end_of_stream = a->batch_iterator.next_message_position;
+        mmapq_batch_iterator_init(&a->walk_batch_iterator, end_of_stream, count, 0);
+        mmapq_batch_iterator_exhaust(&a->walk_batch_iterator);
+        /* CAND-58: a map miss walking the committed batch classifies — its
+         * span start is known-written (header evidence): below the line →
+         * the join restart; at/above → ECORRUPT. */
+        if (a->walk_batch_iterator.last_error == MMAPQI_WALK_MAP_MISS) {
+            int crc = batch_join_walk_classify(a, end_of_stream, end_of_stream + 1);
+            if (crc != 0) return crc;
+            return MMAPQ_ECORRUPT;   /* EOS is impossible: the span start is
+                                      * known-written, so the miss classified
+                                      * CORRUPT */
+        }
+        if (a->walk_batch_iterator.last_error != 0) return a->walk_batch_iterator.last_error;
+        end_of_stream = a->walk_batch_iterator.next_message_position;
     }
     *out_end = end_of_stream;
     return 0;
@@ -276,7 +360,13 @@ static int batch_appender_refill(void *ctx, int64_t off)
     return mmapqi_offset_set_add(&a->outstanding, off);
 }
 
-static int initialise_append_position(MmapqIndexedBatchAppender *a, int64_t start_index)
+/* walk_floor (CAND-58 §4.4): 0 on the first pass; on a restart, the floor
+ * that classified the failure — the restart-floor rule (see the
+ * single-message twin in indexed_appender.c). The walks map through the
+ * walk accessor; a map miss classifies via batch_join_walk_classify —
+ * OVERTAKEN returns MMAPQI_WALK_RESTART to the create-time restart loop. */
+static int initialise_append_position(MmapqIndexedBatchAppender *a, int64_t start_index,
+                                      int64_t walk_floor)
 {
     /* CAND-54 ruling 2: the join clears a stale commit intent (see the
      * single-message twin in indexed_appender.c). */
@@ -301,8 +391,9 @@ static int initialise_append_position(MmapqIndexedBatchAppender *a, int64_t star
         /* No live entry possible — skip from the join anchor to the end
          * of the stream rather than writing at it (CAND-30; CAND-54
          * L(ii)) */
-        int rc_skip = skip_to_end_of_stream(a,
-            appender_join_anchor(a->appender_meta),
+        int64_t anchor = appender_join_anchor(a->appender_meta);
+        if (anchor < walk_floor) anchor = walk_floor;   /* the restart floor */
+        int rc_skip = skip_to_end_of_stream(a, anchor, anchor,
             &a->current_payload_position);
         if (rc_skip != 0) return rc_skip;
     } else {
@@ -317,15 +408,23 @@ static int initialise_append_position(MmapqIndexedBatchAppender *a, int64_t star
         }
 
         if (committed_payload_pos != -1) {
-            int rc_scan = skip_to_end_of_stream(a, committed_payload_pos,
-                                                &a->current_payload_position);
+            /* The restart-floor rule: when the last live header sits below
+             * the classifying floor, its batch is archived (the line never
+             * moves back) — walk from the floor instead. */
+            int64_t start = committed_payload_pos < walk_floor
+                            ? walk_floor : committed_payload_pos;
+            int rc_scan = skip_to_end_of_stream(a, start,
+                /* known-written iff walking from the committed batch itself */
+                start == committed_payload_pos ? start + 1 : start,
+                &a->current_payload_position);
             if (rc_scan != 0) return rc_scan;
         } else {
             /* No committed entry in the live range for this appender —
              * skip forward from the join anchor (CAND-54 L(ii)) to the
              * end of the stream */
-            int rc_skip = skip_to_end_of_stream(a,
-                appender_join_anchor(a->appender_meta),
+            int64_t anchor = appender_join_anchor(a->appender_meta);
+            if (anchor < walk_floor) anchor = walk_floor;   /* the restart floor */
+            int rc_skip = skip_to_end_of_stream(a, anchor, anchor,
                 &a->current_payload_position);
             if (rc_skip != 0) return rc_skip;
         }
@@ -425,8 +524,7 @@ static int batch_appender_create_internal(
     a->header_acc = queue_region_accessor_header(a->rw_acc);
     a->payload_acc = mmapqi_queue_region_accessor_payload(a->rw_acc, a->appender_id);
 
-    a->batch_iterator.queue_name  = a->queue_name;
-    a->batch_iterator.payload_acc = a->payload_acc;
+
 
     rc = mmapqi_queue_region_accessor_create_ro(
         directory, queue_name,
@@ -447,9 +545,67 @@ static int batch_appender_create_internal(
     }
     a->ro_header = queue_region_accessor_header(a->ro_acc);
 
-    int init_rc = initialise_append_position(a, start_index);
+    /* CAND-58: the walk accessor (RO + size-checked) for the walks/scans */
+    rc = mmapqi_queue_region_accessor_create_walk(
+        directory, queue_name, rec_reg, ring_size, 1, rec_max, timeout_ns,
+        runtime, &a->walk_acc);
+    if (rc != 0) {
+        mmapqi_offset_set_destroy(&a->outstanding);
+        mmapqi_queue_region_accessor_close(a->ro_acc);
+        mmapqi_queue_region_accessor_close(a->rw_acc);
+        mmapqi_appender_meta_close(a->appender_meta);
+        if (a->queue_meta) mmapqi_queue_meta_close(a->queue_meta);
+        mmapqi_appender_id_pool_release(a->id_pool, a->appender_id);
+        mmapqi_appender_id_pool_close(a->id_pool);
+        free(a->directory);
+        free(a->queue_name);
+        free(a);
+        return rc;
+    }
+    a->walk_header  = queue_region_accessor_header(a->walk_acc);
+    a->walk_payload = mmapqi_queue_region_accessor_payload(a->walk_acc, a->appender_id);
+    a->batch_iterator.queue_name  = a->queue_name;
+    a->batch_iterator.payload_acc = a->payload_acc;
+    /* CAND-58: the join's committed-batch walk (skip_to_end_of_stream) maps
+     * through the walk accessor and reports misses for classification */
+    a->walk_batch_iterator.queue_name  = a->queue_name;
+    a->walk_batch_iterator.payload_acc = a->walk_payload;
+    a->walk_batch_iterator.walk_mode   = 1;
+    if (a->walk_payload == NULL) {
+        mmapqi_offset_set_destroy(&a->outstanding);
+        mmapqi_queue_region_accessor_close(a->walk_acc);
+        mmapqi_queue_region_accessor_close(a->ro_acc);
+        mmapqi_queue_region_accessor_close(a->rw_acc);
+        mmapqi_appender_meta_close(a->appender_meta);
+        if (a->queue_meta) mmapqi_queue_meta_close(a->queue_meta);
+        mmapqi_appender_id_pool_release(a->id_pool, a->appender_id);
+        mmapqi_appender_id_pool_close(a->id_pool);
+        free(a->directory);
+        free(a->queue_name);
+        free(a);
+        return MMAPQ_ETIMEDOUT;   /* the lazy payload creation's only
+                                   * failure channel */
+    }
+
+    /* CAND-58 §4.4: an overtaken join walk recomputes JoinBase — a fresh
+     * pass floored at the classifying line — never surfaced; bounded by the
+     * no-progress detector + the last-resort cap. */
+    int64_t walk_floor = 0, last_line_floor = INT64_MIN;
+    int     restarts = 0;
+    int     init_rc;
+    for (;;) {
+        init_rc = initialise_append_position(a, start_index, walk_floor);
+        if (init_rc != MMAPQI_WALK_RESTART) break;
+        if (mmapqi_walk_restart_permitted(a->walk_ovt_floor, &last_line_floor,
+                                          &restarts) != 0) {
+            init_rc = MMAPQ_ECORRUPT;
+            break;
+        }
+        walk_floor = a->walk_ovt_floor;
+    }
     if (init_rc != 0) {
         mmapqi_offset_set_destroy(&a->outstanding);
+        mmapqi_queue_region_accessor_close(a->walk_acc);
         mmapqi_queue_region_accessor_close(a->ro_acc);
         mmapqi_queue_region_accessor_close(a->rw_acc);
         mmapqi_appender_meta_close(a->appender_meta);
@@ -550,6 +706,12 @@ int mmapq_indexed_batch_appender_start_batch_checked(
         int64_t new_pos;
         int rc = recover_open_batch(appender, appender->current_batch.batch_offset,
                                     &new_pos);
+        /* CAND-58: MMAPQI_WALK_RESTART is unreachable here — the orphaned
+         * batch sits at this incarnation's live frontier, which the archive
+         * line never passes (the line advances only over committed
+         * records) — and the restart is a create-time concept; map the
+         * unreachable case loudly rather than leaking the internal code. */
+        if (rc == MMAPQI_WALK_RESTART) return MMAPQ_ECORRUPT;
         if (rc != 0) return rc;   /* starts nothing */
         appender->current_payload_position = new_pos;
         appender->batch_state = BATCH_STATE_NONE;
@@ -878,6 +1040,8 @@ int mmapq_indexed_batch_appender_uncommitted_batches_checked(
     if (a == NULL) return MMAPQ_EINVAL;
 
     if (a->uncommitted_batches == NULL) {
+        /* CAND-58: the walk accessor's RO header side + RO size-checked
+         * payload side; the classification floor is the seq_cst line */
         int rc = mmapqi_uncommitted_batch_iterator_create(
             a->queue_name,
             a->appender_id,
@@ -885,8 +1049,9 @@ int mmapq_indexed_batch_appender_uncommitted_batches_checked(
             batch_appender_end_of_stream,
             a,
             batch_appender_archive_offset,   /* §3.9: the archive line */
-            a->header_acc,
-            a->payload_acc,
+            batch_appender_archive_offset_sc,/* CAND-58 §4.2: the classification floor */
+            a->walk_header,
+            a->walk_payload,
             appender_start_index_from_meta,  /* D8/S3: header scan floor */
             a->queue_meta,
             batch_appender_refill,           /* §3.3: refill on yield */
@@ -1033,6 +1198,13 @@ void mmapq_indexed_batch_appender_close(MmapqIndexedBatchAppender *a)
     }
     mmapqi_appender_meta_close(a->appender_meta);
     mmapqi_queue_meta_close(a->queue_meta);
+    if (a->walk_acc) {
+        /* walk_header/walk_payload are owned by walk_acc — no separate close */
+        mmapqi_queue_region_accessor_close(a->walk_acc);
+        a->walk_acc     = NULL;
+        a->walk_header  = NULL;
+        a->walk_payload = NULL;
+    }
     if (a->rw_acc) {
         mmapqi_queue_region_accessor_close(a->rw_acc);
         a->rw_acc = NULL;
@@ -1048,4 +1220,14 @@ void mmapq_indexed_batch_appender_close(MmapqIndexedBatchAppender *a)
     free(a->directory);
     free(a->queue_name);
     free(a);
+}
+
+/* Test-only reach (see internal/test_reach.h). */
+RegionAccessor *mmapqi_batch_appender_header_acc(MmapqIndexedBatchAppender *a)
+{
+    return a == NULL ? NULL : a->header_acc;
+}
+RegionAccessor *mmapqi_batch_appender_payload_acc(MmapqIndexedBatchAppender *a)
+{
+    return a == NULL ? NULL : a->payload_acc;
 }

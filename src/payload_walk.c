@@ -1,4 +1,5 @@
 #include "internal/payload_walk.h"
+#include "internal/walk_classify.h"
 #include "internal/mmap_assert.h"
 #include "mmap_platform.h"
 
@@ -21,6 +22,12 @@
  *               MMAPQ_ECORRUPT on corrupt on-disk data or any other mapping
  *               failure (D8 — the two causes have opposite remedies and are
  *               never collapsed)
+ *
+ *   CAND-58: a wrap that MISSES the file (FILE_NOT_FOUND / BEYOND_FILE_SIZE)
+ *   returns MMAPQI_WALK_MAP_MISS with the failing position in
+ *   *probing_offset — the caller's classification (mmapqi_walk_classify)
+ *   resolves the ambiguity (never created vs already reclaimed). The F1-era
+ *   collapse to MMAPQ_ECORRUPT is superseded: every in-tree caller classifies.
  */
 int32_t mmapqi_payload_walk_advance(
     const char     *queue_name,
@@ -35,7 +42,10 @@ int32_t mmapqi_payload_walk_advance(
     /* ── Map current position ────────────────────────────────────────────── */
     WrapResult r = region_accessor_wrap(payload_accessor, position, payload_buf);
     if (r != WRAP_SUCCESS) {
-        return r == WRAP_MAP_TIMED_OUT ? MMAPQ_ETIMEDOUT : MMAPQ_ECORRUPT;
+        if (r == WRAP_MAP_TIMED_OUT) return MMAPQ_ETIMEDOUT;
+        if (r == WRAP_FILE_NOT_FOUND || r == WRAP_BEYOND_FILE_SIZE)
+            return MMAPQI_WALK_MAP_MISS;   /* CAND-58: the site classifies */
+        return MMAPQ_ECORRUPT;
     }
 
     int32_t capacity = payload_buf->capacity;
@@ -48,7 +58,10 @@ int32_t mmapqi_payload_walk_advance(
 
         r = region_accessor_wrap(payload_accessor, position, payload_buf);
         if (r != WRAP_SUCCESS) {
-            return r == WRAP_MAP_TIMED_OUT ? MMAPQ_ETIMEDOUT : MMAPQ_ECORRUPT;
+            if (r == WRAP_MAP_TIMED_OUT) return MMAPQ_ETIMEDOUT;
+            if (r == WRAP_FILE_NOT_FOUND || r == WRAP_BEYOND_FILE_SIZE)
+                return MMAPQI_WALK_MAP_MISS;
+            return MMAPQ_ECORRUPT;
         }
     }
 
@@ -72,7 +85,10 @@ int32_t mmapqi_payload_walk_advance(
 
         r = region_accessor_wrap(payload_accessor, position, payload_buf);
         if (r != WRAP_SUCCESS) {
-            return r == WRAP_MAP_TIMED_OUT ? MMAPQ_ETIMEDOUT : MMAPQ_ECORRUPT;
+            if (r == WRAP_MAP_TIMED_OUT) return MMAPQ_ETIMEDOUT;
+            if (r == WRAP_FILE_NOT_FOUND || r == WRAP_BEYOND_FILE_SIZE)
+                return MMAPQI_WALK_MAP_MISS;
+            return MMAPQ_ECORRUPT;
         }
 
         /* Re-read length at new position */
