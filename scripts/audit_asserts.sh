@@ -222,7 +222,7 @@ if [ "$VERIFY" = "--self-test" ]; then
     # Negative: drop one header site from the doc — the per-file header
     # check must catch it (header scope is D6; a doc-side mutation only,
     # the planted-source canary is manual acceptance, not self-test).
-    sed 's/^Lines 170-171\./Lines 170./' "$DOC" > "$STMP/fail-hdr.md"
+    sed 's/^Lines 189-190\./Lines 189./' "$DOC" > "$STMP/fail-hdr.md"
     if cmp -s "$DOC" "$STMP/fail-hdr.md"; then
         echo "  self-test setup error: header fail-case sed did not change the doc" >&2
         exit 1

@@ -1,6 +1,9 @@
 # ASSERT_AUDIT.md — MMAP_ASSERT Inventory
 
-**71 asserts across 21 files** (17 src/*.c, 4 src/internal/*.h). Generated from source.
+**74 asserts across 21 files** (17 src/*.c, 4 src/internal/*.h). Generated from source.
+(CAND-59: three new asserts — two in file_mapper_rolled.c's explicit
+frontier-create entry point and one in region_ring_accessor.c's floor-check
+setter; several sites shifted below the CAND-59 source insertions.)
 (CAND-49: the overlap assert in mmapqi_uncommitted_iterator_advance became a
 runtime MMAPQ_ECORRUPT return (spec §3.2); the ranges_insert assert moved to
 committed_ranges.c with the extracted helpers.)
@@ -8,13 +11,16 @@ committed_ranges.c with the extracted helpers.)
 internal/header_reader.h so the call disappears into both pollers; its
 WRAP_UNWRAPPED fatal assert moved with it — header_reader.c 2→1,
 header_reader.h 0→1, total unchanged.)
-Last verified: 2026-10-15 (CAND-32 — the header_encode 56-bit field check
-(:113) is now guarded by MMAPQ_ECORRUPT runtime checks at both append
-commit paths and the appender_meta open-time start_offset validation, and
-is reclassified I; the pending-V table has no pending rows. Previously:
-D6/CAND-18 — the gate was extended to `src/internal/*.h`, adding 8 header
-sites, and the scope and counting rules below were recorded; D6 v2 had
-reclassified :113 as V pending CAND-32 and corrected the queue_meta.h
+Last verified: 2026-10-30 (CAND-59 — the existing-only header mapper and
+explicit frontier create added three asserts (file_mapper_rolled.c ×2,
+region_ring_accessor.c ×1) and shifted the sites below them; re-pinned,
+dispositions unchanged. Previously: 2026-10-15 (CAND-32 — the header_encode
+56-bit field check (:113) is now guarded by MMAPQ_ECORRUPT runtime checks
+at both append commit paths and the appender_meta open-time start_offset
+validation, and is reclassified I; the pending-V table has no pending rows.
+Previously: D6/CAND-18 — the gate was extended to `src/internal/*.h`, adding
+8 header sites, and the scope and counting rules below were recorded; D6 v2
+had reclassified :113 as V pending CAND-32 and corrected the queue_meta.h
 rationale — the setter is called by both archivers).
 
 ## Legend
@@ -41,10 +47,10 @@ rationale — the setter is called by both archivers).
 
 | Disposition | Count |
 |---|---|
-| I (stays, re-verified) | 71 |
+| I (stays, re-verified) | 74 |
 | V (pending conversion) | 0 |
 | (converted from V in Phase 16e) | 2 |
-| **Total** | **71** |
+| **Total** | **74** |
 
 ## Per-file inventory
 
@@ -60,11 +66,22 @@ rationale — the setter is called by both archivers).
 |---|---|---|
 | 83 padding mismatch (capacity == padded) | (converted, Phase 16e) | Now a runtime check: sets exhausted=1 and returns 0 instead of asserting. Note: the int-returning function has no `last_error` channel, so a corrupt padding record is indistinguishable from clean end-of-stream to a caller — intentional; adding an error field would be a struct/ABI change out of scope. |
 
-### file_mapper_rolled.c — 10 (all I)
+### file_mapper_rolled.c — 12 (all I)
 
-Lines 86, 157-158, 162, 184-186, 194, 200, 230.
+Lines 91, 163-164, 168, 190-192, 200, 206, 236, 265, 267.
 Internal: null checks on self/entry, invariant checks on
 oldest_idx/ref_count/length coherence. No caller-controlled values.
+
+The two CAND-59 additions are both in `mmapqi_file_mapper_rolled_create_file`
+(the explicit frontier-create entry point):
+- **:265 `self != NULL`** — the dispatch null check every `FileMapper` entry
+  point carries; `self` is the accessor's retained header-mapper handle,
+  never caller input.
+- **:267 `impl->mode == MAP_MODE_READ_WRITE`** — explicit frontier creation
+  is a write-path operation, wired only to the header's read-write mapper.
+  An RO or walk mapper reaching it is an internal wiring error (creating a
+  file through a read-only mapper would break the read-only contract), not
+  caller input.
 
 ### file_mapper_single_ro.c — 6 (all I)
 
@@ -72,7 +89,8 @@ Lines 71-72, 110-112, 125. Internal dispatch null checks.
 
 ### file_mapper_single_rw.c — 7 (all I)
 
-Lines 46, 136-137, 184-186, 198. Internal dispatch null checks.
+Lines 47, 145-146, 197-199, 211. Internal dispatch null checks. (CAND-59:
+shifted by the no_create field and the rw_init/rw_map rework.)
 
 ### fixed_size_region.c — 3 (all I)
 
@@ -136,21 +154,24 @@ CAND-32.)
 
 ### queue_region_accessor.h — 2 (all I)
 
-Lines 170-171. (CAND-58: moved by the payload_checked field + the walk-accessor factory comment, sites unchanged.)
+Lines 189-190. (CAND-58: moved by the payload_checked field + the walk-accessor factory comment; CAND-59: moved by the header_mapper field + the frontier-create declaration, sites unchanged.)
 Internal dispatch NULL checks.
 
 ### region_async.c — 8 (all I)
 
-Lines 216, 297-298, 328, 373, 386, 401, 411. Internal dispatch null checks.
+Lines 235, 316-317, 347, 392, 405, 420, 430. Internal dispatch null checks. (CAND-59: shifted by the map-process test hook.)
 
 ### region_ring.c — 2 (all I)
 
 Lines 21, 189. Internal dispatch null checks. (CAND-24: shifted — the
 stdio include and AsyncRingImpl's timeout_ns field.)
 
-### region_ring_accessor.c — 5 (all I)
+### region_ring_accessor.c — 6 (all I)
 
-Lines 66-67, 113-114, 139. Internal dispatch null checks.
+Lines 85-86, 158, 168-169, 194. Internal dispatch null checks. (CAND-59:
+the floor-check setter's `acc` NULL check is new at :158 — `acc` is the
+accessor passed by the appender at create, not caller input; the wrap and
+close sites shifted below it.)
 
 ### region_sync.c — 7 (all I)
 
