@@ -1930,7 +1930,16 @@ static int arch_copy(const char *src, const char *dir, const char *base,
     int bad = memcmp(buf, b2, (size_t)sz) != 0 || fnv64(b2, (size_t)sz) != crc;
     free(buf); free(b2);
     if (bad) { fprintf(stderr, "archiver: copy of %s failed size+CRC verification\n", base); return 2; }
-    if (rename(tmp, dst)) { perror("archive rename"); return 2; }
+    /* Never overwrite an existing archived copy (CAND-59 §3.5): a stray
+     * that reappears in a listing is skipped, and reclaim deletes it from
+     * the live queue. link(2) needs tmp and dst on one filesystem (both
+     * under <dir>/archive/); a crash between link and unlink leaves only a
+     * stale .tmp, truncated by the next copy. */
+    if (link(tmp, dst) != 0) {
+        if (errno == EEXIST) { printf("ARCHSKIP %s\n", base); unlink(tmp); return 3; }
+        perror("archive link"); unlink(tmp); return 2;
+    }
+    unlink(tmp);
     *crc_out = crc; *size_out = sz;
     return 0;
 }
@@ -1972,7 +1981,7 @@ static int run_archiver(const char *dir, const char *qname, const char *stopfile
         fprintf(stderr, "archiver: create failed\n"); return 2;
     }
     int rounds = 0, errors = 0;
-    int64_t copied = 0, reclaimed = 0;
+    int64_t copied = 0, reclaimed = 0, skipped = 0;
     for (;;) {
         int stopping = access(stopfile, F_OK) == 0;
         if (access(qdir, F_OK) != 0) {   /* queue not created yet */
@@ -2024,7 +2033,9 @@ static int run_archiver(const char *dir, const char *qname, const char *stopfile
             const char *base = strrchr(marks[i], '/');
             base = base ? base + 1 : marks[i];
             uint64_t crc; int64_t sz;
-            if (arch_copy(marks[i], dir, base, &crc, &sz)) {
+            int arc = arch_copy(marks[i], dir, base, &crc, &sz);
+            if (arc == 3) { skipped++; continue; }   /* already archived: skipped */
+            if (arc) {
                 for (int j = 0; j < n; j++) free(marks[j]);
                 free(marks);
                 mmapq_indexed_archiver_close(a);
@@ -2097,9 +2108,9 @@ static int run_archiver(const char *dir, const char *qname, const char *stopfile
         if (stopping) break;
         struct timespec ts = {0, 50000000}; nanosleep(&ts, NULL);   /* 50 ms between rounds */
     }
-    printf("ARCHFINAL rounds=%d start_index=%lld copied=%lld reclaimed=%lld hand=%d plant_fired=%d\n",
+    printf("ARCHFINAL rounds=%d start_index=%lld copied=%lld skipped=%lld reclaimed=%lld hand=%d plant_fired=%d\n",
            rounds, (long long)mmapq_indexed_archiver_start_index(a),
-           (long long)copied, (long long)reclaimed, hand, plant_fired);
+           (long long)copied, (long long)skipped, (long long)reclaimed, hand, plant_fired);
     fflush(stdout);
     mmapq_indexed_archiver_close(a);
     return 0;

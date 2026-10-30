@@ -217,6 +217,14 @@ over. With `--hand-delete` the archiver replaces only the reclaim step: the
 marked files are unlinked by hand under the X5 rule (no undo between the
 listing and the last unlink — this archiver never undoes).
 
+The copy-aside **never replaces an existing archived copy** (CAND-59 spec
+§3.5): the copy lands via `link(2)`, and an `EEXIST` is skipped and logged
+(`ARCHSKIP <base>`). A file that reappears in a later listing (the
+residual-window stray) is skipped loudly, and `reclaim_files()` then deletes
+it from the live queue. `archskip.py` drives the real archiver against a
+planted stray and asserts the archived copy's `fnv64` is unchanged, the skip
+is logged, and the stray is reclaimed.
+
 Participants periodically write **snapshots** (`<dir>/snaps/`, derived state
 + digest + log index; the first snapshot of each trader id is kept as
 `t<NN>.first.snap`). A restart on an archivable queue rebuilds as
