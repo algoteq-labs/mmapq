@@ -67,11 +67,9 @@ P5/P6 cover the stray file). Code: `src/indexed_appender.c` /
 
 **Side effect — a reclaimed file's space is freed only when its last
 mapping unmaps.** `unlink` removes a reclaimed file's *name*; the inode and
-its bytes persist until the final mapping of it is unmapped. A lane holding
-a warm mapping of a just-reclaimed file (the P1/P2 case) therefore keeps
-that space allocated until the mapping goes — reclaim frees no space while
-such a mapping lives. This is why a stray re-created zero file costs
-nothing beyond its zero-filled mapping and is removed on the next reclaim.
+its bytes persist until the final mapping of it is unmapped. A writer that
+still has a reclaimed file mapped therefore keeps that file's disk space
+allocated until it unmaps it. This is expected behaviour, not a leak.
 
 ## Concurrency and platform
 

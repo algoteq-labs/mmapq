@@ -71,8 +71,8 @@ The production loop:
    `rename(2)` silently overwrites, so land the copy with `link(2)`
    (`EEXIST` → skip and log) or `renameat2(…, RENAME_NOREPLACE)`, never a
    plain `rename(2)`. A file that reappears in a listing after being
-   archived — the residual-window stray described by the commit-floor rule
-   in [guarantees](../reference/guarantees.md) — is skipped loudly;
+   archived — a rare empty header file (see The commit floor in
+   [guarantees](../reference/guarantees.md)) — is skipped loudly;
    `reclaim_files()` then deletes it from the live directory.
 3. Delete the local copies with `reclaim_files()`.
 
