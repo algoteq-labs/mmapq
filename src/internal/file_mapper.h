@@ -104,10 +104,15 @@ int mmapqi_file_mapper_single_ro_create(
 /**
  * Single-file read-write mapper.
  *
- * Creates the file if it does not exist. Extends file length as needed
- * up to max_size. Pre-touches newly extended pages to avoid page faults
- * on the hot path.
+ * Creates the file if it does not exist (unless no_create). Extends file
+ * length as needed up to max_size. Pre-touches newly extended pages to
+ * avoid page faults on the hot path.
  *
+ * no_create:      CAND-59 — when nonzero the file is opened existing-only
+ *                 (O_RDWR, never O_CREAT): map() of a missing file returns
+ *                 FILE_MAPPER_FILE_NOT_FOUND (retried on the next map()).
+ *                 Creation is then explicit
+ *                 (mmapqi_file_mapper_rolled_create_file).
  * out:            out-parameter for the created FileMapper (NULL on failure)
  *
  * Returns 0 on success, MMAPQ_EINVAL for NULL/invalid args,
@@ -118,6 +123,7 @@ int mmapqi_file_mapper_single_rw_create(
     int64_t          max_size,
     FileInitialiser  initialiser,
     void            *initialiser_ctx,
+    int              no_create,
     FileMapper     **out);
 
 /**
@@ -137,6 +143,9 @@ int mmapqi_file_mapper_single_rw_create(
  * INVARIANT: max_cache_size >= ring_size (enforced at creation with MMAP_ASSERT)
  *
  * mode: MAP_MODE_READ_ONLY or MAP_MODE_READ_WRITE
+ * no_create: CAND-59 — READ_WRITE only: the per-file mappers open existing
+ *       files only (never O_CREAT); see mmapqi_file_mapper_single_rw_create.
+ *       Ignored for READ_ONLY (which never creates).
  * out:  out-parameter for the created FileMapper (NULL on failure)
  *
  * Returns 0 on success, MMAPQ_EINVAL for NULL/invalid args,
@@ -151,7 +160,20 @@ int mmapqi_file_mapper_rolled_create(
     MapMode          mode,
     int              max_cache_size,
     int              check_file_size,
+    int              no_create,
     FileMapper     **out);
+
+/**
+ * CAND-59: explicitly create the rolled file that holds `position`, as a
+ * no-overwrite create: open(O_RDWR|O_CREAT|O_EXCL). If the file already
+ * exists (EEXIST — another lane created it) this is success: the caller's
+ * retried map opens it. A freshly created empty file gets the mapper's
+ * initialiser (as rw_init does). No cache interaction.
+ *
+ * Returns 0 on success (created or already existed), a negative MMAPQ_*
+ * code on any other error. READ_WRITE rolled mappers only.
+ */
+int mmapqi_file_mapper_rolled_create_file(FileMapper *self, int64_t position);
 
 /**
  * Destroy a FileMapper and free all associated memory.

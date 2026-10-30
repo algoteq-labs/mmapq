@@ -127,7 +127,7 @@ static int rolled_create_armed(long ordinal, FileMapper **fm)
     arm(ordinal);
     int rc = mmapqi_file_mapper_rolled_create(
         DIR "/header", MAX_FILE, REGION_SIZE,
-        mmapqi_file_init_none, NULL, MAP_MODE_READ_ONLY, 6, 1, fm);
+        mmapqi_file_init_none, NULL, MAP_MODE_READ_ONLY, 6, 1, 0, fm);
     disarm();
     return rc;
 }
@@ -322,7 +322,7 @@ void test_async_ring_create_closed_runtime_no_leak(void)
     FileMapper *fm = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapqi_file_mapper_rolled_create(
         DIR "/payload_0", MAX_FILE, REGION_SIZE,
-        mmapqi_file_init_none, NULL, MAP_MODE_READ_WRITE, 6, 1, &fm));
+        mmapqi_file_init_none, NULL, MAP_MODE_READ_WRITE, 6, 1, 0, &fm));
     TEST_ASSERT_NOT_NULL(fm);
 
     RegionRing *ring = NULL;
@@ -340,7 +340,7 @@ static int async_create_armed_size(size_t sz, long nth, MmapqRuntime *rt,
     FileMapper *fm = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapqi_file_mapper_rolled_create(
         DIR "/payload_0", MAX_FILE, REGION_SIZE,
-        mmapqi_file_init_none, NULL, MAP_MODE_READ_WRITE, 6, 1, &fm));
+        mmapqi_file_init_none, NULL, MAP_MODE_READ_WRITE, 6, 1, 0, &fm));
     TEST_ASSERT_NOT_NULL(fm);
     *ring = NULL;
     arm_size(sz, nth);
@@ -632,7 +632,7 @@ void test_waiting_deregister_alloc_fail_close_completes(void)
     FileMapper *fm = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapqi_file_mapper_rolled_create(
         DIR "/payload_9", MAX_FILE, REGION_SIZE,
-        mmapqi_file_init_none, NULL, MAP_MODE_READ_WRITE, 6, 1, &fm));
+        mmapqi_file_init_none, NULL, MAP_MODE_READ_WRITE, 6, 1, 0, &fm));
     RegionRing *ring = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapqi_region_ring_async_create(
         RING_SIZE, REGION_SIZE, fm, TIMEOUT_NS, rt, &ring));
@@ -673,7 +673,7 @@ static void child_register_alloc_fail_close_leaks_safely(void)
     FileMapper *fm = NULL;
     if (mmapqi_file_mapper_rolled_create(
             DIR "/payload_10", MAX_FILE, REGION_SIZE,
-            mmapqi_file_init_none, NULL, MAP_MODE_READ_WRITE, 6, 1, &fm) != 0)
+            mmapqi_file_init_none, NULL, MAP_MODE_READ_WRITE, 6, 1, 0, &fm) != 0)
         _exit(2);
     RegionRing *ring = NULL;
     if (mmapqi_region_ring_async_create(RING_SIZE, REGION_SIZE, fm,
@@ -731,7 +731,7 @@ void test_ring_create_caller_error_eINVAL_consumes_mapper(void)
     FileMapper *fm1 = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapqi_file_mapper_rolled_create(
         DIR "/h1", MAX_FILE, REGION_SIZE,
-        mmapqi_file_init_none, NULL, MAP_MODE_READ_ONLY, 6, 1, &fm1));
+        mmapqi_file_init_none, NULL, MAP_MODE_READ_ONLY, 6, 1, 0, &fm1));
     int rc1 = mmapqi_region_ring_sync_create(RING_SIZE, REGION_SIZE, fm1,
                                              TIMEOUT_NS, NULL);
     TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL, rc1);
@@ -739,7 +739,7 @@ void test_ring_create_caller_error_eINVAL_consumes_mapper(void)
     FileMapper *fm2 = NULL;
     TEST_ASSERT_EQUAL_INT(0, mmapqi_file_mapper_rolled_create(
         DIR "/h2", MAX_FILE, REGION_SIZE,
-        mmapqi_file_init_none, NULL, MAP_MODE_READ_ONLY, 6, 1, &fm2));
+        mmapqi_file_init_none, NULL, MAP_MODE_READ_ONLY, 6, 1, 0, &fm2));
     RegionRing *ring = NULL;
     int rc2 = mmapqi_region_ring_async_create(RING_SIZE, REGION_SIZE, fm2,
                                               TIMEOUT_NS, NULL, &ring);

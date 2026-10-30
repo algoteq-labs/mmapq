@@ -71,6 +71,19 @@ int mmapqi_region_ring_accessor_create(
  */
 void mmapqi_region_ring_accessor_destroy(RegionAccessor *acc);
 
+/**
+ * CAND-59: install an adoption-time floor check on a ring accessor.
+ *
+ * fn(ctx, position) is called in the sequential wrap (not wrap_no_premap)
+ * after a region is successfully mapped/adopted and before it is used or
+ * cached in the fast path; nonzero rejects the adoption — the wrap returns
+ * WRAP_FILE_NOT_FOUND and the fast path is invalidated. Never called on the
+ * inline in-region fast path. Installed only on an appender's RW header
+ * accessor (fn = "this slot is below start_index"); NULL removes it.
+ */
+void mmapqi_region_ring_accessor_set_floor_check(
+    RegionAccessor *acc, int (*fn)(void *ctx, int64_t position), void *ctx);
+
 /* ── Default configuration ───────────────────────────────────────────────── */
 #define REGION_RING_ACCESSOR_DEFAULT_PREMAP_RATIO   0.5
 #define REGION_RING_ACCESSOR_DEFAULT_REGIONS_AHEAD  1

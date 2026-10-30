@@ -17,7 +17,7 @@ void setUp(void)
 {
     unlink(TEST_FILE);
     int fmerr = mmapqi_file_mapper_single_rw_create(
-        TEST_FILE, MAX_SIZE, mmapqi_file_init_zeros, NULL, &fm);
+        TEST_FILE, MAX_SIZE, mmapqi_file_init_zeros, NULL, 0, &fm);
     TEST_ASSERT_EQUAL_INT(0, fmerr);
     TEST_ASSERT_NOT_NULL(fm);
 }

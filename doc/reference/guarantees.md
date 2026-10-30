@@ -52,6 +52,27 @@ granularity" argument in `../design/archiving-design.md`.
 | The archive line never decreases; a chopped uncommitted message is never yielded again, including after undo or rollback | M + P | `ArchiveLineMonotonic`, `ArchiveLineNeverDecreases`; `test_uncommitted_dg_undo_keeps_line`, `test_uncommitted_dg_race_window`, `test_uncommitted_archived_after_rejoin_yields_nothing` |
 | `archivable_files()` lists files no live entry can need at the time of the call; `reclaim_files()` is always safe; hand deletion is safe provided no undo runs between the listing and the last unlink | M + P | The NoLiveLoss rows above; the deletion protocol in `../design/archiving-design.md`; the X5 wording in `../reference/persistence-contract.md` |
 
+**The commit floor.** A successful commit never returns an index below the
+`start_index` it observed. The commit path never re-creates a header file
+that reclaim has deleted, and it re-checks `start_index` whenever it maps a
+new header region, so a stale writer can only ever be rejected — never
+committed below the floor. Operator-visible effect: a rare, empty header
+file may appear in an `archivable_files()` listing. Skip it when copying
+files aside; `reclaim_files()` deletes it from the live directory. Pins:
+`test_c59_p1`–`p8` (`test/test_c59_commit_floor_pins.c`, both runtimes;
+P5/P6 cover the stray file). Code: `src/indexed_appender.c` /
+`src/indexed_batch_appender.c` (`header_wrap_frontier`),
+`src/file_mapper_single_rw.c` (`no_create`), `src/queue_region_accessor.c`
+(the explicit frontier create).
+
+**Side effect — a reclaimed file's space is freed only when its last
+mapping unmaps.** `unlink` removes a reclaimed file's *name*; the inode and
+its bytes persist until the final mapping of it is unmapped. A lane holding
+a warm mapping of a just-reclaimed file (the P1/P2 case) therefore keeps
+that space allocated until the mapping goes — reclaim frees no space while
+such a mapping lives. This is why a stray re-created zero file costs
+nothing beyond its zero-filled mapping and is removed on the next reclaim.
+
 ## Concurrency and platform
 
 | Claim | Class | Evidence |

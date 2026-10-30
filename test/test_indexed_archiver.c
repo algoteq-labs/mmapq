@@ -1017,7 +1017,7 @@ static void d5_open_payload_access(D5PayloadAccess *px)
     snprintf(prefix, sizeof prefix, "%s/%s/payload_0", DIR, QUEUE);
     TEST_ASSERT_EQUAL_INT(0,
         mmapqi_file_mapper_rolled_create(prefix, MAX_FILE, REGION_SZ,
-            mmapqi_file_init_zeros, NULL, MAP_MODE_READ_WRITE, 6, 1, &px->fm));
+            mmapqi_file_init_zeros, NULL, MAP_MODE_READ_WRITE, 6, 1, 0, &px->fm));
     TEST_ASSERT_NOT_NULL(px->fm);
     TEST_ASSERT_EQUAL_INT(0,
         mmapqi_region_ring_async_create(RING_SZ, REGION_SZ, px->fm,

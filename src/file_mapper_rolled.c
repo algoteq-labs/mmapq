@@ -6,6 +6,10 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdint.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/stat.h>
 
 /* Rolled file names are built with "%ld" and (long) casts on the int64_t
  * file_index — correct only where long is 64 bits (the supported targets
@@ -32,6 +36,7 @@ typedef struct {
     MapMode          mode;
     int              max_cache_size;
     int              check_file_size;
+    int              no_create;    /* CAND-59: RW per-file mappers open existing only */
 
     FileCacheEntry  *cache;        /* array of max_cache_size entries          */
     int              cache_count;  /* number of entries currently in cache     */
@@ -135,6 +140,7 @@ static FileCacheEntry *cache_get_or_open(RolledImpl *impl, int64_t file_index)
             impl->max_file_size,
             impl->initialiser,
             impl->initialiser_ctx,
+            impl->no_create,
             &mapper);
     }
 
@@ -242,6 +248,53 @@ static void rolled_close(FileMapper *self)
     impl->cache_count = 0;
 }
 
+/* Test-only reach (see internal/test_reach.h): expose the prefix + mode so
+ * a hook can distinguish the RW header accessor's maps from RO/payload
+ * probes. */
+const char *mmapqi_rolled_prefix_and_mode(FileMapper *self, int *is_rw)
+{
+    RolledImpl *impl = (RolledImpl *)self->impl;
+    if (is_rw != NULL) *is_rw = (impl->mode == MAP_MODE_READ_WRITE);
+    return impl->file_prefix;
+}
+
+/* ── Explicit frontier create (CAND-59) ──────────────────────────────────── */
+
+int mmapqi_file_mapper_rolled_create_file(FileMapper *self, int64_t position)
+{
+    MMAP_ASSERT(self != NULL, "rolled_create_file: self is NULL");
+    RolledImpl *impl = (RolledImpl *)self->impl;
+    MMAP_ASSERT(impl->mode == MAP_MODE_READ_WRITE,
+        "rolled_create_file: READ_WRITE rolled mappers only");
+    if (position < 0) return MMAPQ_EINVAL;
+
+    int64_t file_index = position / impl->max_file_size;   /* as rolled_map */
+    char file_name[4096];
+    build_file_name(impl->file_prefix, file_index, file_name, sizeof(file_name));
+
+    /* No-overwrite create: never replaces or re-opens an existing file
+     * here — EEXIST means another lane created it first, which is success
+     * (the caller's retried map opens it). */
+    int fd = open(file_name, O_RDWR | O_CREAT | O_EXCL,
+                  S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
+    if (fd < 0) {
+        if (errno == EEXIST) return 0;
+        return MMAPQ_EIO;
+    }
+    if (impl->initialiser != NULL) {
+        struct stat st;
+        if (fstat(fd, &st) != 0 ||
+            (st.st_size == 0 &&
+             impl->initialiser(fd, (size_t)impl->max_file_size,
+                               impl->initialiser_ctx) != 0)) {
+            close(fd);
+            return MMAPQ_EIO;
+        }
+    }
+    close(fd);
+    return 0;
+}
+
 /* ── Factory ─────────────────────────────────────────────────────────────── */
 
 int mmapqi_file_mapper_rolled_create(
@@ -253,6 +306,7 @@ int mmapqi_file_mapper_rolled_create(
     MapMode          mode,
     int              max_cache_size,
     int              check_file_size,
+    int              no_create,
     FileMapper     **out)
 {
     if (out == NULL) return MMAPQ_EINVAL;
@@ -275,6 +329,7 @@ int mmapqi_file_mapper_rolled_create(
     impl->mode             = mode;
     impl->max_cache_size   = max_cache_size;
     impl->check_file_size  = check_file_size;
+    impl->no_create        = no_create ? 1 : 0;
     impl->cache_count      = 0;
     impl->insert_tick      = 0;
 

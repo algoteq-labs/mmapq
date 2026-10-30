@@ -136,12 +136,40 @@ void mmapqi_c58_walk_restart_note(void);
 #define C58_HOOK_JOIN_WALK_STEP(off) \
     mmapqi_c58_hook_join_walk_step((off))
 #define C58_WALK_RESTART_NOTE() mmapqi_c58_walk_restart_note()
+/* CAND-59 commit-floor pins (audit/CAND-59-spec.md v1.1 §6).
+ *
+ * mtlh_entry / mtlh_entry_batch: invoked at move_to_last_header entry
+ *   (single / batch) — the failed-CAS count.
+ * mtlh_clamped: invoked in the single-message move_to_last_header after
+ *   the entry start_index clamp and before the first scan wrap — lets a
+ *   pin raise start_index behind a parked, already-clamped lane (P5 sync).
+ * async_map_process_pre: invoked at region_async.c's map_req_process
+ *   entry with (file prefix, is_rw, requested_position) — lets a pin park
+ *   a premap/map service (P3, P5 async).
+ * c59_header_wrap_not_found_count: process-global count of the commit
+ *   path's header-wrap NOT_FOUND handler engagements (the entry-clamp
+ *   witness: the clamped scan never engages it below si).
+ * c59_force_floor_reject: arms N unconditional floor rejections at the
+ *   ring_accessor_wrap floor-check site (P8 forces the no-progress
+ *   detector). 0 disarms. mmapqi_c59_force_floor_reject_take is the
+ *   internal fire entry point (returns 1 while armed, decrementing).
+ */
+void mmapq_test_hook_set_mtlh_entry(void (*fn)(uint8_t lane));
+void mmapq_test_hook_set_mtlh_entry_batch(void (*fn)(uint8_t lane));
+void mmapq_test_hook_set_mtlh_clamped(void (*fn)(uint8_t lane, int64_t clamped_index));
+void mmapq_test_hook_set_async_map_process_pre(void (*fn)(const char *prefix, int is_rw, int64_t requested_position));
+int  mmapq_test_hook_c59_header_wrap_not_found_count(void);
+void mmapqi_c59_header_not_found_note(void);
+void mmapq_test_hook_set_c59_force_floor_reject(int n);
+int  mmapqi_c59_force_floor_reject_take(void);
+#define C59_HOOK_HEADER_NOT_FOUND_NOTE() mmapqi_c59_header_not_found_note()
 #else
 #define C58_HOOK_SCAN_SPAN_PRE_WALK(off, ss, line) ((void)0)
 #define C58_HOOK_SCAN_HEADER_PRE_READ(idx)         ((void)0)
 #define C58_HOOK_USE_PHASE_STEP(off)               ((void)0)
 #define C58_HOOK_JOIN_WALK_STEP(off)               ((void)0)
 #define C58_WALK_RESTART_NOTE()                    ((void)0)
+#define C59_HOOK_HEADER_NOT_FOUND_NOTE()           ((void)0)
 #endif
 
 #endif /* TEST_HOOKS_H */

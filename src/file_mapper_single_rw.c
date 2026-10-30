@@ -21,6 +21,7 @@ typedef struct {
     FileInitialiser  initialiser;
     void            *initialiser_ctx;
     int              fd;               /* -1 when not open */
+    int              no_create;        /* CAND-59: open existing only (never O_CREAT) */
     int64_t          length_cache;     /* cached file length to avoid stat() on hot path */
 } SingleFileRwImpl;
 
@@ -97,19 +98,27 @@ static void rw_pretouch(uintptr_t addr, int32_t region_length,
     (void)region_length;
 }
 
-/* ── Lazy init — create file on first map() call ─────────────────────────── */
+/* ── Lazy init — open (or create) the file on first map() call ──────────── */
 
+/* Returns 1 when the file is open, 0 when it does not exist and this mapper
+ * is open-existing-only (no_create: ENOENT), -1 on any other error.
+ *
+ * CAND-59: a no_create mapper never brings a file into existence — the
+ * commit path's header mapper is no_create, so a header file that was
+ * reclaimed is never silently re-created as zeros; frontier creation is
+ * the explicit mmapqi_file_mapper_rolled_create_file (O_CREAT|O_EXCL).
+ * A missing file is retried on the next map() (fd stays -1). */
 static int rw_init(SingleFileRwImpl *impl)
 {
     if (impl->fd >= 0) {
         return 1;  /* already open */
     }
 
-    /* Create file if it doesn't exist */
     int fd = open(impl->file_path,
-                  O_RDWR | O_CREAT,
+                  impl->no_create ? O_RDWR : (O_RDWR | O_CREAT),
                   S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
     if (fd < 0) {
+        if (impl->no_create && errno == ENOENT) return 0;   /* missing */
         return -1;
     }
 
@@ -138,8 +147,12 @@ static uintptr_t rw_map(FileMapper *self, int64_t position, int32_t length)
 
     SingleFileRwImpl *impl = (SingleFileRwImpl *)self->impl;
 
-    /* Init is expected to be called from the region mapper thread */
-    rw_init(impl);
+    /* Init is expected to be called from the region mapper thread.
+     * CAND-59: the result is checked (it was ignored since 91d37a9, which
+     * made a missing file indistinguishable from an I/O error). */
+    int irc = rw_init(impl);
+    if (irc == 0) return FILE_MAPPER_FILE_NOT_FOUND;
+    if (irc < 0)  return FILE_MAPPER_NULL_ADDRESS;
 
     int64_t min_length = position + length;
 
@@ -211,6 +224,7 @@ int mmapqi_file_mapper_single_rw_create(
     int64_t          max_size,
     FileInitialiser  initialiser,
     void            *initialiser_ctx,
+    int              no_create,
     FileMapper     **out)
 {
     if (out == NULL) return MMAPQ_EINVAL;
@@ -227,6 +241,7 @@ int mmapqi_file_mapper_single_rw_create(
     impl->initialiser     = initialiser;
     impl->initialiser_ctx = initialiser_ctx;
     impl->fd              = -1;
+    impl->no_create       = no_create ? 1 : 0;
     impl->length_cache    = 0;
 
     FileMapper *fm = calloc(1, sizeof(FileMapper));

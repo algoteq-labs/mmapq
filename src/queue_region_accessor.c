@@ -140,9 +140,13 @@ int mmapqi_queue_region_accessor_create_rw(
             hdr_path, max_file_size, region_size,
             mmapqi_file_init_none, NULL,
             MAP_MODE_READ_WRITE,
-            ring_size + 2, 1, &hdr_mapper);
+            ring_size + 2, 1,
+            1 /* CAND-59: open existing only — never re-create a reclaimed
+               * header file; frontier creation is explicit (header_create) */,
+            &hdr_mapper);
         if (rc != 0) { free(acc->queue_name); free(acc->directory); free(acc); return rc; }
     }
+    acc->header_mapper = hdr_mapper;   /* non-owning; the ring owns it */
 
     {
         int rc = make_ring_accessor(hdr_mapper, region_size, ring_size,
@@ -166,7 +170,7 @@ int mmapqi_queue_region_accessor_create_rw(
             pay_path, max_file_size, region_size,
             mmapqi_file_init_none, NULL,
             MAP_MODE_READ_WRITE,
-            ring_size + 2, 1, &pay_mapper);
+            ring_size + 2, 1, 0, &pay_mapper);
         if (rc != 0) {
             mmapqi_queue_region_accessor_close(acc);
             return rc;
@@ -190,6 +194,16 @@ int mmapqi_queue_region_accessor_create_rw(
 
     *out = acc;
     return 0;
+}
+
+/* ── mmapqi_queue_region_accessor_header_create (CAND-59) ────────────────── */
+
+int mmapqi_queue_region_accessor_header_create(QueueRegionAccessor *acc,
+                                               int64_t position)
+{
+    if (acc == NULL || acc->read_only || acc->header_mapper == NULL)
+        return MMAPQ_EINVAL;
+    return mmapqi_file_mapper_rolled_create_file(acc->header_mapper, position);
 }
 
 /* ── mmapqi_queue_region_accessor_create_ro ─────────────────────────────────────── */
@@ -226,7 +240,7 @@ int mmapqi_queue_region_accessor_create_ro(
             hdr_path, max_file_size, region_size,
             mmapqi_file_init_none, NULL,
             MAP_MODE_READ_ONLY,
-            ring_size + 2, 1, &hdr_mapper);
+            ring_size + 2, 1, 0, &hdr_mapper);
         if (rc != 0) { free(acc->queue_name); free(acc->directory); free(acc); return rc; }
     }
 
@@ -291,7 +305,7 @@ int mmapqi_queue_region_accessor_create_walk(
             hdr_path, max_file_size, region_size,
             mmapqi_file_init_none, NULL,
             MAP_MODE_READ_ONLY,
-            ring_size + 2, 1, &hdr_mapper);
+            ring_size + 2, 1, 0, &hdr_mapper);
         if (rc != 0) { free(acc->queue_name); free(acc->directory); free(acc); return rc; }
     }
 
@@ -355,7 +369,7 @@ RegionAccessor *mmapqi_queue_region_accessor_payload(QueueRegionAccessor *acc,
             mmapqi_file_init_none, NULL,
             mode,
             acc->ring_size + 2,
-            check_file_size,
+            check_file_size, 0,
             &pay_mapper) != 0) return NULL;
 
     double premap_ratio = acc->read_only

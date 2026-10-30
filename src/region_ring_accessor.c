@@ -1,9 +1,23 @@
 #include "internal/region_ring_accessor.h"
 #include "internal/mmap_assert.h"
+#include "internal/test_hooks.h"
 #include "mmap_platform.h"
 
 #include <stdlib.h>
 #include <math.h>
+
+/* CAND-59 test hook — see internal/test_hooks.h (P8 forces the
+ * no-progress detector by rejecting at the floor-check site). */
+#ifdef MMAPQ_TEST_HOOKS
+static int c59_force_floor_reject_remaining;
+void mmapq_test_hook_set_c59_force_floor_reject(int n) { c59_force_floor_reject_remaining = n; }
+int mmapqi_c59_force_floor_reject_take(void)
+{
+    if (c59_force_floor_reject_remaining <= 0) return 0;
+    c59_force_floor_reject_remaining--;
+    return 1;
+}
+#endif
 
 /* ── Internal state ──────────────────────────────────────────────────────── */
 
@@ -16,6 +30,11 @@ typedef struct {
     int         shift_for_region_size;  /* log2(region_size), for fast division   */
     int64_t     region_mask;            /* region_size - 1, for fast offset       */
     int64_t     current_absolute_index; /* last region index where premap fired   */
+    /* CAND-59: optional adoption-time floor check (NULL = none). Installed
+     * only on an appender's RW header accessor; see
+     * mmapqi_region_ring_accessor_set_floor_check. */
+    int       (*floor_check)(void *ctx, int64_t position);
+    void       *floor_ctx;
 } RingAccessorImpl;
 
 /* ── Premap helper ───────────────────────────────────────────────────────── */
@@ -75,6 +94,31 @@ static WrapResult ring_accessor_wrap(RegionAccessor *self, int64_t position, Buf
     WrapResult result = region_wrap(impl->ring->regions[ring_slot], position, buffer);
 
     if (result == WRAP_SUCCESS) {
+        /* CAND-59 items 2+4: the adoption-time floor check. Every adoption
+         * of a header region by the commit path — a sync cold map, an async
+         * cold map, and the adoption of a region the async ring pre-mapped
+         * earlier — returns through this one branch, so the check runs
+         * where the appender ADOPTS a mapping, never where a pre-map was
+         * issued. A slot below start_index in a just-adopted mapping is
+         * rejected (reported as WRAP_FILE_NOT_FOUND; the caller re-reads
+         * start_index and jumps): the mapping may be a stray re-created
+         * zero file, whose slots are all below start_index forever. Cold
+         * path only — the in-region fast path in region_accessor.h never
+         * reaches here. */
+        if (impl->floor_check != NULL &&
+            impl->floor_check(impl->floor_ctx, position)) {
+            region_accessor_invalidate_fast_path(self);
+            return WRAP_FILE_NOT_FOUND;
+        }
+#ifdef MMAPQ_TEST_HOOKS
+        /* CAND-59 P8: forced floor rejection (armed by
+         * mmapq_test_hook_set_c59_force_floor_reject) — at the floor-check
+         * site, to drive the commit path's no-progress detector. */
+        if (mmapqi_c59_force_floor_reject_take()) {
+            region_accessor_invalidate_fast_path(self);
+            return WRAP_FILE_NOT_FOUND;
+        }
+#endif
         /* Trigger premap only for async regions (regions_to_map_ahead > 0) */
         if (impl->regions_to_map_ahead > 0) {
             int64_t offset_in_region = position & impl->region_mask;
@@ -104,6 +148,17 @@ static WrapResult ring_accessor_wrap(RegionAccessor *self, int64_t position, Buf
     }
 
     return result;
+}
+
+/* ── CAND-59: the floor-check setter ─────────────────────────────────────── */
+
+void mmapqi_region_ring_accessor_set_floor_check(
+    RegionAccessor *acc, int (*fn)(void *ctx, int64_t position), void *ctx)
+{
+    MMAP_ASSERT(acc != NULL, "set_floor_check: acc is NULL");
+    RingAccessorImpl *impl = (RingAccessorImpl *)acc->impl;
+    impl->floor_check = fn;
+    impl->floor_ctx   = ctx;
 }
 
 /* ── wrap_no_premap — random access, no premap ───────────────────────────── */

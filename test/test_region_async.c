@@ -42,7 +42,7 @@ void setUp(void)
     TEST_ASSERT_NOT_NULL(rt);
     int fmerr = mmapqi_file_mapper_rolled_create(
         FILE_PREFIX, MAX_FILE_SIZE, REGION_SIZE,
-        mmapqi_file_init_zeros, NULL, MAP_MODE_READ_WRITE, 4, 1, &fm);
+        mmapqi_file_init_zeros, NULL, MAP_MODE_READ_WRITE, 4, 1, 0, &fm);
     TEST_ASSERT_EQUAL_INT(0, fmerr);
     TEST_ASSERT_NOT_NULL(fm);
     int rerr = mmapqi_region_async_create(fm, REGION_SIZE, TIMEOUT_NS,

@@ -70,6 +70,9 @@ typedef struct QueueRegionAccessor {
     int                 read_only;
     int                 payload_checked;   /* CAND-58 walk accessor: RO but
                                             * size-checked payload maps */
+    FileMapper         *header_mapper;     /* CAND-59, RW only: non-owning
+                                            * (the header ring owns it) — the
+                                            * explicit frontier create */
     int32_t             region_size;
     int                 ring_size;
     int                 regions_to_map_ahead;
@@ -84,8 +87,11 @@ typedef struct QueueRegionAccessor {
  * mmapqi_queue_region_accessor_create_rw — create read-write accessors (for appenders).
  *
  * Creates a RW header accessor and a RW payload accessor for appender_id.
- * The header file is created if it does not exist. The payload file is
- * created if it does not exist.
+ * The payload file is created if it does not exist. The header mapper is
+ * open-existing-only (CAND-59): a missing header file maps as
+ * WRAP_FILE_NOT_FOUND and is created only explicitly, at the frontier, via
+ * mmapqi_queue_region_accessor_header_create — a reclaimed header file is
+ * never silently re-created.
  *
  * runtime: the region mapper runtime for async mapping.
  * out:     out-parameter for the created accessor (NULL on failure)
@@ -140,7 +146,9 @@ int mmapqi_queue_region_accessor_create_ro(
  * uncommitted factory's span walk and header scan, the iterator's use
  * phase, and the join's payload walks map through it. The append path keeps
  * the RW accessors — only the append position ever creates or extends a
- * file (CAND-51e's rule, now by construction).
+ * file (CAND-51e's rule, now by construction; CAND-59 completes it for the
+ * commit path: the RW header mapper never creates on map, and the explicit
+ * frontier create runs only at a slot >= start_index).
  *
  * runtime: the region mapper runtime for async mapping.
  * out:     out-parameter for the created accessor (NULL on failure)
@@ -159,6 +167,17 @@ int mmapqi_queue_region_accessor_create_walk(
     uint64_t    timeout_ns,
     MmapqRuntime    *runtime,
     QueueRegionAccessor **out);
+
+/**
+ * mmapqi_queue_region_accessor_header_create — CAND-59 explicit frontier
+ * create of the header file holding byte `position` (O_CREAT|O_EXCL;
+ * EEXIST is success). RW accessors only. The caller has re-read
+ * start_index and found the slot at/above it (the frontier).
+ *
+ * Returns 0 on success, a negative MMAPQ_* code on I/O error.
+ */
+int mmapqi_queue_region_accessor_header_create(QueueRegionAccessor *acc,
+                                               int64_t position);
 
 /* ── Accessor retrieval ──────────────────────────────────────────────────── */
 

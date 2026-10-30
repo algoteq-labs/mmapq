@@ -33,7 +33,7 @@ void setUp(void)
     cleanup_files();
     int fmerr = mmapqi_file_mapper_rolled_create(
         FILE_PREFIX, MAX_FILE_SIZE, REGION_SIZE,
-        mmapqi_file_init_zeros, NULL, MAP_MODE_READ_WRITE, MAX_CACHE, 1, &fm_rw);
+        mmapqi_file_init_zeros, NULL, MAP_MODE_READ_WRITE, MAX_CACHE, 1, 0, &fm_rw);
     TEST_ASSERT_EQUAL_INT(0, fmerr);
     TEST_ASSERT_NOT_NULL(fm_rw);
 }
@@ -70,7 +70,7 @@ void test_rolled_map_spans_multiple_files(void)
     /* Read back — regions 0-3 in file_0, 4-5 in file_1 */
     int fmerr3 = mmapqi_file_mapper_rolled_create(
         FILE_PREFIX, MAX_FILE_SIZE, REGION_SIZE,
-        mmapqi_file_init_none, NULL, MAP_MODE_READ_ONLY, MAX_CACHE, 1, &fm_ro);
+        mmapqi_file_init_none, NULL, MAP_MODE_READ_ONLY, MAX_CACHE, 1, 0, &fm_ro);
     TEST_ASSERT_EQUAL_INT(0, fmerr3);
     TEST_ASSERT_NOT_NULL(fm_ro);
 
@@ -87,7 +87,7 @@ void test_rolled_missing_ro_file_returns_file_not_found(void)
 {
     int fmerr4 = mmapqi_file_mapper_rolled_create(
         FILE_PREFIX, MAX_FILE_SIZE, REGION_SIZE,
-        mmapqi_file_init_none, NULL, MAP_MODE_READ_ONLY, MAX_CACHE, 1, &fm_ro);
+        mmapqi_file_init_none, NULL, MAP_MODE_READ_ONLY, MAX_CACHE, 1, 0, &fm_ro);
     TEST_ASSERT_EQUAL_INT(0, fmerr4);
     TEST_ASSERT_NOT_NULL(fm_ro);
 

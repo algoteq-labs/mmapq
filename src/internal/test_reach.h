@@ -2,6 +2,7 @@
 #define TEST_REACH_H
 
 #include "internal/region_accessor.h"
+#include "internal/file_mapper.h"
 #include "indexed_appender.h"
 #include "indexed_batch_appender.h"
 
@@ -18,5 +19,10 @@ RegionAccessor *mmapqi_batch_appender_header_acc(MmapqIndexedBatchAppender *a);
  * accessor); append-path payload fault injection uses these. */
 RegionAccessor *mmapqi_appender_payload_acc(MmapqIndexedAppender *a);
 RegionAccessor *mmapqi_batch_appender_payload_acc(MmapqIndexedBatchAppender *a);
+
+/* CAND-59: expose a rolled mapper's file prefix + mode so the
+ * async_map_process_pre hook can distinguish the RW header accessor's
+ * maps from RO/payload probes. Test-only. */
+const char *mmapqi_rolled_prefix_and_mode(FileMapper *self, int *is_rw);
 
 #endif /* TEST_REACH_H */

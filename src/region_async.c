@@ -1,4 +1,7 @@
 #include "internal/region.h"
+#include "internal/file_mapper.h"
+#include "internal/test_hooks.h"
+#include "internal/test_reach.h"
 #include "internal/mmap_assert.h"
 #include "mmap_platform.h"
 
@@ -112,8 +115,24 @@ static const RegionStateOps *map_req_request_unmap(AsyncRegionImpl *impl)
     (void)impl; return &MAP_REQUESTED_OPS;
 }
 
+/* CAND-59 test hook — see internal/test_hooks.h. */
+#ifdef MMAPQ_TEST_HOOKS
+static void (*map_process_pre_hook)(const char *, int, int64_t);
+void mmapq_test_hook_set_async_map_process_pre(void (*fn)(const char *, int, int64_t)) { map_process_pre_hook = fn; }
+#define MAP_PROCESS_PRE(impl) do { \
+    if (map_process_pre_hook != NULL) { \
+        int _rw = 0; \
+        const char *_pfx = mmapqi_rolled_prefix_and_mode((impl)->file_mapper, &_rw); \
+        map_process_pre_hook(_pfx, _rw, (impl)->requested_position); \
+    } \
+} while (0)
+#else
+#define MAP_PROCESS_PRE(impl) do { } while (0)
+#endif
+
 static const RegionStateOps *map_req_process(AsyncRegionImpl *impl)
 {
+    MAP_PROCESS_PRE(impl);
     if (impl->address != 0 && impl->position != NULL_POSITION) {
         file_mapper_unmap(impl->file_mapper, impl->address,
                           impl->position, impl->region_size);
