@@ -2212,6 +2212,59 @@ static int snap_claim_ok(const uint8_t *buf, size_t len, int64_t k, uint64_t cin
     return h.magic == SNAP_MAGIC && h.applied == k && h.input_hash == cin && h.digest == cdg;
 }
 
+/* Collect the indices of the snap_<k> files in <dir>/snaps, ascending.
+ * Returns the count (or -1 on error); at most `max` are stored. */
+static int snap_collect(const char *dir, int64_t *idx, int max)
+{
+    char sdir[1100];
+    snprintf(sdir, sizeof sdir, "%s/snaps", dir);
+    DIR *d = opendir(sdir);
+    if (!d) { perror("snapshotter: snaps open"); return -1; }
+    int n = 0;
+    struct dirent *de;
+    while ((de = readdir(d)) != NULL) {
+        if (strncmp(de->d_name, "snap_", 5) != 0) continue;
+        char *end = NULL;
+        long long v = strtoll(de->d_name + 5, &end, 10);
+        if (end == de->d_name + 5 || *end != '\0') continue;   /* skip .tmp */
+        if (n < max) idx[n++] = (int64_t)v;
+    }
+    closedir(d);
+    for (int i = 1; i < n; i++) {          /* ascending; n is small */
+        int64_t v = idx[i]; int j = i - 1;
+        while (j >= 0 && idx[j] > v) { idx[j + 1] = idx[j]; j--; }
+        idx[j + 1] = v;
+    }
+    return n;
+}
+
+/* Keep-two snapshot GC (stage (e) E2): after start_index == k, delete every
+ * snap_<x> whose x is not in {k_prev, start_index} — including orphans above
+ * start_index, which no reader ever loads. The snapshot at start_index is
+ * never deleted. The MKTSIM_GC_KEEP_ONE plant deletes everything except
+ * snap_<start_index> instead, which the snapshotter's own SNAPGUARD check
+ * catches. The indices left on disk are returned ascending in kept[] with
+ * count *kept_n, so the guard can require the set to be exactly
+ * {k_prev, si}. */
+static int snap_gc(const char *dir, int64_t k_prev, int64_t si, int keep_one,
+                   int64_t *kept, int max, int *kept_n)
+{
+    int64_t idx[1024];
+    int n = snap_collect(dir, idx, (int)(sizeof idx / sizeof idx[0]));
+    if (n < 0) return 2;
+    for (int i = 0; i < n; i++) {
+        if (idx[i] == si) continue;                  /* never the snapshot at start_index */
+        if (!keep_one && idx[i] == k_prev) continue; /* keep the previous one */
+        char p[1100];
+        snap_path_index(dir, idx[i], p, sizeof p);
+        if (unlink(p) != 0 && errno != ENOENT) { perror("snapshotter: snap gc unlink"); return 2; }
+    }
+    int m = snap_collect(dir, kept, max);
+    if (m < 0) return 2;
+    *kept_n = m;
+    return 0;
+}
+
 typedef struct {
     Engine  *e;
     int64_t  k_lo;             /* candidates must be >= k_lo */
@@ -2396,9 +2449,15 @@ static int run_snapshotter(const char *dir, const char *qname, const char *stopf
     const char *obo = getenv("MKTSIM_SNAPSHOTTER_OFF_BY_ONE");
     int plant_obo = obo && atoi(obo) != 0;
     if (plant_obo) e.snap_shadow_cap = 1;
+    const char *gcone = getenv("MKTSIM_GC_KEEP_ONE");   /* E2 plant: delete to one */
+    int plant_gc = gcone && atoi(gcone) != 0;
+    const char *daw = getenv("MKTSIM_SNAPSHOTTER_DIE_AFTER_WRITE");  /* E2 plant */
+    int die_after = daw ? atoi(daw) : 0;
+    int snap_count = 0;                /* snap_<k> writes in this process */
     int64_t k_prev = 0;
     int rc = snap_recover(dir, a, &e, &k_prev);
     if (rc) { mmapq_indexed_archiver_close(a); close(lockfd); engine_free(&e); return rc; }
+    int writes = k_prev > 0 ? 1 : 0;   /* snap_<k_prev> already on disk after recovery */
 
     MmapqIndexedQueue *q = NULL;
     if (mmapq_indexed_queue_create(dir, qname, REGION_SIZE, RING_SIZE, 1, MAX_FILE_SIZE, 0,
@@ -2462,6 +2521,28 @@ static int run_snapshotter(const char *dir, const char *qname, const char *stopf
                 mmapq_indexed_poller_close(p); mmapq_indexed_reader_close(rd); mmapq_indexed_queue_close(q);
                 mmapq_indexed_archiver_close(a); close(lockfd); engine_free(&e); return 2;
             }
+            /* E2 fail-first plant: crash between the snapshot write (rename
+             * done) and archive_up_to_index(k), leaving an orphan snap_<k>
+             * whose index is above the still-unmoved start_index. */
+            snap_count++;
+            if (die_after > 0 && snap_count == die_after) {
+                printf("PLANT die-after-write k=%lld\n", (long long)k);
+                fflush(stdout);
+                _exit(9);
+            }
+            int64_t wm_now = arch_watermark(dir);
+            if (k > wm_now) {
+                /* F2 (interim until E4 removes the pin): the watermark may
+                 * have dropped below k since this round began — a slow or
+                 * newly joined reader lowered the minimum. Defer the archive;
+                 * snap_<k> stays for a later round. The GC only runs after
+                 * start_index == k, so nothing is deleted here. */
+                printf("SNAPDEFER k=%lld wm=%lld\n", (long long)k, (long long)wm_now);
+                fflush(stdout);
+                if (stopping) break;
+                struct timespec ts = {0, 50000000}; nanosleep(&ts, NULL);
+                continue;
+            }
             int arc = mmapq_indexed_archiver_archive_up_to_index(a, k);
             if (arc) {
                 fprintf(stderr, "snapshotter: archive_up_to_index(%lld) rc=%d\n", (long long)k, arc);
@@ -2490,6 +2571,27 @@ static int run_snapshotter(const char *dir, const char *qname, const char *stopf
             printf("SNAPWRITE k=%lld si=%lld claim=ok result=PASS\n",
                    (long long)k, (long long)si);
             fflush(stdout);
+            /* E2: keep-two snapshot GC, then the snapshotter's own exact
+             * guard. Two are always kept once two have been written: the
+             * snap_<k> set on disk must be exactly {previous, start_index}. */
+            writes++;
+            if (writes >= 2) {
+                int64_t prev = k_prev;
+                int64_t kept[1024];
+                int kept_n = 0;
+                if (snap_gc(dir, prev, si, plant_gc, kept, (int)(sizeof kept / sizeof kept[0]), &kept_n)) {
+                    mmapq_indexed_poller_close(p); mmapq_indexed_reader_close(rd); mmapq_indexed_queue_close(q);
+                    mmapq_indexed_archiver_close(a); close(lockfd); engine_free(&e); return 2;
+                }
+                int exact = kept_n == 2 && kept[0] == prev && kept[1] == si;
+                printf("SNAPGUARD kept=%d prev=%lld at=%lld result=%s\n",
+                       kept_n, (long long)prev, (long long)si, exact ? "PASS" : "FAIL");
+                fflush(stdout);
+                if (!exact) {
+                    mmapq_indexed_poller_close(p); mmapq_indexed_reader_close(rd); mmapq_indexed_queue_close(q);
+                    mmapq_indexed_archiver_close(a); close(lockfd); engine_free(&e); return 3;
+                }
+            }
             k_prev = k;
             s.k_lo = k;
             s.cand_k = -1;

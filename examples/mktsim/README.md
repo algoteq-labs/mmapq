@@ -217,7 +217,10 @@ guide-chapter-6 tail: `archivable_files()` (the mark) → byte-copy the marked
 files to `<dir>/archive/` (verified by size + CRC) → `reclaim_files()`. `k`
 is bounded by the minimum of the participants' progress watermarks
 (`<dir>/progress/`) until E5, so a lagging live reader is never archived
-over. With `--hand-delete` the reclaim step is replaced: the marked files
+over. A small check-then-act window between the gateway pin and the watermark
+read remains until E4 removes the pin (a round whose re-read watermark has
+dropped below `k` is deferred and logged `SNAPDEFER k=<k> wm=<wm>`). With
+`--hand-delete` the reclaim step is replaced: the marked files
 are unlinked by hand under the X5 rule (no undo between the listing and the
 last unlink — this loop never undoes).
 
