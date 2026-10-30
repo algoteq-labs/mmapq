@@ -46,7 +46,8 @@ def main():
     ap.add_argument("--survivors", type=int, default=2)
     ap.add_argument("--min-gap", type=float, default=0.05)
     ap.add_argument("--max-gap", type=float, default=0.4)
-    ap.add_argument("--mode", choices=["sync", "async"], default="sync")
+    ap.add_argument("--mode", choices=["sync", "async", "mixed"], default="sync",
+                    help="mixed: even trader ids sync, odd async (F8); gateways stay sync")
     ap.add_argument("--seed", type=int, default=None)
     ap.add_argument("--gateways", type=int, default=1, help="gateway participants (0 disables F5)")
     ap.add_argument("--batch", type=int, choices=[0, 1], default=1,
@@ -73,10 +74,14 @@ def main():
     # other process inherits them.
     obo_plant = os.environ.pop("MKTSIM_SNAPSHOT_OFF_BY_ONE", None)      # trader 0, incarnation 0
     ram_plant = os.environ.pop("MKTSIM_RECLAIM_AHEAD_OF_MARK", None)    # the archiver
+    mis_plant = os.environ.pop("MKTSIM_RUNTIME_MISCLASSIFY", None)      # trader 1 (async in mixed), incarnation 0
+    xtr_plant = os.environ.pop("MKTSIM_EXPORT_TRUNCATE", None)          # the exportimport step
 
     a = ap.parse_args()
     if a.hand_delete and not a.archive:
         sys.exit("--hand-delete requires --archive")
+    if mis_plant and a.mode == "sync":
+        sys.exit("MKTSIM_RUNTIME_MISCLASSIFY needs async or mixed (a mapping timeout must be possible)")
 
     seed = a.seed if a.seed is not None else random.randrange(1 << 30)
     rnd = random.Random(seed)
@@ -116,13 +121,17 @@ def main():
         inc = next_inc.get(tid, 0)
         next_inc[tid] = inc + 1
         log = os.path.join(a.dir, "logs", f"t{tid:02d}_i{inc:03d}.log")
+        tmode = a.mode if a.mode != "mixed" else ("sync" if tid % 2 == 0 else "async")
         env = None
         if obo_plant and tid == 0 and inc == 0:
             env = dict(os.environ); env["MKTSIM_SNAPSHOT_OFF_BY_ONE"] = "1"
             stats["obo_armed"] = 1
+        if mis_plant and tid == 1 and inc == 0:
+            env = dict(os.environ); env["MKTSIM_RUNTIME_MISCLASSIFY"] = "1"
+            stats["mis_armed"] = 1
         f = open(log, "w")
         p = subprocess.Popen([a.bin, "trader", a.dir, qname, str(tid), str(inc), stop,
-                              a.mode, str(want_id), str(a.batch), str(archivable)],
+                              tmode, str(want_id), str(a.batch), str(archivable)],
                              stdout=f, stderr=subprocess.STDOUT, env=env)
         f.close()
         live[tid] = (p, inc, log)
@@ -361,6 +370,26 @@ def main():
                         failures.append(f"archiver copied {copied} files but the snapshot joiner replayed "
                                         f"0 archived messages (base={sj_base}) — archived-tail path not exercised")
 
+    # F9: export the live range, import into a fresh directory, and require the
+    # imported replay to reach the live (index,bytes) chain, archivable flag
+    # preserved.
+    xfr_dir = os.path.join(a.dir, "xfr")
+    os.makedirs(xfr_dir, exist_ok=True)
+    xenv = None
+    if xtr_plant:
+        xenv = dict(os.environ); xenv["MKTSIM_EXPORT_TRUNCATE"] = "1"
+    x = subprocess.run([a.bin, "exportimport", a.dir, qname, xfr_dir],
+                       capture_output=True, text=True, env=xenv)
+    print(x.stdout.strip())
+    if x.returncode != 0:
+        failures.append(f"export/import failed rc={x.returncode}:\n" + x.stderr.strip())
+    else:
+        arch_seen = next((t.split("=")[1] for t in x.stdout.split() if t.startswith("archivable=")), None)
+        if arch_seen is not None and int(arch_seen) != (1 if a.archive else 0):
+            failures.append(f"imported queue archivable={arch_seen}, expected {1 if a.archive else 0}")
+    if xtr_plant:
+        print("export_truncate_plant armed=1")
+
     finals = []
     for log in logs:
         for line in open(log):
@@ -395,9 +424,22 @@ def main():
     if a.reclaim and a.batch and blanes != len(next_inc):
         failures.append(f"{blanes} batch lanes for {len(next_inc)} traders (expected one lane per trader)")
 
+    timeouts = 0
+    for log in logs:
+        for line in open(log):
+            if line.startswith(("FINAL", "BATCHFINAL")) and "timeouts=" in line:
+                timeouts += int(line.split("timeouts=")[1].split()[0])
     print(f"kills={stats['kills']} restarts={stats['restarts']} joiners={stats['joiners']} "
           f"incarnations={stats['incarnations']} survivors={len(live)} "
-          f"survivor_final_states_agree={agree}")
+          f"survivor_final_states_agree={agree} poll_timeouts_retried={timeouts}")
+    if a.mode == "mixed":
+        sync_ids = sorted(t for t in next_inc if t % 2 == 0)
+        async_ids = sorted(t for t in next_inc if t % 2 == 1)
+        print(f"mixed-mode: sync_traders={len(sync_ids)} async_traders={len(async_ids)}")
+        if not sync_ids or not async_ids:
+            failures.append("mixed mode requested but only one runtime mode was exercised")
+    if mis_plant:
+        print(f"runtime_misclassify_plant armed={stats.get('mis_armed', 0)}")
     print(f"gateways={a.gateways} gateway_kills={stats['gateway_kills']} "
           f"gateway_restarts={stats['gateway_restarts']}")
     if gw_hook:

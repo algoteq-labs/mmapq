@@ -235,6 +235,15 @@ below `start_index` and outrank the log). The log-ahead check applies only
 to the live range. A restarted gateway's uncommitted records that the walk
 does not yield were chopped by the archiver and are re-appended by policy.
 
+**Limit of the correction:** it relies on the archived copies. With pure
+trimming (reclaim without copy-aside), a commit whose log line was never
+written *and* whose record was archived and deleted is undecidable on
+restart — the restart cannot distinguish it from never-committed. The
+resolution at the trim boundary is then **at-least-once**: the sequence
+number is re-appended, and readers deduplicate by the gateway sequence
+number. This demo never trims without copying, so its restarts stay
+exactly-once.
+
 Checks: `ARCHVERIFY` boundary contiguity and full replay over archived
 copies + live queue; `SNAPJOIN` digest equals the verifier's with the
 archived tail exercised (`archived > 0` whenever files were copied);

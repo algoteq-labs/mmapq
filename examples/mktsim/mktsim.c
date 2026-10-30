@@ -17,7 +17,14 @@
  *   mktsim gateway  <dir> <queue> <gateway_id> <incarnation> <stopfile> [sync|async] [appender_id|-1] [archivable 0|1]
  *   mktsim archiver <dir> <queue> <stopfile> [hand 0|1]
  *   mktsim snapjoin <dir> <queue> <snapshot>
+ *   mktsim exportimport <dir> <queue> <dstdir>
  *   mktsim verify   <dir> <queue> [trader_log ...]
+ *
+ * Export/import (F9): exportimport exports the live range (PRESERVE) of the
+ * queue, imports it into a fresh directory, replays both tails (framing,
+ * contiguity, causality, the (index,bytes) input chain — claims need full
+ * history and are skipped), asserts the chains and the archivable flag
+ * match, and prints XFRVERIFY.
  *
  * Archiving (F6/F7, archivable=1): traders write snapshots (<dir>/snaps/)
  * and progress watermarks (<dir>/progress/); the archiver runs the guide
@@ -77,6 +84,7 @@
 #include "indexed_poller.h"
 #include "indexed_reader.h"
 #include "indexed_batch_queue.h"
+#include "queue_transfer.h"
 #include "runtime.h"
 #include "mmap_platform.h"
 
@@ -99,6 +107,9 @@
 #define RING_SIZE     4
 #define MAX_FILE_SIZE ((int64_t)REGION_SIZE * 4)
 #define TIMEOUT_NS    5000000000ULL
+#define TIMEOUT_NS_PLANT 1000000ULL   /* MKTSIM_RUNTIME_MISCLASSIFY: the armed
+                                       * participant maps with 1 ms, so async
+                                       * timeouts actually occur for it */
 
 #define MAGIC        0x534B544Du   /* "MTKS" */
 #define T_NEW        1
@@ -477,6 +488,12 @@ typedef struct {
     int64_t claims_checked;
     uint16_t self;             /* trader id of this process, or 0xFFFF */
     int strict_seq;            /* verify mode: also check gateway lane seq continuity */
+    int skip_claims;           /* tail-only replay (exportimport): framing, contiguity,
+                                * causality and the input chain run; (k,H,D) claims,
+                                * per-trader seq and incarnation checks need full
+                                * history and are skipped */
+    int misclassify;           /* MKTSIM_RUNTIME_MISCLASSIFY: planted defect (F8) */
+    int64_t timeouts;          /* retryable mapping timeouts retried */
     /* gateway lane tracking (verify only; zeroed otherwise) */
     int64_t  gw_msgs;
     int      gw_seen[MAX_TRADERS];
@@ -534,7 +551,7 @@ static MmapqNextMove on_msg(int64_t index, uint8_t appender_id, const void *data
         fprintf(stderr, "%s: CAUSALITY at %lld: seen_count %lld\n", r->who, (long long)index, (long long)h.seen_count);
         r->fatal = 1; return MMAPQ_NEXT_STOP;
     }
-    if (h.seen_count >= e->base) {
+    if (!r->skip_claims && h.seen_count >= e->base) {
         uint64_t in, dg; hist_at(e, h.seen_count, &in, &dg);
         if (in != h.seen_input || dg != h.seen_digest) {
             fprintf(stderr, "%s: DIVERGENCE at %lld: trader %u inc %u claims state@%lld input=%016llx digest=%016llx, "
@@ -546,6 +563,7 @@ static MmapqNextMove on_msg(int64_t index, uint8_t appender_id, const void *data
         }
         r->claims_checked++;
     }
+    if (r->skip_claims) { engine_apply(e, index, data, len, &h); return MMAPQ_NEXT_ADVANCE; }
     /* per-trader sequence continuity across incarnations */
     if (h.seq != (uint64_t)e->next_seq[h.trader]) {
         fprintf(stderr, "%s: SEQ trader %u at %lld: expected %lld got %llu (inc %u)\n", r->who, h.trader,
@@ -562,15 +580,29 @@ static MmapqNextMove on_msg(int64_t index, uint8_t appender_id, const void *data
     return MMAPQ_NEXT_ADVANCE;
 }
 
-/* Poll until end of stream. Returns 0, or 3 on check failure, 4 on poll error. */
+/* Poll until end of stream. Returns 0, or 3 on check failure, 4 on poll error.
+ * A mapping timeout (MMAPQ_ETIMEDOUT) is retryable: bounded retry, counted.
+ * The planted defect MKTSIM_RUNTIME_MISCLASSIFY aborts on it as if corrupt. */
 static int drain(MmapqIndexedPoller *p, Replay *r, int64_t *n_out)
 {
     int64_t n = 0;
+    int consec_to = 0;
     for (;;) {
         MmapqPollResult pr = mmapq_indexed_poller_poll(p, on_msg, r);
         if (r->fatal) return 3;
-        if (pr == MMAPQ_POLL_ADVANCED) { n++; continue; }
+        if (pr == MMAPQ_POLL_ADVANCED) { consec_to = 0; n++; continue; }
         if (pr == MMAPQ_POLL_END_OF_STREAM) break;
+        if (pr == MMAPQ_POLL_ERROR
+            && mmapq_indexed_poller_last_error(p) == MMAPQ_ETIMEDOUT && consec_to < 5) {
+            consec_to++; r->timeouts++;
+            if (r->misclassify) {
+                fprintf(stderr, "%s: INVALID at %lld: mapping timeout misclassified as fatal corruption "
+                                "(MKTSIM_RUNTIME_MISCLASSIFY)\n", r->who, (long long)r->e->applied);
+                return 3;
+            }
+            struct timespec ts = {0, 1000000}; nanosleep(&ts, NULL);
+            continue;
+        }
         fprintf(stderr, "%s: poll returned %d (last_error %d) at %lld\n", r->who, (int)pr,
                 mmapq_indexed_poller_last_error(p), (long long)r->e->applied);
         return 4;
@@ -696,6 +728,8 @@ typedef struct {
     int64_t batches;           /* batches applied; also the expected next index */
     int reverse;               /* MKTSIM_BATCH_REORDER: planted defect */
     int partial;               /* MKTSIM_BATCH_PARTIAL_READ: planted defect */
+    int misclassify;           /* MKTSIM_RUNTIME_MISCLASSIFY: planted defect (F8) */
+    int64_t timeouts;          /* retryable mapping timeouts retried */
 } BReplay;
 
 /* One batch per poll; framing/CRC/claims are validated per message, batch
@@ -714,7 +748,11 @@ static MmapqNextMove on_batch(int64_t bi, MmapqBatchReadingContext *c, void *ctx
         int rc = mmapq_batch_iterator_next(c->iterator, &d[n], &l[n]);
         if (rc == 0) break;
         if (rc < 0) {
-            fprintf(stderr, "%s: batch %lld iterator error %d\n", r->who, (long long)bi, rc);
+            if (rc == MMAPQ_ETIMEDOUT && r->misclassify)
+                fprintf(stderr, "%s: INVALID at batch %lld: mapping timeout misclassified as fatal corruption "
+                                "(MKTSIM_RUNTIME_MISCLASSIFY)\n", r->who, (long long)bi);
+            else
+                fprintf(stderr, "%s: batch %lld iterator error %d\n", r->who, (long long)bi, rc);
             r->fatal = 1; return MMAPQ_NEXT_STOP;
         }
         if (++n == MAX_BATCH_MSGS) {
@@ -783,11 +821,23 @@ static MmapqNextMove on_batch(int64_t bi, MmapqBatchReadingContext *c, void *ctx
 static int drain_batch(MmapqIndexedBatchPoller *p, BReplay *r, int64_t *n_out)
 {
     int64_t n = 0;
+    int consec_to = 0;
     for (;;) {
         BatchPollResult pr = mmapq_indexed_batch_poller_poll(p, on_batch, r);
         if (r->fatal) return 3;
-        if (pr == MMAPQ_POLL_ADVANCED) { n++; continue; }
+        if (pr == MMAPQ_POLL_ADVANCED) { consec_to = 0; n++; continue; }
         if (pr == MMAPQ_POLL_END_OF_STREAM) break;
+        if (pr == MMAPQ_POLL_ERROR
+            && mmapq_indexed_batch_poller_last_error(p) == MMAPQ_ETIMEDOUT && consec_to < 5) {
+            consec_to++; r->timeouts++;
+            if (r->misclassify) {
+                fprintf(stderr, "%s: INVALID at batch %lld: mapping timeout misclassified as fatal corruption "
+                                "(MKTSIM_RUNTIME_MISCLASSIFY)\n", r->who, (long long)r->batches);
+                return 3;
+            }
+            struct timespec ts = {0, 1000000}; nanosleep(&ts, NULL);
+            continue;
+        }
         fprintf(stderr, "%s: batch poll returned %d (last_error %d) at batch %lld\n", r->who, (int)pr,
                 mmapq_indexed_batch_poller_last_error(p), (long long)r->batches);
         return 4;
@@ -909,12 +959,15 @@ static int run_trader(const char *dir, const char *qname, int trader, uint32_t i
 {
     char who[64]; snprintf(who, sizeof who, "trader %d/%u", trader, inc);
     rng_state = mix64(((uint64_t)trader << 32) ^ inc ^ (uint64_t)getpid());
+    const char *mis = getenv("MKTSIM_RUNTIME_MISCLASSIFY");
+    int misclassify = mis && atoi(mis) != 0;
+    uint64_t timeout_ns = misclassify ? TIMEOUT_NS_PLANT : TIMEOUT_NS;
 
     MmapqRuntime *rt = NULL;
     if (async && mmapq_runtime_region_mapper(&rt) != 0) { fprintf(stderr, "%s: runtime\n", who); return 2; }
     MmapqIndexedQueue *q = NULL;
     int rc = mmapq_indexed_queue_create(dir, qname, REGION_SIZE, RING_SIZE, 1, MAX_FILE_SIZE, 0,
-                                        TIMEOUT_NS, archivable, rt, rt, &q);
+                                        timeout_ns, archivable, rt, rt, &q);
     if (rc) { fprintf(stderr, "%s: queue create rc=%d\n", who, rc); return 2; }
     MmapqIndexedAppender *a = NULL;
     if (want_id >= 0) {
@@ -943,7 +996,7 @@ static int run_trader(const char *dir, const char *qname, int trader, uint32_t i
     Engine be; BReplay br; int baid = -1;
     if (batch_on) {
         rc = mmapq_indexed_batch_queue_create(dir, BATCH_QNAME, REGION_SIZE, RING_SIZE, 1,
-                                              MAX_FILE_SIZE, 0, TIMEOUT_NS, 0, rt, rt, &bq);
+                                              MAX_FILE_SIZE, 0, timeout_ns, 0, rt, rt, &bq);
         if (rc) { fprintf(stderr, "%s: batch queue create rc=%d\n", who, rc); return 2; }
         if (want_id >= 0) {
             rc = mmapq_indexed_batch_queue_create_appender_with_id(bq, (uint8_t)want_id, &bapp);
@@ -960,6 +1013,7 @@ static int run_trader(const char *dir, const char *qname, int trader, uint32_t i
         br.reverse = bug && atoi(bug) != 0;
         const char *bug2 = getenv("MKTSIM_BATCH_PARTIAL_READ");
         br.partial = bug2 && atoi(bug2) != 0;
+        br.misclassify = misclassify;
     }
 
     Engine e; engine_init(&e);
@@ -968,6 +1022,7 @@ static int run_trader(const char *dir, const char *qname, int trader, uint32_t i
         if (obo && atoi(obo) != 0) e.snap_shadow_cap = 1;   /* armed; buffer grows on capture */
     }
     Replay r = { .e = &e, .who = who, .self = (uint16_t)trader };
+    r.misclassify = misclassify;
 
     /* JOIN: learn the committed range, rebuild exactly up to its end.
      * Archivable runs (F6): start from the latest snapshot (any participant —
@@ -975,11 +1030,6 @@ static int run_trader(const char *dir, const char *qname, int trader, uint32_t i
      * range the live queue no longer has from the archived copies (§3), then
      * the live tail. With no snapshot the replay starts at index 0 from the
      * copies. */
-    MmapqIndexedReader *rd = NULL;
-    if (mmapq_indexed_queue_create_reader(q, &rd)) { fprintf(stderr, "%s: reader\n", who); return 2; }
-    int64_t last = mmapq_indexed_reader_last_index(rd);
-    int64_t start_idx = archivable ? mmapq_indexed_reader_start_index(rd) : 0;
-    mmapq_indexed_reader_close(rd);
     if (archivable) {
         char spath[1100];
         if (snap_latest(dir, spath, sizeof spath) == 0) {
@@ -987,13 +1037,23 @@ static int run_trader(const char *dir, const char *qname, int trader, uint32_t i
                 fprintf(stderr, "%s: snapshot %s unreadable\n", who, spath);
                 return 3;
             }
-            if (e.applied > last + 1) {
-                fprintf(stderr, "%s: snapshot at %lld is ahead of the log (last %lld)\n",
-                        who, (long long)e.applied, (long long)last);
-                return 3;
-            }
         }
+        /* Publish the watermark BEFORE reading the live range: while this
+         * progress file says k, the archiver cannot advance start_index
+         * past k, so the range this restart reads cannot move under it. */
         if (progress_write(dir, (uint16_t)trader, e.applied)) { fprintf(stderr, "%s: progress write\n", who); return 2; }
+    }
+    MmapqIndexedReader *rd = NULL;
+    if (mmapq_indexed_queue_create_reader(q, &rd)) { fprintf(stderr, "%s: reader\n", who); return 2; }
+    int64_t last = mmapq_indexed_reader_last_index(rd);
+    int64_t start_idx = archivable ? mmapq_indexed_reader_start_index(rd) : 0;
+    mmapq_indexed_reader_close(rd);
+    if (archivable) {
+        if (e.applied > last + 1) {
+            fprintf(stderr, "%s: snapshot at %lld is ahead of the log (last %lld)\n",
+                    who, (long long)e.applied, (long long)last);
+            return 3;
+        }
         if (e.applied < start_idx) {
             int arc = replay_archived_range(dir, qname, &r, e.applied, start_idx, NULL);
             if (arc) return arc;
@@ -1145,13 +1205,14 @@ static int run_trader(const char *dir, const char *qname, int trader, uint32_t i
         if (!rcode && batch_on) rcode = drain_batch(bp, &br, NULL);
     }
     hist_at(&e, e.applied, &in, &dg);
-    printf("FINAL %d %u %d %lld %016llx %016llx claims=%lld rc=%d\n", trader, inc, appender_id,
-           (long long)e.applied, (unsigned long long)in, (unsigned long long)dg, (long long)r.claims_checked, rcode);
+    printf("FINAL %d %u %d %lld %016llx %016llx claims=%lld timeouts=%lld rc=%d\n", trader, inc, appender_id,
+           (long long)e.applied, (unsigned long long)in, (unsigned long long)dg, (long long)r.claims_checked,
+           (long long)r.timeouts, rcode);
     if (batch_on) {
         hist_at(&be, be.applied, &in, &dg);
-        printf("BATCHFINAL %d %u %d %lld %016llx %016llx claims=%lld rc=%d\n", trader, inc, baid,
+        printf("BATCHFINAL %d %u %d %lld %016llx %016llx claims=%lld timeouts=%lld rc=%d\n", trader, inc, baid,
                (long long)be.applied, (unsigned long long)in, (unsigned long long)dg,
-               (long long)br.claims_checked, rcode);
+               (long long)br.claims_checked, (long long)br.timeouts, rcode);
     }
     fflush(stdout);
     if (batch_on) {
@@ -1449,6 +1510,22 @@ static int run_gateway(const char *dir, const char *qname, int gw, uint32_t inc,
     if (mmapq_indexed_queue_create_reader(q, &qrd)) { fprintf(stderr, "%s: reader\n", who); return 2; }
     int64_t qfirst = mmapq_indexed_reader_start_index(qrd);
     int64_t qlast = mmapq_indexed_reader_last_index(qrd);
+    /* Pin the watermark for the restart: with progress/g<NN> = qfirst in
+     * place the archiver archives to nothing above it, so the top of the
+     * live range cannot move during the scan, the walk, or the pending
+     * rebuild. Indices archived between the read and the pin are skipped by
+     * the ARCHIVED status discipline below. The pin file is removed when
+     * the restart completes. */
+    char gpin[1100] = {0};
+    if (archivable) {
+        snprintf(gpin, sizeof gpin, "%s/progress/g%02d", dir, gw);
+        char tmp[1100]; snprintf(tmp, sizeof tmp, "%s.tmp", gpin);
+        FILE *pf = fopen(tmp, "w");
+        if (!pf) { fprintf(stderr, "%s: watermark pin\n", who); return 2; }
+        fprintf(pf, "%lld\n", (long long)qfirst);
+        fclose(pf);
+        if (rename(tmp, gpin)) { fprintf(stderr, "%s: watermark pin rename\n", who); return 2; }
+    }
     for (int64_t i = qfirst; i <= qlast; i++) {
         MmapqReadingContext ctx = {0};
         mmapq_indexed_reader_read(qrd, i, &ctx);
@@ -1758,6 +1835,8 @@ static int run_gateway(const char *dir, const char *qname, int gw, uint32_t inc,
         free(latest_app); free(is_committed); free(exp_off); free(exp_seq); free(emark);
         free(echop); free(qcom);
     }
+    /* restart complete: unpin the watermark */
+    if (gpin[0]) unlink(gpin);
     /* the commit cursor resumes at the lowest uncommitted seq — a pending
      * record or a held (never appended) packet alike */
     uint64_t next_commit = g.next_emit;
@@ -1868,7 +1947,8 @@ static int64_t arch_watermark(const char *dir)
     int64_t best = -1;
     struct dirent *de;
     while ((de = readdir(d))) {
-        if (de->d_name[0] != 't') continue;
+        /* t<NN>: trader progress; g<NN>: a gateway restart's watermark pin */
+        if (de->d_name[0] != 't' && de->d_name[0] != 'g') continue;
         char p[1100]; snprintf(p, sizeof p, "%s/progress/%s", dir, de->d_name);
         FILE *f = fopen(p, "r");
         if (!f) continue;
@@ -2079,6 +2159,114 @@ static int run_snapjoin(const char *dir, const char *qname, const char *snap_pat
     return bad;
 }
 
+/* ── export/import (F9) ─────────────────────────────────────────────────── */
+
+/* Replay [from, last] of one queue tail-only (skip_claims) and return the
+ * input chain — a function of (index, bytes) only, so it is comparable
+ * between the live queue and its import even when archiving removed the
+ * prefix. */
+static int xfr_replay(const char *dir, const char *qname, const char *who,
+                      int64_t from, int64_t last, uint64_t *in_out, int64_t *n_out)
+{
+    MmapqIndexedQueue *q = NULL;
+    if (mmapq_indexed_queue_create(dir, qname, REGION_SIZE, RING_SIZE, 1, MAX_FILE_SIZE, 0,
+                                   TIMEOUT_NS, 0, NULL, NULL, &q)) { fprintf(stderr, "%s: queue\n", who); return 1; }
+    MmapqIndexedPoller *p = NULL;
+    if (mmapq_indexed_queue_create_poller(q, &p)) { fprintf(stderr, "%s: poller\n", who); return 1; }
+    Engine e; engine_init(&e);
+    e.applied = e.base = from;
+    Replay r = { .e = &e, .who = who, .self = 0xFFFF, .skip_claims = 1 };
+    if (from <= last && !mmapq_indexed_poller_move_to_index(p, from)) {
+        fprintf(stderr, "%s: move_to_index %lld failed\n", who, (long long)from);
+        return 1;
+    }
+    int bad = 0;
+    while (e.applied <= last) {
+        MmapqPollResult pr = mmapq_indexed_poller_poll(p, on_msg, &r);
+        if (r.fatal) { bad = 1; break; }
+        if (pr != MMAPQ_POLL_ADVANCED) {
+            fprintf(stderr, "%s: poll %d at %lld (target last=%lld)\n", who, (int)pr,
+                    (long long)e.applied, (long long)last);
+            bad = 1; break;
+        }
+    }
+    *in_out = e.input_hash;
+    *n_out = e.applied - from;
+    mmapq_indexed_poller_close(p);
+    mmapq_indexed_queue_close(q);
+    engine_free(&e);
+    return bad;
+}
+
+static int meta_archivable(const char *dir, const char *qname)
+{
+    char path[1100];
+    snprintf(path, sizeof path, "%s/%s/meta", dir, qname);
+    FILE *f = fopen(path, "r");
+    if (!f) return -1;
+    uint8_t mb[25];
+    size_t n = fread(mb, 1, sizeof mb, f);
+    fclose(f);
+    return n == sizeof mb ? mb[24] : -1;
+}
+
+static int run_exportimport(const char *dir, const char *qname, const char *dstdir)
+{
+    MmapqIndexedQueue *q = NULL;
+    if (mmapq_indexed_queue_create(dir, qname, REGION_SIZE, RING_SIZE, 1, MAX_FILE_SIZE, 0,
+                                   TIMEOUT_NS, 0, NULL, NULL, &q)) { fprintf(stderr, "xfr: queue\n"); return 1; }
+    MmapqIndexedReader *rd = NULL;
+    if (mmapq_indexed_queue_create_reader(q, &rd)) { fprintf(stderr, "xfr: reader\n"); return 1; }
+    int64_t start_idx = mmapq_indexed_reader_start_index(rd);
+    int64_t last = mmapq_indexed_reader_last_index(rd);
+
+    /* The planted defect MKTSIM_EXPORT_TRUNCATE stops the export one short
+     * of the end index — the imported replay cannot reach the live chain. */
+    const char *tr = getenv("MKTSIM_EXPORT_TRUNCATE");
+    int64_t end = (tr && atoi(tr) != 0) ? last - 1 : last;
+
+    char stream[1100];
+    snprintf(stream, sizeof stream, "%s/export.stream", dstdir);
+    FILE *out = fopen(stream, "w");
+    if (!out) { perror("xfr: stream"); return 1; }
+    int64_t exported = mmapq_queue_transfer_export(rd, out, start_idx, end,
+                                                   MMAPQ_QUEUE_TRANSFER_PRESERVE, NULL, NULL, NULL);
+    fclose(out);
+    mmapq_indexed_reader_close(rd);
+    mmapq_indexed_queue_close(q);
+    if (exported < 0) { fprintf(stderr, "xfr: export rc=%lld\n", (long long)exported); return 1; }
+
+    FILE *in = fopen(stream, "r");
+    if (!in) { perror("xfr: stream read"); return 1; }
+    int64_t imported = mmapq_queue_transfer_import(in, dstdir, qname,
+                                                   MMAPQ_QUEUE_TRANSFER_PRESERVE, NULL, NULL, 0,
+                                                   NULL, NULL, MMAPQ_CONFLICT_AUTO);
+    fclose(in);
+    if (imported < 0) { fprintf(stderr, "xfr: import rc=%lld\n", (long long)imported); return 1; }
+
+    uint64_t in_live, in_imp; int64_t n_live, n_imp;
+    int bad = xfr_replay(dir, qname, "xfr-live", start_idx, last, &in_live, &n_live);
+    bad |= xfr_replay(dstdir, qname, "xfr-import", start_idx, last, &in_imp, &n_imp);
+    int arch_src = meta_archivable(dir, qname), arch_dst = meta_archivable(dstdir, qname);
+    if (!bad && (in_live != in_imp || n_live != n_imp)) {
+        fprintf(stderr, "xfr: imported replay differs: live n=%lld input=%016llx, import n=%lld input=%016llx\n",
+                (long long)n_live, (unsigned long long)in_live,
+                (long long)n_imp, (unsigned long long)in_imp);
+        bad = 1;
+    }
+    if (!bad && arch_dst != arch_src) {
+        fprintf(stderr, "xfr: archivable flag not preserved (%d -> %d)\n", arch_src, arch_dst);
+        bad = 1;
+    }
+    printf("XFRVERIFY start_index=%lld exported=%lld imported=%lld live=%lld import=%lld input=%016llx "
+           "archivable=%d result=%s\n",
+           (long long)start_idx, (long long)exported, (long long)imported,
+           (long long)n_live, (long long)n_imp, (unsigned long long)in_live,
+           arch_dst, bad ? "FAIL" : "PASS");
+    fflush(stdout);
+    return bad;
+}
+
 /* ── verify ─────────────────────────────────────────────────────────────── */
 
 static int check_log_lines(const Engine *e, const char *path, const char *kind1, const char *kind2)
@@ -2255,12 +2443,15 @@ int main(int argc, char **argv)
         return run_archiver(argv[2], argv[3], argv[4], argc >= 6 ? atoi(argv[5]) : 0);
     if (argc >= 5 && !strcmp(argv[1], "snapjoin"))
         return run_snapjoin(argv[2], argv[3], argv[4]);
+    if (argc >= 5 && !strcmp(argv[1], "exportimport"))
+        return run_exportimport(argv[2], argv[3], argv[4]);
     if (argc >= 4 && !strcmp(argv[1], "verify"))
         return run_verify(argv[2], argv[3], argc - 4, argv + 4);
     fprintf(stderr, "usage:\n  %s trader   <dir> <queue> <trader_id> <incarnation> <stopfile> [sync|async] [appender_id|-1] [batch 0|1] [archivable 0|1]\n"
                     "  %s gateway  <dir> <queue> <gateway_id> <incarnation> <stopfile> [sync|async] [appender_id|-1] [archivable 0|1]\n"
                     "  %s archiver <dir> <queue> <stopfile> [hand 0|1]\n"
                     "  %s snapjoin <dir> <queue> <snapshot>\n"
-                    "  %s verify   <dir> <queue> [trader_log ...]\n", argv[0], argv[0], argv[0], argv[0], argv[0]);
+                    "  %s exportimport <dir> <queue> <dstdir>\n"
+                    "  %s verify   <dir> <queue> [trader_log ...]\n", argv[0], argv[0], argv[0], argv[0], argv[0], argv[0]);
     return 2;
 }
