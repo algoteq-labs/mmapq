@@ -500,6 +500,10 @@ typedef struct {
     int64_t  gw_msgs;
     int      gw_seen[MAX_TRADERS];
     uint64_t gw_next[MAX_TRADERS];
+    int      gw_seed;          /* F1 interim (joiner only, removed in E4):
+                                * seed gw_next[g] from the first gateway packet
+                                * after the snapshot base instead of 0 */
+    uint64_t gw_seeded[MAX_TRADERS];   /* the seq seeded per gateway */
     uint64_t gw_last_seq[MAX_TRADERS];
     int64_t  gw_last_off[MAX_TRADERS];
     int      gw_inv_set;       /* first offset inversion in commit order */
@@ -527,7 +531,14 @@ static MmapqNextMove on_msg(int64_t index, uint8_t appender_id, const void *data
          * checks the lane's seq continuity and records offset inversions. */
         if (r->strict_seq) {
             int g = h.trader;
-            if (h.seq != r->gw_next[g]) {
+            if (r->gw_seed && !r->gw_seen[g]) {
+                /* F1 interim (joiner only; removed in E4): the trader snapshot
+                 * carries no gateway sequence, so a replay from base > 0 cannot
+                 * know how many packets this gateway committed below the base.
+                 * Seed the expectation from the first packet seen after the
+                 * base; every later packet is still checked strictly. */
+                r->gw_seeded[g] = h.seq;
+            } else if (h.seq != r->gw_next[g]) {
                 fprintf(stderr, "%s: GATEWAY SEQ gw %u at %lld: expected %llu got %llu (gap or inversion)\n",
                         r->who, h.trader, (long long)index,
                         (unsigned long long)r->gw_next[g], (unsigned long long)h.seq);
@@ -2642,7 +2653,7 @@ static int run_snapjoin(const char *dir, const char *qname, const char *snap_pat
                 (long long)base, (long long)last);
         return 1;
     }
-    Replay r = { .e = &e, .who = "snapjoin", .self = 0xFFFF, .strict_seq = 1 };
+    Replay r = { .e = &e, .who = "snapjoin", .self = 0xFFFF, .strict_seq = 1, .gw_seed = 1 };
     int64_t arch_n = 0;
     int bad = 0;
     if (e.applied < start_idx)
@@ -2665,9 +2676,16 @@ static int run_snapjoin(const char *dir, const char *qname, const char *snap_pat
             bad = 1; break;
         }
     }
-    printf("SNAPJOIN base=%lld start_index=%lld archived=%lld messages=%lld input=%016llx digest=%016llx result=%s\n",
+    char seeded[512]; seeded[0] = '\0';
+    for (int g = 0; r.gw_seed && g < MAX_TRADERS; g++) {
+        if (!r.gw_seen[g]) continue;
+        char tok[64];
+        snprintf(tok, sizeof tok, " gw_seeded=%d:%llu", g, (unsigned long long)r.gw_seeded[g]);
+        strncat(seeded, tok, sizeof seeded - strlen(seeded) - 1);
+    }
+    printf("SNAPJOIN base=%lld start_index=%lld archived=%lld messages=%lld input=%016llx digest=%016llx%s result=%s\n",
            (long long)base, (long long)start_idx, (long long)arch_n, (long long)e.applied,
-           (unsigned long long)e.input_hash, (unsigned long long)e.digest, bad ? "FAIL" : "PASS");
+           (unsigned long long)e.input_hash, (unsigned long long)e.digest, seeded, bad ? "FAIL" : "PASS");
     fflush(stdout);
     mmapq_indexed_poller_close(p);
     mmapq_indexed_queue_close(q);
