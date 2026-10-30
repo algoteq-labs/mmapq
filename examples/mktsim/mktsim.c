@@ -16,6 +16,7 @@
  *   mktsim trader   <dir> <queue> <trader_id> <incarnation> <stopfile> [sync|async] [appender_id|-1] [batch 0|1] [archivable 0|1]
  *   mktsim gateway  <dir> <queue> <gateway_id> <incarnation> <stopfile> [sync|async] [appender_id|-1] [archivable 0|1]
  *   mktsim archiver <dir> <queue> <stopfile> [hand 0|1]
+ *   mktsim snapshotter <dir> <queue> <stopfile> [hand 0|1]
  *   mktsim snapjoin <dir> <queue> <snapshot>
  *   mktsim exportimport <dir> <queue> <dstdir>
  *   mktsim verify   <dir> <queue> [trader_log ...]
@@ -98,6 +99,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/file.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -1969,19 +1971,153 @@ static int64_t arch_watermark(const char *dir)
     return best;
 }
 
+/* The list → copy-aside → reclaim tail, shared by the archiver and the
+ * snapshotter (stage (e) E1). State carried across rounds lives in ArchTail. */
+typedef struct {
+    const char *dir;
+    const char *qdir;
+    int         hand;
+    int         plant_armed;
+    int         plant_fired;
+    int         errors;
+    int         rounds;
+    int64_t     copied;
+    int64_t     reclaimed;
+    int64_t     skipped;
+} ArchTail;
+
+/* One tail round. Returns 0 (round done), 1 (soft error: caller retries), or
+ * 2 (fatal error: caller aborts). */
+static int archiver_tail(MmapqIndexedArchiver *a, ArchTail *c)
+{
+    char **marks = malloc(512 * sizeof *marks);
+    if (!marks) { perror("malloc"); return 2; }
+    int n = mmapq_indexed_archiver_archivable_files(a, marks, 512);
+    if (n < 0) {
+        /* a live-header read can time out under load: retry next round */
+        free(marks);
+        if (++c->errors > 100) {
+            fprintf(stderr, "archiver: archivable_files failing repeatedly (last rc=%d)\n", n);
+            return 2;
+        }
+        return 1;
+    }
+    c->errors = 0;
+    if (n == 512) {   /* listing truncated: reclaim this batch, re-list next round */
+        fprintf(stderr, "archiver: listing truncated at 512 marks\n");
+        free(marks);
+        return 2;
+    }
+    c->rounds++;
+    for (int i = 0; i < n; i++) {
+        const char *base = strrchr(marks[i], '/');
+        base = base ? base + 1 : marks[i];
+        uint64_t crc; int64_t sz;
+        int arc = arch_copy(marks[i], c->dir, base, &crc, &sz);
+        if (arc == 3) { c->skipped++; continue; }   /* already archived: skipped */
+        if (arc) {
+            for (int j = 0; j < n; j++) free(marks[j]);
+            free(marks);
+            return 2;
+        }
+        printf("ARCHCOPY %s size=%lld crc=%016llx\n", base, (long long)sz, (unsigned long long)crc);
+        c->copied++;
+    }
+    fflush(stdout);
+    if (n > 0) {
+        if (c->hand) {
+            /* the X5 hand-deletion rule: steps 1–3 as usual, then unlink
+             * the marks by hand — no undo runs between the listing and
+             * the last unlink (this archiver never undoes) */
+            for (int i = 0; i < n; i++) {
+                if (unlink(marks[i]) && errno != ENOENT) {
+                    perror("archiver: hand unlink");
+                    for (int j = 0; j < n; j++) free(marks[j]);
+                    free(marks);
+                    return 2;
+                }
+                printf("HANDDELETE %s\n", marks[i]);
+            }
+        } else {
+            int rc = mmapq_indexed_archiver_reclaim_files(a, marks, n);
+            if (rc < 0) {
+                fprintf(stderr, "archiver: reclaim_files rc=%d\n", rc);
+                for (int j = 0; j < n; j++) free(marks[j]);
+                free(marks);
+                return 2;
+            }
+            c->reclaimed += rc;
+        }
+    }
+    /* planted defect MKTSIM_RECLAIM_AHEAD_OF_MARK: unlink one payload
+     * file beyond the mark (not listed, not copied) — the verifier must
+     * fail with the missing range identified. */
+    if (c->plant_armed && !c->plant_fired && n > 0) {
+        DIR *qd = opendir(c->qdir);
+        if (qd) {
+            char victim[280] = {0};
+            int64_t vbest = -1;
+            struct dirent *de;
+            while ((de = readdir(qd))) {
+                unsigned aid; long long fn;
+                if (sscanf(de->d_name, "payload_%u_%lld", &aid, &fn) != 2) continue;
+                int marked = 0;
+                for (int i = 0; i < n; i++) {
+                    const char *b = strrchr(marks[i], '/');
+                    if (!strcmp(b ? b + 1 : marks[i], de->d_name)) { marked = 1; break; }
+                }
+                if (!marked && (vbest < 0 || fn < vbest)) { vbest = fn; snprintf(victim, sizeof victim, "%s", de->d_name); }
+            }
+            closedir(qd);
+            if (victim[0]) {
+                char vp[1100 + 280];
+                snprintf(vp, sizeof vp, "%s/%s", c->qdir, victim);
+                if (unlink(vp) == 0) {
+                    c->plant_fired = 1;
+                    printf("PLANT reclaim-ahead-of-mark: unlinked live file %s\n", victim);
+                    fflush(stdout);
+                }
+            }
+        }
+    }
+    for (int i = 0; i < n; i++) free(marks[i]);
+    free(marks);
+    return 0;
+}
+
+/* The exclusive snapshotter lock (<dir>/snapshotter.lock): exactly one
+ * archiver-or-snapshotter runs at a time (amendment 5). Prints the
+ * SNAPSHOTTER verdict line; returns the held lock fd, or -1 if busy. */
+static int snap_lock(const char *dir)
+{
+    char lockpath[1100];
+    snprintf(lockpath, sizeof lockpath, "%s/snapshotter.lock", dir);
+    int fd = open(lockpath, O_RDWR | O_CREAT, 0644);
+    if (fd < 0) { perror("snapshotter: lock open"); return -1; }
+    if (flock(fd, LOCK_EX | LOCK_NB) != 0) {
+        printf("SNAPSHOTTER lock=busy result=FAIL\n"); fflush(stdout);
+        close(fd);
+        return -1;
+    }
+    printf("SNAPSHOTTER lock=acquired result=PASS\n"); fflush(stdout);
+    return fd;
+}
+
 static int run_archiver(const char *dir, const char *qname, const char *stopfile, int hand)
 {
     char qdir[1100];
     snprintf(qdir, sizeof qdir, "%s/%s", dir, qname);
     const char *plant = getenv("MKTSIM_RECLAIM_AHEAD_OF_MARK");
-    int plant_armed = plant && atoi(plant) != 0, plant_fired = 0;
+    ArchTail c = { .dir = dir, .qdir = qdir, .hand = hand,
+                   .plant_armed = plant && atoi(plant) != 0 };
+
+    int lockfd = snap_lock(dir);      /* the same guard as the snapshotter */
+    if (lockfd < 0) return 2;
 
     MmapqIndexedArchiver *a = NULL;
     if (mmapq_indexed_archiver_create(dir, qname, RING_SIZE, NULL, &a) || !a) {
-        fprintf(stderr, "archiver: create failed\n"); return 2;
+        fprintf(stderr, "archiver: create failed\n"); close(lockfd); return 2;
     }
-    int rounds = 0, errors = 0;
-    int64_t copied = 0, reclaimed = 0, skipped = 0;
     for (;;) {
         int stopping = access(stopfile, F_OK) == 0;
         if (access(qdir, F_OK) != 0) {   /* queue not created yet */
@@ -1992,6 +2128,7 @@ static int run_archiver(const char *dir, const char *qname, const char *stopfile
         if (!mmapq_indexed_archiver_archivable(a)) {
             fprintf(stderr, "archiver: queue %s is not archivable\n", qname);
             mmapq_indexed_archiver_close(a);
+            close(lockfd);
             return 2;
         }
         /* the guide ch6 loop: archive → mark → copy aside → reclaim */
@@ -2002,117 +2139,383 @@ static int run_archiver(const char *dir, const char *qname, const char *stopfile
             if (rc) {
                 fprintf(stderr, "archiver: archive_up_to_index(%lld) rc=%d\n", (long long)wm, rc);
                 mmapq_indexed_archiver_close(a);
+                close(lockfd);
                 return 2;
             }
-            cur = wm;
         }
-        char **marks = malloc(512 * sizeof *marks);
-        if (!marks) { perror("malloc"); mmapq_indexed_archiver_close(a); return 2; }
-        int n = mmapq_indexed_archiver_archivable_files(a, marks, 512);
-        if (n < 0) {
-            /* a live-header read can time out under load: retry next round */
-            free(marks);
-            if (++errors > 100) {
-                fprintf(stderr, "archiver: archivable_files failing repeatedly (last rc=%d)\n", n);
-                mmapq_indexed_archiver_close(a);
-                return 2;
-            }
+        int tr = archiver_tail(a, &c);
+        if (tr == 2) { mmapq_indexed_archiver_close(a); close(lockfd); return 2; }
+        if (tr == 1) {
             if (stopping) break;
             struct timespec ts = {0, 50000000}; nanosleep(&ts, NULL);
             continue;
         }
-        errors = 0;
-        if (n == 512) {   /* listing truncated: reclaim this batch, re-list next round */
-            fprintf(stderr, "archiver: listing truncated at 512 marks\n");
-            mmapq_indexed_archiver_close(a);
-            free(marks);
-            return 2;
-        }
-        rounds++;
-        for (int i = 0; i < n; i++) {
-            const char *base = strrchr(marks[i], '/');
-            base = base ? base + 1 : marks[i];
-            uint64_t crc; int64_t sz;
-            int arc = arch_copy(marks[i], dir, base, &crc, &sz);
-            if (arc == 3) { skipped++; continue; }   /* already archived: skipped */
-            if (arc) {
-                for (int j = 0; j < n; j++) free(marks[j]);
-                free(marks);
-                mmapq_indexed_archiver_close(a);
-                return 2;
-            }
-            printf("ARCHCOPY %s size=%lld crc=%016llx\n", base, (long long)sz, (unsigned long long)crc);
-            copied++;
-        }
-        fflush(stdout);
-        if (n > 0) {
-            if (hand) {
-                /* the X5 hand-deletion rule: steps 1–3 as usual, then unlink
-                 * the marks by hand — no undo runs between the listing and
-                 * the last unlink (this archiver never undoes) */
-                for (int i = 0; i < n; i++) {
-                    if (unlink(marks[i]) && errno != ENOENT) {
-                        perror("archiver: hand unlink");
-                        for (int j = 0; j < n; j++) free(marks[j]);
-                        free(marks);
-                        mmapq_indexed_archiver_close(a);
-                        return 2;
-                    }
-                    printf("HANDDELETE %s\n", marks[i]);
-                }
-            } else {
-                int rc = mmapq_indexed_archiver_reclaim_files(a, marks, n);
-                if (rc < 0) {
-                    fprintf(stderr, "archiver: reclaim_files rc=%d\n", rc);
-                    for (int j = 0; j < n; j++) free(marks[j]);
-                    free(marks);
-                    mmapq_indexed_archiver_close(a);
-                    return 2;
-                }
-                reclaimed += rc;
-            }
-        }
-        /* planted defect MKTSIM_RECLAIM_AHEAD_OF_MARK: unlink one payload
-         * file beyond the mark (not listed, not copied) — the verifier must
-         * fail with the missing range identified. */
-        if (plant_armed && !plant_fired && n > 0) {
-            DIR *qd = opendir(qdir);
-            if (qd) {
-                char victim[280] = {0};
-                int64_t vbest = -1;
-                struct dirent *de;
-                while ((de = readdir(qd))) {
-                    unsigned aid; long long fn;
-                    if (sscanf(de->d_name, "payload_%u_%lld", &aid, &fn) != 2) continue;
-                    int marked = 0;
-                    for (int i = 0; i < n; i++) {
-                        const char *b = strrchr(marks[i], '/');
-                        if (!strcmp(b ? b + 1 : marks[i], de->d_name)) { marked = 1; break; }
-                    }
-                    if (!marked && (vbest < 0 || fn < vbest)) { vbest = fn; snprintf(victim, sizeof victim, "%s", de->d_name); }
-                }
-                closedir(qd);
-                if (victim[0]) {
-                    char vp[1100 + 280];
-                    snprintf(vp, sizeof vp, "%s/%s", qdir, victim);
-                    if (unlink(vp) == 0) {
-                        plant_fired = 1;
-                        printf("PLANT reclaim-ahead-of-mark: unlinked live file %s\n", victim);
-                        fflush(stdout);
-                    }
-                }
-            }
-        }
-        for (int i = 0; i < n; i++) free(marks[i]);
-        free(marks);
         if (stopping) break;
         struct timespec ts = {0, 50000000}; nanosleep(&ts, NULL);   /* 50 ms between rounds */
     }
     printf("ARCHFINAL rounds=%d start_index=%lld copied=%lld skipped=%lld reclaimed=%lld hand=%d plant_fired=%d\n",
-           rounds, (long long)mmapq_indexed_archiver_start_index(a),
-           (long long)copied, (long long)skipped, (long long)reclaimed, hand, plant_fired);
+           c.rounds, (long long)mmapq_indexed_archiver_start_index(a),
+           (long long)c.copied, (long long)c.skipped, (long long)c.reclaimed, hand, c.plant_fired);
     fflush(stdout);
     mmapq_indexed_archiver_close(a);
+    close(lockfd);
+    return 0;
+}
+
+/* ── snapshotter (stage (e) E1): the archiver loop, snapshot step first ────
+ *
+ * The snapshotter reads the committed queue in order, holds one Engine in
+ * memory across rounds, and at index k publishes snap_<k> atomically with an
+ * independent write-time claim check, then archive_up_to_index(k) and
+ * requires start_index == k. Until E5, k <= arch_watermark, so live readers
+ * are never undercut. One snapshotter runs at a time (the flock guard); its
+ * own restart recovers via start_index -> snap_<start_index> (bounded
+ * no-progress retry, amendment 2, defined here and reused by E3). */
+
+#define SNAPRECOVER_MAX_TRIES 1024
+
+/* Path of the index-named snapshot <dir>/snaps/snap_<k>. */
+static int snap_path_index(const char *dir, int64_t k, char *path, size_t n)
+{
+    return snprintf(path, n, "%s/snaps/snap_%lld", dir, (long long)k);
+}
+
+/* Write already-serialised snapshot bytes to <dir>/snaps/snap_<k> (tmp+rename). */
+static int snap_write_index(const char *dir, int64_t k, const uint8_t *buf, size_t len)
+{
+    char tmp[1100], dst[1100];
+    snprintf(tmp, sizeof tmp, "%s/snaps/snap_%lld.tmp", dir, (long long)k);
+    snprintf(dst, sizeof dst, "%s/snaps/snap_%lld", dir, (long long)k);
+    FILE *f = fopen(tmp, "w");
+    if (!f || fwrite(buf, 1, len, f) != len) { perror("snap write"); if (f) fclose(f); return 2; }
+    if (fclose(f)) { perror("snap close"); return 2; }
+    if (rename(tmp, dst)) { perror("snap rename"); return 2; }
+    return 0;
+}
+
+/* Stamp the snapshot's recorded index and refresh its trailing CRC. */
+static void snap_set_index(uint8_t *buf, size_t len, int64_t k)
+{
+    memcpy(buf + offsetof(SnapHdr, applied), &k, 8);
+    uint64_t crc = fnv64(buf, len - 8);
+    memcpy(buf + len - 8, &crc, 8);
+}
+
+/* Write-time claim verification (amendment 3): the bytes about to be
+ * published must carry the (H,D) a committed participant claimed at k — an
+ * independent source the snapshotter did not compute itself. */
+static int snap_claim_ok(const uint8_t *buf, size_t len, int64_t k, uint64_t cin, uint64_t cdg)
+{
+    SnapHdr h;
+    if (len < sizeof h) return 0;
+    memcpy(&h, buf, sizeof h);
+    return h.magic == SNAP_MAGIC && h.applied == k && h.input_hash == cin && h.digest == cdg;
+}
+
+typedef struct {
+    Engine  *e;
+    int64_t  k_lo;             /* candidates must be >= k_lo */
+    int      plant;            /* MKTSIM_SNAPSHOT_OFF_BY_ONE armed */
+    int      fatal;
+    int64_t  cand_k;           /* index of the latest covering claim, or -1 */
+    uint64_t cand_in, cand_dg; /* that participant's claimed (H,D) at cand_k */
+    uint8_t *cand_buf;
+    size_t   cand_len, cand_cap;
+} SnapReplay;
+
+/* Capture the state at `index` (before it is applied) as the snapshot
+ * candidate. Under the off-by-one plant the engine's shadow holds the state
+ * at index-1, so the captured bytes record index but carry state index-1. */
+static void snap_capture_candidate(SnapReplay *s, int64_t index, uint64_t cin, uint64_t cdg)
+{
+    Engine *e = s->e;
+    size_t need;
+    if (s->plant && e->snap_shadow && e->snap_shadow_len) {
+        need = e->snap_shadow_len;
+        if (need > s->cand_cap) {
+            s->cand_buf = realloc(s->cand_buf, need);
+            if (!s->cand_buf) { perror("realloc"); exit(5); }
+            s->cand_cap = need;
+        }
+        memcpy(s->cand_buf, e->snap_shadow, need);
+    } else {
+        need = sizeof(SnapHdr) + (size_t)e->n * sizeof(Order) + 8;
+        if (need > s->cand_cap) {
+            s->cand_buf = realloc(s->cand_buf, need);
+            if (!s->cand_buf) { perror("realloc"); exit(5); }
+            s->cand_cap = need;
+        }
+        need = snap_serialize(e, s->cand_buf);
+    }
+    s->cand_len = need;
+    s->cand_k = index;
+    s->cand_in = cin;
+    s->cand_dg = cdg;
+}
+
+/* The snapshotter's replay: validate, note a covering claim at this index,
+ * apply. A committed message whose seen_count equals its own index is a
+ * participant that had applied exactly k = index messages — an independent
+ * claim of the state at index. */
+static MmapqNextMove on_snap(int64_t index, uint8_t appender_id, const void *data, int32_t len, void *ctx)
+{
+    (void)appender_id;
+    SnapReplay *s = ctx; Engine *e = s->e;
+    if (index != e->applied) {
+        fprintf(stderr, "snapshotter: GAP expected index %lld got %lld\n",
+                (long long)e->applied, (long long)index);
+        s->fatal = 1; return MMAPQ_NEXT_STOP;
+    }
+    MsgHdr h; const char *bad = validate(data, len, &h);
+    if (bad) {
+        fprintf(stderr, "snapshotter: INVALID message at %lld (%s), len=%d\n",
+                (long long)index, bad, len);
+        s->fatal = 1; return MMAPQ_NEXT_STOP;
+    }
+    if (h.type != T_GATEWAY && h.seen_count == index && index >= s->k_lo)
+        snap_capture_candidate(s, index, h.seen_input, h.seen_digest);
+    engine_apply(e, index, data, len, &h);
+    return MMAPQ_NEXT_ADVANCE;
+}
+
+/* Advance the in-memory engine from its current position to `t`, applying
+ * only [k_prev, t) and remembering the latest covering claim at or below t. */
+static int snap_advance(MmapqIndexedPoller *p, SnapReplay *s, int64_t t)
+{
+    int consec_to = 0;
+    while (s->e->applied < t) {
+        MmapqPollResult pr = mmapq_indexed_poller_poll(p, on_snap, s);
+        if (s->fatal) return 3;
+        if (pr == MMAPQ_POLL_ADVANCED) { consec_to = 0; continue; }
+        if (pr == MMAPQ_POLL_END_OF_STREAM) break;
+        if (pr == MMAPQ_POLL_ERROR
+            && mmapq_indexed_poller_last_error(p) == MMAPQ_ETIMEDOUT && consec_to < 5) {
+            consec_to++;
+            struct timespec ts = {0, 1000000}; nanosleep(&ts, NULL);
+            continue;
+        }
+        fprintf(stderr, "snapshotter: poll returned %d (last_error %d) at %lld\n", (int)pr,
+                mmapq_indexed_poller_last_error(p), (long long)s->e->applied);
+        return 4;
+    }
+    return 0;
+}
+
+/* Recover the engine at start or restart: start_index -> snap_<start_index>
+ * -> replay from start_index, never below. The no-progress rule (amendment
+ * 2) is defined here: retry only while start_index advances; if the same
+ * start_index returns with the snapshot still missing, SNAPRECOVER FAIL and
+ * a non-zero exit — never start empty at start_index > 0. */
+static int snap_recover(const char *dir, MmapqIndexedArchiver *a, Engine *e, int64_t *k_prev)
+{
+    int64_t from = -1, prev = -1;
+    for (int tries = 1; tries <= SNAPRECOVER_MAX_TRIES; tries++) {
+        int64_t si = mmapq_indexed_archiver_start_index(a);
+        if (from < 0) from = si;
+        if (si == 0) { *k_prev = 0; return 0; }   /* fresh queue: empty engine */
+        char path[1100];
+        snap_path_index(dir, si, path, sizeof path);
+        int lrc = snap_load(path, e);
+        if (lrc == 0) {
+            if (e->applied != si) {
+                /* the snapshot must name the index start_index names; a
+                 * mismatch would adopt a state for the wrong index */
+                printf("SNAPRECOVER who=snapshotter from=%lld si=%lld tries=%d result=FAIL (snapshot carries %lld)\n",
+                       (long long)from, (long long)si, tries, (long long)e->applied);
+                fflush(stdout);
+                return 3;
+            }
+            *k_prev = si;
+            printf("SNAPRECOVER who=snapshotter from=%lld si=%lld tries=%d result=PASS\n",
+                   (long long)from, (long long)si, tries);
+            fflush(stdout);
+            return 0;
+        }
+        if (lrc == -2) {
+            /* a present but corrupt snapshot: fail at once, never retried
+             * as if it were missing */
+            printf("SNAPRECOVER who=snapshotter from=%lld si=%lld tries=%d result=FAIL (corrupt)\n",
+                   (long long)from, (long long)si, tries);
+            fflush(stdout);
+            return 3;
+        }
+        if (si == prev) {
+            /* no progress: the same start_index with the snapshot still
+             * missing — the no-progress rule (amendment 2) */
+            printf("SNAPRECOVER who=snapshotter from=%lld si=%lld tries=%d result=FAIL\n",
+                   (long long)from, (long long)si, tries);
+            fflush(stdout);
+            return 3;
+        }
+        prev = si;
+        struct timespec ts = {0, 20000000}; nanosleep(&ts, NULL);
+    }
+    /* last-resort cap: start_index kept advancing but the snapshot never
+     * appeared; report the current start_index and stop */
+    {
+        int64_t si = mmapq_indexed_archiver_start_index(a);
+        printf("SNAPRECOVER who=snapshotter from=%lld si=%lld tries=%d result=FAIL (retry cap)\n",
+               (long long)from, (long long)si, SNAPRECOVER_MAX_TRIES);
+        fflush(stdout);
+    }
+    return 3;
+}
+
+static int run_snapshotter(const char *dir, const char *qname, const char *stopfile, int hand)
+{
+    char qdir[1100];
+    snprintf(qdir, sizeof qdir, "%s/%s", dir, qname);
+
+    /* amendment 5: exactly one snapshotter (flock guard) */
+    int lockfd = snap_lock(dir);
+    if (lockfd < 0) return 2;
+
+    const char *plant = getenv("MKTSIM_RECLAIM_AHEAD_OF_MARK");
+    ArchTail c = { .dir = dir, .qdir = qdir, .hand = hand,
+                   .plant_armed = plant && atoi(plant) != 0 };
+
+    MmapqIndexedArchiver *a = NULL;
+    if (mmapq_indexed_archiver_create(dir, qname, RING_SIZE, NULL, &a) || !a) {
+        fprintf(stderr, "snapshotter: create failed\n");
+        close(lockfd);
+        return 2;
+    }
+    while (access(qdir, F_OK) != 0) {   /* queue not created yet */
+        if (access(stopfile, F_OK) == 0) {
+            mmapq_indexed_archiver_close(a); close(lockfd); return 0;
+        }
+        struct timespec ts = {0, 100000000}; nanosleep(&ts, NULL);
+    }
+    if (!mmapq_indexed_archiver_archivable(a)) {
+        fprintf(stderr, "snapshotter: queue %s is not archivable\n", qname);
+        mmapq_indexed_archiver_close(a); close(lockfd);
+        return 2;
+    }
+
+    Engine e; engine_init(&e);
+    const char *obo = getenv("MKTSIM_SNAPSHOTTER_OFF_BY_ONE");
+    int plant_obo = obo && atoi(obo) != 0;
+    if (plant_obo) e.snap_shadow_cap = 1;
+    int64_t k_prev = 0;
+    int rc = snap_recover(dir, a, &e, &k_prev);
+    if (rc) { mmapq_indexed_archiver_close(a); close(lockfd); engine_free(&e); return rc; }
+
+    MmapqIndexedQueue *q = NULL;
+    if (mmapq_indexed_queue_create(dir, qname, REGION_SIZE, RING_SIZE, 1, MAX_FILE_SIZE, 0,
+                                   TIMEOUT_NS, 1, NULL, NULL, &q)) {
+        fprintf(stderr, "snapshotter: queue create\n");
+        mmapq_indexed_archiver_close(a); close(lockfd); engine_free(&e); return 2;
+    }
+    MmapqIndexedReader *rd = NULL;
+    if (mmapq_indexed_queue_create_reader(q, &rd)) {
+        fprintf(stderr, "snapshotter: reader\n");
+        mmapq_indexed_queue_close(q); mmapq_indexed_archiver_close(a); close(lockfd); engine_free(&e); return 2;
+    }
+    MmapqIndexedPoller *p = NULL;
+    if (mmapq_indexed_queue_create_poller(q, &p)) {
+        fprintf(stderr, "snapshotter: poller\n");
+        mmapq_indexed_reader_close(rd); mmapq_indexed_queue_close(q);
+        mmapq_indexed_archiver_close(a); close(lockfd); engine_free(&e); return 2;
+    }
+    if (!mmapq_indexed_poller_move_to_index(p, e.applied)) {
+        fprintf(stderr, "snapshotter: move_to_index %lld failed\n", (long long)e.applied);
+        mmapq_indexed_poller_close(p); mmapq_indexed_reader_close(rd); mmapq_indexed_queue_close(q);
+        mmapq_indexed_archiver_close(a); close(lockfd); engine_free(&e); return 4;
+    }
+
+    SnapReplay s = { .e = &e, .k_lo = k_prev, .plant = plant_obo, .cand_k = -1 };
+    for (;;) {
+        int stopping = access(stopfile, F_OK) == 0;
+        if (access(qdir, F_OK) != 0) {
+            if (stopping) break;
+            struct timespec ts = {0, 100000000}; nanosleep(&ts, NULL);
+            continue;
+        }
+        int64_t last = mmapq_indexed_reader_last_index(rd);
+        int64_t committed_end = last + 1;
+        int64_t wm = arch_watermark(dir);          /* temporary bound (amendment 1) */
+        if (wm < 0) {
+            if (stopping) break;
+            struct timespec ts = {0, 50000000}; nanosleep(&ts, NULL);
+            continue;
+        }
+        int64_t t = committed_end < wm ? committed_end : wm;
+        if (t > e.applied) {
+            rc = snap_advance(p, &s, t);
+            if (rc) {
+                mmapq_indexed_poller_close(p); mmapq_indexed_reader_close(rd); mmapq_indexed_queue_close(q);
+                mmapq_indexed_archiver_close(a); close(lockfd); engine_free(&e); return rc;
+            }
+        }
+        if (s.cand_k > k_prev && s.cand_k <= t) {
+            int64_t k = s.cand_k;
+            snap_set_index(s.cand_buf, s.cand_len, k);
+            int64_t si_before = mmapq_indexed_archiver_start_index(a);
+            if (!snap_claim_ok(s.cand_buf, s.cand_len, k, s.cand_in, s.cand_dg)) {
+                printf("SNAPWRITE k=%lld si=%lld claim=FAIL result=FAIL\n",
+                       (long long)k, (long long)si_before);
+                fflush(stdout);
+                mmapq_indexed_poller_close(p); mmapq_indexed_reader_close(rd); mmapq_indexed_queue_close(q);
+                mmapq_indexed_archiver_close(a); close(lockfd); engine_free(&e); return 3;
+            }
+            if (snap_write_index(dir, k, s.cand_buf, s.cand_len)) {
+                mmapq_indexed_poller_close(p); mmapq_indexed_reader_close(rd); mmapq_indexed_queue_close(q);
+                mmapq_indexed_archiver_close(a); close(lockfd); engine_free(&e); return 2;
+            }
+            int arc = mmapq_indexed_archiver_archive_up_to_index(a, k);
+            if (arc) {
+                fprintf(stderr, "snapshotter: archive_up_to_index(%lld) rc=%d\n", (long long)k, arc);
+                mmapq_indexed_poller_close(p); mmapq_indexed_reader_close(rd); mmapq_indexed_queue_close(q);
+                mmapq_indexed_archiver_close(a); close(lockfd); engine_free(&e); return 2;
+            }
+            int64_t si = mmapq_indexed_archiver_start_index(a);
+            if (si < k) {
+                /* start_index did not reach k: keep everything and retry
+                 * next round (a retry, not a failed write) */
+                printf("SNAPRETRY k=%lld si=%lld (start_index has not reached k)\n",
+                       (long long)k, (long long)si);
+                fflush(stdout);
+                if (stopping) break;
+                struct timespec ts = {0, 50000000}; nanosleep(&ts, NULL);
+                continue;
+            }
+            if (si > k) {
+                /* start_index names a snapshot we never wrote: abort */
+                printf("SNAPWRITE k=%lld si=%lld claim=ok result=FAIL\n",
+                       (long long)k, (long long)si);
+                fflush(stdout);
+                mmapq_indexed_poller_close(p); mmapq_indexed_reader_close(rd); mmapq_indexed_queue_close(q);
+                mmapq_indexed_archiver_close(a); close(lockfd); engine_free(&e); return 3;
+            }
+            printf("SNAPWRITE k=%lld si=%lld claim=ok result=PASS\n",
+                   (long long)k, (long long)si);
+            fflush(stdout);
+            k_prev = k;
+            s.k_lo = k;
+            s.cand_k = -1;
+        }
+        int tr = archiver_tail(a, &c);
+        if (tr == 2) {
+            mmapq_indexed_poller_close(p); mmapq_indexed_reader_close(rd); mmapq_indexed_queue_close(q);
+            mmapq_indexed_archiver_close(a); close(lockfd); engine_free(&e); return 2;
+        }
+        if (tr == 1) {
+            if (stopping) break;
+            struct timespec ts = {0, 50000000}; nanosleep(&ts, NULL);
+            continue;
+        }
+        if (stopping) break;
+        struct timespec ts = {0, 50000000}; nanosleep(&ts, NULL);
+    }
+    printf("ARCHFINAL rounds=%d start_index=%lld copied=%lld skipped=%lld reclaimed=%lld hand=%d plant_fired=%d\n",
+           c.rounds, (long long)mmapq_indexed_archiver_start_index(a),
+           (long long)c.copied, (long long)c.skipped, (long long)c.reclaimed, hand, c.plant_fired);
+    fflush(stdout);
+    mmapq_indexed_poller_close(p); mmapq_indexed_reader_close(rd); mmapq_indexed_queue_close(q);
+    mmapq_indexed_archiver_close(a);
+    free(s.cand_buf);
+    engine_free(&e);
+    close(lockfd);
     return 0;
 }
 
@@ -2452,6 +2855,8 @@ int main(int argc, char **argv)
     }
     if (argc >= 5 && !strcmp(argv[1], "archiver"))
         return run_archiver(argv[2], argv[3], argv[4], argc >= 6 ? atoi(argv[5]) : 0);
+    if (argc >= 5 && !strcmp(argv[1], "snapshotter"))
+        return run_snapshotter(argv[2], argv[3], argv[4], argc >= 6 ? atoi(argv[5]) : 0);
     if (argc >= 5 && !strcmp(argv[1], "snapjoin"))
         return run_snapjoin(argv[2], argv[3], argv[4]);
     if (argc >= 5 && !strcmp(argv[1], "exportimport"))
@@ -2461,8 +2866,10 @@ int main(int argc, char **argv)
     fprintf(stderr, "usage:\n  %s trader   <dir> <queue> <trader_id> <incarnation> <stopfile> [sync|async] [appender_id|-1] [batch 0|1] [archivable 0|1]\n"
                     "  %s gateway  <dir> <queue> <gateway_id> <incarnation> <stopfile> [sync|async] [appender_id|-1] [archivable 0|1]\n"
                     "  %s archiver <dir> <queue> <stopfile> [hand 0|1]\n"
+                    "  %s snapshotter <dir> <queue> <stopfile> [hand 0|1]\n"
                     "  %s snapjoin <dir> <queue> <snapshot>\n"
                     "  %s exportimport <dir> <queue> <dstdir>\n"
-                    "  %s verify   <dir> <queue> [trader_log ...]\n", argv[0], argv[0], argv[0], argv[0], argv[0], argv[0]);
+                    "  %s verify   <dir> <queue> [trader_log ...]\n",
+                    argv[0], argv[0], argv[0], argv[0], argv[0], argv[0], argv[0]);
     return 2;
 }

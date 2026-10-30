@@ -207,15 +207,31 @@ expected 6 got 7 (gap or inversion)` → RESULT: FAIL.
 
 ## Archiving, reclamation and snapshots (F6/F7, `--archive`)
 
-With `--archive` the queue is created `archivable=1` and an **archiver
-process** runs the guide-chapter-6 loop continuously under the churn load:
-`archive_up_to_index(N)` → `archivable_files()` (the mark) → byte-copy the
-marked files to `<dir>/archive/` (verified by size + CRC) →
-`reclaim_files()`. `N` is the minimum of the participants' progress
-watermarks (`<dir>/progress/`), so a lagging live reader is never archived
-over. With `--hand-delete` the archiver replaces only the reclaim step: the
-marked files are unlinked by hand under the X5 rule (no undo between the
-listing and the last unlink — this archiver never undoes).
+With `--archive` the queue is created `archivable=1` and a **snapshotter
+process** (`mktsim snapshotter`, stage (e) E1) runs under the churn load.
+Each round it reads the committed queue in order, holds one engine in
+memory across rounds, picks `k`, writes `snap_<k>` atomically (tmp +
+`rename`) after verifying `(k, H, D)` against a committed participant's
+claim at `k`, calls `archive_up_to_index(k)`, and only then runs the
+guide-chapter-6 tail: `archivable_files()` (the mark) → byte-copy the marked
+files to `<dir>/archive/` (verified by size + CRC) → `reclaim_files()`. `k`
+is bounded by the minimum of the participants' progress watermarks
+(`<dir>/progress/`) until E5, so a lagging live reader is never archived
+over. With `--hand-delete` the reclaim step is replaced: the marked files
+are unlinked by hand under the X5 rule (no undo between the listing and the
+last unlink — this loop never undoes).
+
+**One snapshotter, and the dead-snapshotter safety property.** Exactly one
+snapshotter (or archiver) runs at a time, enforced by an exclusive
+`flock` on `<dir>/snapshotter.lock`; a second instance prints
+`SNAPSHOTTER lock=busy result=FAIL` and exits non-zero. Because only the
+snapshotter moves `start_index`, **a dead snapshotter pauses archiving —
+`start_index` does not move — so no live reader is undercut.** A restart
+recovers via `start_index → snap_<start_index> → replay from start_index`
+(bounded no-progress retry); it never replays below `start_index`, and if
+`start_index > 0` with `snap_<start_index>` missing after the bounded retry
+it prints `SNAPRECOVER who=snapshotter … result=FAIL` and exits non-zero
+rather than starting empty.
 
 The copy-aside **never replaces an existing archived copy** (CAND-59 spec
 §3.5): the copy lands via `link(2)`, and an `EEXIST` is skipped and logged
@@ -241,7 +257,7 @@ copies (the log can be short by the at-most-one unlogged committed record,
 and that record may itself be archived; the copies are the queue's content
 below `start_index` and outrank the log). The log-ahead check applies only
 to the live range. A restarted gateway's uncommitted records that the walk
-does not yield were chopped by the archiver and are re-appended by policy.
+does not yield were chopped by the snapshotter and are re-appended by policy.
 
 **Limit of the correction:** it relies on the archived copies. With pure
 trimming (reclaim without copy-aside), a commit whose log line was never
@@ -259,15 +275,23 @@ archived tail exercised (`archived > 0` whenever files were copied);
 records already archived (L < C + 1).
 
 Planted defects:
-- `MKTSIM_RECLAIM_AHEAD_OF_MARK=1` — the archiver unlinks one payload file
+- `MKTSIM_RECLAIM_AHEAD_OF_MARK=1` — the snapshotter unlinks one payload file
   beyond the mark. Observed failing: `verify: MISSING HISTORY at index
   41562: payload_64_1 absent from archive/ and the live queue` →
   RESULT: FAIL (the missing range is identified; never a silent pass).
-- `MKTSIM_SNAPSHOT_OFF_BY_ONE=1` — one trader's snapshots record index k
-  but carry the state at k−1. Observed failing: the snapshot joiner dies on
-  the first claim over the corrupt boundary (`snapjoin: DIVERGENCE at 4097 …
+- `MKTSIM_SNAPSHOT_OFF_BY_ONE=1` — one trader's snapshots record index k but
+  carry the state at k−1. Observed failing: the snapshot joiner dies on the
+  first claim over the corrupt boundary (`snapjoin: DIVERGENCE at 4097 …
   claims state@4097 …`), and a restart that consumed the planted snapshot
-  diverges online the same way → RESULT: FAIL.
+  diverges online the same way → RESULT: FAIL. (Stage-(c) plant; it is the
+  fail-first proof for the joiner's check, and the trader snapshots drive
+  restarts and the joiner until E5.)
+- `MKTSIM_SNAPSHOTTER_OFF_BY_ONE=1` — the **snapshotter** writes `snap_<k>`
+  recording index k but carrying the state at k−1. Observed failing: the
+  write-time claim check catches it at publication —
+  `SNAPWRITE k=… si=… claim=FAIL result=FAIL` → RESULT: FAIL. (Fail-first:
+  with the check removed in a scratch copy the same run reports `claim=ok`
+  and PASSes, i.e. the plant is real and the check is what catches it.)
 
 Fail-first for the committed-prefix restart: the pre-fix semantics
 (committed set = what the live scan shows; any logged commit not shown is

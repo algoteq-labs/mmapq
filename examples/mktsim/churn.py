@@ -72,8 +72,9 @@ def main():
         gw_hook = "MKTSIM_GW_KILL_AFTER_COMMIT"
     # Plants (stage c): armed on ONE process each, then disarmed here so no
     # other process inherits them.
-    obo_plant = os.environ.pop("MKTSIM_SNAPSHOT_OFF_BY_ONE", None)      # trader 0, incarnation 0
-    ram_plant = os.environ.pop("MKTSIM_RECLAIM_AHEAD_OF_MARK", None)    # the archiver
+    obo_plant = os.environ.pop("MKTSIM_SNAPSHOT_OFF_BY_ONE", None)      # trader 0, incarnation 0 (stage c)
+    sbo_plant = os.environ.pop("MKTSIM_SNAPSHOTTER_OFF_BY_ONE", None)   # the snapshotter (stage e E1)
+    ram_plant = os.environ.pop("MKTSIM_RECLAIM_AHEAD_OF_MARK", None)    # the snapshotter/archiver
     mis_plant = os.environ.pop("MKTSIM_RUNTIME_MISCLASSIFY", None)      # trader 1 (async in mixed), incarnation 0
     xtr_plant = os.environ.pop("MKTSIM_EXPORT_TRUNCATE", None)          # the exportimport step
 
@@ -241,16 +242,21 @@ def main():
         time.sleep(rnd.uniform(0, 0.05))
     time.sleep(0.5)
 
-    # F7: the archiver process runs the guide-ch6 loop under the churn load.
-    # It is never a churn victim; STOP ends it after one final round.
+    # F7 / stage (e) E1: the snapshotter process runs the snapshot-then-archive
+    # loop under the churn load. It is never a churn victim; STOP ends it after
+    # one final round.
     archiver, archiver_log = None, None
     if a.archive:
-        archiver_log = os.path.join(a.dir, "logs", "archiver.log")
-        env = dict(os.environ) if ram_plant else None
-        if ram_plant:
-            env["MKTSIM_RECLAIM_AHEAD_OF_MARK"] = "1"
+        archiver_log = os.path.join(a.dir, "logs", "snapshotter.log")
+        env = None
+        if sbo_plant or ram_plant:
+            env = dict(os.environ)
+            if sbo_plant:
+                env["MKTSIM_SNAPSHOTTER_OFF_BY_ONE"] = "1"; stats["sbo_armed"] = 1
+            if ram_plant:
+                env["MKTSIM_RECLAIM_AHEAD_OF_MARK"] = "1"
         f = open(archiver_log, "w")
-        archiver = subprocess.Popen([a.bin, "archiver", a.dir, qname, stop,
+        archiver = subprocess.Popen([a.bin, "snapshotter", a.dir, qname, stop,
                                      "1" if a.hand_delete else "0"],
                                     stdout=f, stderr=subprocess.STDOUT, env=env)
         f.close()
@@ -451,6 +457,8 @@ def main():
           f"batch_ids_taken_at_end={btaken}")
     if obo_plant:
         print(f"snapshot_off_by_one_plant armed={stats.get('obo_armed', 0)}")
+    if sbo_plant:
+        print(f"snapshotter_off_by_one_plant armed={stats.get('sbo_armed', 0)}")
     if ram_plant:
         fired = archiver_log is not None and any(l.startswith("PLANT reclaim-ahead-of-mark")
                                                  for l in open(archiver_log))
