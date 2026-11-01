@@ -144,7 +144,9 @@ void test_archivable_roundtrip(void)
     int rc_arch = mmapq_indexed_archiver_create(DIR, QUEUE, RING_SZ, rt, &arch);
     TEST_ASSERT_EQUAL_INT(0, rc_arch);
     TEST_ASSERT_NOT_NULL(arch);
-    TEST_ASSERT_TRUE(mmapq_indexed_archiver_archivable(arch));
+    { int out = -1;
+      TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_archiver_archivable_checked(arch, &out));
+      TEST_ASSERT_EQUAL_INT(1, out); }
     mmapq_indexed_archiver_close(arch);
 
     /* Reopen with archivable=0 — disk wins, still archivable */
@@ -159,7 +161,9 @@ void test_archivable_roundtrip(void)
     int rc_arch2 = mmapq_indexed_archiver_create(DIR, QUEUE, RING_SZ, rt, &arch);
     TEST_ASSERT_EQUAL_INT(0, rc_arch2);
     TEST_ASSERT_NOT_NULL(arch);
-    TEST_ASSERT_TRUE(mmapq_indexed_archiver_archivable(arch));
+    { int out = -1;
+      TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_archiver_archivable_checked(arch, &out));
+      TEST_ASSERT_EQUAL_INT(1, out); }
     mmapq_indexed_archiver_close(arch);
 }
 
@@ -188,7 +192,9 @@ void test_default_not_archivable(void)
     int rc_arch = mmapq_indexed_archiver_create(DIR, QUEUE, RING_SZ, rt, &arch);
     TEST_ASSERT_EQUAL_INT(0, rc_arch);
     TEST_ASSERT_NOT_NULL(arch);
-    TEST_ASSERT_FALSE(mmapq_indexed_archiver_archivable(arch));
+    { int out = -1;
+      TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_archiver_archivable_checked(arch, &out));
+      TEST_ASSERT_EQUAL_INT(0, out); }
     mmapq_indexed_archiver_close(arch);
 }
 
@@ -225,7 +231,9 @@ void test_archiver_start_index_initially_zero(void)
     TEST_ASSERT_EQUAL_INT(0, rc_arch);
     TEST_ASSERT_NOT_NULL(arch);
     TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_archiver_start_index(arch));
-    TEST_ASSERT_EQUAL_INT(1, mmapq_indexed_archiver_archivable(arch));
+    { int out = -1;
+      TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_archiver_archivable_checked(arch, &out));
+      TEST_ASSERT_EQUAL_INT(1, out); }
     mmapq_indexed_archiver_close(arch);
 }
 
@@ -3041,6 +3049,112 @@ void test_c38_reclaim_aligned_96k_file_loses_nothing(void)
     c38_reclaim_loses_nothing(98304);
 }
 
+/* ── CAND-60 pins ────────────────────────────────────────────────────────── */
+
+static void write_short_meta(void)
+{
+    char dir_path[512];
+    snprintf(dir_path, sizeof(dir_path), "%s/%s", DIR, QUEUE);
+    mkdir(dir_path, 0775);
+    char meta_path[600];
+    snprintf(meta_path, sizeof(meta_path), "%s/%s/meta", DIR, QUEUE);
+    FILE *f = fopen(meta_path, "wb");
+    TEST_ASSERT_NOT_NULL(f);
+    char shortbuf[10] = {0};
+    TEST_ASSERT_EQUAL_INT(10, (int)fwrite(shortbuf, 1, sizeof(shortbuf), f));
+    fclose(f);
+}
+
+void test_c60_archivable_checked_missing_meta_is_enoent(void)
+{
+    MmapqIndexedArchiver *arch = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_archiver_create(DIR, QUEUE, RING_SZ, rt, &arch));
+    TEST_ASSERT_NOT_NULL(arch);
+    int out = 0x7fffffff;
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ENOENT,
+        mmapq_indexed_archiver_archivable_checked(arch, &out));
+    TEST_ASSERT_EQUAL_INT(0, out);
+    mmapq_indexed_archiver_close(arch);
+}
+
+void test_c60_archivable_checked_transient_retry_same_handle(void)
+{
+    MmapqIndexedArchiver *arch = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_archiver_create(DIR, QUEUE, RING_SZ, rt, &arch));
+    TEST_ASSERT_NOT_NULL(arch);
+    int out = 0x7fffffff;
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ENOENT,
+        mmapq_indexed_archiver_archivable_checked(arch, &out));
+    TEST_ASSERT_EQUAL_INT(0, out);
+
+    /* Same handle: the queue appears, the call must return the real answer. */
+    MmapqIndexedAppender *a = create_archivable_appender();
+    TEST_ASSERT_NOT_NULL(a);
+    mmapq_indexed_appender_close(a);
+
+    out = 0x7fffffff;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_archiver_archivable_checked(arch, &out));
+    TEST_ASSERT_EQUAL_INT(1, out);
+    mmapq_indexed_archiver_close(arch);
+}
+
+void test_c60_archivable_checked_short_meta_is_enotready(void)
+{
+    write_short_meta();
+
+    MmapqIndexedArchiver *arch = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_archiver_create(DIR, QUEUE, RING_SZ, rt, &arch));
+    TEST_ASSERT_NOT_NULL(arch);
+    int out = 0x7fffffff;
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ENOTREADY,
+        mmapq_indexed_archiver_archivable_checked(arch, &out));
+    TEST_ASSERT_EQUAL_INT(0, out);
+
+    /* Same handle: unlink the short meta, create the archivable queue, retry. */
+    char meta_path[600];
+    snprintf(meta_path, sizeof(meta_path), "%s/%s/meta", DIR, QUEUE);
+    TEST_ASSERT_EQUAL_INT(0, unlink(meta_path));
+    MmapqIndexedAppender *a = create_archivable_appender();
+    TEST_ASSERT_NOT_NULL(a);
+    mmapq_indexed_appender_close(a);
+
+    out = 0x7fffffff;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_archiver_archivable_checked(arch, &out));
+    TEST_ASSERT_EQUAL_INT(1, out);
+    mmapq_indexed_archiver_close(arch);
+}
+
+void test_c60_archivable_checked_sticky_is_stable(void)
+{
+    char dir_path[512];
+    snprintf(dir_path, sizeof(dir_path), "%s/%s", DIR, QUEUE);
+    mkdir(dir_path, 0775);
+    QueueMeta *m = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapqi_queue_meta_open_rw(DIR, QUEUE, 0,
+        REGION_SZ, MAX_FILE, 1, QUEUE_TYPE_BATCH, &m));
+    TEST_ASSERT_NOT_NULL(m);
+    mmapqi_queue_meta_close(m);
+
+    MmapqIndexedArchiver *arch = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_archiver_create(DIR, QUEUE, RING_SZ, rt, &arch));
+    TEST_ASSERT_NOT_NULL(arch);
+    int out = 0x7fffffff;
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ESCHEMA,
+        mmapq_indexed_archiver_archivable_checked(arch, &out));
+    TEST_ASSERT_EQUAL_INT(0, out);
+    out = 0x7fffffff;
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ESCHEMA,
+        mmapq_indexed_archiver_archivable_checked(arch, &out));
+    TEST_ASSERT_EQUAL_INT(0, out);
+    mmapq_indexed_archiver_close(arch);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -3108,5 +3222,11 @@ int main(void)
     /* CAND-38 pins */
     RUN_TEST(test_c38_reclaim_aligned_32k_file_loses_nothing);
     RUN_TEST(test_c38_reclaim_aligned_96k_file_loses_nothing);
+
+    /* CAND-60 pins */
+    RUN_TEST(test_c60_archivable_checked_missing_meta_is_enoent);
+    RUN_TEST(test_c60_archivable_checked_transient_retry_same_handle);
+    RUN_TEST(test_c60_archivable_checked_short_meta_is_enotready);
+    RUN_TEST(test_c60_archivable_checked_sticky_is_stable);
     return UNITY_END();
 }

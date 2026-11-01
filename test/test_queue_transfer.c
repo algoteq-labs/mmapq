@@ -2666,7 +2666,9 @@ static void assert_archive_reclaim_round(const char *name, int64_t up_to_index)
     TEST_ASSERT_EQUAL_INT(0,
         mmapq_indexed_archiver_create(TEST_DIR, name, 16, rt, &arch));
     TEST_ASSERT_NOT_NULL(arch);
-    TEST_ASSERT_EQUAL_INT(1, mmapq_indexed_archiver_archivable(arch));
+    { int out = -1;
+      TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_archiver_archivable_checked(arch, &out));
+      TEST_ASSERT_EQUAL_INT(1, out); }
     TEST_ASSERT_EQUAL_INT(0,
         mmapq_indexed_archiver_archive_up_to_index(arch, up_to_index));
     char *paths[8] = {0};
@@ -2688,7 +2690,9 @@ static void assert_not_archivable(const char *name)
     TEST_ASSERT_EQUAL_INT(0,
         mmapq_indexed_archiver_create(TEST_DIR, name, 16, rt, &arch));
     TEST_ASSERT_NOT_NULL(arch);
-    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_archiver_archivable(arch));
+    { int out = -1;
+      TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_archiver_archivable_checked(arch, &out));
+      TEST_ASSERT_EQUAL_INT(0, out); }
     mmapq_indexed_archiver_close(arch);
 }
 
@@ -2866,7 +2870,9 @@ void test_transfer_import_append_flag_mismatch(void)
     MmapqIndexedArchiver *arch = NULL;
     TEST_ASSERT_EQUAL_INT(0,
         mmapq_indexed_archiver_create(TEST_DIR, COPY_Q, 16, rt, &arch));
-    TEST_ASSERT_EQUAL_INT(1, mmapq_indexed_archiver_archivable(arch));
+    { int out = -1;
+      TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_archiver_archivable_checked(arch, &out));
+      TEST_ASSERT_EQUAL_INT(1, out); }
     mmapq_indexed_archiver_close(arch);
 }
 
@@ -2878,7 +2884,9 @@ static void assert_batch_archive_reclaim_round(const char *name, int64_t up_to_i
     TEST_ASSERT_EQUAL_INT(0,
         mmapq_indexed_batch_archiver_create(TEST_DIR, name, 16, rt, &arch));
     TEST_ASSERT_NOT_NULL(arch);
-    TEST_ASSERT_EQUAL_INT(1, mmapq_indexed_batch_archiver_archivable(arch));
+    { int out = -1;
+      TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_archiver_archivable_checked(arch, &out));
+      TEST_ASSERT_EQUAL_INT(1, out); }
     TEST_ASSERT_EQUAL_INT(0,
         mmapq_indexed_batch_archiver_archive_up_to_index(arch, up_to_index));
     char *paths[8] = {0};
@@ -2901,7 +2909,9 @@ static void assert_batch_not_archivable(const char *name)
     TEST_ASSERT_EQUAL_INT(0,
         mmapq_indexed_batch_archiver_create(TEST_DIR, name, 16, rt, &arch));
     TEST_ASSERT_NOT_NULL(arch);
-    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_archiver_archivable(arch));
+    { int out = -1;
+      TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_archiver_archivable_checked(arch, &out));
+      TEST_ASSERT_EQUAL_INT(0, out); }
     mmapq_indexed_batch_archiver_close(arch);
 }
 
@@ -3086,7 +3096,9 @@ void test_batch_transfer_import_append_flag_mismatch(void)
     MmapqIndexedBatchArchiver *arch = NULL;
     TEST_ASSERT_EQUAL_INT(0,
         mmapq_indexed_batch_archiver_create(TEST_DIR, BQ_COPY, 16, rt, &arch));
-    TEST_ASSERT_EQUAL_INT(1, mmapq_indexed_batch_archiver_archivable(arch));
+    { int out = -1;
+      TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_archiver_archivable_checked(arch, &out));
+      TEST_ASSERT_EQUAL_INT(1, out); }
     mmapq_indexed_batch_archiver_close(arch);
 }
 

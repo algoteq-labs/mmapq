@@ -72,9 +72,25 @@ int mmapq_indexed_batch_archiver_create(
 /* ── Archiving ───────────────────────────────────────────────────────────── */
 
 /**
- * Return 1 if the queue is archivable, 0 otherwise.
+ * Report whether the queue is archivable.
+ *
+ * Batch twin of mmapq_indexed_archiver_archivable_checked — see
+ * indexed_archiver.h for the full contract. The meta is opened read-only
+ * on first use and cached. While it is not determinable yet the open's
+ * code is returned unchanged and the call is retryable on the same
+ * archiver: MMAPQ_ENOENT, MMAPQ_ENOTREADY or MMAPQ_ETIMEDOUT. Any other
+ * negative code is a sticky failure, reported unchanged on this and every
+ * later call. A genuine answer is a zero return with archivable_out set to
+ * 1 or 0.
+ *
+ * a:              the batch archiver
+ * archivable_out: receives 1 if archivable, 0 if not; cleared to 0 on any
+ *                 non-zero return
+ * Returns: 0 on success; MMAPQ_EINVAL if a or archivable_out is NULL;
+ *          otherwise the meta-open or region-accessor MMAPQ_* code
  */
-int mmapq_indexed_batch_archiver_archivable(MmapqIndexedBatchArchiver *a);
+int mmapq_indexed_batch_archiver_archivable_checked(MmapqIndexedBatchArchiver *a,
+                                                    int *archivable_out);
 
 /**
  * Archive all batches up to @p index (exclusive).

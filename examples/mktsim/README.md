@@ -484,18 +484,25 @@ the `run_short.sh` summary row. `run_short.sh` and `run_soak.sh` put every run
 and every scenario directory under their work directory and, on any
 `MISMATCH`, leave it in place and print its path (on success it is removed).
 
-**The snapshotter startup race (v1.18).** A snapshotter started alongside its
-traders can read the queue's archivable flag while the meta file is still being
-created. `mmapq_indexed_archiver_archivable()` (`src/indexed_archiver.c:156`)
-returns 0 in that window: it calls `ro_init` (`:44`), which opens the meta
-read-only via `mmapqi_queue_meta_open_ro`; while the meta is mid-creation that
-open returns `MMAPQ_ENOENT`/`MMAPQ_ENOTREADY`/`MMAPQ_ETIMEDOUT`, `ro_init`
-returns NULL, and `archivable` returns 0 — **so it can say 0 for a queue that
-becomes archivable**. Two mitigations here (no library change): the harnesses
-start the snapshotter only after the traders' `JOIN` lines
-(`_harness.Topo.wait_traders_joined`), and `run_snapshotter` retries the
-archivable check for a bounded 5 s before failing with the distinct line
-`SNAPSHOTTER not_archivable queue=<q> retries=<n> result=FAIL`. **Card for the
-owner:** the library API cannot distinguish "mid-creation" from "genuinely
-non-archivable" on the first call; a caller must retry (or a future
-open-ready signal is needed).
+**The snapshotter startup race (CAND-60).** A snapshotter started alongside
+its traders can read the queue's archivable flag while the meta file is still
+being created. `mmapq_indexed_archiver_archivable_checked()`
+(`src/indexed_archiver.c`) distinguishes the cases: while the meta is not
+determinable it returns the meta-open code unchanged — `MMAPQ_ENOENT` (no meta
+file), `MMAPQ_ENOTREADY` (meta exists but is not fully written) or
+`MMAPQ_ETIMEDOUT` (mapping timed out) — and the call is retryable on the same
+archiver; a zero return with `out == 0` is a genuine non-archivable answer;
+any other code is a terminal (sticky) failure. `run_snapshotter` retries only
+the not-ready trio for a bounded 5 s and prints a distinct line for each
+outcome:
+
+```
+SNAPSHOTTER not_archivable queue=<q> result=FAIL                    (genuine 0)
+SNAPSHOTTER not_ready queue=<q> retries=<n> rc=<rc> result=FAIL     (transient)
+SNAPSHOTTER archivable_error queue=<q> rc=<rc> result=FAIL          (sticky)
+```
+
+The harnesses additionally start the snapshotter only after the traders'
+`JOIN` lines (`_harness.Topo.wait_traders_joined`). The old behaviour — a
+boolean `archivable()` that said 0 for a queue that becomes archivable — is
+gone (CAND-60; the C symbol is removed).

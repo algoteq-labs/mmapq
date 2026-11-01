@@ -39,6 +39,7 @@ their on-disk value.
 | `mmapq_indexed_poller_move_to_index()` | Jump to a specific index |
 | `mmapq_indexed_reader_read()` | Read entry at a specific index |
 | `mmapq_indexed_reader_read_last()` | Read the last committed entry |
+| `mmapq_indexed_archiver_archivable_checked()` | Report whether the queue is archivable (0 or a negative `MMAPQ_*` code; `MMAPQ_ENOENT`/`MMAPQ_ENOTREADY`/`MMAPQ_ETIMEDOUT` while the meta is not determinable yet) |
 | `mmapq_indexed_archiver_archive_up_to_index()` | Archive entries up to an index |
 | `mmapq_indexed_archiver_archivable_files()` | List files no live entry can need |
 | `mmapq_indexed_archiver_print_summary()` | Print queue file layout summary |
@@ -61,6 +62,7 @@ The poll callback returns `MMAPQ_NEXT_ADVANCE`, `MMAPQ_NEXT_STOP`, or
 | `mmapq_indexed_batch_poller_poll()` | Process one message via callback |
 | `mmapq_indexed_batch_reader_read()` | Read a batch at a specific index |
 | `mmapq_indexed_batch_reader_read_last()` | Read the last committed batch |
+| `mmapq_indexed_batch_archiver_archivable_checked()` | Report whether the queue is archivable (0 or a negative `MMAPQ_*` code; `MMAPQ_ENOENT`/`MMAPQ_ENOTREADY`/`MMAPQ_ETIMEDOUT` while the meta is not determinable yet) |
 | `mmapq_indexed_batch_archiver_archive_up_to_index()` | Archive batches up to an index |
 | `mmapq_indexed_batch_archiver_archivable_files()` | List files no live entry can need |
 

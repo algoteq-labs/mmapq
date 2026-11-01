@@ -79,14 +79,31 @@ int mmapq_indexed_archiver_create(
 /* ── Archiving ───────────────────────────────────────────────────────────── */
 
 /**
- * Return 1 if the queue is archivable, 0 otherwise.
+ * Report whether the queue is archivable.
  *
  * A queue is archivable if and only if its meta file was created with
  * archivable=1. A non-archivable queue's start_index is fixed at
  * creation (it may be non-zero, e.g. a PRESERVE-mode transfer
  * destination); archiving never moves it.
+ *
+ * The meta is opened read-only on first use and cached on the archiver.
+ * While it is not determinable yet the open's code is returned unchanged
+ * and the call is retryable on the same archiver: MMAPQ_ENOENT (no meta
+ * file), MMAPQ_ENOTREADY (meta exists but is not fully written) or
+ * MMAPQ_ETIMEDOUT (mapping timed out). Any other negative code is a
+ * sticky failure, reported unchanged on this and every later call. A
+ * genuine answer is a zero return with archivable_out set to 1 or 0.
+ *
+ * a:              the archiver
+ * archivable_out: receives 1 if archivable, 0 if not; cleared to 0 on any
+ *                 non-zero return
+ * Returns: 0 on success; MMAPQ_EINVAL if a or archivable_out is NULL;
+ *          otherwise the meta-open or region-accessor MMAPQ_* code
+ *          (MMAPQ_ENOENT/MMAPQ_ENOTREADY/MMAPQ_ETIMEDOUT retryable on this
+ *          archiver, any other code terminal)
  */
-int mmapq_indexed_archiver_archivable(MmapqIndexedArchiver *a);
+int mmapq_indexed_archiver_archivable_checked(MmapqIndexedArchiver *a,
+                                              int *archivable_out);
 
 /**
  * Archive all entries up to @p index (exclusive).

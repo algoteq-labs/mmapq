@@ -2498,23 +2498,36 @@ static int run_snapshotter(const char *dir, const char *qname, const char *stopf
         }
         struct timespec ts = {0, 100000000}; nanosleep(&ts, NULL);
     }
-    /* The queue directory can exist before its meta file is fully created.
-     * mmapq_indexed_archiver_archivable() reads the flag through the meta open
-     * (ro_init -> mmapqi_queue_meta_open_ro); while the meta is mid-creation
-     * that open returns ENOENT/ENOTREADY/ETIMEDOUT and the function returns 0
-     * for a queue that becomes archivable (see the E6 card). Retry for a
-     * bounded time before failing, so a snapshotter started alongside its
-     * traders does not exit on a transient not-ready. A genuinely
-     * non-archivable queue still fails, with a distinct line. */
+    /* mmapq_indexed_archiver_archivable_checked() returns the meta-open
+     * code as-is: ENOENT/ENOTREADY/ETIMEDOUT mean "not determinable yet"
+     * and are retryable on this same archiver; a zero return with out==0
+     * is a genuine non-archivable answer; any other code is a terminal
+     * (sticky) failure. Retry only the not-ready trio for a bounded time
+     * and emit a distinct line for each of the three outcomes. */
     int archivable = 0, arch_tries = 0;
+    int arch_rc = 0;         /* set on a terminal (non-transient) failure */
+    int notready_rc = 0;     /* last transient rc seen */
     for (arch_tries = 1; arch_tries <= 200; arch_tries++) {   /* <= 5 s */
-        if (mmapq_indexed_archiver_archivable(a)) { archivable = 1; break; }
-        if (access(stopfile, F_OK) == 0) break;
+        int av = 0;
+        int rc = mmapq_indexed_archiver_archivable_checked(a, &av);
+        if (rc == 0) { archivable = av; break; }              /* definitive */
+        if (rc != MMAPQ_ENOENT && rc != MMAPQ_ENOTREADY &&
+            rc != MMAPQ_ETIMEDOUT) {
+            arch_rc = rc; break;                              /* terminal */
+        }
+        notready_rc = rc;
+        if (access(stopfile, F_OK) == 0) break;               /* stop requested */
         struct timespec ts = {0, 25000000}; nanosleep(&ts, NULL);
     }
     if (!archivable) {
-        printf("SNAPSHOTTER not_archivable queue=%s retries=%d result=FAIL\n",
-               qname, arch_tries - 1);
+        if (arch_rc != 0)
+            printf("SNAPSHOTTER archivable_error queue=%s rc=%d result=FAIL\n",
+                   qname, arch_rc);
+        else if (notready_rc != 0)
+            printf("SNAPSHOTTER not_ready queue=%s retries=%d rc=%d result=FAIL\n",
+                   qname, arch_tries - 1, notready_rc);
+        else
+            printf("SNAPSHOTTER not_archivable queue=%s result=FAIL\n", qname);
         fflush(stdout);
         mmapq_indexed_archiver_close(a); close(lockfd);
         return 2;

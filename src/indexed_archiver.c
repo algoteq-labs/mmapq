@@ -37,6 +37,10 @@ struct MmapqIndexedArchiver {
     AppenderMeta *appender_metas[MAX_APPENDERS];
 
     int meta_init_failed;
+    /* Exact rc from the last failed ro_init (0 once ready). Retained so a
+       sticky failure is reported on every later call, and so the transient
+       codes (ENOENT/ENOTREADY/ETIMEDOUT) reach archivable_checked unchanged. */
+    int meta_init_rc;
 };
 
 /* ── Lazy initialisers ───────────────────────────────────────────────────── */
@@ -48,6 +52,7 @@ static QueueMeta *ro_init(MmapqIndexedArchiver *a)
 
     int rc = mmapqi_queue_meta_open_ro(a->directory, a->queue_name, QUEUE_TYPE_NORMAL, &a->ro_meta);
     if (rc != 0) {
+        a->meta_init_rc = rc;
         if (rc != MMAPQ_ENOENT && rc != MMAPQ_ENOTREADY && rc != MMAPQ_ETIMEDOUT)
             a->meta_init_failed = 1;
         return NULL;
@@ -66,9 +71,11 @@ static QueueMeta *ro_init(MmapqIndexedArchiver *a)
     if (acc_rc != 0) {
         mmapqi_queue_meta_close(a->ro_meta);
         a->ro_meta = NULL;
+        a->meta_init_rc = acc_rc;
         return NULL;
     }
     a->header_acc = queue_region_accessor_header(a->ro_acc);
+    a->meta_init_rc = 0;
     return a->ro_meta;
 }
 
@@ -153,12 +160,16 @@ int mmapq_indexed_archiver_create(
 
 /* ── Archiving ───────────────────────────────────────────────────────────── */
 
-int mmapq_indexed_archiver_archivable(MmapqIndexedArchiver *a)
+int mmapq_indexed_archiver_archivable_checked(MmapqIndexedArchiver *a,
+                                              int *archivable_out)
 {
-    if (a == NULL) return 0;
+    if (archivable_out == NULL) return MMAPQ_EINVAL;
+    *archivable_out = 0;
+    if (a == NULL) return MMAPQ_EINVAL;
     QueueMeta *m = ro_init(a);
-    if (m == NULL) return 0;
-    return queue_meta_archivable(m);
+    if (m == NULL) return a->meta_init_rc;
+    *archivable_out = queue_meta_archivable(m);
+    return 0;
 }
 
 /* Lower every published start_offset back to its pre-call value after a

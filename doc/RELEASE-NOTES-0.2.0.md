@@ -44,6 +44,16 @@ guarantees are the C library's to state).
     replaced by `mmapq_indexed_batch_appender_start_batch_checked`. (The
     Python `start_batch` keeps its shape and now routes the C failure
     code; the Rust surface already used the checked call.)
+  - `mmapq_indexed_archiver_archivable` and
+    `mmapq_indexed_batch_archiver_archivable` (boolean-collapsing) —
+    replaced by `mmapq_indexed_archiver_archivable_checked` and
+    `mmapq_indexed_batch_archiver_archivable_checked` (0 on success with
+    the out-parameter set to 1/0; otherwise a negative `MMAPQ_*` code with
+    the out-parameter cleared to 0). The checked form returns
+    `MMAPQ_ENOENT`, `MMAPQ_ENOTREADY` or `MMAPQ_ETIMEDOUT` while the meta
+    is not yet determinable — retryable on the same archiver — and so
+    distinguishes that window from a genuine non-archivable answer, which
+    the old boolean collapsed into `0`.
   - `mmapq_indexed_appender_iterator` (the all-payloads appender
     iterator, an incomplete factory-only surface since 0.1.0) — removed
     with no replacement: for committed messages use a poller or reader;
