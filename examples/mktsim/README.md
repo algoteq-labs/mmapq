@@ -326,6 +326,15 @@ Planted defects:
   recovering participant's `snap_load` refuses it with
   `old snapshot format MKSNAP10 refused` → `SNAPRECOVER … result=FAIL
   (corrupt)`; never misread.
+- `MKTSIM_SNAP_BODY_CORRUPT=1` (E6) — the snapshotter corrupts one snapshot
+  **body** field (trader 0's `next_seq`, +1) after the write-time claim check
+  and refreshes the CRC, leaving the header `(k, H, D)` and the magic intact.
+  Observed failing: the write-time check prints `SNAPWRITE … claim=ok` (it
+  compares only the header claim and cannot see a body field), then the first
+  participant to recover from that snapshot fails its own per-trader check:
+  `SEQ trader 0 … expected <s+1> got <s>` → `SNAPRECOVER`/`SNAPJOIN` FAIL. This
+  is the second guard on snapshot contents; it is the counterpart of the
+  E3 wrong-snapshot-content check.
 
 Fail-first for the gateway snapshot prefix (stage (e) E4): the committed
 prefix is recovered from `snap_<start_index>` plus the queue scan, never from
@@ -351,6 +360,142 @@ regions / 256 KiB files:
 | `MKTSIM_GW_NO_SNAPSEQ=1` (E4) | FAIL: `GWRECOVER … result=FAIL` (the snapshot's gateway field is zeroed) |
 | `MKTSIM_SNAP_OLD_MAGIC=1` (E4) | FAIL: `snap_load: … old snapshot format MKSNAP10 refused` (never misread) |
 
-Churn runs are soak evidence — "ran N messages under M kills without a check
-failure" — not proof of race-freedom; the race-freedom claim belongs to the
-TLA+ model (`doc/model/`).
+## Gating scripts (stage (e) E6)
+
+Two scripts consolidate the scenarios and plants into runnable gates. Both
+invoke the real binary; neither runs in `test.sh`.
+
+```bash
+make mktsim
+bash examples/mktsim/run_short.sh              # <= 5 min, run by hand until CI exists
+bash examples/mktsim/run_soak.sh               # 30-60 min, the release gate
+```
+
+`run_short.sh` runs, in order: every plant (current and inherited) once and
+expects it **red**; every scenario harness and checks it against its declared
+outcome; and one clean churn per mode (sync, async, mixed) at the churn
+default cadence plus one at `--snap-every 1`, all expected **green**. It prints
+one summary table and exits non-zero if any row is `MISMATCH`. A plant that
+comes out green is a suite failure. Its plant list is checked against
+`mktsim.c` with `grep`; a plant named in the list but absent from the code is
+reported as a `plant-list mismatch` (see below).
+
+`run_soak.sh` is the release gate: many seeds, sync/async/mixed, both
+cadences (`--snap-every 4096` and `1`), the hand-deletion run, and the two
+gateway kill hooks. No plants. Per run it reports messages, kills, undercuts,
+snapshot cycles, peak live-queue disk, and that every survivor reached the
+live digest; it prints the totals and exits non-zero if any run failed. Knobs:
+`SOAK_SEEDS` (default 12), `SOAK_KILLS` (60), `SOAK_TRADERS` (8), `SOAK_ONLY`.
+
+**Scenario harnesses** (`examples/mktsim/scenarios/`, each prints one
+`SCENARIO <name> expect=<PASS|FAIL> got=<PASS|FAIL|VACUOUS> result=<OK|MISMATCH>
+[reason=<token>]` line and exits non-zero on `MISMATCH`; the scenario directory
+is `$MKTSIM_SCENARIO_DIR` when set, else a per-name `/tmp` path, and a
+harness that never reached its point reports `got=VACUOUS` with a `reason`
+rather than a silent green):
+
+| harness | topology | expect |
+|---|---|---|
+| `undercut.py` | SIGSTOP a trader for several cadence-1 rounds, SIGCONT; it recovers from `snap_<start_index>` | PASS |
+| `rejoin_delay.py` | restart a trader with `MKTSIM_REJOIN_DELAY_MS`; the ARCHIVED-move window forces a re-recovery | PASS |
+| `gwsnap.py` | kill/restart the gateway after `start_index` passed its committed prefix C; `GWRECOVER prefix>=C snap>0` | PASS |
+| `die_after_write.py` | `MKTSIM_SNAPSHOTTER_DIE_AFTER_WRITE=2` red, then a restart GCs the orphan | PASS |
+| `lock.py` | a second snapshotter gets `lock=busy` and exits non-zero | PASS |
+| `removed_snapshot.py` | delete `snap_<start_index>`; a restart fails bounded (`tries=2`) | FAIL |
+| `corrupt_snapshot.py` | `MKTSIM_SNAP_BODY_CORRUPT`; the recovering trader fails its SEQ check | FAIL |
+| `arch_before_snap.py` | `MKTSIM_ARCH_BEFORE_SNAP`; a restart fails bounded (`tries=2`) | FAIL |
+| `tiebreak.py` | `MKTSIM_TIEBREAK_BUG` armed on one trader; the others catch DIVERGENCE | FAIL |
+| `rejoin_stale_seq.py` | trader 0 commits past the latest `snap_<k>`, is SIGKILLed and restarted with `MKTSIM_REJOIN_STALE_SEQ`; trader 1 catches the duplicate | FAIL |
+| `runtime_misclassify.py` | an async trader with `MKTSIM_RUNTIME_MISCLASSIFY` (never killed) aborts on the first mapping timeout | FAIL |
+| `gw_no_snapseq.py` | gateway killed, its records archived (`live_committed=0`), restarted with `MKTSIM_GW_NO_SNAPSEQ`; `GWRECOVER … result=FAIL` | FAIL |
+
+**Every plant row must prove its plant fired (v1.18).** Each plant prints a
+`PLANT <name> …` line at the moment it changes behaviour: the snapshotter
+plants in `snapshotter.log` (`PLANT snapshotter-off-by-one`, `gc-keep-one`,
+`snap-body-corrupt`, `gw-no-snapseq`, `snap-old-magic`, `die-after-write`,
+`arch-before-snap`, `reclaim-ahead-of-mark`), the trader plants in the trader
+log (`PLANT batch-reorder`, `batch-partial-read`, `runtime-misclassify`,
+`rejoin-stale-seq` — the last only when the snapshot's `next_seq` differs from
+the rebuilt one), the gateway plant (`PLANT commit-before-gap`), the export
+plant (`PLANT export-truncate`), and the engine plant (`PLANT tiebreak-bug`).
+A plant row whose run has no `PLANT` line is `got=VACUOUS
+reason=plant_not_fired`, never `got=PASS`. Three plants that are inherently
+racy under churn (`MKTSIM_REJOIN_STALE_SEQ`, `MKTSIM_RUNTIME_MISCLASSIFY`,
+`MKTSIM_GW_NO_SNAPSEQ`) run as dedicated scenario harnesses instead of churn
+rows, so the plant fires deterministically.
+
+**Measured runtimes** (house machine, 2026-11-01, `-O3`): `run_short.sh`
+**~56 s** for 27 rows; determinism check **10× sequential and 5× two-at-once,
+0 mismatches**; one `run_soak.sh` at the defaults (12 seeds, 60 kills, 8
+traders; 76 runs, 29,746,451 messages, 4,401 kills, 6,630 undercuts, 8,863
+snapshot cycles, peak live disk 102,088 KiB, all 152 survivor FINALs at the
+live digest) **33 m 14 s** — see `audit/DEMO-01-stage-e/E6/`.
+
+**Scratch mutations (recorded evidence, not scripts).** These four edit the
+source in a throwaway copy (never the tree) to show the guard each plant is
+meant to exercise is what catches it; transcripts are in
+`audit/DEMO-01-stage-e/E6/scratch/`:
+
+- **no-delete GC** — comment out the `unlink` in `snap_gc`: snapshots
+  accumulate and the third write gives `SNAPGUARD kept=3 … result=FAIL`
+  (`no_delete_gc.txt`).
+- **spin** — make `drain()` always return `DRAIN_ARCHIVED`: without the bound
+  the trader spins; with it the same `start_index` twice gives the bounded
+  `SNAPRECOVER … result=FAIL (no progress)` (`spin.txt`).
+- **guard removed** — delete the `SNAPGUARD` exactness abort: the
+  `MKTSIM_GC_KEEP_ONE` plant still makes the line say
+  `SNAPGUARD kept=1 … result=FAIL`, but the snapshotter no longer aborts and
+  the run passes green — the guard is what catches it
+  (`guard_removed.txt`).
+- **claim check removed** — skip the write-time `snap_claim_ok` call: the
+  `MKTSIM_SNAPSHOTTER_OFF_BY_ONE` plant then publishes its wrong snapshot and
+  the snapshotter prints `SNAPWRITE … claim=ok result=PASS` (the guard is what
+  would have produced `claim=FAIL`); the defect then propagates and a
+  recovering reader diverges (`claim_removed.txt`).
+
+**Soak-evidence wording (§4, binding).** Churn runs are presented as **soak
+evidence** — "ran N messages under M kills without a check failure" — never as
+proof of race-freedom; the race-freedom claim belongs to the TLA+ model
+(`doc/model/`).
+
+**Dead-snapshotter safety property.** Because only the snapshotter moves
+`start_index`, a dead snapshotter pauses archiving — `start_index` does not
+move — so no live reader is undercut; recovery from a later snapshot plus the
+live queue is always possible.
+
+**`MKTSIM_REJOIN_STALE_SEQ` (E6 follow-up, v1.17).** On rejoin, the trader
+resumes its own sequence from the snapshot's `next_seq` — the value right
+after recovery — **without** counting its own messages drained in the rebuild.
+The resumed sequence is therefore stale (it repeats seqs the snapshot already
+counted), so another participant's per-trader `SEQ` check and the offline
+`VERIFY` catch the duplicate:
+`SEQ trader <t> … expected <s> got <s-1>`. Without the plant the value is read
+after the rebuild and accounts for every drained message. This hook did not
+exist before v1.17; the 2026-10-30 reconciliation was wrong to list it as
+present. `run_short.sh` now greps the code for every named plant and all are
+present (no plant-list mismatch).
+
+**No silent green in the harnesses (v1.17).** Each scenario reports one of
+three outcomes: the expected red, an unexpected green, or
+`got=VACUOUS result=MISMATCH reason=<token>` when it never reached its point
+(a plant did not fire, an expected line was never seen, or a process did not
+exit in time). A VACUOUS outcome is never a pass and its `reason` appears in
+the `run_short.sh` summary row. `run_short.sh` and `run_soak.sh` put every run
+and every scenario directory under their work directory and, on any
+`MISMATCH`, leave it in place and print its path (on success it is removed).
+
+**The snapshotter startup race (v1.18).** A snapshotter started alongside its
+traders can read the queue's archivable flag while the meta file is still being
+created. `mmapq_indexed_archiver_archivable()` (`src/indexed_archiver.c:156`)
+returns 0 in that window: it calls `ro_init` (`:44`), which opens the meta
+read-only via `mmapqi_queue_meta_open_ro`; while the meta is mid-creation that
+open returns `MMAPQ_ENOENT`/`MMAPQ_ENOTREADY`/`MMAPQ_ETIMEDOUT`, `ro_init`
+returns NULL, and `archivable` returns 0 — **so it can say 0 for a queue that
+becomes archivable**. Two mitigations here (no library change): the harnesses
+start the snapshotter only after the traders' `JOIN` lines
+(`_harness.Topo.wait_traders_joined`), and `run_snapshotter` retries the
+archivable check for a bounded 5 s before failing with the distinct line
+`SNAPSHOTTER not_archivable queue=<q> retries=<n> result=FAIL`. **Card for the
+owner:** the library API cannot distinguish "mid-creation" from "genuinely
+non-archivable" on the first call; a caller must retry (or a future
+open-ready signal is needed).

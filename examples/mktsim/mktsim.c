@@ -221,6 +221,7 @@ static void engine_init(Engine *e)
     for (int i = 0; i < MAX_TRADERS; i++) e->gw_last[i] = -1;
     const char *bug = getenv("MKTSIM_TIEBREAK_BUG");
     e->tiebreak_bug = bug && atoi(bug) != 0;
+    if (e->tiebreak_bug) { printf("PLANT tiebreak-bug pid=%d\n", (int)getpid()); fflush(stdout); }
 }
 
 static void engine_free(Engine *e)
@@ -298,7 +299,11 @@ static size_t snap_serialize(const Engine *e, uint8_t *buf)
     /* E4 fail-first plant: emit the snapshot with the gateway field zeroed, so
      * a recovering gateway cannot derive its committed prefix. */
     const char *nos = getenv("MKTSIM_GW_NO_SNAPSEQ");
-    if (nos && atoi(nos) != 0) memset(h.gw_last, 0, sizeof h.gw_last);
+    if (nos && atoi(nos) != 0) {
+        static int announced;
+        if (!announced) { printf("PLANT gw-no-snapseq\n"); fflush(stdout); announced = 1; }
+        memset(h.gw_last, 0, sizeof h.gw_last);
+    }
     memcpy(buf, &h, sizeof h);
     memcpy(buf + sizeof h, e->orders, (size_t)e->n * sizeof(Order));
     uint64_t crc = fnv64(buf, sizeof h + (size_t)e->n * sizeof(Order));
@@ -702,6 +707,8 @@ static int drain(MmapqIndexedPoller *p, Replay *r, int64_t *n_out)
             && mmapq_indexed_poller_last_error(p) == MMAPQ_ETIMEDOUT && consec_to < 5) {
             consec_to++; r->timeouts++;
             if (r->misclassify) {
+                printf("PLANT runtime-misclassify who=%s at=%lld\n", r->who, (long long)r->e->applied);
+                fflush(stdout);
                 fprintf(stderr, "%s: INVALID at %lld: mapping timeout misclassified as fatal corruption "
                                 "(MKTSIM_RUNTIME_MISCLASSIFY)\n", r->who, (long long)r->e->applied);
                 return 3;
@@ -854,10 +861,12 @@ static MmapqNextMove on_batch(int64_t bi, MmapqBatchReadingContext *c, void *ctx
         int rc = mmapq_batch_iterator_next(c->iterator, &d[n], &l[n]);
         if (rc == 0) break;
         if (rc < 0) {
-            if (rc == MMAPQ_ETIMEDOUT && r->misclassify)
+            if (rc == MMAPQ_ETIMEDOUT && r->misclassify) {
+                printf("PLANT runtime-misclassify who=%s at_batch=%lld\n", r->who, (long long)bi);
+                fflush(stdout);
                 fprintf(stderr, "%s: INVALID at batch %lld: mapping timeout misclassified as fatal corruption "
                                 "(MKTSIM_RUNTIME_MISCLASSIFY)\n", r->who, (long long)bi);
-            else
+            } else
                 fprintf(stderr, "%s: batch %lld iterator error %d\n", r->who, (long long)bi, rc);
             r->fatal = 1; return MMAPQ_NEXT_STOP;
         }
@@ -937,6 +946,8 @@ static int drain_batch(MmapqIndexedBatchPoller *p, BReplay *r, int64_t *n_out)
             && mmapq_indexed_batch_poller_last_error(p) == MMAPQ_ETIMEDOUT && consec_to < 5) {
             consec_to++; r->timeouts++;
             if (r->misclassify) {
+                printf("PLANT runtime-misclassify who=%s at_batch=%lld\n", r->who, (long long)r->batches);
+                fflush(stdout);
                 fprintf(stderr, "%s: INVALID at batch %lld: mapping timeout misclassified as fatal corruption "
                                 "(MKTSIM_RUNTIME_MISCLASSIFY)\n", r->who, (long long)r->batches);
                 return 3;
@@ -1028,6 +1039,16 @@ static int trader_rejoin(const char *dir, const char *who, uint16_t trader,
     int rc = snap_recover(dir, &src, e, &k_prev);
     if (rc) return rc;
     if (rec_si) *rec_si = e->applied;   /* the start_index this rejoin recovered at */
+    /* E6 fail-first plant MKTSIM_REJOIN_STALE_SEQ: resume this trader's own
+     * sequence from the snapshot's next_seq (the value right after recovery),
+     * ignoring the trader's own messages drained in the rebuild below. The
+     * resumed seq is then stale (it repeats seqs the snapshot already counted),
+     * so another participant's per-trader SEQ check and the offline verifier
+     * catch the duplicate. Without the plant the value is read after the
+     * rebuild, so it accounts for every drained message. */
+    const char *stale = getenv("MKTSIM_REJOIN_STALE_SEQ");
+    int plant_stale = stale && atoi(stale) != 0;
+    uint64_t snap_seq = (uint64_t)e->next_seq[trader];
     /* E3 follow-up-2 fail-first plant: a harness delay between the recovery
      * and the poller move widens the check-then-act window, so a harness can
      * archive past this index and force the ARCHIVED move. */
@@ -1061,7 +1082,11 @@ static int trader_rejoin(const char *dir, const char *who, uint16_t trader,
         }
     }
     *last_out = last;
-    *seq_out = (uint64_t)e->next_seq[trader];
+    *seq_out = plant_stale ? snap_seq : (uint64_t)e->next_seq[trader];
+    if (plant_stale && snap_seq != (uint64_t)e->next_seq[trader])
+        printf("PLANT rejoin-stale-seq trader=%u snap_seq=%llu rebuilt=%lld\n",
+               (unsigned)trader, (unsigned long long)snap_seq, (long long)e->next_seq[trader]);
+    fflush(stdout);
     return 0;
 }
 
@@ -1163,6 +1188,8 @@ static int run_trader(const char *dir, const char *qname, int trader, uint32_t i
         const char *bug2 = getenv("MKTSIM_BATCH_PARTIAL_READ");
         br.partial = bug2 && atoi(bug2) != 0;
         br.misclassify = misclassify;
+        if (br.reverse) { printf("PLANT batch-reorder trader=%d\n", trader); fflush(stdout); }
+        if (br.partial) { printf("PLANT batch-partial-read trader=%d\n", trader); fflush(stdout); }
     }
 
     Engine e; engine_init(&e);
@@ -1978,6 +2005,9 @@ static int run_gateway(const char *dir, const char *qname, int gw, uint32_t inc,
         if (commit_before_gap && gw_pend_find(&g, next_commit) < 0 && g.npend > 0) {
             int hi = 0;
             for (int i = 1; i < g.npend; i++) if (g.pend[i].seq > g.pend[hi].seq) hi = i;
+            printf("PLANT commit-before-gap gw=%d seq=%llu (next_commit=%llu)\n",
+                   gw, (unsigned long long)g.pend[hi].seq, (unsigned long long)next_commit);
+            fflush(stdout);
             if ((rcode = gw_commit_one(a, lf, &g, hi, (uint16_t)gw))) break;
         }
         int pi;
@@ -2213,21 +2243,44 @@ static int snap_lock(const char *dir)
 /* Write already-serialised snapshot bytes to <dir>/snaps/snap_<k> (tmp+rename).
  * E4 fail-first plant MKTSIM_SNAP_OLD_MAGIC: stamp the previous (v1) magic and
  * refresh the CRC, so the file is a well-formed v1 snapshot that snap_load
- * must refuse. The write-time claim check already saw the current magic. */
+ * must refuse. The write-time claim check already saw the current magic.
+ * E6 fail-first plant MKTSIM_SNAP_BODY_CORRUPT: corrupt one snapshot body
+ * field (trader 0's next_seq, +1) and refresh the CRC, leaving the header
+ * claim (k, H, D) and the magic intact. The write-time claim check cannot see
+ * it (it compares only magic/applied/H/D); the recovering participant's own
+ * per-trader SEQ check catches it on first use. Both plants mutate a copy so
+ * the caller's candidate buffer is untouched. */
 static int snap_write_index(const char *dir, int64_t k, const uint8_t *buf, size_t len)
 {
     char tmp[1100], dst[1100];
     snprintf(tmp, sizeof tmp, "%s/snaps/snap_%lld.tmp", dir, (long long)k);
     snprintf(dst, sizeof dst, "%s/snaps/snap_%lld", dir, (long long)k);
     const char *om = getenv("MKTSIM_SNAP_OLD_MAGIC");
+    const char *bc = getenv("MKTSIM_SNAP_BODY_CORRUPT");
     uint8_t *out = NULL;
     const uint8_t *src = buf;
     if (om && atoi(om) != 0 && len >= 16) {
+        printf("PLANT snap-old-magic k=%lld\n", (long long)k);
+        fflush(stdout);
         out = malloc(len);
         if (!out) { perror("malloc"); return 2; }
         memcpy(out, buf, len);
         uint64_t v1 = SNAP_MAGIC_V1;
         memcpy(out, &v1, 8);
+        uint64_t crc = fnv64(out, len - 8);
+        memcpy(out + len - 8, &crc, 8);
+        src = out;
+    }
+    if (bc && atoi(bc) != 0 && len >= sizeof(SnapHdr)) {
+        printf("PLANT snap-body-corrupt k=%lld\n", (long long)k);
+        fflush(stdout);
+        if (!out) {
+            out = malloc(len);
+            if (!out) { perror("malloc"); return 2; }
+            memcpy(out, buf, len);
+        }
+        int64_t *ns = (int64_t *)(void *)(out + offsetof(SnapHdr, next_seq));
+        ns[0] += 1;                       /* trader 0's next_seq: a body field */
         uint64_t crc = fnv64(out, len - 8);
         memcpy(out + len - 8, &crc, 8);
         src = out;
@@ -2299,6 +2352,10 @@ static int snap_gc(const char *dir, int64_t k_prev, int64_t si, int keep_one,
     int64_t idx[1024];
     int n = snap_collect(dir, idx, (int)(sizeof idx / sizeof idx[0]));
     if (n < 0) return 2;
+    if (keep_one) {
+        printf("PLANT gc-keep-one si=%lld\n", (long long)si);
+        fflush(stdout);
+    }
     for (int i = 0; i < n; i++) {
         if (idx[i] == si) continue;                  /* never the snapshot at start_index */
         if (!keep_one && idx[i] == k_prev) continue; /* keep the previous one */
@@ -2331,6 +2388,12 @@ static void snap_capture_candidate(SnapReplay *s, int64_t index, uint64_t cin, u
     Engine *e = s->e;
     size_t need;
     if (s->plant && e->snap_shadow && e->snap_shadow_len) {
+        static int announced;
+        if (!announced) {
+            printf("PLANT snapshotter-off-by-one k=%lld\n", (long long)index);
+            fflush(stdout);
+            announced = 1;
+        }
         need = e->snap_shadow_len;
         if (need > s->cand_cap) {
             s->cand_buf = realloc(s->cand_buf, need);
@@ -2435,8 +2498,24 @@ static int run_snapshotter(const char *dir, const char *qname, const char *stopf
         }
         struct timespec ts = {0, 100000000}; nanosleep(&ts, NULL);
     }
-    if (!mmapq_indexed_archiver_archivable(a)) {
-        fprintf(stderr, "snapshotter: queue %s is not archivable\n", qname);
+    /* The queue directory can exist before its meta file is fully created.
+     * mmapq_indexed_archiver_archivable() reads the flag through the meta open
+     * (ro_init -> mmapqi_queue_meta_open_ro); while the meta is mid-creation
+     * that open returns ENOENT/ENOTREADY/ETIMEDOUT and the function returns 0
+     * for a queue that becomes archivable (see the E6 card). Retry for a
+     * bounded time before failing, so a snapshotter started alongside its
+     * traders does not exit on a transient not-ready. A genuinely
+     * non-archivable queue still fails, with a distinct line. */
+    int archivable = 0, arch_tries = 0;
+    for (arch_tries = 1; arch_tries <= 200; arch_tries++) {   /* <= 5 s */
+        if (mmapq_indexed_archiver_archivable(a)) { archivable = 1; break; }
+        if (access(stopfile, F_OK) == 0) break;
+        struct timespec ts = {0, 25000000}; nanosleep(&ts, NULL);
+    }
+    if (!archivable) {
+        printf("SNAPSHOTTER not_archivable queue=%s retries=%d result=FAIL\n",
+               qname, arch_tries - 1);
+        fflush(stdout);
         mmapq_indexed_archiver_close(a); close(lockfd);
         return 2;
     }
@@ -2752,6 +2831,10 @@ static int run_exportimport(const char *dir, const char *qname, const char *dstd
      * of the end index — the imported replay cannot reach the live chain. */
     const char *tr = getenv("MKTSIM_EXPORT_TRUNCATE");
     int64_t end = (tr && atoi(tr) != 0) ? last - 1 : last;
+    if (tr && atoi(tr) != 0) {
+        printf("PLANT export-truncate last=%lld end=%lld\n", (long long)last, (long long)end);
+        fflush(stdout);
+    }
 
     char stream[1100];
     snprintf(stream, sizeof stream, "%s/export.stream", dstdir);
