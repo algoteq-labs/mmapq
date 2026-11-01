@@ -14,7 +14,7 @@
 # failure" — never proof of race-freedom; that claim belongs to the TLA+ model
 # (doc/model/). See README.md.
 #
-# Usage:  examples/mktsim/run_soak.sh [workdir]
+# Usage:  torture/mktsim/run_soak.sh [workdir]
 # Env:    SOAK_SEEDS (default 12), SOAK_KILLS (default 60),
 #         SOAK_TRADERS (default 8), SOAK_ONLY (regex filter on run name),
 #         MKTSIM_BIN.

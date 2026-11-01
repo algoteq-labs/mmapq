@@ -16,7 +16,7 @@
 # the work directory, and on any MISMATCH the work directory is left in place
 # and its path printed. On success it is removed.
 #
-# Usage:  examples/mktsim/run_short.sh [workdir]
+# Usage:  torture/mktsim/run_short.sh [workdir]
 # Env:    MKTSIM_BIN overrides the binary path; MKTSIM_SHORT_DIR the workdir.
 set -u
 

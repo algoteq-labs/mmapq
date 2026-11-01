@@ -71,7 +71,7 @@ add_executable(echo_server examples/echo_server.c)
 target_link_libraries(echo_server PRIVATE mmapq)
 
 # DEMO-01: the end-to-end demo (excluded from the default build; not in test.sh)
-add_executable(mktsim EXCLUDE_FROM_ALL examples/mktsim/mktsim.c)
+add_executable(mktsim EXCLUDE_FROM_ALL torture/mktsim/mktsim.c)
 target_link_libraries(mktsim PRIVATE mmapq)
 
 # ── Summary ───────────────────────────────────────────────────────────────

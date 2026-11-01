@@ -15,9 +15,9 @@ at the end and checks everything again.
 From the repository root:
 
 ```bash
-make mktsim            # builds examples/mktsim/mktsim
-python3 examples/mktsim/churn.py --dir /tmp/mktsim_run --mode sync  --seed 1
-python3 examples/mktsim/churn.py --dir /tmp/mktsim_run --mode async --seed 1
+make mktsim            # builds torture/mktsim/mktsim
+python3 torture/mktsim/churn.py --dir /tmp/mktsim_run --mode sync  --seed 1
+python3 torture/mktsim/churn.py --dir /tmp/mktsim_run --mode async --seed 1
 ```
 
 Options: `--traders 8 --kills 40 --restart-prob 0.7 --survivors 2
@@ -115,7 +115,7 @@ An `EIDCONFLICT` is therefore a supervisor bug, and the trader fails (exit 2).
 
 ```bash
 make mmapq-ids         # the operator tool, in tools/mmapq-ids/
-python3 examples/mktsim/churn.py --dir /tmp/mktsim_run --mode sync --seed 1 \
+python3 torture/mktsim/churn.py --dir /tmp/mktsim_run --mode sync --seed 1 \
     --reclaim tools/mmapq-ids/build/release/mmapq-ids
 ```
 
@@ -367,8 +367,8 @@ invoke the real binary; neither runs in `test.sh`.
 
 ```bash
 make mktsim
-bash examples/mktsim/run_short.sh              # <= 5 min, run by hand until CI exists
-bash examples/mktsim/run_soak.sh               # 30-60 min, the release gate
+bash torture/mktsim/run_short.sh              # <= 5 min, run by hand until CI exists
+bash torture/mktsim/run_soak.sh               # 30-60 min, the release gate
 ```
 
 `run_short.sh` runs, in order: every plant (current and inherited) once and
@@ -387,7 +387,7 @@ snapshot cycles, peak live-queue disk, and that every survivor reached the
 live digest; it prints the totals and exits non-zero if any run failed. Knobs:
 `SOAK_SEEDS` (default 12), `SOAK_KILLS` (60), `SOAK_TRADERS` (8), `SOAK_ONLY`.
 
-**Scenario harnesses** (`examples/mktsim/scenarios/`, each prints one
+**Scenario harnesses** (`torture/mktsim/scenarios/`, each prints one
 `SCENARIO <name> expect=<PASS|FAIL> got=<PASS|FAIL|VACUOUS> result=<OK|MISMATCH>
 [reason=<token>]` line and exits non-zero on `MISMATCH`; the scenario directory
 is `$MKTSIM_SCENARIO_DIR` when set, else a per-name `/tmp` path, and a
