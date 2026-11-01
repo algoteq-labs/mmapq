@@ -214,14 +214,32 @@ memory across rounds, picks `k`, writes `snap_<k>` atomically (tmp +
 `rename`) after verifying `(k, H, D)` against a committed participant's
 claim at `k`, calls `archive_up_to_index(k)`, and only then runs the
 guide-chapter-6 tail: `archivable_files()` (the mark) → byte-copy the marked
-files to `<dir>/archive/` (verified by size + CRC) → `reclaim_files()`. `k`
-is bounded by the minimum of the traders' progress watermarks
-(`<dir>/progress/`) until E5, so a lagging live reader is never archived
-over. (The gateway no longer writes a watermark pin — stage (e) E4 recovers
-its committed prefix from the snapshot instead, so there is no read-to-pin
-window.) With `--hand-delete` the reclaim step is replaced: the marked files
-are unlinked by hand under the X5 rule (no undo between the listing and the
-last unlink — this loop never undoes).
+files to `<dir>/archive/` (verified by size + CRC) → `reclaim_files()`.
+
+`k` is the latest index at or below the committed end that has a **covering
+participant claim** (a committed message whose `seen_count` equals its own
+index — an independent statement of the state at `k`). E5 removed the
+watermarks, so the snapshotter no longer needs to know who is alive: the
+snapshotter is the **only** process that moves `start_index`, and it does so
+only after `snap_<k>` exists. Removing the watermark also removed the only
+throttle on archiving, so the cadence is explicit: **`--snap-every <N>`**
+publishes a snapshot only once the latest covering claim is at least `N`
+indices past the previous one. The cadence is in **indices**, not
+milliseconds, so the throttle is deterministic and independent of the message
+rate; **a reader keeps up as long as its rebuild from a snapshot takes less
+than the snapshot interval** (the time between two `snap_<k>` writes at the
+current rate).
+
+**Two defaults on purpose.** The mktsim binary's own default is **65536**
+(production-like: few snapshots, low churn). `churn.py` passes **4096** by
+default so a short recipe run still writes several snapshots, fires GC guards
+and produces undercut recoveries — at 65536 a recipe run wrote 1–2 snapshots,
+0 GC guards and 0 undercuts, so it no longer exercised E1–E4. Pass
+`--snap-every 1` for the recovery stress run ("as fast as claims allow") and
+`--snap-every 65536` for the production-like cadence. With `--hand-delete`
+the reclaim step is replaced: the marked files are unlinked by hand under the
+X5 rule (no undo between the listing and the last unlink — this loop never
+undoes).
 
 **One snapshotter, and the dead-snapshotter safety property.** Exactly one
 snapshotter (or archiver) runs at a time, enforced by an exclusive
@@ -251,14 +269,19 @@ it from the live queue. `archskip.py` drives the real archiver against a
 planted stray and asserts the archived copy's `fnv64` is unchanged, the skip
 is logged, and the stray is reclaimed.
 
-Participants periodically write **snapshots** (`<dir>/snaps/`, derived state
-+ digest + log index; the first snapshot of each trader id is kept as
-`t<NN>.first.snap`). A restart on an archivable queue rebuilds as
-*latest snapshot → archived tail from the copies → live tail*; the snapshot
-joiner (`mktsim snapjoin`) does the same at the end of the run from a
-pre-reclamation snapshot, and its digest must equal the verifier's. The
-offline verifier replays the archived copies plus the live queue and asserts
-boundary contiguity exactly (`ARCHVERIFY archived=N boundary=N`).
+The **only** snapshot source is the snapshotter: `<dir>/snaps/snap_<k>`
+(derived state + digest + log index, two kept: the previous and the current).
+Every participant recovers the same way, at start and on `ARCHIVED`: read
+`start_index`, load `snap_<start_index>` (bounded retry, `snap_recover`), then
+read the queue from `start_index`. The snapshot joiner (`mktsim snapjoin`)
+does exactly that at the end of the run, so its base is `start_index` and it
+replays **no** archived copies (`archived=0` by design); its digest must equal
+the verifier's. There are no per-trader snapshots and no per-reader side
+files: recovery reads only the queue and the snapshotter's snapshot.
+The offline verifier keeps replaying the archived copies plus the live queue
+and asserts boundary contiguity exactly (`ARCHVERIFY archived=N boundary=N`) —
+archived-history coverage belongs to the verifier, not to any participant's
+recovery. `archive/` stays for durability and export.
 
 The **gateway restart under archiving** (stage (e) E4): its committed seqs
 are the prefix `0..C`. C comes from two places only — the snapshot at
@@ -276,23 +299,16 @@ log-ahead check compares every logged commit against C. The verdict line is
 `GWRECOVER gw=<id> prefix=<C> snap=<k> result=PASS|FAIL`.
 
 Checks: `ARCHVERIFY` boundary contiguity and full replay over archived
-copies + live queue; `SNAPJOIN` digest equals the verifier's with the
-archived tail exercised (`archived > 0` whenever files were copied);
-`GWJOIN prefix=C live_committed=L` lines show restarts with committed
-records already archived (L < C + 1).
+copies + live queue; `SNAPJOIN` digest equals the verifier's, with
+`base == start_index` and `archived=0` (the joiner starts at the snapshot
+boundary); `GWJOIN prefix=C live_committed=L` lines show restarts with
+committed records already archived (L < C + 1).
 
 Planted defects:
 - `MKTSIM_RECLAIM_AHEAD_OF_MARK=1` — the snapshotter unlinks one payload file
   beyond the mark. Observed failing: `verify: MISSING HISTORY at index
   41562: payload_64_1 absent from archive/ and the live queue` →
   RESULT: FAIL (the missing range is identified; never a silent pass).
-- `MKTSIM_SNAPSHOT_OFF_BY_ONE=1` — one trader's snapshots record index k but
-  carry the state at k−1. Observed failing: the snapshot joiner dies on the
-  first claim over the corrupt boundary (`snapjoin: DIVERGENCE at 4097 …
-  claims state@4097 …`), and a restart that consumed the planted snapshot
-  diverges online the same way → RESULT: FAIL. (Stage-(c) plant; it is the
-  fail-first proof for the joiner's check, and the trader snapshots drive
-  restarts and the joiner until E5.)
 - `MKTSIM_SNAPSHOTTER_OFF_BY_ONE=1` — the **snapshotter** writes `snap_<k>`
   recording index k but carrying the state at k−1. Observed failing: the
   write-time claim check catches it at publication —
@@ -314,9 +330,9 @@ Planted defects:
 Fail-first for the gateway snapshot prefix (stage (e) E4): the committed
 prefix is recovered from `snap_<start_index>` plus the queue scan, never from
 `archive/`. `MKTSIM_GW_NO_SNAPSEQ=1` red, the real tree green (see the plant
-above); the pre-E4 joiner from the latest trader snapshot (`t00.snap`) fails
-with `GATEWAY SEQ gw 0 … expected 0 got <N>` because a trader snapshot carried
-no gateway field, while the E4 joiner seeds from the field and PASSes.
+above). (Before E4 a joiner from a per-trader snapshot failed with
+`GATEWAY SEQ gw 0 … expected 0 got <N>`; E5 removed the per-trader snapshots
+entirely — the snapshotter is the only snapshot source.)
 
 ## Validation (stage c, 2026-10-27, house machine)
 

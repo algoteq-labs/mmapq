@@ -43,7 +43,7 @@ def main():
 
     d = a.dir
     shutil.rmtree(d, ignore_errors=True)
-    for sub in ("logs", "progress", "snaps", "archive"):
+    for sub in ("logs", "snaps", "archive"):
         os.makedirs(os.path.join(d, sub), exist_ok=True)
     stop = os.path.join(d, "STOP")
     stop2 = os.path.join(d, "STOP2")

@@ -56,10 +56,15 @@ def main():
                     help="path to mmapq-ids: after reaping a killed participant, release its appender id "
                          "and restart it on the same lane")
     ap.add_argument("--archive", action="store_true",
-                    help="archivable queue (F6/F7): snapshots + progress watermarks, an archiver process "
-                         "running the guide-ch6 loop, archived-copy replay in verify, a snapshot joiner check")
+                    help="archivable queue (F6/F7): a snapshotter process running the guide-ch6 loop "
+                         "(snap_<k> + archive), archived-copy replay in verify, a snapshot joiner check")
     ap.add_argument("--hand-delete", action="store_true",
-                    help="with --archive: the archiver unlinks the marks by hand (X5 rule) instead of reclaim_files()")
+                    help="with --archive: the snapshotter unlinks the marks by hand (X5 rule) instead of reclaim_files()")
+    ap.add_argument("--snap-every", type=int, default=4096,
+                    help="with --archive: the snapshotter cadence in indices (default 4096, the "
+                         "torture default: enough snapshots/GC/undercuts to exercise E1-E4 in a short "
+                         "run. The mktsim binary's own default is 65536, production-like. 1 = as fast "
+                         "as claims allow)")
     # Scenario hooks (stage b rework): the driver arms the FIRST incarnation of
     # gateway 0 with the hook and disarms its own environment, so no other
     # process inherits it. The armed gateway SIGKILLs itself between the queue
@@ -70,9 +75,8 @@ def main():
         gw_hook = "MKTSIM_GW_KILL_AFTER_APPEND"
     if os.environ.pop("MKTSIM_GW_KILL_AFTER_COMMIT", None):
         gw_hook = "MKTSIM_GW_KILL_AFTER_COMMIT"
-    # Plants (stage c): armed on ONE process each, then disarmed here so no
+    # Plants (stage c/e): armed on ONE process each, then disarmed here so no
     # other process inherits them.
-    obo_plant = os.environ.pop("MKTSIM_SNAPSHOT_OFF_BY_ONE", None)      # trader 0, incarnation 0 (stage c)
     sbo_plant = os.environ.pop("MKTSIM_SNAPSHOTTER_OFF_BY_ONE", None)   # the snapshotter (stage e E1)
     ram_plant = os.environ.pop("MKTSIM_RECLAIM_AHEAD_OF_MARK", None)    # the snapshotter/archiver
     mis_plant = os.environ.pop("MKTSIM_RUNTIME_MISCLASSIFY", None)      # trader 1 (async in mixed), incarnation 0
@@ -94,7 +98,6 @@ def main():
     shutil.rmtree(a.dir, ignore_errors=True)
     os.makedirs(os.path.join(a.dir, "logs"))
     if a.archive:
-        os.makedirs(os.path.join(a.dir, "progress"))
         os.makedirs(os.path.join(a.dir, "snaps"))
         os.makedirs(os.path.join(a.dir, "archive"))
     stop = os.path.join(a.dir, "STOP")
@@ -124,9 +127,6 @@ def main():
         log = os.path.join(a.dir, "logs", f"t{tid:02d}_i{inc:03d}.log")
         tmode = a.mode if a.mode != "mixed" else ("sync" if tid % 2 == 0 else "async")
         env = None
-        if obo_plant and tid == 0 and inc == 0:
-            env = dict(os.environ); env["MKTSIM_SNAPSHOT_OFF_BY_ONE"] = "1"
-            stats["obo_armed"] = 1
         if mis_plant and tid == 1 and inc == 0:
             env = dict(os.environ); env["MKTSIM_RUNTIME_MISCLASSIFY"] = "1"
             stats["mis_armed"] = 1
@@ -201,13 +201,6 @@ def main():
         else:
             stats["reclaimed" if queue == qname else "batch_reclaimed"] += 1
 
-    def drop_progress(tid):
-        """Attrition/joiner case: the trader is never restarted, so its stale
-        watermark would pin the archiver forever. Remove it."""
-        if a.archive:
-            try: os.remove(os.path.join(a.dir, "progress", f"t{tid:02d}"))
-            except FileNotFoundError: pass
-
     def kill(tid):
         """SIGKILL and reap a trader; with --reclaim, unset its id on BOTH queues."""
         p, inc, log = live.pop(tid)
@@ -255,10 +248,10 @@ def main():
                 env["MKTSIM_SNAPSHOTTER_OFF_BY_ONE"] = "1"; stats["sbo_armed"] = 1
             if ram_plant:
                 env["MKTSIM_RECLAIM_AHEAD_OF_MARK"] = "1"
+        cmd = [a.bin, "snapshotter", a.dir, qname, stop,
+               "1" if a.hand_delete else "0", "--snap-every", str(a.snap_every)]
         f = open(archiver_log, "w")
-        archiver = subprocess.Popen([a.bin, "snapshotter", a.dir, qname, stop,
-                                     "1" if a.hand_delete else "0"],
-                                    stdout=f, stderr=subprocess.STDOUT, env=env)
+        archiver = subprocess.Popen(cmd, stdout=f, stderr=subprocess.STDOUT, env=env)
         f.close()
 
     def archiver_check():
@@ -280,7 +273,6 @@ def main():
             if rnd.random() < a.restart_prob or next_new_id >= 64:
                 start(vid); stats["restarts"] += 1
             else:
-                drop_progress(vid)
                 start(next_new_id); next_new_id += 1; stats["joiners"] += 1
         else:
             kill_gateway(vid)
@@ -294,7 +286,6 @@ def main():
         if live:
             tid = rnd.choice(sorted(live))
             kill(tid)
-            drop_progress(tid)
     time.sleep(0.3)
     reap_unexpected()
 
@@ -339,42 +330,26 @@ def main():
     if v.returncode != 0:
         failures.append(f"verifier failed rc={v.returncode}:\n" + v.stderr.strip())
 
-    # F6: the snapshot joiner — start from a snapshot taken before reclamation
-    # (a kept .first.snap), replay snapshot + archived tail + live tail, and
-    # reach exactly the verifier's digest.
+    # F6: the snapshot joiner — E5 uses the shared participant recovery: it
+    # reads start_index itself, loads snap_<start_index>, and replays the live
+    # tail from there (base == start_index, archived == 0 by design). The
+    # archived-history coverage belongs to the offline VERIFY/ARCHVERIFY, which
+    # keep replaying archive/ plus the live queue.
     if a.archive:
-        sdir = os.path.join(a.dir, "snaps")
-        firsts = sorted(f for f in os.listdir(sdir) if f.endswith(".first.snap"))
-        latests = sorted(f for f in os.listdir(sdir) if f.endswith(".snap") and not f.endswith(".first.snap"))
-        if obo_plant and os.path.exists(os.path.join(sdir, "t00.first.snap")):
-            snap = os.path.join(sdir, "t00.first.snap")      # the armed trader's snapshot
-        elif firsts:
-            snap = os.path.join(sdir, firsts[0])
-        elif latests:
-            snap = os.path.join(sdir, latests[0])
+        sj = subprocess.run([a.bin, "snapjoin", a.dir, qname], capture_output=True, text=True)
+        print(sj.stdout.strip())
+        if sj.returncode != 0:
+            failures.append(f"snapshot joiner failed rc={sj.returncode}:\n{sj.stderr.strip()}")
         else:
-            snap = None
-        if snap is None:
-            failures.append("--archive run wrote no snapshot (snaps/ is empty)")
-        else:
-            sj = subprocess.run([a.bin, "snapjoin", a.dir, qname, snap], capture_output=True, text=True)
-            print(sj.stdout.strip())
-            if sj.returncode != 0:
-                failures.append(f"snapshot joiner failed rc={sj.returncode}:\n{sj.stderr.strip()}")
-            else:
-                sj_digest = next((t.split("=")[1] for t in sj.stdout.split() if t.startswith("digest=")), None)
-                vline = next((l for l in v.stdout.splitlines() if l.startswith("VERIFY ")), "")
-                v_digest = next((t.split("=")[1] for t in vline.split() if t.startswith("digest=")), None)
-                sj_base = int(next((t.split("=")[1] for t in sj.stdout.split() if t.startswith("base=")), "-1"))
-                sj_arch = int(next((t.split("=")[1] for t in sj.stdout.split() if t.startswith("archived=")), "-1"))
-                if sj_digest is None or sj_digest != v_digest:
-                    failures.append(f"snapshot joiner digest {sj_digest} != verifier digest {v_digest}")
-                # the archived-tail path must be exercised when history was reclaimed
-                if arch_final is not None:
-                    copied = int(next((t.split("=")[1] for t in arch_final.split() if t.startswith("copied=")), "0"))
-                    if copied > 0 and sj_arch <= 0:
-                        failures.append(f"archiver copied {copied} files but the snapshot joiner replayed "
-                                        f"0 archived messages (base={sj_base}) — archived-tail path not exercised")
+            sj_digest = next((t.split("=")[1] for t in sj.stdout.split() if t.startswith("digest=")), None)
+            vline = next((l for l in v.stdout.splitlines() if l.startswith("VERIFY ")), "")
+            v_digest = next((t.split("=")[1] for t in vline.split() if t.startswith("digest=")), None)
+            sj_base = int(next((t.split("=")[1] for t in sj.stdout.split() if t.startswith("base=")), "-1"))
+            sj_si = int(next((t.split("=")[1] for t in sj.stdout.split() if t.startswith("start_index=")), "-1"))
+            if sj_digest is None or sj_digest != v_digest:
+                failures.append(f"snapshot joiner digest {sj_digest} != verifier digest {v_digest}")
+            if sj_base != sj_si:
+                failures.append(f"snapshot joiner base {sj_base} != start_index {sj_si}")
 
     # F9: export the live range, import into a fresh directory, and require the
     # imported replay to reach the live (index,bytes) chain, archivable flag
@@ -455,8 +430,6 @@ def main():
           f"traders={len(next_inc)} lanes_created={lanes} ids_taken_at_end={taken} "
           f"batch_lanes={blanes} batch_ids_reclaimed={stats['batch_reclaimed']} "
           f"batch_ids_taken_at_end={btaken}")
-    if obo_plant:
-        print(f"snapshot_off_by_one_plant armed={stats.get('obo_armed', 0)}")
     if sbo_plant:
         print(f"snapshotter_off_by_one_plant armed={stats.get('sbo_armed', 0)}")
     if ram_plant:
