@@ -188,6 +188,11 @@ typedef struct {
     /* per-trader replay facts */
     int64_t  next_seq[MAX_TRADERS];
     uint32_t last_inc[MAX_TRADERS];
+    /* per-gateway committed prefix: the highest committed T_GATEWAY seq seen
+     * so far (entries [0, applied)); -1 when none. Serialised into the
+     * snapshot so a gateway can recover its prefix below the snapshot index
+     * without reading archive/. */
+    int64_t  gw_last[MAX_TRADERS];
     int      tiebreak_bug;            /* test hook: planted divergence */
     /* MKTSIM_SNAPSHOT_OFF_BY_ONE (planted defect, F6): when snap_shadow is
      * non-NULL, engine_apply serializes the state at its entry, so the
@@ -202,6 +207,7 @@ static void engine_init(Engine *e)
     e->input_hash = ENGINE_SEED;
     e->digest = ENGINE_SEED ^ 1;
     e->last_trade = 1000;
+    for (int i = 0; i < MAX_TRADERS; i++) e->gw_last[i] = -1;
     const char *bug = getenv("MKTSIM_TIEBREAK_BUG");
     e->tiebreak_bug = bug && atoi(bug) != 0;
 }
@@ -243,8 +249,14 @@ static void hist_at(const Engine *e, int64_t count, uint64_t *in, uint64_t *dg)
 /* ── snapshots (F6) ────────────────────────────────────────────────────── */
 
 /* Snapshot wire format (demo-local, single machine): the fixed block below,
- * then n_orders Orders, then a u64 fnv64 CRC over everything before it. */
-#define SNAP_MAGIC 0x4D4B534E41503130ULL   /* "MKSNAP10" */
+ * then n_orders Orders, then a u64 fnv64 CRC over everything before it.
+ *
+ * Format version: v2 (stage (e) E4) adds gw_last[], the per-gateway highest
+ * committed T_GATEWAY seq among entries with index < applied ([0, applied)) —
+ * the gateway's committed prefix below this snapshot. The magic names the
+ * version; snap_load refuses v1 (MKSNAP10) rather than misreading it. */
+#define SNAP_MAGIC    0x4D4B534E41503230ULL   /* "MKSNAP20" */
+#define SNAP_MAGIC_V1 0x4D4B534E41503130ULL   /* "MKSNAP10" (refused) */
 
 #pragma pack(push, 1)
 typedef struct {
@@ -255,6 +267,7 @@ typedef struct {
     int32_t  last_trade, n_orders;
     int64_t  position[MAX_TRADERS], cash[MAX_TRADERS], next_seq[MAX_TRADERS];
     uint32_t last_inc[MAX_TRADERS], pad[MAX_TRADERS];
+    int64_t  gw_last[MAX_TRADERS];   /* highest committed gateway seq < applied; -1 none */
 } SnapHdr;
 #pragma pack(pop)
 
@@ -270,6 +283,11 @@ static size_t snap_serialize(const Engine *e, uint8_t *buf)
     memcpy(h.cash, e->cash, sizeof h.cash);
     memcpy(h.next_seq, e->next_seq, sizeof h.next_seq);
     memcpy(h.last_inc, e->last_inc, sizeof h.last_inc);
+    memcpy(h.gw_last, e->gw_last, sizeof h.gw_last);
+    /* E4 fail-first plant: emit the snapshot with the gateway field zeroed, so
+     * a recovering gateway cannot derive its committed prefix. */
+    const char *nos = getenv("MKTSIM_GW_NO_SNAPSEQ");
+    if (nos && atoi(nos) != 0) memset(h.gw_last, 0, sizeof h.gw_last);
     memcpy(buf, &h, sizeof h);
     memcpy(buf + sizeof h, e->orders, (size_t)e->n * sizeof(Order));
     uint64_t crc = fnv64(buf, sizeof h + (size_t)e->n * sizeof(Order));
@@ -356,6 +374,14 @@ static int snap_load(const char *path, Engine *e)
     uint64_t crc; memcpy(&crc, buf + sz - 8, 8);
     if (crc != fnv64(buf, (size_t)sz - 8)) { free(buf); return -2; }
     SnapHdr h; memcpy(&h, buf, sizeof h);
+    if (h.magic == SNAP_MAGIC_V1) {
+        /* E4: a pre-gateway-field snapshot. Refuse it loudly — its bytes do
+         * not carry gw_last[], and misreading them would fabricate a gateway
+         * prefix. The queue is the source of truth; recreate the snapshot. */
+        fprintf(stderr, "snap_load: %s: old snapshot format MKSNAP10 refused "
+                        "(pre-E4, no gateway field); recreate the snapshot\n", path);
+        free(buf); return -2;
+    }
     if (h.magic != SNAP_MAGIC || h.n_orders < 0 || h.applied < 0 ||
         (int64_t)sizeof h + (int64_t)h.n_orders * (int64_t)sizeof(Order) + 8 != (int64_t)sz) {
         free(buf); return -2;
@@ -374,6 +400,7 @@ static int snap_load(const char *path, Engine *e)
     memcpy(e->cash, h.cash, sizeof e->cash);
     memcpy(e->next_seq, h.next_seq, sizeof e->next_seq);
     memcpy(e->last_inc, h.last_inc, sizeof e->last_inc);
+    memcpy(e->gw_last, h.gw_last, sizeof e->gw_last);
     free(e->hist_input); free(e->hist_digest);
     e->hist_input = e->hist_digest = NULL; e->hist_cap = 0;
     e->base = h.applied;
@@ -590,10 +617,6 @@ typedef struct {
     int64_t  gw_msgs;
     int      gw_seen[MAX_TRADERS];
     uint64_t gw_next[MAX_TRADERS];
-    int      gw_seed;          /* F1 interim (joiner only, removed in E4):
-                                * seed gw_next[g] from the first gateway packet
-                                * after the snapshot base instead of 0 */
-    uint64_t gw_seeded[MAX_TRADERS];   /* the seq seeded per gateway */
     uint64_t gw_last_seq[MAX_TRADERS];
     int64_t  gw_last_off[MAX_TRADERS];
     int      gw_inv_set;       /* first offset inversion in commit order */
@@ -602,12 +625,18 @@ typedef struct {
     int64_t  gw_inv_prev_off, gw_inv_off;
 } Replay;
 
-/* Advance the per-trader replay facts for a committed non-gateway message.
- * One place, called by both the online replay (on_msg) and the snapshotter's
- * replay (on_snap), so the snapshot carries exactly the facts a recovering
- * participant checks and the two callbacks cannot drift. */
+/* Advance the replay facts for a committed message, applied by every engine
+ * that writes a SnapHdr. One place, called by both the online replay (on_msg)
+ * and the snapshotter's replay (on_snap), so the snapshot carries exactly the
+ * facts a recovering participant checks and the two callbacks cannot drift.
+ * Gateway packets have no per-trader sequence or incarnation; their fact is
+ * the committed prefix, so track the highest committed seq per gateway. */
 static void replay_track(Engine *e, const MsgHdr *h)
 {
+    if (h->type == T_GATEWAY) {
+        if ((int64_t)h->seq > e->gw_last[h->trader]) e->gw_last[h->trader] = (int64_t)h->seq;
+        return;
+    }
     e->next_seq[h->trader] = (int64_t)h->seq + 1;
     e->last_inc[h->trader] = h->incarnation;
 }
@@ -628,17 +657,13 @@ static MmapqNextMove on_msg(int64_t index, uint8_t appender_id, const void *data
     if (h.type == T_GATEWAY) {
         /* gateway packet: no claim, no book effect; the digest derivation is
          * payload-only (engine_apply), so every replayer agrees. Verify also
-         * checks the lane's seq continuity and records offset inversions. */
+         * checks the lane's seq continuity and records offset inversions. The
+         * gateway's committed prefix is tracked for every replay (E4): a
+         * snapshot must carry it whether it is written by a trader or the
+         * snapshotter. */
         if (r->strict_seq) {
             int g = h.trader;
-            if (r->gw_seed && !r->gw_seen[g]) {
-                /* F1 interim (joiner only; removed in E4): the trader snapshot
-                 * carries no gateway sequence, so a replay from base > 0 cannot
-                 * know how many packets this gateway committed below the base.
-                 * Seed the expectation from the first packet seen after the
-                 * base; every later packet is still checked strictly. */
-                r->gw_seeded[g] = h.seq;
-            } else if (h.seq != r->gw_next[g]) {
+            if (h.seq != r->gw_next[g]) {
                 fprintf(stderr, "%s: GATEWAY SEQ gw %u at %lld: expected %llu got %llu (gap or inversion)\n",
                         r->who, h.trader, (long long)index,
                         (unsigned long long)r->gw_next[g], (unsigned long long)h.seq);
@@ -653,6 +678,7 @@ static MmapqNextMove on_msg(int64_t index, uint8_t appender_id, const void *data
             r->gw_last_seq[g] = h.seq; r->gw_last_off[g] = h.cancel_id;
             r->gw_msgs++;
         }
+        replay_track(e, &h);
         engine_apply(e, index, data, len, &h);
         return MMAPQ_NEXT_ADVANCE;
     }
@@ -1686,132 +1712,123 @@ static int run_gateway(const char *dir, const char *qname, int gw, uint32_t inc,
     g.delayed = -1;
     g.next_off = mmapq_indexed_appender_start_offset(a);
 
-    /* The queue is the source of truth (owner, stage-b rework; committed-
-     * prefix design for archiving, spec v3.2): the gateway commits in seq
-     * order, so its committed seqs are the prefix 0..C. C is the highest
-     * gateway seq in the LIVE range (the scan below); when none is live, C
-     * is the highest logged commit — the archived range is the only one
-     * where the log is trusted, because the queue can no longer contradict
-     * it. The log-ahead check applies only to the live range. A kill
-     * between a commit and its log line leaves the log short, and the
-     * queue is right. */
+    /* The queue is the source of truth, and the snapshot carries this
+     * gateway's committed prefix below start_index (E4): a snapshot at k
+     * covers entries below k, so snap_<start_index>.gw_last[gw] is the
+     * highest committed gateway seq in [0, start_index). The live scan then
+     * adds the committed seqs in [start_index, last]. No pin, no archive/
+     * reads, no log-trust boundary: if archiving moves start_index under the
+     * scan the scan sees ARCHIVED and the recovery re-runs from the new
+     * start_index and its snapshot. A kill between a commit and its log line
+     * leaves the log short, and the queue (and hence the snapshot) is right. */
     int64_t committed_prefix = -1;       /* C (-1: nothing committed) */
     int nlive_committed = 0, chopped = 0;
     uint64_t live_min = 0;
     uint64_t *qcom = NULL; int nqcom = 0, capqc = 0;
+    int64_t prefix_snap = 0;             /* the snapshot index the prefix came from */
     MmapqIndexedReader *qrd = NULL;
     if (mmapq_indexed_queue_create_reader(q, &qrd)) { fprintf(stderr, "%s: reader\n", who); return 2; }
-    int64_t qfirst = mmapq_indexed_reader_start_index(qrd);
-    int64_t qlast = mmapq_indexed_reader_last_index(qrd);
-    /* Pin the watermark for the restart: with progress/g<NN> = qfirst in
-     * place the archiver archives to nothing above it, so the top of the
-     * live range cannot move during the scan, the walk, or the pending
-     * rebuild. Indices archived between the read and the pin are skipped by
-     * the ARCHIVED status discipline below. The pin file is removed when
-     * the restart completes. */
-    char gpin[1100] = {0};
-    if (archivable) {
-        snprintf(gpin, sizeof gpin, "%s/progress/g%02d", dir, gw);
-        char tmp[1100]; snprintf(tmp, sizeof tmp, "%s.tmp", gpin);
-        FILE *pf = fopen(tmp, "w");
-        if (!pf) { fprintf(stderr, "%s: watermark pin\n", who); return 2; }
-        fprintf(pf, "%lld\n", (long long)qfirst);
-        fclose(pf);
-        if (rename(tmp, gpin)) { fprintf(stderr, "%s: watermark pin rename\n", who); return 2; }
-    }
-    for (int64_t i = qfirst; i <= qlast; i++) {
-        MmapqReadingContext ctx = {0};
-        mmapq_indexed_reader_read(qrd, i, &ctx);
-        /* Status discipline (owner, stage b): AVAILABLE → use; ARCHIVED →
-         * skip; anything else must never be skipped silently — a missed
-         * committed seq is re-committed by the restart → a duplicate. */
-        if (ctx.status == MMAPQ_ENTRY_AVAILABLE) {
-            MsgHdr h;
-            if (validate(ctx.data, ctx.length, &h)) continue;  /* verify catches committed corruption */
-            if (h.type == T_GATEWAY && h.trader == (uint16_t)gw) {
-                qcom = gw_grow(qcom, &capqc, nqcom, sizeof *qcom);
-                qcom[nqcom++] = h.seq;
+    int attempts = 0;                    /* recovery attempts (cap below) */
+    int64_t last_si = -1;                /* the start_index the previous attempt used */
+    for (;;) {
+        int64_t qfirst = mmapq_indexed_reader_start_index(qrd);
+        int64_t qlast = mmapq_indexed_reader_last_index(qrd);
+        /* Bound the re-recovery, same convention as the trader's rejoin loop:
+         * each attempt records the start_index it used. A scan that hit
+         * ARCHIVED must have advanced start_index; the same start_index twice
+         * is a no-progress FAIL. A last-resort cap (SNAPRECOVER_MAX_TRIES)
+         * bounds a storm that keeps advancing. */
+        if (attempts >= SNAPRECOVER_MAX_TRIES) {
+            printf("GWRECOVER gw=%d prefix=%lld snap=%lld result=FAIL (retry cap)\n",
+                   gw, (long long)committed_prefix, (long long)prefix_snap);
+            fflush(stdout);
+            mmapq_indexed_reader_close(qrd);
+            return 3;
+        }
+        attempts++;
+        if (last_si >= 0 && qfirst == last_si) {
+            printf("GWRECOVER gw=%d prefix=%lld snap=%lld result=FAIL (no progress)\n",
+                   gw, (long long)committed_prefix, (long long)prefix_snap);
+            fflush(stdout);
+            mmapq_indexed_reader_close(qrd);
+            return 3;
+        }
+        last_si = qfirst;
+        /* Recover the committed prefix below start_index from snap_<start_index>
+         * (bounded no-progress retry, amendment 2). A fresh queue has none. */
+        int64_t prefix = -1;
+        int64_t snap_used = 0;
+        if (qfirst > 0) {
+            Engine se; engine_init(&se);
+            RecoverSrc src = { .who = "gateway", .start_index = recov_si_reader, .ctx = qrd };
+            int64_t kp = 0;
+            int src_rc = snap_recover(dir, &src, &se, &kp);
+            if (src_rc) {
+                printf("GWRECOVER gw=%d prefix=-1 snap=%lld result=FAIL\n",
+                       gw, (long long)qfirst);
+                fflush(stdout);
+                engine_free(&se);
+                mmapq_indexed_reader_close(qrd);
+                return src_rc;
             }
-            continue;
+            prefix = se.gw_last[gw];
+            snap_used = kp;
+            engine_free(&se);
         }
-        if (ctx.status == MMAPQ_ENTRY_ARCHIVED) continue;
-        if (ctx.status == MMAPQ_ENTRY_ERROR
-            && mmapq_indexed_reader_last_error(qrd) == MMAPQ_ETIMEDOUT) {
-            int retries = 0;
-            do {
-                struct timespec ts = {0, 1000000}; nanosleep(&ts, NULL);
-                memset(&ctx, 0, sizeof ctx);
-                mmapq_indexed_reader_read(qrd, i, &ctx);
-            } while (ctx.status == MMAPQ_ENTRY_ERROR
-                     && mmapq_indexed_reader_last_error(qrd) == MMAPQ_ETIMEDOUT
-                     && ++retries < 5);
-            if (ctx.status == MMAPQ_ENTRY_AVAILABLE) { i--; continue; }  /* reprocess */
-            if (ctx.status == MMAPQ_ENTRY_ARCHIVED) continue;
+        /* Live scan for this gateway's committed seqs, from the loaded
+         * snapshot's index when there is one: entries below it are already in
+         * the prefix, so they need not be rescanned. An ARCHIVED entry means
+         * start_index moved under us: re-read it and its snapshot and scan
+         * again (a committed seq is never skipped silently). */
+        nqcom = 0;
+        int moved = 0;
+        int64_t scan_from = qfirst > 0 ? snap_used : 0;
+        for (int64_t i = scan_from; i <= qlast; i++) {
+            MmapqReadingContext ctx = {0};
+            mmapq_indexed_reader_read(qrd, i, &ctx);
+            if (ctx.status == MMAPQ_ENTRY_AVAILABLE) {
+                MsgHdr h;
+                if (validate(ctx.data, ctx.length, &h)) continue;  /* verify catches committed corruption */
+                if (h.type == T_GATEWAY && h.trader == (uint16_t)gw) {
+                    qcom = gw_grow(qcom, &capqc, nqcom, sizeof *qcom);
+                    qcom[nqcom++] = h.seq;
+                }
+                continue;
+            }
+            if (ctx.status == MMAPQ_ENTRY_ARCHIVED) { moved = 1; break; }
+            if (ctx.status == MMAPQ_ENTRY_ERROR
+                && mmapq_indexed_reader_last_error(qrd) == MMAPQ_ETIMEDOUT) {
+                int retries = 0;
+                do {
+                    struct timespec ts = {0, 1000000}; nanosleep(&ts, NULL);
+                    memset(&ctx, 0, sizeof ctx);
+                    mmapq_indexed_reader_read(qrd, i, &ctx);
+                } while (ctx.status == MMAPQ_ENTRY_ERROR
+                         && mmapq_indexed_reader_last_error(qrd) == MMAPQ_ETIMEDOUT
+                         && ++retries < 5);
+                if (ctx.status == MMAPQ_ENTRY_AVAILABLE) { i--; continue; }  /* reprocess */
+                if (ctx.status == MMAPQ_ENTRY_ARCHIVED) { moved = 1; break; }
+            }
+            fprintf(stderr, "%s: committed scan: index %lld status %d (last_error %d) — refusing to restart\n",
+                    who, (long long)i, (int)ctx.status, mmapq_indexed_reader_last_error(qrd));
+            mmapq_indexed_reader_close(qrd);
+            return 2;
         }
-        fprintf(stderr, "%s: committed scan: index %lld status %d (last_error %d) — refusing to restart\n",
-                who, (long long)i, (int)ctx.status, mmapq_indexed_reader_last_error(qrd));
-        return 2;
+        if (!moved) { prefix_snap = snap_used; committed_prefix = prefix; break; }
+        /* start_index moved under the scan: retry with the new snapshot. The
+         * next attempt checks it actually advanced, else no-progress FAIL. */
     }
     mmapq_indexed_reader_close(qrd);
 
-    /* C: highest live gateway seq; if none is live, the highest logged
-     * commit (the log is trusted at/below the archived boundary) — with one
-     * correction: the log can be SHORT by the at-most-one unlogged
-     * committed record (a kill between the commit and its log line), and
-     * that record may itself be archived. The archived copies are the
-     * queue's content below start_index, so they outrank the log: scan
-     * them backward from start_index-1 for this gateway's last archived
-     * record. Without that, the unlogged committed seq is re-appended and
-     * duplicated. */
+    /* C: the snapshot prefix, extended by the highest committed seq in the
+     * live range. */
     nlive_committed = nqcom;
     if (nqcom > 0) {
-        committed_prefix = (int64_t)qcom[0]; live_min = qcom[0];
+        if ((int64_t)qcom[0] > committed_prefix) committed_prefix = (int64_t)qcom[0];
+        live_min = qcom[0];
         for (int i = 1; i < nqcom; i++) {
             if ((int64_t)qcom[i] > committed_prefix) committed_prefix = (int64_t)qcom[i];
             if (qcom[i] < live_min) live_min = qcom[i];
-        }
-    } else {
-        for (int i = 0; i < L.ncom; i++)
-            if ((int64_t)L.com[i] > committed_prefix) committed_prefix = (int64_t)L.com[i];
-        if (qfirst > 0) {
-            /* lane ids this gateway has used (every logged append carries one) */
-            for (int64_t i = qfirst - 1; i >= 0 && L.napp > 0; i--) {
-                int64_t hp = hdr_pos(i);
-                char name[64];
-                snprintf(name, sizeof name, "header_%lld", (long long)(hp / MAX_FILE_SIZE));
-                int fd = raw_open(dir, qname, name, NULL);
-                if (fd < 0) {
-                    fprintf(stderr, "%s: committed scan: archived header file %s missing\n", who, name);
-                    return 2;
-                }
-                uint64_t ent = 0;
-                int rd2 = raw_pread(fd, &ent, 8, hp % MAX_FILE_SIZE);
-                close(fd);
-                if (rd2 || ent == 0) continue;   /* NULL: not committed */
-                uint8_t aid = (uint8_t)(ent >> 56);
-                int ours = 0;
-                for (int j = 0; j < L.napp; j++) if (L.app[j].aid == aid) { ours = 1; break; }
-                if (!ours) continue;
-                uint64_t pos = ent & 0x00FFFFFFFFFFFFFFULL;
-                snprintf(name, sizeof name, "payload_%u_%lld", aid, (long long)(pos / (uint64_t)MAX_FILE_SIZE));
-                fd = raw_open(dir, qname, name, NULL);
-                if (fd < 0) {
-                    fprintf(stderr, "%s: committed scan: archived payload file %s missing\n", who, name);
-                    return 2;
-                }
-                uint8_t buf[sizeof(MsgHdr) + MAX_PAD + 8];
-                int32_t mlen = 0;
-                MsgHdr h;
-                if (raw_pread(fd, &mlen, 4, (int64_t)(pos % (uint64_t)MAX_FILE_SIZE)) == 0 &&
-                    mlen > 0 && mlen <= (int32_t)sizeof buf &&
-                    raw_pread(fd, buf, (size_t)mlen, (int64_t)(pos % (uint64_t)MAX_FILE_SIZE) + 4) == 0 &&
-                    !validate(buf, mlen, &h) && h.type == T_GATEWAY && h.trader == (uint16_t)gw) {
-                    if ((int64_t)h.seq > committed_prefix) committed_prefix = (int64_t)h.seq;
-                    close(fd);
-                    break;   /* the highest: seqs are index-ordered on the lane */
-                }
-                close(fd);
-            }
         }
     }
 
@@ -1838,6 +1855,9 @@ static int run_gateway(const char *dir, const char *qname, int gw, uint32_t inc,
             if ((int64_t)s > committed_prefix) {
                 fprintf(stderr, "%s: GWALK MISMATCH: gap log calls seq %llu committed, beyond the committed prefix 0..%lld (log ahead of queue)\n",
                         who, (unsigned long long)s, (long long)committed_prefix);
+                printf("GWRECOVER gw=%d prefix=%lld snap=%lld result=FAIL\n",
+                       gw, (long long)committed_prefix, (long long)prefix_snap);
+                fflush(stdout);
                 return 3;
             }
             if (nqcom > 0 && s >= live_min) {
@@ -1846,6 +1866,9 @@ static int run_gateway(const char *dir, const char *qname, int gw, uint32_t inc,
                 if (!shown) {
                     fprintf(stderr, "%s: GWALK MISMATCH: gap log calls seq %llu committed; it is in the live range but the queue does not show it\n",
                             who, (unsigned long long)s);
+                    printf("GWRECOVER gw=%d prefix=%lld snap=%lld result=FAIL\n",
+                           gw, (long long)committed_prefix, (long long)prefix_snap);
+                    fflush(stdout);
                     return 3;
                 }
             }
@@ -2028,13 +2051,13 @@ static int run_gateway(const char *dir, const char *qname, int gw, uint32_t inc,
         free(latest_app); free(is_committed); free(exp_off); free(exp_seq); free(emark);
         free(echop); free(qcom);
     }
-    /* restart complete: unpin the watermark */
-    if (gpin[0]) unlink(gpin);
     /* the commit cursor resumes at the lowest uncommitted seq — a pending
      * record or a held (never appended) packet alike */
     uint64_t next_commit = g.next_emit;
     for (int i = 0; i < g.npend; i++) if (g.pend[i].seq < next_commit) next_commit = g.pend[i].seq;
     if (g.delayed >= 0 && (uint64_t)g.delayed < next_commit) next_commit = (uint64_t)g.delayed;
+    printf("GWRECOVER gw=%d prefix=%lld snap=%lld result=PASS\n",
+           gw, (long long)committed_prefix, (long long)prefix_snap);
     printf("GWJOIN %d %u %d lane=%s walked=%lld reappended=%d prefix=%lld live_committed=%d chopped=%d resume_emit=%llu resume_commit=%llu\n",
            gw, inc, appender_id, same_lane ? "same" : "new", (long long)g.walked, g.reappended,
            (long long)committed_prefix, nlive_committed, chopped,
@@ -2139,7 +2162,9 @@ static int arch_copy(const char *src, const char *dir, const char *base,
 
 /* The archiving watermark: the minimum over the participants' progress
  * files (their highest applied index). Archiving never goes past it, so a
- * lagging live reader is never archived over. -1 when no file exists. */
+ * lagging live reader is never archived over. -1 when no file exists. (The
+ * gateway no longer writes a pin: E4 recovers the gateway prefix from the
+ * snapshot, so only trader progress files remain.) */
 static int64_t arch_watermark(const char *dir)
 {
     char pdir[1100];
@@ -2149,8 +2174,8 @@ static int64_t arch_watermark(const char *dir)
     int64_t best = -1;
     struct dirent *de;
     while ((de = readdir(d))) {
-        /* t<NN>: trader progress; g<NN>: a gateway restart's watermark pin */
-        if (de->d_name[0] != 't' && de->d_name[0] != 'g') continue;
+        /* t<NN>: trader progress (kept until E5) */
+        if (de->d_name[0] != 't') continue;
         char p[1100]; snprintf(p, sizeof p, "%s/progress/%s", dir, de->d_name);
         FILE *f = fopen(p, "r");
         if (!f) continue;
@@ -2362,16 +2387,33 @@ static int run_archiver(const char *dir, const char *qname, const char *stopfile
  * are never undercut. One snapshotter runs at a time (the flock guard); its
  * own restart recovers via the shared participant protocol (snap_recover). */
 
-/* Write already-serialised snapshot bytes to <dir>/snaps/snap_<k> (tmp+rename). */
+/* Write already-serialised snapshot bytes to <dir>/snaps/snap_<k> (tmp+rename).
+ * E4 fail-first plant MKTSIM_SNAP_OLD_MAGIC: stamp the previous (v1) magic and
+ * refresh the CRC, so the file is a well-formed v1 snapshot that snap_load
+ * must refuse. The write-time claim check already saw the current magic. */
 static int snap_write_index(const char *dir, int64_t k, const uint8_t *buf, size_t len)
 {
     char tmp[1100], dst[1100];
     snprintf(tmp, sizeof tmp, "%s/snaps/snap_%lld.tmp", dir, (long long)k);
     snprintf(dst, sizeof dst, "%s/snaps/snap_%lld", dir, (long long)k);
+    const char *om = getenv("MKTSIM_SNAP_OLD_MAGIC");
+    uint8_t *out = NULL;
+    const uint8_t *src = buf;
+    if (om && atoi(om) != 0 && len >= 16) {
+        out = malloc(len);
+        if (!out) { perror("malloc"); return 2; }
+        memcpy(out, buf, len);
+        uint64_t v1 = SNAP_MAGIC_V1;
+        memcpy(out, &v1, 8);
+        uint64_t crc = fnv64(out, len - 8);
+        memcpy(out + len - 8, &crc, 8);
+        src = out;
+    }
     FILE *f = fopen(tmp, "w");
-    if (!f || fwrite(buf, 1, len, f) != len) { perror("snap write"); if (f) fclose(f); return 2; }
-    if (fclose(f)) { perror("snap close"); return 2; }
-    if (rename(tmp, dst)) { perror("snap rename"); return 2; }
+    if (!f || fwrite(src, 1, len, f) != len) { perror("snap write"); if (f) fclose(f); free(out); return 2; }
+    if (fclose(f)) { perror("snap close"); free(out); return 2; }
+    if (rename(tmp, dst)) { perror("snap rename"); free(out); return 2; }
+    free(out);
     return 0;
 }
 
@@ -2514,8 +2556,8 @@ static MmapqNextMove on_snap(int64_t index, uint8_t appender_id, const void *dat
          * the trader's recovery base (stage (e) E3), so these must be real. */
         if (h.seen_count == index && index >= s->k_lo)
             snap_capture_candidate(s, index, h.seen_input, h.seen_digest);
-        replay_track(e, &h);
     }
+    replay_track(e, &h);   /* gateway packets update the committed prefix (E4) */
     engine_apply(e, index, data, len, &h);
     return MMAPQ_NEXT_ADVANCE;
 }
@@ -2664,19 +2706,6 @@ static int run_snapshotter(const char *dir, const char *qname, const char *stopf
                 fflush(stdout);
                 _exit(9);
             }
-            int64_t wm_now = arch_watermark(dir);
-            if (k > wm_now) {
-                /* F2 (interim until E4 removes the pin): the watermark may
-                 * have dropped below k since this round began — a slow or
-                 * newly joined reader lowered the minimum. Defer the archive;
-                 * snap_<k> stays for a later round. The GC only runs after
-                 * start_index == k, so nothing is deleted here. */
-                printf("SNAPDEFER k=%lld wm=%lld\n", (long long)k, (long long)wm_now);
-                fflush(stdout);
-                if (stopping) break;
-                struct timespec ts = {0, 50000000}; nanosleep(&ts, NULL);
-                continue;
-            }
             int arc = mmapq_indexed_archiver_archive_up_to_index(a, k);
             if (arc) {
                 fprintf(stderr, "snapshotter: archive_up_to_index(%lld) rc=%d\n", (long long)k, arc);
@@ -2785,7 +2814,12 @@ static int run_snapjoin(const char *dir, const char *qname, const char *snap_pat
                 (long long)base, (long long)last);
         return 1;
     }
-    Replay r = { .e = &e, .who = "snapjoin", .self = 0xFFFF, .strict_seq = 1, .gw_seed = 1 };
+    Replay r = { .e = &e, .who = "snapjoin", .self = 0xFFFF, .strict_seq = 1 };
+    /* E4: the snapshot carries each gateway's committed prefix below its
+     * base. Seed the strict-seq expectation from it; every gateway packet
+     * from the base on is then checked contiguously (the F1 seed is gone). */
+    for (int g = 0; g < MAX_TRADERS; g++)
+        if (e.gw_last[g] >= 0) r.gw_next[g] = (uint64_t)e.gw_last[g] + 1;
     int64_t arch_n = 0;
     int bad = 0;
     if (e.applied < start_idx)
@@ -2808,16 +2842,9 @@ static int run_snapjoin(const char *dir, const char *qname, const char *snap_pat
             bad = 1; break;
         }
     }
-    char seeded[512]; seeded[0] = '\0';
-    for (int g = 0; r.gw_seed && g < MAX_TRADERS; g++) {
-        if (!r.gw_seen[g]) continue;
-        char tok[64];
-        snprintf(tok, sizeof tok, " gw_seeded=%d:%llu", g, (unsigned long long)r.gw_seeded[g]);
-        strncat(seeded, tok, sizeof seeded - strlen(seeded) - 1);
-    }
-    printf("SNAPJOIN base=%lld start_index=%lld archived=%lld messages=%lld input=%016llx digest=%016llx%s result=%s\n",
+    printf("SNAPJOIN base=%lld start_index=%lld archived=%lld messages=%lld input=%016llx digest=%016llx result=%s\n",
            (long long)base, (long long)start_idx, (long long)arch_n, (long long)e.applied,
-           (unsigned long long)e.input_hash, (unsigned long long)e.digest, seeded, bad ? "FAIL" : "PASS");
+           (unsigned long long)e.input_hash, (unsigned long long)e.digest, bad ? "FAIL" : "PASS");
     fflush(stdout);
     mmapq_indexed_poller_close(p);
     mmapq_indexed_queue_close(q);
