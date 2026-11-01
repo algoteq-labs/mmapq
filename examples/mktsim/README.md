@@ -236,6 +236,11 @@ recovers via `start_index → snap_<start_index> → replay from start_index`
 it prints `SNAPRECOVER who=snapshotter … result=FAIL` and exits non-zero
 rather than starting empty.
 
+A snapshot's header `(k, H, D)` is verified when it is written (against a
+committed participant's claim at `k`); its contents — the book and the
+per-trader sequences — are verified on first use by the recovering
+participant's own SEQ and claim checks.
+
 The copy-aside **never replaces an existing archived copy** (CAND-59 spec
 §3.5): the copy lands via `link(2)`, and an `EEXIST` is skipped and logged
 (`ARCHSKIP <base>`). A file that reappears in a later listing (the

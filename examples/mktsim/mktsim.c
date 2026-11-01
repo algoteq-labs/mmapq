@@ -382,6 +382,96 @@ static int snap_load(const char *path, Engine *e)
     return 0;
 }
 
+/* ── participant recovery (stage (e) E1, shared by E3) ────────────────────
+ *
+ * Every participant recovers the same way, at start and on ARCHIVED: read
+ * start_index, load snap_<start_index>, poll the queue from start_index. The
+ * no-progress rule (amendment 2) lives here: retry only while start_index
+ * advances; if the same start_index returns with the snapshot still missing,
+ * SNAPRECOVER FAIL and a non-zero exit — never start empty at start_index >
+ * 0. The snapshotter recovers through its archiver, the trader through its
+ * reader; only the start_index getter and the who= label differ. */
+
+#define SNAPRECOVER_MAX_TRIES 1024
+
+/* Path of the index-named snapshot <dir>/snaps/snap_<k>. */
+static int snap_path_index(const char *dir, int64_t k, char *path, size_t n)
+{
+    return snprintf(path, n, "%s/snaps/snap_%lld", dir, (long long)k);
+}
+
+/* The recovery source: whichever handle names start_index. */
+typedef struct {
+    const char *who;
+    int64_t (*start_index)(void *ctx);
+    void *ctx;
+} RecoverSrc;
+
+static int64_t recov_si_archiver(void *ctx)
+{
+    return mmapq_indexed_archiver_start_index((MmapqIndexedArchiver *)ctx);
+}
+
+static int64_t recov_si_reader(void *ctx)
+{
+    return mmapq_indexed_reader_start_index((MmapqIndexedReader *)ctx);
+}
+
+static int snap_recover(const char *dir, const RecoverSrc *src, Engine *e, int64_t *k_prev)
+{
+    int64_t from = -1, prev = -1;
+    for (int tries = 1; tries <= SNAPRECOVER_MAX_TRIES; tries++) {
+        int64_t si = src->start_index(src->ctx);
+        if (from < 0) from = si;
+        if (si == 0) { *k_prev = 0; return 0; }   /* fresh queue: empty engine */
+        char path[1100];
+        snap_path_index(dir, si, path, sizeof path);
+        int lrc = snap_load(path, e);
+        if (lrc == 0) {
+            if (e->applied != si) {
+                /* the snapshot must name the index start_index names; a
+                 * mismatch would adopt a state for the wrong index */
+                printf("SNAPRECOVER who=%s from=%lld si=%lld tries=%d result=FAIL (snapshot carries %lld)\n",
+                       src->who, (long long)from, (long long)si, tries, (long long)e->applied);
+                fflush(stdout);
+                return 3;
+            }
+            *k_prev = si;
+            printf("SNAPRECOVER who=%s from=%lld si=%lld tries=%d result=PASS\n",
+                   src->who, (long long)from, (long long)si, tries);
+            fflush(stdout);
+            return 0;
+        }
+        if (lrc == -2) {
+            /* a present but corrupt snapshot: fail at once, never retried
+             * as if it were missing */
+            printf("SNAPRECOVER who=%s from=%lld si=%lld tries=%d result=FAIL (corrupt)\n",
+                   src->who, (long long)from, (long long)si, tries);
+            fflush(stdout);
+            return 3;
+        }
+        if (si == prev) {
+            /* no progress: the same start_index with the snapshot still
+             * missing — the no-progress rule (amendment 2) */
+            printf("SNAPRECOVER who=%s from=%lld si=%lld tries=%d result=FAIL\n",
+                   src->who, (long long)from, (long long)si, tries);
+            fflush(stdout);
+            return 3;
+        }
+        prev = si;
+        struct timespec ts = {0, 20000000}; nanosleep(&ts, NULL);
+    }
+    /* last-resort cap: start_index kept advancing but the snapshot never
+     * appeared; report the current start_index and stop */
+    {
+        int64_t si = src->start_index(src->ctx);
+        printf("SNAPRECOVER who=%s from=%lld si=%lld tries=%d result=FAIL (retry cap)\n",
+               src->who, (long long)from, (long long)si, SNAPRECOVER_MAX_TRIES);
+        fflush(stdout);
+    }
+    return 3;
+}
+
 static int best_index(const Engine *e, int side)
 {
     int b = -1;
@@ -512,6 +602,16 @@ typedef struct {
     int64_t  gw_inv_prev_off, gw_inv_off;
 } Replay;
 
+/* Advance the per-trader replay facts for a committed non-gateway message.
+ * One place, called by both the online replay (on_msg) and the snapshotter's
+ * replay (on_snap), so the snapshot carries exactly the facts a recovering
+ * participant checks and the two callbacks cannot drift. */
+static void replay_track(Engine *e, const MsgHdr *h)
+{
+    e->next_seq[h->trader] = (int64_t)h->seq + 1;
+    e->last_inc[h->trader] = h->incarnation;
+}
+
 static MmapqNextMove on_msg(int64_t index, uint8_t appender_id, const void *data, int32_t len, void *ctx)
 {
     (void)appender_id;
@@ -587,15 +687,20 @@ static MmapqNextMove on_msg(int64_t index, uint8_t appender_id, const void *data
         fprintf(stderr, "%s: INCARNATION went backwards for trader %u at %lld\n", r->who, h.trader, (long long)index);
         r->fatal = 1; return MMAPQ_NEXT_STOP;
     }
-    e->next_seq[h.trader] = (int64_t)h.seq + 1;
-    e->last_inc[h.trader] = h.incarnation;
+    replay_track(e, &h);
     engine_apply(e, index, data, len, &h);
     return MMAPQ_NEXT_ADVANCE;
 }
 
-/* Poll until end of stream. Returns 0, or 3 on check failure, 4 on poll error.
- * A mapping timeout (MMAPQ_ETIMEDOUT) is retryable: bounded retry, counted.
- * The planted defect MKTSIM_RUNTIME_MISCLASSIFY aborts on it as if corrupt. */
+/* drain(): the poller's cursor fell below start_index mid-drain. The trader
+ * re-runs its recovery (stage (e) E3); verify never sees it (nothing
+ * archives while it runs). Distinct from 0/3/4 (end/check-fail/poll-error). */
+#define DRAIN_ARCHIVED 5
+
+/* Poll until end of stream. Returns 0, or 3 on check failure, 4 on poll error,
+ * 5 (DRAIN_ARCHIVED) if the queue archived under the cursor. A mapping
+ * timeout (MMAPQ_ETIMEDOUT) is retryable: bounded retry, counted. The planted
+ * defect MKTSIM_RUNTIME_MISCLASSIFY aborts on it as if corrupt. */
 static int drain(MmapqIndexedPoller *p, Replay *r, int64_t *n_out)
 {
     int64_t n = 0;
@@ -604,6 +709,7 @@ static int drain(MmapqIndexedPoller *p, Replay *r, int64_t *n_out)
         MmapqPollResult pr = mmapq_indexed_poller_poll(p, on_msg, r);
         if (r->fatal) return 3;
         if (pr == MMAPQ_POLL_ADVANCED) { consec_to = 0; n++; continue; }
+        if (pr == MMAPQ_POLL_ARCHIVED) return DRAIN_ARCHIVED;
         if (pr == MMAPQ_POLL_END_OF_STREAM) break;
         if (pr == MMAPQ_POLL_ERROR
             && mmapq_indexed_poller_last_error(p) == MMAPQ_ETIMEDOUT && consec_to < 5) {
@@ -938,33 +1044,122 @@ static int progress_write(const char *dir, uint16_t trader, int64_t applied)
     return 0;
 }
 
-/* The latest snapshot across all participants (deterministic engine: at a
- * given index every snapshot is identical). Returns 0 and fills `path`, or
- * 1 when no snapshot exists. */
-static int snap_latest(const char *dir, char *path, size_t n)
+/* Trader join / re-join (stage (e) E3): recover via the shared participant
+ * protocol (start_index -> snap_<start_index>, bounded), then drain the
+ * committed live range [start_index, last] into the engine. Called at start
+ * and on MMAPQ_ENTRY_ARCHIVED mid-drain; the caller re-enters on
+ * DRAIN_ARCHIVED. Publishes the progress watermark before reading the live
+ * range (kept until E5). Returns 0 with *last and *seq set (seq = this
+ * trader's next single-lane sequence), DRAIN_ARCHIVED to re-enter, or a
+ * process rc. */
+static int trader_rejoin(const char *dir, const char *who, uint16_t trader,
+                         MmapqIndexedReader *rd, MmapqIndexedPoller *p,
+                         Engine *e, Replay *r, int64_t *last_out, uint64_t *seq_out,
+                         int64_t *rec_si)
 {
-    char sdir[1100];
-    snprintf(sdir, sizeof sdir, "%s/snaps", dir);
-    DIR *d = opendir(sdir);
-    if (!d) return 1;
-    int64_t best = -1;
-    struct dirent *de;
-    while ((de = readdir(d))) {
-        size_t l = strlen(de->d_name);
-        /* t<NN>.snap only: not .tmp, not .first.snap (kept for the joiner) */
-        if (l != 8 || de->d_name[0] != 't' || strcmp(de->d_name + 3, ".snap")) continue;
-        char p[1100]; snprintf(p, sizeof p, "%s/snaps/%s", dir, de->d_name);
-        FILE *f = fopen(p, "r");
-        if (!f) continue;
-        SnapHdr h;
-        if (fread(&h, sizeof h, 1, f) == 1 && h.magic == SNAP_MAGIC && h.applied > best) {
-            best = h.applied;
-            snprintf(path, n, "%s", p);
-        }
-        fclose(f);
+    char recwho[16]; snprintf(recwho, sizeof recwho, "t%02u", (unsigned)trader);
+    RecoverSrc src = { .who = recwho, .start_index = recov_si_reader, .ctx = rd };
+    int64_t from = -1;
+    int pinned = 0;
+    for (int tries = 1; tries <= SNAPRECOVER_MAX_TRIES; tries++) {
+        int64_t si = recov_si_reader(rd);
+        if (from < 0) from = si;
+        int64_t k_prev = 0;
+        int rc = snap_recover(dir, &src, e, &k_prev);
+        if (rc) return rc;
+        /* Publish the watermark BEFORE reading the live range: while
+         * progress/t<NN> says e->applied, the snapshotter's watermark bound
+         * cannot advance start_index past it (kept until E5). */
+        if (progress_write(dir, trader, e->applied)) { fprintf(stderr, "%s: progress write\n", who); return 2; }
+        if (recov_si_reader(rd) == e->applied) { pinned = 1; break; }
+        /* start_index advanced between the read and the load; the loaded
+         * snapshot is stale — re-read and retry */
     }
-    closedir(d);
-    return best < 0 ? 1 : 0;
+    if (!pinned) {
+        printf("SNAPRECOVER who=%s from=%lld si=%lld tries=%d result=FAIL (retry cap)\n",
+               recwho, (long long)from, (long long)recov_si_reader(rd), SNAPRECOVER_MAX_TRIES);
+        fflush(stdout);
+        return 3;
+    }
+    if (rec_si) *rec_si = e->applied;   /* the start_index this rejoin recovered at */
+    /* E3 follow-up-2 fail-first plant: a harness delay between the recovery
+     * and the poller move widens the check-then-act window, so a harness can
+     * archive past this index and force the ARCHIVED move. */
+    const char *rdly = getenv("MKTSIM_REJOIN_DELAY_MS");
+    if (rdly && atoi(rdly) > 0) {
+        int ms = atoi(rdly);
+        printf("PLANT rejoin-delay ms=%d at=%lld\n", ms, (long long)e->applied);
+        fflush(stdout);
+        struct timespec ts = {ms / 1000, (long)(ms % 1000) * 1000000L};
+        nanosleep(&ts, NULL);
+    }
+    int64_t last = mmapq_indexed_reader_last_index(rd);
+    if (e->applied <= last && !mmapq_indexed_poller_move_to_index(p, e->applied)) {
+        /* The index was archived between the snapshot load and the move (the
+         * same stale-watermark window as F2). If start_index has moved past
+         * the recovered index this is an ARCHIVED case: return DRAIN_ARCHIVED
+         * so the bounded rejoin loop recovers again. Only a move that fails
+         * with start_index not past us is a real error. */
+        if (recov_si_reader(rd) > e->applied) return DRAIN_ARCHIVED;
+        fprintf(stderr, "%s: move_to_index %lld failed\n", who, (long long)e->applied);
+        return 4;
+    }
+    int64_t prog_mark = e->applied;
+    while (e->applied <= last) {
+        MmapqPollResult pr = mmapq_indexed_poller_poll(p, on_msg, r);
+        if (r->fatal) return 3;
+        if (pr == MMAPQ_POLL_ARCHIVED) return DRAIN_ARCHIVED;
+        if (pr != MMAPQ_POLL_ADVANCED) {
+            fprintf(stderr, "%s: rebuild poll %d at %lld (target last=%lld)\n",
+                    who, (int)pr, (long long)e->applied, (long long)last);
+            return 4;
+        }
+        if (e->applied - prog_mark >= 4096) {
+            if (progress_write(dir, trader, e->applied)) { fprintf(stderr, "%s: progress write\n", who); return 2; }
+            prog_mark = e->applied;
+        }
+    }
+    *last_out = last;
+    *seq_out = (uint64_t)e->next_seq[trader];
+    return 0;
+}
+
+/* The trader's re-join loop (stage (e) E3 follow-up): re-enter the shared
+ * recovery after a DRAIN_ARCHIVED only while start_index advances. The same
+ * start_index twice is a no-progress FAIL; a last-resort cap of
+ * SNAPRECOVER_MAX_TRIES rejoins has its own distinct FAIL line. *rejoin_si
+ * is the start_index of the last recovery, *rejoin_count the rejoin total
+ * (shared across the join and the mid-drain recovery). Returns 0 or a
+ * process rc. */
+static int trader_rejoin_loop(const char *dir, const char *who, uint16_t trader,
+                              MmapqIndexedReader *rd, MmapqIndexedPoller *p,
+                              Engine *e, Replay *r, int64_t *last_out, uint64_t *seq_out,
+                              int64_t *rejoin_si, int *rejoin_count)
+{
+    char recwho[16]; snprintf(recwho, sizeof recwho, "t%02u", (unsigned)trader);
+    for (;;) {
+        if (*rejoin_count >= SNAPRECOVER_MAX_TRIES) {
+            printf("SNAPRECOVER who=%s from=%lld si=%lld tries=%d result=FAIL (rejoin cap)\n",
+                   recwho, (long long)*rejoin_si, (long long)recov_si_reader(rd), *rejoin_count);
+            fflush(stdout);
+            return 3;
+        }
+        (*rejoin_count)++;
+        int64_t now = recov_si_reader(rd);
+        if (now == *rejoin_si) {
+            printf("SNAPRECOVER who=%s from=%lld si=%lld tries=%d result=FAIL (no progress)\n",
+                   recwho, (long long)*rejoin_si, (long long)now, *rejoin_count);
+            fflush(stdout);
+            return 3;
+        }
+        int rc = trader_rejoin(dir, who, trader, rd, p, e, r, last_out, seq_out, rejoin_si);
+        if (rc != DRAIN_ARCHIVED) {
+            /* a rejoin that completed its rebuild ends the storm: the cap
+             * bounds one run of consecutive rejoins, not a lifetime total */
+            if (rc == 0) *rejoin_count = 0;
+            return rc;
+        }
+    }
 }
 
 static int run_trader(const char *dir, const char *qname, int trader, uint32_t inc,
@@ -1037,59 +1232,34 @@ static int run_trader(const char *dir, const char *qname, int trader, uint32_t i
     Replay r = { .e = &e, .who = who, .self = (uint16_t)trader };
     r.misclassify = misclassify;
 
-    /* JOIN: learn the committed range, rebuild exactly up to its end.
-     * Archivable runs (F6): start from the latest snapshot (any participant —
-     * the engine is deterministic, so identical at a given index), replay the
-     * range the live queue no longer has from the archived copies (§3), then
-     * the live tail. With no snapshot the replay starts at index 0 from the
-     * copies. */
-    if (archivable) {
-        char spath[1100];
-        if (snap_latest(dir, spath, sizeof spath) == 0) {
-            if (snap_load(spath, &e)) {
-                fprintf(stderr, "%s: snapshot %s unreadable\n", who, spath);
-                return 3;
-            }
-        }
-        /* Publish the watermark BEFORE reading the live range: while this
-         * progress file says k, the archiver cannot advance start_index
-         * past k, so the range this restart reads cannot move under it. */
-        if (progress_write(dir, (uint16_t)trader, e.applied)) { fprintf(stderr, "%s: progress write\n", who); return 2; }
-    }
+    /* JOIN: recover and rebuild the committed range. Archivable runs (stage
+     * (e) E3) use the shared participant protocol: read start_index, load
+     * snap_<start_index> (bounded retry), poll from start_index — no
+     * snap_latest, no archived-copy replay. On MMAPQ_ENTRY_ARCHIVED mid-drain
+     * the same recovery runs again. Non-archivable runs rebuild from 0. */
     MmapqIndexedReader *rd = NULL;
     if (mmapq_indexed_queue_create_reader(q, &rd)) { fprintf(stderr, "%s: reader\n", who); return 2; }
-    int64_t last = mmapq_indexed_reader_last_index(rd);
-    int64_t start_idx = archivable ? mmapq_indexed_reader_start_index(rd) : 0;
-    mmapq_indexed_reader_close(rd);
+    int64_t last = -1;
+    uint64_t seq = 0;
+    int64_t rejoin_si = -1;   /* start_index of the last recovery */
+    int rejoin_count = 0;     /* rejoins so far (cap SNAPRECOVER_MAX_TRIES) */
     if (archivable) {
-        if (e.applied > last + 1) {
-            fprintf(stderr, "%s: snapshot at %lld is ahead of the log (last %lld)\n",
-                    who, (long long)e.applied, (long long)last);
-            return 3;
+        int rc2 = trader_rejoin_loop(dir, who, (uint16_t)trader, rd, p, &e, &r, &last, &seq,
+                                     &rejoin_si, &rejoin_count);
+        if (rc2) { mmapq_indexed_reader_close(rd); return rc2; }
+    } else {
+        last = mmapq_indexed_reader_last_index(rd);
+        mmapq_indexed_reader_close(rd);
+        while (e.applied <= last) {
+            MmapqPollResult pr = mmapq_indexed_poller_poll(p, on_msg, &r);
+            if (r.fatal) return 3;
+            if (pr != MMAPQ_POLL_ADVANCED) {
+                fprintf(stderr, "%s: rebuild poll %d at %lld (target last=%lld)\n", who, (int)pr,
+                        (long long)e.applied, (long long)last);
+                return 4;
+            }
         }
-        if (e.applied < start_idx) {
-            int arc = replay_archived_range(dir, qname, &r, e.applied, start_idx, NULL);
-            if (arc) return arc;
-        }
-        int64_t live_from = e.applied > start_idx ? e.applied : start_idx;
-        if (live_from <= last && !mmapq_indexed_poller_move_to_index(p, live_from)) {
-            fprintf(stderr, "%s: move_to_index %lld failed\n", who, (long long)live_from);
-            return 4;
-        }
-    }
-    int64_t prog_mark = e.applied, snap_mark = e.applied / SNAP_EVERY;
-    while (e.applied <= last) {
-        MmapqPollResult pr = mmapq_indexed_poller_poll(p, on_msg, &r);
-        if (r.fatal) return 3;
-        if (pr != MMAPQ_POLL_ADVANCED) {
-            fprintf(stderr, "%s: rebuild poll %d at %lld (target last=%lld)\n", who, (int)pr,
-                    (long long)e.applied, (long long)last);
-            return 4;
-        }
-        if (archivable && e.applied - prog_mark >= 4096) {
-            if (progress_write(dir, (uint16_t)trader, e.applied)) return 2;
-            prog_mark = e.applied;
-        }
+        seq = (uint64_t)e.next_seq[trader];
     }
     uint64_t in, dg; hist_at(&e, e.applied, &in, &dg);
     printf("JOIN %d %u %d %lld %016llx %016llx\n", trader, inc, appender_id,
@@ -1119,13 +1289,22 @@ static int run_trader(const char *dir, const char *qname, int trader, uint32_t i
         bseq = (uint64_t)be.next_seq[trader];
     }
 
-    /* Resume this trader's sequence from the log, not from local memory. */
-    uint64_t seq = (uint64_t)e.next_seq[trader];
+    /* seq (resumed from the log/snapshot, not local memory) is set above. */
     int taker = trader % 4 == 0;
     int rcode = 0;
+    int64_t prog_mark = e.applied, snap_mark = e.applied / SNAP_EVERY;
 
     while (access(stopfile, F_OK) != 0) {
-        if ((rcode = drain(p, &r, NULL))) break;
+        rcode = drain(p, &r, NULL);
+        if (rcode == DRAIN_ARCHIVED && archivable) {
+            /* MMAPQ_ENTRY_ARCHIVED mid-drain: re-run the same recovery. */
+            rcode = trader_rejoin_loop(dir, who, (uint16_t)trader, rd, p, &e, &r, &last, &seq,
+                                       &rejoin_si, &rejoin_count);
+            if (rcode) break;
+            prog_mark = e.applied; snap_mark = e.applied / SNAP_EVERY;
+            continue;
+        }
+        if (rcode) break;
         if (batch_on && (rcode = drain_batch(bp, &br, NULL))) break;
         if (archivable) {
             if (e.applied - prog_mark >= 4096) {
@@ -1234,6 +1413,7 @@ static int run_trader(const char *dir, const char *qname, int trader, uint32_t i
         mmapq_indexed_batch_queue_close(bq);
         engine_free(&be);
     }
+    if (archivable) mmapq_indexed_reader_close(rd);
     mmapq_indexed_poller_close(p);
     mmapq_indexed_appender_close(a);
     mmapq_indexed_queue_close(q);
@@ -2180,16 +2360,7 @@ static int run_archiver(const char *dir, const char *qname, const char *stopfile
  * independent write-time claim check, then archive_up_to_index(k) and
  * requires start_index == k. Until E5, k <= arch_watermark, so live readers
  * are never undercut. One snapshotter runs at a time (the flock guard); its
- * own restart recovers via start_index -> snap_<start_index> (bounded
- * no-progress retry, amendment 2, defined here and reused by E3). */
-
-#define SNAPRECOVER_MAX_TRIES 1024
-
-/* Path of the index-named snapshot <dir>/snaps/snap_<k>. */
-static int snap_path_index(const char *dir, int64_t k, char *path, size_t n)
-{
-    return snprintf(path, n, "%s/snaps/snap_%lld", dir, (long long)k);
-}
+ * own restart recovers via the shared participant protocol (snap_recover). */
 
 /* Write already-serialised snapshot bytes to <dir>/snaps/snap_<k> (tmp+rename). */
 static int snap_write_index(const char *dir, int64_t k, const uint8_t *buf, size_t len)
@@ -2336,8 +2507,15 @@ static MmapqNextMove on_snap(int64_t index, uint8_t appender_id, const void *dat
                 (long long)index, bad, len);
         s->fatal = 1; return MMAPQ_NEXT_STOP;
     }
-    if (h.type != T_GATEWAY && h.seen_count == index && index >= s->k_lo)
-        snap_capture_candidate(s, index, h.seen_input, h.seen_digest);
+    if (h.type != T_GATEWAY) {
+        /* Capture the candidate first: the snapshot at k carries the state
+         * after k messages, so it must not yet include this message's
+         * per-trader facts. Then track next_seq/last_inc — the snapshot is
+         * the trader's recovery base (stage (e) E3), so these must be real. */
+        if (h.seen_count == index && index >= s->k_lo)
+            snap_capture_candidate(s, index, h.seen_input, h.seen_digest);
+        replay_track(e, &h);
+    }
     engine_apply(e, index, data, len, &h);
     return MMAPQ_NEXT_ADVANCE;
 }
@@ -2363,66 +2541,6 @@ static int snap_advance(MmapqIndexedPoller *p, SnapReplay *s, int64_t t)
         return 4;
     }
     return 0;
-}
-
-/* Recover the engine at start or restart: start_index -> snap_<start_index>
- * -> replay from start_index, never below. The no-progress rule (amendment
- * 2) is defined here: retry only while start_index advances; if the same
- * start_index returns with the snapshot still missing, SNAPRECOVER FAIL and
- * a non-zero exit — never start empty at start_index > 0. */
-static int snap_recover(const char *dir, MmapqIndexedArchiver *a, Engine *e, int64_t *k_prev)
-{
-    int64_t from = -1, prev = -1;
-    for (int tries = 1; tries <= SNAPRECOVER_MAX_TRIES; tries++) {
-        int64_t si = mmapq_indexed_archiver_start_index(a);
-        if (from < 0) from = si;
-        if (si == 0) { *k_prev = 0; return 0; }   /* fresh queue: empty engine */
-        char path[1100];
-        snap_path_index(dir, si, path, sizeof path);
-        int lrc = snap_load(path, e);
-        if (lrc == 0) {
-            if (e->applied != si) {
-                /* the snapshot must name the index start_index names; a
-                 * mismatch would adopt a state for the wrong index */
-                printf("SNAPRECOVER who=snapshotter from=%lld si=%lld tries=%d result=FAIL (snapshot carries %lld)\n",
-                       (long long)from, (long long)si, tries, (long long)e->applied);
-                fflush(stdout);
-                return 3;
-            }
-            *k_prev = si;
-            printf("SNAPRECOVER who=snapshotter from=%lld si=%lld tries=%d result=PASS\n",
-                   (long long)from, (long long)si, tries);
-            fflush(stdout);
-            return 0;
-        }
-        if (lrc == -2) {
-            /* a present but corrupt snapshot: fail at once, never retried
-             * as if it were missing */
-            printf("SNAPRECOVER who=snapshotter from=%lld si=%lld tries=%d result=FAIL (corrupt)\n",
-                   (long long)from, (long long)si, tries);
-            fflush(stdout);
-            return 3;
-        }
-        if (si == prev) {
-            /* no progress: the same start_index with the snapshot still
-             * missing — the no-progress rule (amendment 2) */
-            printf("SNAPRECOVER who=snapshotter from=%lld si=%lld tries=%d result=FAIL\n",
-                   (long long)from, (long long)si, tries);
-            fflush(stdout);
-            return 3;
-        }
-        prev = si;
-        struct timespec ts = {0, 20000000}; nanosleep(&ts, NULL);
-    }
-    /* last-resort cap: start_index kept advancing but the snapshot never
-     * appeared; report the current start_index and stop */
-    {
-        int64_t si = mmapq_indexed_archiver_start_index(a);
-        printf("SNAPRECOVER who=snapshotter from=%lld si=%lld tries=%d result=FAIL (retry cap)\n",
-               (long long)from, (long long)si, SNAPRECOVER_MAX_TRIES);
-        fflush(stdout);
-    }
-    return 3;
 }
 
 static int run_snapshotter(const char *dir, const char *qname, const char *stopfile, int hand)
@@ -2464,9 +2582,12 @@ static int run_snapshotter(const char *dir, const char *qname, const char *stopf
     int plant_gc = gcone && atoi(gcone) != 0;
     const char *daw = getenv("MKTSIM_SNAPSHOTTER_DIE_AFTER_WRITE");  /* E2 plant */
     int die_after = daw ? atoi(daw) : 0;
+    const char *abs = getenv("MKTSIM_ARCH_BEFORE_SNAP");   /* E3 plant */
+    int plant_abs = abs && atoi(abs) != 0;
     int snap_count = 0;                /* snap_<k> writes in this process */
     int64_t k_prev = 0;
-    int rc = snap_recover(dir, a, &e, &k_prev);
+    RecoverSrc rsrc = { .who = "snapshotter", .start_index = recov_si_archiver, .ctx = a };
+    int rc = snap_recover(dir, &rsrc, &e, &k_prev);
     if (rc) { mmapq_indexed_archiver_close(a); close(lockfd); engine_free(&e); return rc; }
     int writes = k_prev > 0 ? 1 : 0;   /* snap_<k_prev> already on disk after recovery */
 
@@ -2528,7 +2649,9 @@ static int run_snapshotter(const char *dir, const char *qname, const char *stopf
                 mmapq_indexed_poller_close(p); mmapq_indexed_reader_close(rd); mmapq_indexed_queue_close(q);
                 mmapq_indexed_archiver_close(a); close(lockfd); engine_free(&e); return 3;
             }
-            if (snap_write_index(dir, k, s.cand_buf, s.cand_len)) {
+            /* E3 plant MKTSIM_ARCH_BEFORE_SNAP: archive k without writing
+             * snap_<k>, so start_index names a snapshot that is not there. */
+            if (!plant_abs && snap_write_index(dir, k, s.cand_buf, s.cand_len)) {
                 mmapq_indexed_poller_close(p); mmapq_indexed_reader_close(rd); mmapq_indexed_queue_close(q);
                 mmapq_indexed_archiver_close(a); close(lockfd); engine_free(&e); return 2;
             }
@@ -2582,6 +2705,15 @@ static int run_snapshotter(const char *dir, const char *qname, const char *stopf
             printf("SNAPWRITE k=%lld si=%lld claim=ok result=PASS\n",
                    (long long)k, (long long)si);
             fflush(stdout);
+            if (plant_abs) {
+                /* leave start_index == k with snap_<k> absent and stop, so a
+                 * recovering trader must fail bounded (never hang or start
+                 * empty). */
+                printf("PLANT arch-before-snap k=%lld si=%lld\n", (long long)k, (long long)si);
+                fflush(stdout);
+                mmapq_indexed_poller_close(p); mmapq_indexed_reader_close(rd); mmapq_indexed_queue_close(q);
+                mmapq_indexed_archiver_close(a); close(lockfd); engine_free(&e); _exit(9);
+            }
             /* E2: keep-two snapshot GC, then the snapshotter's own exact
              * guard. Two are always kept once two have been written: the
              * snap_<k> set on disk must be exactly {previous, start_index}. */
