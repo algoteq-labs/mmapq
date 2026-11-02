@@ -79,7 +79,7 @@ must not be interpreted as an existing queue's authoritative disk geometry.
 Rust readers now require exclusive borrows. Batch cursors lend each payload
 until the next step; process it in place before advancing, without copying.
 The upcoming release intentionally breaks source compatibility. See
-`../mmapq-rs/doc/hardening-migration.md`.
+`../mmapq-rs/RELEASE-NOTES-0.2.0.md`.
 Python `IndexedReader.read_view` now enforces borrowing: read-only views retain
 the reader, and reads/index queries/close raise `BufferError` until all exports
 and aliases release. Implementation: `../mmapq-py/src/mmapq/reader.py`

@@ -28,15 +28,18 @@ After a crash, the rejoining lane owner recovers what it appended but never
 committed with the uncommitted iterator:
 
 ```c
+int rc;
 MmapqUncommittedPayloadIterator *it = NULL;
-assert(mmapq_indexed_appender_uncommitted_iterator_checked(
+rc = mmapq_indexed_appender_uncommitted_iterator_checked(
     a, MMAPQ_PAYLOAD_ITERATOR_NOT_SET, MMAPQ_PAYLOAD_ITERATOR_NOT_SET,
-    &it) == 0);
+    &it);
+assert(rc == 0);
 
-const void *data; int32_t len; int64_t off; int rc;
+const void *data; int32_t len; int64_t off;
 while ((rc = mmapq_uncommitted_iterator_next(it, &data, &len, &off)) == 1) {
     /* decide: commit it, or skip it */
-    assert(mmapq_indexed_appender_commit(a, off) >= 0);
+    int64_t idx = mmapq_indexed_appender_commit(a, off);
+    assert(idx >= 0);
 }
 /* Three-way: 1 message / 0 exhausted / negative MMAPQ_E*. A negative is
  * truthy in C — compare explicitly, never

@@ -79,20 +79,24 @@ flush to stable storage.
 
 /* Background mapper thread — a process-wide singleton; call once */
 MmapqRuntime *rt = NULL;
-assert(mmapq_runtime_region_mapper(&rt) == 0);
+int rc = mmapq_runtime_region_mapper(&rt);
+assert(rc == 0);
 
 /* Open or create a queue */
 MmapqIndexedQueue *q = NULL;
-assert(mmapq_indexed_queue_create_default("./data", "orders", rt, rt, &q) == 0);
+rc = mmapq_indexed_queue_create_default("./data", "orders", rt, rt, &q);
+assert(rc == 0);
 
 /* Append a message */
 MmapqIndexedAppender *a = NULL;
-assert(mmapq_indexed_queue_create_appender(q, &a) == 0);
+rc = mmapq_indexed_queue_create_appender(q, &a);
+assert(rc == 0);
 int64_t idx = mmapq_indexed_appender_append(a, "hello", 5);
 
 /* Poll messages */
 MmapqIndexedPoller *p = NULL;
-assert(mmapq_indexed_queue_create_poller(q, &p) == 0);
+rc = mmapq_indexed_queue_create_poller(q, &p);
+assert(rc == 0);
 
 static MmapqNextMove my_handler(int64_t index, uint8_t appender_id,
                             const void *data, int32_t length, void *ctx) {
@@ -120,25 +124,34 @@ A batch groups messages under one atomic commit:
 #include "indexed_batch_queue.h"
 
 MmapqRuntime *rt = NULL;
-assert(mmapq_runtime_region_mapper(&rt) == 0);
+int rc = mmapq_runtime_region_mapper(&rt);
+assert(rc == 0);
 
 MmapqIndexedBatchQueue *q = NULL;
-assert(mmapq_indexed_batch_queue_create_default("./data", "events", rt, rt, &q) == 0);
+rc = mmapq_indexed_batch_queue_create_default("./data", "events", rt, rt, &q);
+assert(rc == 0);
 
 MmapqIndexedBatchAppender *a = NULL;
-assert(mmapq_indexed_batch_queue_create_appender(q, &a) == 0);
+rc = mmapq_indexed_batch_queue_create_appender(q, &a);
+assert(rc == 0);
 
 MmapqMutableBatch *b = NULL;
-assert(mmapq_indexed_batch_appender_start_batch_checked(a, &b) == 0);
+rc = mmapq_indexed_batch_appender_start_batch_checked(a, &b);
+assert(rc == 0);
 mmapq_mutable_batch_append(b, "msg0", 4);
 mmapq_mutable_batch_append(b, "msg1", 4);
 mmapq_mutable_batch_append(b, "msg2", 4);
-int64_t batch_idx = mmapq_indexed_batch_appender_commit_batch(a, mmapq_mutable_batch_complete(b));
+int64_t batch_idx = mmapq_mutable_batch_complete(b);
 
 mmapq_indexed_batch_appender_close(a);
 mmapq_indexed_batch_queue_close(q);
 mmapq_runtime_destroy(rt);
 ```
+
+`mmapq_mutable_batch_complete()` publishes the batch and returns its index;
+`mmapq_indexed_batch_appender_commit_batch()` is only for batches staged
+with `mmapq_mutable_batch_complete_uncommitted()` (see [chapter
+5](doc/guide/05-crash-and-restart.md), Crash and restart).
 
 Full walkthrough: [chapter 3](doc/guide/03-batch-queue.md).
 

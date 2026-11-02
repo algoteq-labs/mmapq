@@ -2982,6 +2982,59 @@ static void test_batch_poll_mid_batch_corrupt_length_is_corrupt(void)
     mmapq_indexed_batch_poller_close(p);
 }
 
+/* DOC-03: the README.md "Quick start: batch" example used to wrap the
+ * publish step as commit_batch(a, complete(b)). Since CAND-49 complete()
+ * publishes the batch itself and returns its index; commit_batch() only
+ * accepts an offset staged by complete_uncommitted(), so the old shape
+ * always yielded MMAPQ_EINVAL (the batch was still published — the example
+ * ignored the value). This pins the contract the corrected example relies
+ * on. */
+void test_doc03_complete_publishes_and_returns_index(void)
+{
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
+    TEST_ASSERT_NOT_NULL(a);
+
+    MmapqMutableBatch *b = NULL;
+
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(b, "hello", 5));
+    int64_t idx0 = mmapq_mutable_batch_complete(b);
+    TEST_ASSERT_EQUAL_INT64(0, idx0);
+
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(b, "world", 5));
+    int64_t idx1 = mmapq_mutable_batch_complete(b);
+    TEST_ASSERT_EQUAL_INT64(1, idx1);
+
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(b, "again", 5));
+    int64_t idx2 = mmapq_mutable_batch_complete(b);
+    TEST_ASSERT_EQUAL_INT64(2, idx2);
+
+    /* The batch complete() published is readable at the index it returned. */
+    MmapqIndexedBatchReader *r = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_reader(q, &r));
+    TEST_ASSERT_NOT_NULL(r);
+
+    MmapqBatchReadingContext ctx = {0};
+    mmapq_indexed_batch_reader_read(r, idx1, &ctx);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_BATCH_ENTRY_AVAILABLE, ctx.status);
+    TEST_ASSERT_EQUAL_INT64(1, ctx.index);
+    TEST_ASSERT_EQUAL_INT(1, ctx.message_count);
+    TEST_ASSERT_TRUE(mmapq_batch_iterator_advance(ctx.iterator));
+    TEST_ASSERT_EQUAL_INT(5, batch_iterator_current_length(ctx.iterator));
+    TEST_ASSERT_EQUAL_MEMORY("world", batch_iterator_current_data(ctx.iterator), 5);
+
+    /* The old README shape: a published index is not a staged offset, so
+     * commit_batch() refuses it with MMAPQ_EINVAL. */
+    TEST_ASSERT_EQUAL_INT64(MMAPQ_EINVAL,
+        mmapq_indexed_batch_appender_commit_batch(a, idx2));
+
+    mmapq_indexed_batch_reader_close(r);
+    mmapq_indexed_batch_appender_close(a);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -3068,6 +3121,7 @@ int main(void)
     RUN_TEST(test_mutable_batch_iterator_start_beyond_count_refused);
     RUN_TEST(test_batch_iterator_init_start_beyond_count_refused);
     RUN_TEST(test_append_and_commit_failure_leaves_lane_usable);
+    RUN_TEST(test_doc03_complete_publishes_and_returns_index);
 
     /* CAND-51b F-REC-3 guard pins */
     RUN_TEST(test_batch_complete_publish_failure_stages);

@@ -54,7 +54,7 @@ static MmapqNextMove internal_echo_handler(
     mmapq_mutable_batch_append(b, batch_iterator_current_data(ctx->iterator),
                             batch_iterator_current_length(ctx->iterator));
     mmapq_mutable_batch_append_remaining_from(b, ctx->iterator);
-    mmapq_indexed_batch_appender_commit_batch(s->response_appender, mmapq_mutable_batch_complete(b));
+    mmapq_mutable_batch_complete(b);
 
     return MMAPQ_NEXT_ADVANCE;
 }

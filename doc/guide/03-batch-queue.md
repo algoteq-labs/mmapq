@@ -29,7 +29,7 @@ assert(rc == 0);
 mmapq_mutable_batch_append(b, "msg0", 4);
 mmapq_mutable_batch_append(b, "msg1", 4);
 mmapq_mutable_batch_append(b, "msg2", 4);
-int64_t batch_idx = mmapq_indexed_batch_appender_commit_batch(a, mmapq_mutable_batch_complete(b));
+int64_t batch_idx = mmapq_mutable_batch_complete(b);
 
 /* Poll one batch at a time — handler receives the full batch context */
 MmapqIndexedBatchPoller *p = NULL;
@@ -59,6 +59,10 @@ mmapq_indexed_batch_queue_close(q);
 
 - Batch lanes support the same deferred-commit machinery as single-message
   lanes (next chapter): staged batches are visible to the restart walk.
+- `mmapq_mutable_batch_complete()` publishes the batch and returns its
+  index; `mmapq_indexed_batch_appender_commit_batch()` is only for batches
+  staged with `mmapq_mutable_batch_complete_uncommitted()` (see [chapter
+  5](05-crash-and-restart.md), Crash and restart).
 - In 0.2.0 the batch queue is a C/Rust/Python feature: the Java
   implementation does not yet read batch queues, and Java-written queues
   are refused at open regardless of type.
