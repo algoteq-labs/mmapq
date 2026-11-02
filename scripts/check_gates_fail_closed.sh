@@ -141,6 +141,7 @@ copy_subsets() {
     cp -a "$ROOT/mmapq-rs/c/include/." "$WORK/mmapq-rs/c/include/"
     cp "$ROOT/mmapq-rs/Cargo.toml" "$WORK/mmapq-rs/Cargo.toml"
     cp "$ROOT/mmapq-rs/README.md" "$WORK/mmapq-rs/README.md"
+    cp "$ROOT/mmapq-rs/RELEASE-NOTES-0.2.0.md" "$WORK/mmapq-rs/RELEASE-NOTES-0.2.0.md"
     cp "$ROOT/mmapq-rs/LICENSE" "$WORK/mmapq-rs/LICENSE"
     mkdir -p "$WORK/mmapq-rs/doc"
     cp -a "$ROOT/mmapq-rs/doc/." "$WORK/mmapq-rs/doc/"
