@@ -17,7 +17,7 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   mirrors:
@@ -27,7 +27,7 @@ jobs:
     continue-on-error: ${{ !startsWith(github.ref, 'refs/tags/v') }}
     steps:
       - name: Checkout mmapq (SHA under test)
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           path: ws/mmapq
           fetch-depth: 0
@@ -61,7 +61,7 @@ jobs:
           echo "rs_ref=$(resolve mmapq-rs)" >> "$GITHUB_OUTPUT"
           echo "py_ref=$(resolve mmapq-py)" >> "$GITHUB_OUTPUT"
       - name: Checkout mmapq-rs (committed gitlink)
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           repository: algoteq-labs/mmapq-rs
           ref: ${{ steps.refmap.outputs.rs_ref }}
@@ -69,7 +69,7 @@ jobs:
           submodules: recursive
           token: ${{ secrets.MMAPQ_CI_TOKEN || github.token }}
       - name: Checkout mmapq-py (committed gitlink)
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           repository: algoteq-labs/mmapq-py
           ref: ${{ steps.refmap.outputs.py_ref }}

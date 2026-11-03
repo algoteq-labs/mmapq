@@ -9,13 +9,15 @@ on:
     branches:
       - main
   workflow_dispatch:
+  schedule:
+    - cron: '41 4 * * *'
 
 permissions:
   contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   c-suite:
@@ -24,7 +26,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout mmapq (SHA under test)
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           path: ws/mmapq
           fetch-depth: 0
@@ -43,7 +45,7 @@ jobs:
     timeout-minutes: 25
     steps:
       - name: Checkout mmapq (SHA under test)
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           path: ws/mmapq
           fetch-depth: 0
@@ -77,7 +79,7 @@ jobs:
           echo "rs_ref=$(resolve mmapq-rs)" >> "$GITHUB_OUTPUT"
           echo "py_ref=$(resolve mmapq-py)" >> "$GITHUB_OUTPUT"
       - name: Checkout mmapq-rs (mapped ref, no submodules)
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           repository: algoteq-labs/mmapq-rs
           ref: ${{ steps.refmap.outputs.rs_ref }}
@@ -85,7 +87,7 @@ jobs:
           submodules: false
           token: ${{ secrets.MMAPQ_CI_TOKEN || github.token }}
       - name: Checkout mmapq-py (mapped ref, no submodules)
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           repository: algoteq-labs/mmapq-py
           ref: ${{ steps.refmap.outputs.py_ref }}
@@ -109,7 +111,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
-          toolchain: stable
+          toolchain: 1.99.1
       - name: CAND-55 hygiene wipe
         shell: bash
         run: |
@@ -144,7 +146,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout mmapq (SHA under test)
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           path: ws/mmapq
           fetch-depth: 0
@@ -178,7 +180,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout mmapq (SHA under test)
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           path: ws/mmapq
           fetch-depth: 0
@@ -211,7 +213,7 @@ jobs:
           }
           echo "rs_ref=$(resolve mmapq-rs)" >> "$GITHUB_OUTPUT"
       - name: Checkout mmapq-rs (mapped ref, no submodules)
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           repository: algoteq-labs/mmapq-rs
           ref: ${{ steps.refmap.outputs.rs_ref }}
@@ -229,7 +231,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
-          toolchain: stable
+          toolchain: 1.99.1
       - name: CAND-55 hygiene wipe
         shell: bash
         run: |
@@ -245,7 +247,7 @@ jobs:
     timeout-minutes: 25
     steps:
       - name: Checkout mmapq (SHA under test)
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           path: ws/mmapq
           fetch-depth: 0
@@ -278,7 +280,7 @@ jobs:
           }
           echo "py_ref=$(resolve mmapq-py)" >> "$GITHUB_OUTPUT"
       - name: Checkout mmapq-py (mapped ref, no submodules)
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           repository: algoteq-labs/mmapq-py
           ref: ${{ steps.refmap.outputs.py_ref }}
@@ -318,7 +320,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout mmapq (SHA under test)
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           path: ws/mmapq
           fetch-depth: 0
@@ -337,7 +339,7 @@ jobs:
         run: bash torture/mktsim/run_short.sh
       - name: Upload torture evidence
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: mktsim-short-evidence
           path: ${{ runner.temp }}/mktsim_short

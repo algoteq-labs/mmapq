@@ -10,7 +10,7 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   soak:
@@ -20,7 +20,7 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' || vars.MMAPQ_PUBLIC == 'true' }}
     steps:
       - name: Checkout mmapq (SHA under test)
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           path: ws/mmapq
           fetch-depth: 0
@@ -36,7 +36,7 @@ jobs:
         run: bash torture/mktsim/run_soak.sh "$RUNNER_TEMP/mktsim_soak"
       - name: Upload soak evidence
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: mktsim-soak-evidence
           path: ${{ runner.temp }}/mktsim_soak
