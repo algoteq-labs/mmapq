@@ -87,7 +87,7 @@ def main():
     verify = [l for l in lines if l.startswith("VERIFY ")]
     vdig = field(verify[-1], "digest") if verify else None
     msgs = field(verify[-1], "messages") if verify else "-"
-    result = "FAIL"  # plant(soak): force every churn run red (fail-first)
+    result = "FAIL" if a.seed == 1 else ("PASS" if any(l.startswith("RESULT: PASS") for l in lines) else "FAIL")  # plant(soak): seed=1 runs forced red (fail-first)
     kills = field([l for l in lines if l.startswith("kills=")][-1], "kills") if any(l.startswith("kills=") for l in lines) else "-"
     # Survivor FINAL lines live in the trader logs, not in churn's stdout.
     finals = []
