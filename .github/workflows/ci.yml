@@ -110,7 +110,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential python3 python3-venv python3-dev libffi-dev
-      - name: Plant: Rust toolchain intentionally NOT installed (simulate no cargo)
+      - name: "Plant: Rust toolchain intentionally NOT installed (simulate no cargo)"
         run: echo "plant(gates-a): cargo intentionally absent"
       - name: CAND-55 hygiene wipe
         shell: bash
