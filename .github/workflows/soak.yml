@@ -1,10 +1,6 @@
 name: Soak
 
 on:
-  # TEMP CI-01 soak measurement; removed before main
-  push:
-    branches:
-      - 'ci-check/soak-measure'
   workflow_dispatch:
   schedule:
     - cron: '23 3 * * *'
