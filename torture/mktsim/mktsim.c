@@ -2537,7 +2537,7 @@ static int run_snapshotter(const char *dir, const char *qname, const char *stopf
     const char *obo = getenv("MKTSIM_SNAPSHOTTER_OFF_BY_ONE");
     int plant_obo = obo && atoi(obo) != 0;
     if (plant_obo) e.snap_shadow_cap = 1;
-    const char *gcone = getenv("MKTSIM_GC_KEEP_ONE");   /* E2 plant: delete to one */
+    const char *gcone = getenv("MKTSIM_GC_KEEP_ONE_PLANT_OFF");   /* E2 plant: delete to one */
     int plant_gc = gcone && atoi(gcone) != 0;
     const char *daw = getenv("MKTSIM_SNAPSHOTTER_DIE_AFTER_WRITE");  /* E2 plant */
     int die_after = daw ? atoi(daw) : 0;
