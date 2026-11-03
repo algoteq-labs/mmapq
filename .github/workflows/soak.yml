@@ -38,21 +38,20 @@ jobs:
       - name: Run soak
         working-directory: ${{ github.workspace }}/ws/mmapq
         run: bash torture/mktsim/run_soak.sh "$RUNNER_TEMP/mktsim_soak"
-      - name: Prune soak evidence (keep soak.log + failing runs)
+      - name: Prune soak evidence (keep soak.log + every non-PASS run)
         if: failure()
         shell: bash
         run: |
           set -euo pipefail
           DIR="$RUNNER_TEMP/mktsim_soak"
           [ -d "$DIR" ] || exit 0
-          fail_names="$(grep '^SOAKRUN ' "$DIR/soak.log" 2>/dev/null | grep -v 'result=PASS' | awk '{print $2}' | sort -u || true)"
+          pass_names="$(grep '^SOAKRUN ' "$DIR/soak.log" 2>/dev/null | grep 'result=PASS' | awk '{print $2}' | sort -u || true)"
           cd "$DIR"
           for entry in *; do
             [ "$entry" = "soak.log" ] && continue
-            if [ -d "$entry" ] && printf '%s\n' "$fail_names" | grep -qx "$entry"; then
-              continue
+            if [ -d "$entry" ] && printf '%s\n' "$pass_names" | grep -qx "$entry"; then
+              rm -rf -- "$entry"
             fi
-            rm -rf -- "$entry"
           done
       - name: Upload soak evidence
         if: failure()
