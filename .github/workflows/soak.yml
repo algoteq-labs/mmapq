@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - 'ci-check/soak-measure'
+      - 'ci-check/soak-measure-plant'
   workflow_dispatch:
   schedule:
     - cron: '23 3 * * *'
