@@ -109,7 +109,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential python3 python3-venv python3-dev libffi-dev
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch; version set by toolchain input
         with:
           toolchain: 1.99.1
       - name: CAND-55 hygiene wipe
@@ -229,7 +229,7 @@ jobs:
           git clone --quiet --no-hardlinks "$GITHUB_WORKSPACE/ws/mmapq" ws/mmapq-rs/c
           git -C ws/mmapq-rs/c checkout --quiet --detach "$SHA"
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch; version set by toolchain input
         with:
           toolchain: 1.99.1
       - name: CAND-55 hygiene wipe
@@ -239,7 +239,7 @@ jobs:
           find ws/mmapq ws/mmapq-rs/c -name 'libmmapq.a' -delete
       - name: cargo test
         working-directory: ${{ github.workspace }}/ws/mmapq-rs
-        run: cargo test
+        run: cargo test --no-fail-fast
 
   wrappers-python:
     name: "Wrappers: Python vs mmapq SHA"
@@ -344,3 +344,4 @@ jobs:
           name: mktsim-short-evidence
           path: ${{ runner.temp }}/mktsim_short
           if-no-files-found: ignore
+          retention-days: 14
