@@ -1,0 +1,49 @@
+name: Flake matrix
+
+on:
+  push:
+    branches:
+      - 'ci-check/flake-matrix'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  short:
+    name: run_short (${{ matrix.shard }}, iter ${{ matrix.iteration }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [a, b, c, d]
+        iteration: [1, 2, 3, 4, 5]
+    steps:
+      - name: Checkout mmapq
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          path: ws/mmapq
+          fetch-depth: 0
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential python3
+      - name: Build mktsim
+        working-directory: ${{ github.workspace }}/ws/mmapq
+        run: make mktsim
+      - name: Run run_short (${{ matrix.shard }}/${{ matrix.iteration }})
+        working-directory: ${{ github.workspace }}/ws/mmapq
+        env:
+          MKTSIM_SHORT_DIR: ${{ runner.temp }}/mktsim_short_${{ matrix.shard }}_${{ matrix.iteration }}
+        run: bash torture/mktsim/run_short.sh
+      - name: Upload evidence
+        if: failure()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: mktsim-short-${{ matrix.shard }}-${{ matrix.iteration }}
+          path: ${{ runner.temp }}/mktsim_short_${{ matrix.shard }}_${{ matrix.iteration }}
+          if-no-files-found: ignore
