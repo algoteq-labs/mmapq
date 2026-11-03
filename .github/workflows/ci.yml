@@ -239,7 +239,7 @@ jobs:
           find ws/mmapq ws/mmapq-rs/c -name 'libmmapq.a' -delete
       - name: cargo test
         working-directory: ${{ github.workspace }}/ws/mmapq-rs
-        run: cargo test
+        run: cargo test --no-fail-fast
 
   wrappers-python:
     name: "Wrappers: Python vs mmapq SHA"
@@ -344,3 +344,4 @@ jobs:
           name: mktsim-short-evidence
           path: ${{ runner.temp }}/mktsim_short
           if-no-files-found: ignore
+          retention-days: 14

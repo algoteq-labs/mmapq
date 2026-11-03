@@ -38,6 +38,22 @@ jobs:
       - name: Run soak
         working-directory: ${{ github.workspace }}/ws/mmapq
         run: bash torture/mktsim/run_soak.sh "$RUNNER_TEMP/mktsim_soak"
+      - name: Prune soak evidence (keep soak.log + failing runs)
+        if: failure()
+        shell: bash
+        run: |
+          set -euo pipefail
+          DIR="$RUNNER_TEMP/mktsim_soak"
+          [ -d "$DIR" ] || exit 0
+          fail_names="$(grep '^SOAKRUN ' "$DIR/soak.log" 2>/dev/null | grep -v 'result=PASS' | awk '{print $2}' | sort -u || true)"
+          cd "$DIR"
+          for entry in *; do
+            [ "$entry" = "soak.log" ] && continue
+            if [ -d "$entry" ] && printf '%s\n' "$fail_names" | grep -qx "$entry"; then
+              continue
+            fi
+            rm -rf -- "$entry"
+          done
       - name: Upload soak evidence
         if: failure()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
@@ -45,3 +61,4 @@ jobs:
           name: mktsim-soak-evidence
           path: ${{ runner.temp }}/mktsim_soak
           if-no-files-found: ignore
+          retention-days: 14
