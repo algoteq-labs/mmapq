@@ -331,7 +331,7 @@ static int move_to_last_header(MmapqIndexedAppender *a)
         if (r != WRAP_SUCCESS) return corrupt ? MMAPQ_ECORRUPT : -1;
 
         _Atomic uint64_t *hp = (_Atomic uint64_t *)a->header_buf.data;
-        if (*(uint64_t *)hp == HEADER_NULL) {
+        if (atomic_load_explicit(hp, memory_order_acquire) == HEADER_NULL) {
             return 0;
         }
     }

@@ -30,6 +30,10 @@ typedef struct {
     int64_t index;
 } Worker;
 
+/* plant(tsan): deliberately unsynchronized shared counter, written by every
+ * worker thread after the barrier — a real data race for ThreadSanitizer. */
+static int g_tsan_plant_shared;
+
 static void *create_and_use_participants(void *context)
 {
     Worker *worker = context;
@@ -38,6 +42,7 @@ static void *create_and_use_participants(void *context)
     MmapqIndexedPoller *poller = NULL;
     MmapqIndexedArchiver *archiver = NULL;
     pthread_barrier_wait(worker->barrier);
+    g_tsan_plant_shared = g_tsan_plant_shared + 1;  /* plant(tsan): racy */
     if (mmapq_indexed_queue_create_reader(worker->queue, &reader) != 0) goto done;
     if (mmapq_indexed_queue_create_poller(worker->queue, &poller) != 0) goto done;
     if (mmapq_indexed_queue_create_archiver(worker->queue, &archiver) != 0) goto done;
