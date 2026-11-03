@@ -47,15 +47,15 @@ const char *mmapq_strerror(int rc);
 /* ── Version ───────────────────────────────────────────────────────────────── */
 
 #define MMAPQ_VERSION_MAJOR 0
-#define MMAPQ_VERSION_MINOR 1
+#define MMAPQ_VERSION_MINOR 2
 #define MMAPQ_VERSION_PATCH 0
 
-#define MMAPQ_VERSION_STR "0.1.0"
+#define MMAPQ_VERSION_STR "0.2.0-dev"
 
 /**
  * mmapq_version — return the library version string.
  *
- * Returns: a statically allocated version string (e.g. "0.1.0").
+ * Returns: a statically allocated version string (e.g. "0.2.0").
  * Never returns NULL. Safe to call at any time.
  */
 static inline const char *mmapq_version(void) {
