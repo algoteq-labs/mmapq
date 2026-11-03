@@ -1,0 +1,344 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - 'ci-check/**'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  c-suite:
+    name: C suite (test.sh, both loops)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout mmapq (SHA under test)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          path: ws/mmapq
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+      - name: C test suite (normal and release-flags loops)
+        working-directory: ${{ github.workspace }}/ws/mmapq
+        run: bash scripts/test.sh
+
+  gates:
+    name: Gates (check_sync, GATE_SKIP==0)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout mmapq (SHA under test)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          path: ws/mmapq
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Resolve wrapper refs
+        id: refmap
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          HEAD_REF: ${{ github.head_ref }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "pull_request" ]; then
+            cand="$HEAD_REF $BASE_REF main"
+          else
+            cand="$REF_NAME main"
+          fi
+          resolve() {
+            local repo="$1" r
+            for r in $cand; do
+              [ -n "$r" ] || continue
+              if git ls-remote --exit-code "https://github.com/algoteq-labs/${repo}.git" "refs/heads/$r" >/dev/null 2>&1; then
+                printf '%s\n' "$r"
+                return 0
+              fi
+            done
+            printf 'main\n'
+          }
+          echo "rs_ref=$(resolve mmapq-rs)" >> "$GITHUB_OUTPUT"
+          echo "py_ref=$(resolve mmapq-py)" >> "$GITHUB_OUTPUT"
+      - name: Checkout mmapq-rs (mapped ref, no submodules)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: algoteq-labs/mmapq-rs
+          ref: ${{ steps.refmap.outputs.rs_ref }}
+          path: ws/mmapq-rs
+          submodules: false
+          token: ${{ secrets.MMAPQ_CI_TOKEN || github.token }}
+      - name: Checkout mmapq-py (mapped ref, no submodules)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: algoteq-labs/mmapq-py
+          ref: ${{ steps.refmap.outputs.py_ref }}
+          path: ws/mmapq-py
+          submodules: false
+          token: ${{ secrets.MMAPQ_CI_TOKEN || github.token }}
+      - name: Pin wrappers' c/ to the mmapq SHA under test
+        shell: bash
+        run: |
+          set -euo pipefail
+          SHA="$(git -C ws/mmapq rev-parse HEAD)"
+          for w in mmapq-rs mmapq-py; do
+            rm -rf "ws/$w/c"
+            git clone --quiet --no-hardlinks "$GITHUB_WORKSPACE/ws/mmapq" "ws/$w/c"
+            git -C "ws/$w/c" checkout --quiet --detach "$SHA"
+          done
+      - name: Install toolchains (gcc, python3, cargo)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential python3 python3-venv python3-dev libffi-dev
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+      - name: CAND-55 hygiene wipe
+        shell: bash
+        run: |
+          find ws/mmapq ws/mmapq-rs/c ws/mmapq-py/c -name '*.o' -delete
+          find ws/mmapq ws/mmapq-rs/c ws/mmapq-py/c -name 'libmmapq.a' -delete
+          rm -rf ws/mmapq-py/build
+      - name: Build libmmapq.a
+        working-directory: ${{ github.workspace }}/ws/mmapq
+        run: make
+      - name: Run check_sync.sh and assert GATE_SKIP == 0
+        working-directory: ${{ github.workspace }}/ws
+        shell: bash
+        run: |
+          set +e
+          OUT="$(bash mmapq/scripts/check_sync.sh 2>&1)"; RC=$?
+          set -e
+          printf '%s\n' "$OUT"
+          if printf '%s\n' "$OUT" | grep -q '^GATE_SKIP:'; then
+            echo "FAIL: check_sync.sh reported GATE_SKIP > 0 (a cross-repo check was skipped)"; exit 1
+          fi
+          if ! printf '%s\n' "$OUT" | grep -q '^mirrors in sync$'; then
+            echo "FAIL: check_sync.sh did not print 'mirrors in sync' (GATE_SKIP != 0?)"; exit 1
+          fi
+          if ! printf '%s\n' "$OUT" | grep -q 'GATE_SKIP=0 '; then
+            echo "FAIL: check_readme_examples GATE_SKIP != 0 (toolchain opt-out set?)"; exit 1
+          fi
+          exit "$RC"
+
+  tsan:
+    name: TSan (setarch -R)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout mmapq (SHA under test)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          path: ws/mmapq
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+      - name: TSan under setarch -R (sysctl fallback; never skip)
+        working-directory: ${{ github.workspace }}/ws/mmapq
+        shell: bash
+        run: |
+          set -uo pipefail
+          if setarch "$(uname -m)" -R true 2>/tmp/setarch.err; then
+            setarch "$(uname -m)" -R bash scripts/test.sh --tsan
+            exit $?
+          fi
+          echo "setarch -R unavailable: $(cat /tmp/setarch.err)"
+          echo "retrying after: sudo sysctl vm.mmap_rnd_bits=28"
+          sudo sysctl vm.mmap_rnd_bits=28
+          if setarch "$(uname -m)" -R true 2>/tmp/setarch.err; then
+            setarch "$(uname -m)" -R bash scripts/test.sh --tsan
+            exit $?
+          fi
+          echo "FAIL: setarch -R (personality ADDR_NO_RANDOMIZE) still blocked after sysctl vm.mmap_rnd_bits=28: $(cat /tmp/setarch.err)"
+          exit 1
+
+  wrappers-rust:
+    name: "Wrappers: Rust vs mmapq SHA"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout mmapq (SHA under test)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          path: ws/mmapq
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Resolve wrapper refs
+        id: refmap
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          HEAD_REF: ${{ github.head_ref }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "pull_request" ]; then
+            cand="$HEAD_REF $BASE_REF main"
+          else
+            cand="$REF_NAME main"
+          fi
+          resolve() {
+            local repo="$1" r
+            for r in $cand; do
+              [ -n "$r" ] || continue
+              if git ls-remote --exit-code "https://github.com/algoteq-labs/${repo}.git" "refs/heads/$r" >/dev/null 2>&1; then
+                printf '%s\n' "$r"
+                return 0
+              fi
+            done
+            printf 'main\n'
+          }
+          echo "rs_ref=$(resolve mmapq-rs)" >> "$GITHUB_OUTPUT"
+      - name: Checkout mmapq-rs (mapped ref, no submodules)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: algoteq-labs/mmapq-rs
+          ref: ${{ steps.refmap.outputs.rs_ref }}
+          path: ws/mmapq-rs
+          submodules: false
+          token: ${{ secrets.MMAPQ_CI_TOKEN || github.token }}
+      - name: Pin mmapq-rs c/ to the mmapq SHA under test
+        shell: bash
+        run: |
+          set -euo pipefail
+          SHA="$(git -C ws/mmapq rev-parse HEAD)"
+          rm -rf ws/mmapq-rs/c
+          git clone --quiet --no-hardlinks "$GITHUB_WORKSPACE/ws/mmapq" ws/mmapq-rs/c
+          git -C ws/mmapq-rs/c checkout --quiet --detach "$SHA"
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+      - name: CAND-55 hygiene wipe
+        shell: bash
+        run: |
+          find ws/mmapq ws/mmapq-rs/c -name '*.o' -delete
+          find ws/mmapq ws/mmapq-rs/c -name 'libmmapq.a' -delete
+      - name: cargo test
+        working-directory: ${{ github.workspace }}/ws/mmapq-rs
+        run: cargo test
+
+  wrappers-python:
+    name: "Wrappers: Python vs mmapq SHA"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout mmapq (SHA under test)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          path: ws/mmapq
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Resolve wrapper refs
+        id: refmap
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          HEAD_REF: ${{ github.head_ref }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "pull_request" ]; then
+            cand="$HEAD_REF $BASE_REF main"
+          else
+            cand="$REF_NAME main"
+          fi
+          resolve() {
+            local repo="$1" r
+            for r in $cand; do
+              [ -n "$r" ] || continue
+              if git ls-remote --exit-code "https://github.com/algoteq-labs/${repo}.git" "refs/heads/$r" >/dev/null 2>&1; then
+                printf '%s\n' "$r"
+                return 0
+              fi
+            done
+            printf 'main\n'
+          }
+          echo "py_ref=$(resolve mmapq-py)" >> "$GITHUB_OUTPUT"
+      - name: Checkout mmapq-py (mapped ref, no submodules)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: algoteq-labs/mmapq-py
+          ref: ${{ steps.refmap.outputs.py_ref }}
+          path: ws/mmapq-py
+          submodules: false
+          token: ${{ secrets.MMAPQ_CI_TOKEN || github.token }}
+      - name: Pin mmapq-py c/ to the mmapq SHA under test
+        shell: bash
+        run: |
+          set -euo pipefail
+          SHA="$(git -C ws/mmapq rev-parse HEAD)"
+          rm -rf ws/mmapq-py/c
+          git clone --quiet --no-hardlinks "$GITHUB_WORKSPACE/ws/mmapq" ws/mmapq-py/c
+          git -C ws/mmapq-py/c checkout --quiet --detach "$SHA"
+      - name: Install Python toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential python3 python3-venv python3-dev libffi-dev
+      - name: CAND-55 hygiene wipe
+        shell: bash
+        run: |
+          find ws/mmapq ws/mmapq-py/c -name '*.o' -delete
+          find ws/mmapq ws/mmapq-py/c -name 'libmmapq.a' -delete
+          rm -rf ws/mmapq-py/build
+      - name: Build and run Python tests
+        shell: bash
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install --upgrade pip cffi setuptools wheel
+          cd "$GITHUB_WORKSPACE/ws/mmapq-py"
+          "$RUNNER_TEMP/venv/bin/pip" install -e . --force-reinstall -q
+          "$RUNNER_TEMP/venv/bin/python" -m unittest discover -s tests -v
+
+  torture:
+    name: Torture (mktsim run_short)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout mmapq (SHA under test)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          path: ws/mmapq
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential python3
+      - name: Build mktsim
+        working-directory: ${{ github.workspace }}/ws/mmapq
+        run: make mktsim
+      - name: Run torture short gate
+        working-directory: ${{ github.workspace }}/ws/mmapq
+        env:
+          MKTSIM_SHORT_DIR: ${{ runner.temp }}/mktsim_short
+        run: bash torture/mktsim/run_short.sh
+      - name: Upload torture evidence
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: mktsim-short-evidence
+          path: ${{ runner.temp }}/mktsim_short
+          if-no-files-found: ignore

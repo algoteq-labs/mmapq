@@ -1,0 +1,81 @@
+name: Coherence
+
+on:
+  push:
+    branches:
+      - main
+      - 'ci-check/**'
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mirrors:
+    name: Mirrors (committed gitlinks)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    continue-on-error: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+    steps:
+      - name: Checkout mmapq (SHA under test)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          path: ws/mmapq
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Resolve wrapper refs
+        id: refmap
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          HEAD_REF: ${{ github.head_ref }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "pull_request" ]; then
+            cand="$HEAD_REF $BASE_REF main"
+          else
+            cand="$REF_NAME main"
+          fi
+          resolve() {
+            local repo="$1" r
+            for r in $cand; do
+              [ -n "$r" ] || continue
+              if git ls-remote --exit-code "https://github.com/algoteq-labs/${repo}.git" "refs/heads/$r" >/dev/null 2>&1; then
+                printf '%s\n' "$r"
+                return 0
+              fi
+            done
+            printf 'main\n'
+          }
+          echo "rs_ref=$(resolve mmapq-rs)" >> "$GITHUB_OUTPUT"
+          echo "py_ref=$(resolve mmapq-py)" >> "$GITHUB_OUTPUT"
+      - name: Checkout mmapq-rs (committed gitlink)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: algoteq-labs/mmapq-rs
+          ref: ${{ steps.refmap.outputs.rs_ref }}
+          path: ws/mmapq-rs
+          submodules: recursive
+          token: ${{ secrets.MMAPQ_CI_TOKEN || github.token }}
+      - name: Checkout mmapq-py (committed gitlink)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: algoteq-labs/mmapq-py
+          ref: ${{ steps.refmap.outputs.py_ref }}
+          path: ws/mmapq-py
+          submodules: recursive
+          token: ${{ secrets.MMAPQ_CI_TOKEN || github.token }}
+      - name: Check mirrors
+        working-directory: ${{ github.workspace }}/ws
+        run: bash mmapq/scripts/check_mirrors.sh
