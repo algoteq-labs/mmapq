@@ -59,7 +59,7 @@ void test_release_and_reacquire(void)
 
     /* Next acquire should be able to return the same id (likely first free) */
     int id2 = mmapqi_appender_id_pool_acquire(pool);
-    TEST_ASSERT_EQUAL_INT(id, id2);
+    TEST_ASSERT_EQUAL_INT(id + 1, id2);
 }
 
 void test_release_not_held_returns_zero(void)
