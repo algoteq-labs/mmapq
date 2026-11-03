@@ -1292,3 +1292,4 @@ RegionAccessor *mmapqi_appender_payload_acc(MmapqIndexedAppender *a)
 {
     return a == NULL ? NULL : a->payload_acc;
 }
+
