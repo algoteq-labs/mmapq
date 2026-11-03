@@ -115,7 +115,7 @@ MmapqPollResult mmapq_indexed_poller_poll(
 /* ── Cursor positioning ──────────────────────────────────────────────────── */
 
 /**
- * mmapq_indexed_poller_move_to_index — move cursor to a specific index.
+ * mmapq_indexed_poller_move_to_index_plant — move cursor to a specific index.
  *
  * Returns 1 if successful:
  *   - index >= startIndex, AND
@@ -125,7 +125,7 @@ MmapqPollResult mmapq_indexed_poller_poll(
  *
  * Aborts on mapping timeout (MMAP_ASSERT).
  */
-int mmapq_indexed_poller_move_to_index(MmapqIndexedPoller *p, int64_t index);
+int mmapq_indexed_poller_move_to_index_plant(MmapqIndexedPoller *p, int64_t index);
 
 /**
  * mmapq_indexed_poller_move_to_end — move cursor to one past the last committed entry.

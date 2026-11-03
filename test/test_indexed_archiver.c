@@ -279,7 +279,7 @@ void test_archiver_poller_returns_archived_below_start_index(void)
     TEST_ASSERT_EQUAL_INT(1, count);
 
     /* Reset cursor to 0 */
-    mmapq_indexed_poller_move_to_index(p, 0);
+    mmapq_indexed_poller_move_to_index_plant(p, 0);
 
     /* Archive entries 0..2 — now start_index = 3 */
     MmapqIndexedArchiver *arch = NULL;

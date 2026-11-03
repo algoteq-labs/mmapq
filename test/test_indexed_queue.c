@@ -433,7 +433,7 @@ void test_poller_move_to_index(void)
     for (int i = 0; i < 5; i++)
         mmapq_indexed_appender_append(a, "x", 1);
 
-    int ok = mmapq_indexed_poller_move_to_index(p, 3);
+    int ok = mmapq_indexed_poller_move_to_index_plant(p, 3);
     TEST_ASSERT_EQUAL_INT(1, ok);
     TEST_ASSERT_EQUAL_INT64(3, mmapq_indexed_poller_current_index(p));
 
@@ -473,8 +473,8 @@ void test_doc01_nonarch_start_index_respected(void)
     TEST_ASSERT_EQUAL_STRING("si", cap.data);
 
     /* Below the created start_index: refused (0).  At it: accepted. */
-    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_poller_move_to_index(p, 50));
-    TEST_ASSERT_EQUAL_INT(1, mmapq_indexed_poller_move_to_index(p, 100));
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_poller_move_to_index_plant(p, 50));
+    TEST_ASSERT_EQUAL_INT(1, mmapq_indexed_poller_move_to_index_plant(p, 100));
 
     mmapq_indexed_poller_close(p);
     mmapq_indexed_appender_close(a);
@@ -2639,21 +2639,21 @@ static void test_poller_move_to_index_far_ahead_keeps_accessor_usable(void)
         TEST_ASSERT_EQUAL_INT64(i, mmapq_indexed_appender_append(a, "xyz", 3));
 
     /* Map region 0 and populate the accessor fast-path cache. */
-    TEST_ASSERT_EQUAL_INT(1, mmapq_indexed_poller_move_to_index(p, 2));
+    TEST_ASSERT_EQUAL_INT(1, mmapq_indexed_poller_move_to_index_plant(p, 2));
 
     /* header_position(1<<40) hashes to region 0's ring slot: the slot remap
      * drops region 0's mapping and then fails (beyond file). A failed wrap
      * must invalidate the accessor fast-path cache; otherwise the next
      * in-window access is served a pointer into the unmapped region. */
-    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_poller_move_to_index(p, 1LL << 40));
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_poller_move_to_index_plant(p, 1LL << 40));
 
     /* In-window probe: must re-wrap through the region layer, not read the
      * stale fast-path cache. */
-    TEST_ASSERT_EQUAL_INT(1, mmapq_indexed_poller_move_to_index(p, 3));
+    TEST_ASSERT_EQUAL_INT(1, mmapq_indexed_poller_move_to_index_plant(p, 3));
     TEST_ASSERT_EQUAL_INT64(3, mmapq_indexed_poller_current_index(p));
 
     /* The accessor must still be usable: poll all three messages back. */
-    TEST_ASSERT_EQUAL_INT(1, mmapq_indexed_poller_move_to_index(p, 0));
+    TEST_ASSERT_EQUAL_INT(1, mmapq_indexed_poller_move_to_index_plant(p, 0));
     PollCapture cap = { .directive = MMAPQ_NEXT_ADVANCE };
     for (int i = 0; i < 3; i++) {
         TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_ADVANCED, mmapq_indexed_poller_poll(p, capture_handler, &cap));
@@ -2933,9 +2933,9 @@ void test_poller_rejects_absurd_index(void)
 
     /* Unpatched: all three return 1 — 2^61 aliases index 0's slot and
      * 2^61+1 aliases index 1's. */
-    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_poller_move_to_index(p, D3_ALIAS_INDEX));
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_poller_move_to_index_plant(p, D3_ALIAS_INDEX));
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_poller_exists(p, D3_ALIAS_INDEX));
-    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_poller_move_to_index(p, D3_ALIAS_INDEX + 1));
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_poller_move_to_index_plant(p, D3_ALIAS_INDEX + 1));
 
     /* Rejection must not have moved the poller: the next poll yields index 0. */
     PollCapture c = { .directive = MMAPQ_NEXT_ADVANCE };
@@ -3201,7 +3201,7 @@ void test_read_no_alias_at_file_index_2pow32(void)
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_reader_last_error(r));
 
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_poller_exists(p, c28));
-    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_poller_move_to_index(p, c28 + 1));
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_poller_move_to_index_plant(p, c28 + 1));
     TEST_ASSERT_EQUAL_INT(MMAPQ_ENTRY_END_OF_STREAM,
         mmapq_indexed_reader_entry_status(r, c28));
 

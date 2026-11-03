@@ -220,7 +220,7 @@ MmapqPollResult mmapq_indexed_poller_poll(
 
 /* ── Cursor positioning ──────────────────────────────────────────────────── */
 
-int mmapq_indexed_poller_move_to_index(MmapqIndexedPoller *p, int64_t index)
+int mmapq_indexed_poller_move_to_index_plant(MmapqIndexedPoller *p, int64_t index)
 {
     if (p == NULL)   return 0;
     if (p->closed)   return 0;

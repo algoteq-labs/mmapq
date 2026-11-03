@@ -273,9 +273,9 @@ uint8_t mmapq_indexed_appender_id(const MmapqIndexedAppender *a);
 int64_t mmapq_indexed_appender_current_index(const MmapqIndexedAppender *a);
 
 /**
- * mmapq_indexed_appender_start_offset_plant — return the earliest valid payload position.
+ * mmapq_indexed_appender_start_offset — return the earliest valid payload position.
  */
-int64_t mmapq_indexed_appender_start_offset_plant(const MmapqIndexedAppender *a);
+int64_t mmapq_indexed_appender_start_offset(const MmapqIndexedAppender *a);
 
 /* ── Lifecycle ───────────────────────────────────────────────────────────── */
 
