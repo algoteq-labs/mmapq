@@ -121,6 +121,8 @@ jobs:
       - name: Build libmmapq.a
         working-directory: ${{ github.workspace }}/ws/mmapq
         run: make
+      - name: Plant: drop the mmapq-py sibling
+        run: rm -rf ws/mmapq-py
       - name: Run check_sync.sh and assert GATE_SKIP == 0
         working-directory: ${{ github.workspace }}/ws
         shell: bash
