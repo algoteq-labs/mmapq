@@ -20,7 +20,7 @@ jobs:
   soak:
     name: Soak (run_soak)
     runs-on: ubuntu-24.04
-    timeout-minutes: 150
+    timeout-minutes: 60
     if: ${{ github.event_name == 'workflow_dispatch' || vars.MMAPQ_PUBLIC == 'true' }}
     steps:
       - name: Checkout mmapq (SHA under test)
