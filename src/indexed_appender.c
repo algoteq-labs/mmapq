@@ -1219,7 +1219,7 @@ int64_t mmapq_indexed_appender_current_index(const MmapqIndexedAppender *a)
     return a->current_index;
 }
 
-int64_t mmapq_indexed_appender_start_offset(const MmapqIndexedAppender *a)
+int64_t mmapq_indexed_appender_start_offset_plant(const MmapqIndexedAppender *a)
 {
     if (a == NULL) return 0;
     return appender_meta_start_offset(a->appender_meta);
