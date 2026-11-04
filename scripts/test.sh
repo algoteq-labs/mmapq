@@ -37,6 +37,16 @@ TESTS=(
     test_c59_commit_floor_pins
 )
 
+# Hook-only suites (TEST-01): main() wraps every RUN_TEST in
+# `#ifdef MMAPQ_TEST_HOOKS`, so under the release flags — which deliberately
+# omit -DMMAPQ_TEST_HOOKS — they compile to ZERO tests. That is by design
+# (CAND-58/CAND-59), so the release loop SKIPs them instead of failing. Any
+# other suite that runs 0 tests is a defect and FAILs.
+HOOK_ONLY_SUITES=(
+    test_c58_walk_pins
+    test_c59_commit_floor_pins
+)
+
 # MMAPQ_TEST_HOOKS enables the deterministic race/failure-injection hooks
 # (CAND-30 pins P9/P15) in the normal loop only; the release loop below
 # compiles without it, and the shipped library never contains the hooks
@@ -77,6 +87,7 @@ echo '#include "mmapq.h"' | gcc $GATE_CFLAGS -x c - -c -o /dev/null 2>&1 && \
 
 PASS=0
 FAIL=0
+SKIP=0
 
 # ── Tools block (CAND-50 import): runs only when tools/mmapq-ids exists ────
 # Conditional so the mirrored copy in the wrappers' c/ trees (which carry no
@@ -111,6 +122,59 @@ if [ -d tools/mmapq-ids ]; then
 fi
 
 # ── Shared compile + run + verify ──────────────────────────────────────────
+
+# is_hook_only — is this suite in the by-design 0-test-in-release allow-list?
+is_hook_only() {
+    local t="$1" h
+    for h in "${HOOK_ONLY_SUITES[@]}"; do
+        if [ "$h" = "$t" ]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+# classify_tests — TEST-01: a run that exits 0 is a PASS only if it actually
+# ran tests. Parse the Unity summary; decide 0-test handling from the BUILD
+# FLAGS (not the loop label), so the release loop is judged on what it
+# compiled, not on what the caller thinks it is. Echoes the summary line on
+# PASS (as before); prints its own FAIL/SKIP diagnostics. Returns 0 PASS,
+# 1 FAIL, 2 SKIP.
+classify_tests() {
+    local test="$1" label="$2" cflags="$3" out="$4"
+    local summary n_tests hooks_on=0
+    summary=$(echo "$out" | grep -E '^[0-9]+ Tests [0-9]+ Failures [0-9]+ Ignored' | tail -1 || true)
+    if [ -z "$summary" ]; then
+        echo "FAIL ($label): $test (no Unity summary)"
+        echo "$out" | tail -20
+        return 1
+    fi
+    n_tests=$(echo "$summary" | awk '{print $1}')
+    case "$cflags" in *-DMMAPQ_TEST_HOOKS*) hooks_on=1 ;; esac
+    if is_hook_only "$test"; then
+        if [ "$hooks_on" -eq 0 ] && [ "$n_tests" -eq 0 ]; then
+            echo "SKIP ($label): $test (hook-only suite, 0 tests without MMAPQ_TEST_HOOKS)"
+            return 2
+        fi
+        if [ "$n_tests" -eq 0 ]; then
+            echo "FAIL ($label): $test (hook-only suite produced 0 tests with MMAPQ_TEST_HOOKS)"
+            echo "$out" | tail -20
+            return 1
+        fi
+        if [ "$hooks_on" -eq 0 ]; then
+            echo "FAIL ($label): $test (allow-list stale: hook-only suite ran $n_tests tests)"
+            echo "$out" | tail -20
+            return 1
+        fi
+    elif [ "$n_tests" -eq 0 ]; then
+        echo "FAIL ($label): $test (0 tests)"
+        echo "$out" | tail -20
+        return 1
+    fi
+    echo "$summary"
+    return 0
+}
+
 run_test() {
     local test="$1"
     local label="$2"
@@ -147,8 +211,7 @@ run_test() {
     fi
 
     rm -f "$bin"
-    echo "$OUT" | grep -E '^[0-9]+ Tests [0-9]+ Failures [0-9]+ Ignored'
-    return 0
+    classify_tests "$test" "$label" "$cflags" "$OUT"
 }
 
 # ── Tools integration suite (CAND-50): the C fork/kill real-queue test for
@@ -180,35 +243,37 @@ run_ids_integration() {
     fi
 
     rm -f "$bin"
-    echo "$OUT" | grep -E '^[0-9]+ Tests [0-9]+ Failures [0-9]+ Ignored'
-    return 0
+    classify_tests test_ids_integration "$label" "$cflags" "$OUT"
 }
 
 # ── Normal mode ────────────────────────────────────────────────────────────
 for TEST in "${TESTS[@]}"; do
-    if run_test "$TEST" "$MODE" "$CFLAGS"; then
-        echo "PASS ($MODE): $TEST"
-        PASS=$((PASS+1))
-    else
-        FAIL=$((FAIL+1))
-    fi
+    rc=0
+    run_test "$TEST" "$MODE" "$CFLAGS" || rc=$?
+    case "$rc" in
+        0) echo "PASS ($MODE): $TEST"; PASS=$((PASS+1)) ;;
+        2) SKIP=$((SKIP+1)) ;;
+        *) FAIL=$((FAIL+1)) ;;
+    esac
 done
 
 if [ -n "$IDS_BIN" ]; then
-    if run_ids_integration "$MODE" "$CFLAGS"; then
-        echo "PASS ($MODE): test_ids_integration"
-        PASS=$((PASS+1))
-    else
-        FAIL=$((FAIL+1))
-    fi
+    rc=0
+    run_ids_integration "$MODE" "$CFLAGS" || rc=$?
+    case "$rc" in
+        0) echo "PASS ($MODE): test_ids_integration"; PASS=$((PASS+1)) ;;
+        2) SKIP=$((SKIP+1)) ;;
+        *) FAIL=$((FAIL+1)) ;;
+    esac
 fi
 
-# ── Release-flags validation (all 21 tests + gates under exact release flags) ──
+# ── Release-flags validation (every suite in TESTS + gates under exact release flags) ──
 echo ""
 echo "=== release-flags validation ==="
 CFLAGS_RELEASE="$(make -s print-cflags-release)"
 REL_PASS=0
 REL_FAIL=0
+REL_SKIP=0
 
 # Gate A under release flags (no -I src — must resolve everything from include/)
 GATE_CFLAGS_RELEASE="-std=gnu11 -O3 -DNDEBUG -D_GNU_SOURCE -I include"
@@ -218,26 +283,26 @@ echo '#include "mmapq.h"' | gcc $GATE_CFLAGS_RELEASE -x c - -c -o /dev/null 2>&1
     { echo "FAIL (release): mmapq.h umbrella header did not compile"; ((REL_FAIL++)); }
 
 for TEST in "${TESTS[@]}"; do
-    if run_test "$TEST" "release" "$CFLAGS_RELEASE"; then
-        echo "PASS (release): $TEST"
-        REL_PASS=$((REL_PASS+1))
-    else
-        echo "FAIL (release): $TEST"
-        REL_FAIL=$((REL_FAIL+1))
-    fi
+    rc=0
+    run_test "$TEST" "release" "$CFLAGS_RELEASE" || rc=$?
+    case "$rc" in
+        0) echo "PASS (release): $TEST"; REL_PASS=$((REL_PASS+1)) ;;
+        2) REL_SKIP=$((REL_SKIP+1)) ;;
+        *) echo "FAIL (release): $TEST"; REL_FAIL=$((REL_FAIL+1)) ;;
+    esac
 done
 
 if [ -n "$IDS_BIN" ]; then
-    if run_ids_integration "release" "$CFLAGS_RELEASE"; then
-        echo "PASS (release): test_ids_integration"
-        REL_PASS=$((REL_PASS+1))
-    else
-        echo "FAIL (release): test_ids_integration"
-        REL_FAIL=$((REL_FAIL+1))
-    fi
+    rc=0
+    run_ids_integration "release" "$CFLAGS_RELEASE" || rc=$?
+    case "$rc" in
+        0) echo "PASS (release): test_ids_integration"; REL_PASS=$((REL_PASS+1)) ;;
+        2) REL_SKIP=$((REL_SKIP+1)) ;;
+        *) echo "FAIL (release): test_ids_integration"; REL_FAIL=$((REL_FAIL+1)) ;;
+    esac
 fi
 
 echo ""
-echo "=== Results (normal): $PASS passed, $FAIL failed ==="
-echo "=== Results (release): $REL_PASS passed, $REL_FAIL failed ==="
+echo "=== Results (normal): $PASS passed, $FAIL failed, $SKIP skipped ==="
+echo "=== Results (release): $REL_PASS passed, $REL_FAIL failed, $REL_SKIP skipped ==="
 [ "$FAIL" -eq 0 ] && [ "$REL_FAIL" -eq 0 ]
