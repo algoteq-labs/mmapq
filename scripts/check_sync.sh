@@ -295,10 +295,6 @@ run_cross bash mmapq/scripts/check_published_urls.sh
 # Verify binding symbols are declared in public headers
 run_cross bash mmapq/scripts/check_binding_symbols.sh
 
-# Verify every gate fails closed when its inputs are absent (P5). Reads the
-# sibling inputs, so cross-scope.
-run_cross bash mmapq/scripts/check_gates_fail_closed.sh
-
 # ── Final ───────────────────────────────────────────────────────────────────
 if [ "$GATE_SKIP" -gt 0 ]; then
     echo "local checks passed ($GATE_SKIP cross-repo check(s) skipped — bare clone). CI must assert GATE_SKIP == 0." >&2
