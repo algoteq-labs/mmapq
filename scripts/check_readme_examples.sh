@@ -259,7 +259,7 @@ self_test() {
         echo '```python' > "$tmpdir/py_readme.md"
         echo 'from mmapq import IndexedQueue' >> "$tmpdir/py_readme.md"
         echo '```' >> "$tmpdir/py_readme.md"
-        if bash "$0" "$tmpdir/py_readme.md" 2>&1 | grep -q 'FAIL:.*__init__.py not found'; then
+        if env -u MMAPQ_SKIP_PYTHON_GATE bash "$0" "$tmpdir/py_readme.md" 2>&1 | grep -q 'FAIL:.*__init__.py not found'; then
             echo "  self-test Python missing-init arm: OK"
         else
             echo "  self-test Python missing-init arm: FAIL (false positive)"
@@ -277,9 +277,9 @@ self_test() {
     echo '```rust' > "$tmpdir/fake_readme.md"
     echo 'fn main() { let x = }' >> "$tmpdir/fake_readme.md"
     echo '```' >> "$tmpdir/fake_readme.md"
-    if bash "$0" "$tmpdir/fake_readme.md" >/dev/null 2>&1; then
+    if env -u MMAPQ_SKIP_RUST_GATE bash "$0" "$tmpdir/fake_readme.md" >/dev/null 2>&1; then
         echo "  self-test Rust arm: FAIL (false positive — broken block passed)"
-        bash "$0" "$tmpdir/fake_readme.md" 2>&1 | tail -5
+        env -u MMAPQ_SKIP_RUST_GATE bash "$0" "$tmpdir/fake_readme.md" 2>&1 | tail -5
         fail=1
     else
         echo "  self-test Rust arm: OK"

@@ -31,6 +31,74 @@ run_cross() {
     "$@"
 }
 
+# ── Structural guard (GATE-01c): cross-scope gates must go through run_cross ─
+# check_gates_fail_closed.sh --list-registry=csv derives each gate's scope from
+# its declared inputs; a gate whose inputs include mmapq-rs/ or mmapq-py/ is
+# cross-repo and must be invoked via run_cross so a bare clone counts the skip
+# (17d). Nothing called --list-registry=csv before, so the bare-clone path could
+# silently rot — check_doc_links.sh was invoked unwrapped. This guard makes the
+# classification mechanical: it reads check_sync.sh and fails if any cross-scope
+# gate is invoked outside run_cross. It reads only mmapq/ files, so it runs (and
+# passes) on a bare clone. It sits before every gate so its diagnosis comes
+# first.
+#
+# Fail closed on the query. The output is captured into a variable (not read
+# through `done < <(...)`, whose failure set -e cannot see); a failed query, or
+# a registry that names no cross-scope gate, is itself an ERROR — a registry
+# that cannot name its cross gates makes this guard meaningless.
+if ! REG_CSV="$(bash mmapq/scripts/check_gates_fail_closed.sh --list-registry=csv)"; then
+    echo "ERROR: check_gates_fail_closed.sh --list-registry=csv failed — cannot classify cross-scope gates" >&2
+    exit 1
+fi
+if ! printf '%s\n' "$REG_CSV" | awk -F'\t' '$1 == "cross" { n++ } END { exit !(n > 0) }'; then
+    echo "ERROR: check_gates_fail_closed.sh --list-registry=csv named no cross-scope gates" >&2
+    exit 1
+fi
+#
+# Exemption (explicit, one entry, with its reason): check_readme_examples.sh
+# --self-test. That self-test DOES read mmapq-py (its self_test() function)
+# and temporarily moves mmapq-py/src/mmapq/__init__.py; it is safe on a bare
+# clone only because each sibling-reading arm checks for the sibling and SKIPs
+# when it is absent (F3). Any other cross-gate --self-test must go through
+# run_cross or be added here with its own reason.
+GUARD_BAD=""
+while IFS=$'\t' read -r _scope _gpath _gargs; do
+    [ "$_scope" = "cross" ] || continue
+    _gfile=$(basename "$_gpath")
+    _in_run_cross=0
+    while IFS= read -r _line; do
+        case "$_line" in
+            \#*) _in_run_cross=0; continue ;;
+            '')  _in_run_cross=0; continue ;;
+        esac
+        _invoked=0
+        case "$_line" in *"$_gfile"*) _invoked=1 ;; esac
+        case "$_line" in
+            *check_readme_examples.sh*--self-test*) _invoked=0 ;;
+        esac
+        if [ "$_invoked" -eq 1 ]; then
+            _wrapped=0
+            case "$_line" in *run_cross*) _wrapped=1 ;; esac
+            if [ "$_in_run_cross" -eq 1 ]; then _wrapped=1; fi
+            if [ "$_wrapped" -eq 0 ]; then
+                GUARD_BAD="$GUARD_BAD $_gfile"
+            fi
+        fi
+        case "$_line" in
+            *run_cross*\\) _in_run_cross=1 ;;
+            *\\) : ;;
+            *) _in_run_cross=0 ;;
+        esac
+    done < mmapq/scripts/check_sync.sh
+done <<< "$REG_CSV"
+if [ -n "$GUARD_BAD" ]; then
+    echo "ERROR: cross-scope gate(s) invoked outside run_cross in check_sync.sh:$GUARD_BAD" >&2
+    echo "       A gate whose declared inputs include mmapq-rs/ or mmapq-py/ must be" >&2
+    echo "       wrapped in run_cross (17d) so a bare clone counts the skip." >&2
+    exit 1
+fi
+echo "PASS: every cross-scope registry gate is wrapped in run_cross"
+
 # ── Local checks (valid on a bare mmapq clone) ──────────────────────────────
 
 # Verify disjointness: no header in both public include/ and private src/internal/
@@ -158,8 +226,11 @@ fi
 # Verify no doc cites a source file by line number, and cited files exist (17f)
 bash mmapq/scripts/check_doc_citations.sh
 
-# Verify every relative Markdown link resolves (DOC-02)
-bash mmapq/scripts/check_doc_links.sh
+# Verify every relative Markdown link resolves (DOC-02). Its registry inputs
+# include mmapq-rs/README.md and mmapq-py/README.md, so it is cross-scope by the
+# registry's own rule; unwrapped, a bare clone would die here and the 17d
+# counted-skip path would be unreachable (GATE-01b).
+run_cross bash mmapq/scripts/check_doc_links.sh
 
 # ── Cross-repo checks (need mmapq-rs/ and mmapq-py/) ────────────────────────
 
