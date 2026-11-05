@@ -1022,13 +1022,163 @@ static int publish_batch(MmapqIndexedBatchAppender *ba, Engine *be, uint16_t tra
     return 0;
 }
 
+/* ── rebuild-poll rule: re-check start_index after a failed read ─────────────
+ *
+ * The poller checks start_index before a read but not after a failed one, so a
+ * rebuild can observe a result other than ADVANCED while start_index has
+ * already moved past the cursor. ERROR+ETIMEDOUT is a failed payload or header
+ * wrap (e.g. a reclaimed file); END_OF_STREAM is an unwritten slot. Every
+ * rebuild loop therefore re-checks start_index after ANY result other than
+ * ADVANCED and returns DRAIN_ARCHIVED when it moved past the current index —
+ * the same rule the move_to_index branch uses; the bounded rejoin loop then
+ * re-recovers. Only otherwise is ERROR+ETIMEDOUT retried (the main loop's bound
+ * and counter) and END_OF_STREAM re-polled with a bounded wait; anything else,
+ * or a bound exhausted, fails with one diagnostic line.
+ * For a non-archivable queue start_index is fixed at creation, so those sites
+ * carry no ARCHIVED re-check (stated in a comment there, not a dead branch). */
+
+#define REBUILD_EOS_MAX_WAITS 5000   /* per stall: 5000 × 1 ms = 5 s = TIMEOUT_NS
+                                      * — one stall longer than a mapping
+                                      * timeout. Reset on ADVANCED, like
+                                      * consec_to; the main loop re-polls EOS
+                                      * with no wait at all. */
+#define REBUILD_RETRY_SLEEP_NS 1000000L
+
+static void rebuild_sleep_1ms(void)
+{
+    struct timespec ts = {0, REBUILD_RETRY_SLEEP_NS};
+    nanosleep(&ts, NULL);
+}
+
+static void rebuild_fail_line(const char *who, MmapqIndexedReader *rd, int pr,
+                              int perr, int64_t index, int64_t target_last)
+{
+    fprintf(stderr, "%s: rebuild poll %d (last_error %d) entry_status=%d index=%lld "
+                    "target_last=%lld last_index=%lld start_index=%lld\n",
+            who, pr, perr, (int)mmapq_indexed_reader_entry_status(rd, index),
+            (long long)index, (long long)target_last,
+            (long long)mmapq_indexed_reader_last_index(rd),
+            (long long)mmapq_indexed_reader_start_index(rd));
+}
+
+static void batch_rebuild_fail_line(const char *who, MmapqIndexedBatchReader *brd,
+                                    int pr, int perr, int64_t index, int64_t target_last)
+{
+    fprintf(stderr, "%s: batch rebuild poll %d (last_error %d) entry_status=%d index=%lld "
+                    "target_last=%lld last_index=%lld start_index=%lld\n",
+            who, pr, perr, (int)mmapq_indexed_batch_reader_entry_status(brd, index),
+            (long long)index, (long long)target_last,
+            (long long)mmapq_indexed_batch_reader_last_index(brd),
+            (long long)mmapq_indexed_batch_reader_start_index(brd));
+}
+
+/* ── fail-first plants for the rebuild-poll rule (harness-only) ──────────────
+ *
+ * MKTSIM_REBUILD_RACE reproduces the archive race on the rejoin rebuild
+ * deterministically: it copy-asides the payload file that holds the recovered
+ * index (link to archive/, unlink the live copy — the archiver's own reclaim
+ * effect), so the next poll of that index fails ERROR+ETIMEDOUT while
+ * start_index is still at the recovered value, then waits for the snapshotter
+ * to advance start_index past it. Nothing is faked: the poll failure is the
+ * library's file-not-found wrap, the move is the real snapshotter's.
+ * MKTSIM_REBUILD_TIMEOUT / _STUCK / _EOS force the replay loop's poll result
+ * instead (start_index untouched): TIMEOUT = first poll ERROR+ETIMEDOUT,
+ * STUCK = every poll ERROR+ETIMEDOUT, EOS = first poll END_OF_STREAM. */
+
+static int env_armed(const char *name)
+{
+    const char *v = getenv(name);
+    return v != NULL && atoi(v) != 0;
+}
+
+static int rebuild_race_arm(const char *dir, const char *qname,
+                            MmapqIndexedReader *rd, int64_t index)
+{
+    static int fired = 0;   /* one shot per process: a second arm would loop */
+    if (!env_armed("MKTSIM_REBUILD_RACE") || fired) return 0;
+    fired = 1;
+    MmapqReadingContext ctx;
+    if (mmapq_indexed_reader_read(rd, index, &ctx) != &ctx) return 0;
+    if (ctx.status != MMAPQ_ENTRY_AVAILABLE) return 0;
+    char base[64], live[1200], arch[1400];
+    snprintf(base, sizeof base, "payload_%u_%lld", (unsigned)ctx.appender_id,
+             (long long)(ctx.msg_offset / MAX_FILE_SIZE));
+    snprintf(live, sizeof live, "%s/%s/%s", dir, qname, base);
+    snprintf(arch, sizeof arch, "%s/archive/%s", dir, base);
+    int lrc = link(live, arch);
+    if (lrc != 0 && errno != EEXIST) return 0;
+    if (unlink(live) != 0 && errno != ENOENT) return 0;
+    printf("PLANT rebuild-race copy-aside=%s index=%lld\n", base, (long long)index);
+    fflush(stdout);
+    return 1;
+}
+
+static void rebuild_race_wait(MmapqIndexedReader *rd, int64_t index)
+{
+    /* Bounded: the snapshotter (cadence 1) advances start_index within a few
+     * rounds; 2 s is far beyond that but never hangs a broken scenario. */
+    for (int i = 0; i < 2000; i++) {
+        if (mmapq_indexed_reader_start_index(rd) > index) break;
+        rebuild_sleep_1ms();
+    }
+    if (mmapq_indexed_reader_start_index(rd) > index)
+        printf("PLANT rebuild-race start_index-moved si=%lld index=%lld\n",
+               (long long)mmapq_indexed_reader_start_index(rd), (long long)index);
+    else
+        printf("PLANT rebuild-race start_index-not-moved si=%lld index=%lld\n",
+               (long long)mmapq_indexed_reader_start_index(rd), (long long)index);
+    fflush(stdout);
+}
+
+typedef struct {
+    int timeout_once, stuck, eos_once;  /* armed kinds */
+    int fired;                          /* a kind has fired */
+    int retry_pending;                  /* a once-kind fired; the next real poll is the retry */
+    int64_t plant_index;
+    const char *plant_name;
+} RebuildOverride;
+
+static void rebuild_override_init(RebuildOverride *o)
+{
+    o->timeout_once = env_armed("MKTSIM_REBUILD_TIMEOUT");
+    o->stuck        = env_armed("MKTSIM_REBUILD_STUCK");
+    o->eos_once     = env_armed("MKTSIM_REBUILD_EOS");
+    o->fired = 0; o->retry_pending = 0; o->plant_index = -1; o->plant_name = NULL;
+}
+
+/* Synthesize this iteration's poll result WITHOUT calling the poller, so the
+ * cursor does not advance — a real ETIMEDOUT or EOS does not advance it
+ * either. Returns 1 when a result was synthesized. */
+static int rebuild_override_take(RebuildOverride *o, const char *who, int64_t index,
+                                 MmapqPollResult *pr, int *perr)
+{
+    if (o->stuck) {
+        if (!o->fired) { printf("PLANT rebuild-stuck who=%s index=%lld\n", who, (long long)index); fflush(stdout); o->fired = 1; }
+        *pr = MMAPQ_POLL_ERROR; *perr = MMAPQ_ETIMEDOUT;
+        return 1;
+    }
+    if (o->timeout_once && !o->fired) {
+        printf("PLANT rebuild-timeout who=%s index=%lld\n", who, (long long)index); fflush(stdout);
+        o->fired = 1; o->retry_pending = 1; o->plant_index = index; o->plant_name = "rebuild-timeout";
+        *pr = MMAPQ_POLL_ERROR; *perr = MMAPQ_ETIMEDOUT;
+        return 1;
+    }
+    if (o->eos_once && !o->fired) {
+        printf("PLANT rebuild-eos who=%s index=%lld\n", who, (long long)index); fflush(stdout);
+        o->fired = 1; o->retry_pending = 1; o->plant_index = index; o->plant_name = "rebuild-eos";
+        *pr = MMAPQ_POLL_END_OF_STREAM; *perr = 0;
+        return 1;
+    }
+    return 0;
+}
+
 /* Trader join / re-join (stage (e) E3): recover via the shared participant
  * protocol (start_index -> snap_<start_index>, bounded), then drain the
  * committed live range [start_index, last] into the engine. Called at start
  * and on MMAPQ_ENTRY_ARCHIVED mid-drain; the caller re-enters on
  * DRAIN_ARCHIVED. Returns 0 with *last and *seq set (seq = this trader's next
  * single-lane sequence), DRAIN_ARCHIVED to re-enter, or a process rc. */
-static int trader_rejoin(const char *dir, const char *who, uint16_t trader,
+static int trader_rejoin(const char *dir, const char *qname, const char *who, uint16_t trader,
                          MmapqIndexedReader *rd, MmapqIndexedPoller *p,
                          Engine *e, Replay *r, int64_t *last_out, uint64_t *seq_out,
                          int64_t *rec_si)
@@ -1071,15 +1221,46 @@ static int trader_rejoin(const char *dir, const char *who, uint16_t trader,
         fprintf(stderr, "%s: move_to_index %lld failed\n", who, (long long)e->applied);
         return 4;
     }
+    int consec_to = 0;          /* ETIMEDOUT retries, the main loop's bound */
+    int eos_waits = 0;          /* bounded EOS re-polls (REBUILD_EOS_MAX_WAITS) */
+    RebuildOverride ov; rebuild_override_init(&ov);
+    int race_armed = (e->applied <= last) ? rebuild_race_arm(dir, qname, rd, e->applied) : 0;
+    int race_waited = 0;
     while (e->applied <= last) {
-        MmapqPollResult pr = mmapq_indexed_poller_poll(p, on_msg, r);
-        if (r->fatal) return 3;
-        if (pr == MMAPQ_POLL_ARCHIVED) return DRAIN_ARCHIVED;
-        if (pr != MMAPQ_POLL_ADVANCED) {
-            fprintf(stderr, "%s: rebuild poll %d at %lld (target last=%lld)\n",
-                    who, (int)pr, (long long)e->applied, (long long)last);
-            return 4;
+        MmapqPollResult pr;
+        int perr;
+        if (!rebuild_override_take(&ov, who, e->applied, &pr, &perr)) {
+            if (ov.retry_pending) {
+                printf("PLANT %s retried index=%lld (plant=%lld)\n", ov.plant_name,
+                       (long long)e->applied, (long long)ov.plant_index);
+                fflush(stdout);
+                ov.retry_pending = 0;
+            }
+            pr = mmapq_indexed_poller_poll(p, on_msg, r);
+            perr = mmapq_indexed_poller_last_error(p);
+            if (r->fatal) return 3;
         }
+        if (pr == MMAPQ_POLL_ADVANCED) { consec_to = 0; eos_waits = 0; continue; }
+        if (race_armed && !race_waited) {
+            race_waited = 1;
+            rebuild_race_wait(rd, e->applied);
+        }
+        /* start_index first. A failed wrap (e.g. a reclaimed file) makes
+         * the poll return ERROR while start_index has already moved past us;
+         * that is an ARCHIVED cursor, not a failure. */
+        if (mmapq_indexed_reader_start_index(rd) > e->applied) return DRAIN_ARCHIVED;
+        if (pr == MMAPQ_POLL_ERROR && perr == MMAPQ_ETIMEDOUT && consec_to < 5) {
+            consec_to++; r->timeouts++;
+            rebuild_sleep_1ms();
+            continue;
+        }
+        if (pr == MMAPQ_POLL_END_OF_STREAM && eos_waits < REBUILD_EOS_MAX_WAITS) {
+            eos_waits++;
+            rebuild_sleep_1ms();
+            continue;
+        }
+        rebuild_fail_line(who, rd, (int)pr, perr, e->applied, last);
+        return 4;
     }
     *last_out = last;
     *seq_out = plant_stale ? snap_seq : (uint64_t)e->next_seq[trader];
@@ -1097,7 +1278,7 @@ static int trader_rejoin(const char *dir, const char *who, uint16_t trader,
  * is the start_index of the last recovery, *rejoin_count the rejoin total
  * (shared across the join and the mid-drain recovery). Returns 0 or a
  * process rc. */
-static int trader_rejoin_loop(const char *dir, const char *who, uint16_t trader,
+static int trader_rejoin_loop(const char *dir, const char *qname, const char *who, uint16_t trader,
                               MmapqIndexedReader *rd, MmapqIndexedPoller *p,
                               Engine *e, Replay *r, int64_t *last_out, uint64_t *seq_out,
                               int64_t *rejoin_si, int *rejoin_count)
@@ -1118,7 +1299,7 @@ static int trader_rejoin_loop(const char *dir, const char *who, uint16_t trader,
             fflush(stdout);
             return 3;
         }
-        int rc = trader_rejoin(dir, who, trader, rd, p, e, r, last_out, seq_out, rejoin_si);
+        int rc = trader_rejoin(dir, qname, who, trader, rd, p, e, r, last_out, seq_out, rejoin_si);
         if (rc != DRAIN_ARCHIVED) {
             /* a rejoin that completed its rebuild ends the storm: the cap
              * bounds one run of consecutive rejoins, not a lifetime total */
@@ -1208,21 +1389,35 @@ static int run_trader(const char *dir, const char *qname, int trader, uint32_t i
     int64_t rejoin_si = -1;   /* start_index of the last recovery */
     int rejoin_count = 0;     /* rejoins so far (cap SNAPRECOVER_MAX_TRIES) */
     if (archivable) {
-        int rc2 = trader_rejoin_loop(dir, who, (uint16_t)trader, rd, p, &e, &r, &last, &seq,
+        int rc2 = trader_rejoin_loop(dir, qname, who, (uint16_t)trader, rd, p, &e, &r, &last, &seq,
                                      &rejoin_si, &rejoin_count);
         if (rc2) { mmapq_indexed_reader_close(rd); return rc2; }
     } else {
+        /* Non-archivable queue: start_index is fixed at creation, so it cannot
+         * move under the rebuild — no ARCHIVED re-check here (the archivable
+         * path in trader_rejoin has it). rd stays open for the diagnostic. */
         last = mmapq_indexed_reader_last_index(rd);
-        mmapq_indexed_reader_close(rd);
+        int consec_to = 0;
+        int eos_waits = 0;
         while (e.applied <= last) {
             MmapqPollResult pr = mmapq_indexed_poller_poll(p, on_msg, &r);
+            int perr = mmapq_indexed_poller_last_error(p);
             if (r.fatal) return 3;
-            if (pr != MMAPQ_POLL_ADVANCED) {
-                fprintf(stderr, "%s: rebuild poll %d at %lld (target last=%lld)\n", who, (int)pr,
-                        (long long)e.applied, (long long)last);
-                return 4;
+            if (pr == MMAPQ_POLL_ADVANCED) { consec_to = 0; eos_waits = 0; continue; }
+            if (pr == MMAPQ_POLL_ERROR && perr == MMAPQ_ETIMEDOUT && consec_to < 5) {
+                consec_to++; r.timeouts++;
+                rebuild_sleep_1ms();
+                continue;
             }
+            if (pr == MMAPQ_POLL_END_OF_STREAM && eos_waits < REBUILD_EOS_MAX_WAITS) {
+                eos_waits++;
+                rebuild_sleep_1ms();
+                continue;
+            }
+            rebuild_fail_line(who, rd, (int)pr, perr, e.applied, last);
+            return 4;
         }
+        mmapq_indexed_reader_close(rd);
         seq = (uint64_t)e.next_seq[trader];
     }
     uint64_t in, dg; hist_at(&e, e.applied, &in, &dg);
@@ -1236,16 +1431,30 @@ static int run_trader(const char *dir, const char *qname, int trader, uint32_t i
         MmapqIndexedBatchReader *brd = NULL;
         if (mmapq_indexed_batch_queue_create_reader(bq, &brd)) { fprintf(stderr, "%s: batch reader\n", who); return 2; }
         int64_t blast = mmapq_indexed_batch_reader_last_index(brd);
-        mmapq_indexed_batch_reader_close(brd);
+        /* Non-archivable batch queue: start_index is fixed at creation, so it
+         * cannot move — no ARCHIVED re-check here. brd stays open for the
+         * diagnostic. */
+        int consec_to = 0;
+        int eos_waits = 0;
         while (br.batches <= blast) {
             BatchPollResult pr = mmapq_indexed_batch_poller_poll(bp, on_batch, &br);
+            int perr = mmapq_indexed_batch_poller_last_error(bp);
             if (br.fatal) return 3;
-            if (pr != MMAPQ_POLL_ADVANCED) {
-                fprintf(stderr, "%s: batch rebuild poll %d at %lld (target last=%lld)\n", who, (int)pr,
-                        (long long)br.batches, (long long)blast);
-                return 4;
+            if (pr == MMAPQ_POLL_ADVANCED) { consec_to = 0; eos_waits = 0; continue; }
+            if (pr == MMAPQ_POLL_ERROR && perr == MMAPQ_ETIMEDOUT && consec_to < 5) {
+                consec_to++; br.timeouts++;
+                rebuild_sleep_1ms();
+                continue;
             }
+            if (pr == MMAPQ_POLL_END_OF_STREAM && eos_waits < REBUILD_EOS_MAX_WAITS) {
+                eos_waits++;
+                rebuild_sleep_1ms();
+                continue;
+            }
+            batch_rebuild_fail_line(who, brd, (int)pr, perr, br.batches, blast);
+            return 4;
         }
+        mmapq_indexed_batch_reader_close(brd);
         hist_at(&be, be.applied, &in, &dg);
         printf("BATCHJOIN %d %u %d %lld %016llx %016llx\n", trader, inc, baid,
                (long long)be.applied, (unsigned long long)in, (unsigned long long)dg);
@@ -1261,7 +1470,7 @@ static int run_trader(const char *dir, const char *qname, int trader, uint32_t i
         rcode = drain(p, &r, NULL);
         if (rcode == DRAIN_ARCHIVED && archivable) {
             /* MMAPQ_ENTRY_ARCHIVED mid-drain: re-run the same recovery. */
-            rcode = trader_rejoin_loop(dir, who, (uint16_t)trader, rd, p, &e, &r, &last, &seq,
+            rcode = trader_rejoin_loop(dir, qname, who, (uint16_t)trader, rd, p, &e, &r, &last, &seq,
                                        &rejoin_si, &rejoin_count);
             if (rcode) break;
             continue;
@@ -1349,7 +1558,7 @@ static int run_trader(const char *dir, const char *qname, int trader, uint32_t i
              * fresh rejoin budget: the no-progress guard is per storm. */
             rejoin_si = -1;
             rejoin_count = 0;
-            rcode = trader_rejoin_loop(dir, who, (uint16_t)trader, rd, p, &e, &r, &last, &seq,
+            rcode = trader_rejoin_loop(dir, qname, who, (uint16_t)trader, rd, p, &e, &r, &last, &seq,
                                        &rejoin_si, &rejoin_count);
         }
         if (!rcode && batch_on) rcode = drain_batch(bp, &br, NULL);

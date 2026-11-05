@@ -283,6 +283,27 @@ and asserts boundary contiguity exactly (`ARCHVERIFY archived=N boundary=N`) —
 archived-history coverage belongs to the verifier, not to any participant's
 recovery. `archive/` stays for durability and export.
 
+**The rebuild-poll rule.** After recovery a rebuild replays the committed range
+`[start_index, last]`, and the poller checks `start_index` *before* a read but
+not after a failed one: under a fast snapshotter a file can be reclaimed
+between the check and the read, so the poll returns `ERROR`+`ETIMEDOUT` (a
+failed payload or header wrap, e.g. a reclaimed file) while `start_index` has
+already moved past the cursor, or `END_OF_STREAM` (an unwritten slot). Every
+rebuild loop (`trader_rejoin`, the non-archivable rebuild, the batch rebuild)
+applies the rule: at the archivable rejoin site it re-checks `start_index`
+after any result other than `ADVANCED` and returns `DRAIN_ARCHIVED` when it
+moved past the current index — the same rule the `move_to_index` branch uses —
+so the bounded rejoin loop re-recovers. Only otherwise is `ERROR`+`ETIMEDOUT`
+retried (the main loop's bound of five and its `timeouts` counter) and
+`END_OF_STREAM` re-polled with a per-stall bounded wait (5000 × 1 ms = the 5 s
+`TIMEOUT_NS`, reset on `ADVANCED`; the main loop re-polls EOS with no wait at
+all); anything else, or a bound exhausted, fails with one line naming the poll
+result, `last_error`, `entry_status(index)`, index, target last, current
+`last_index` and `start_index`. A non-archivable queue's `start_index` is fixed
+at creation, so the two non-archivable sites carry no ARCHIVED re-check. The 5 s
+mapping timeout itself is unchanged: it is also the archiver's wait-window
+argument (`doc/design/archiving-design.md`).
+
 The **gateway restart under archiving** (stage (e) E4): its committed seqs
 are the prefix `0..C`. C comes from two places only — the snapshot at
 `start_index`, whose per-gateway field records the highest committed gateway
@@ -408,6 +429,10 @@ rather than a silent green):
 | `rejoin_stale_seq.py` | trader 0 commits past the latest `snap_<k>`, is SIGKILLed and restarted with `MKTSIM_REJOIN_STALE_SEQ`; trader 1 catches the duplicate | FAIL |
 | `runtime_misclassify.py` | an async trader with `MKTSIM_RUNTIME_MISCLASSIFY` (never killed) aborts on the first mapping timeout | FAIL |
 | `gw_no_snapseq.py` | gateway killed, its records archived (`live_committed=0`), restarted with `MKTSIM_GW_NO_SNAPSEQ`; `GWRECOVER … result=FAIL` | FAIL |
+| `rebuild_race.py` | `MKTSIM_REBUILD_RACE`: copy-aside the recovered index's payload file, then let the snapshotter advance `start_index` past it; the rebuild re-checks `start_index` → `DRAIN_ARCHIVED` → re-recovery → JOIN | PASS |
+| `rebuild_timeout.py` | `MKTSIM_REBUILD_TIMEOUT`: force the first rebuild poll to `ERROR`+`ETIMEDOUT`; retried with the main loop's bound and `timeouts` counter | PASS |
+| `rebuild_eos.py` | `MKTSIM_REBUILD_EOS`: force the first rebuild poll to `END_OF_STREAM`; re-polled with the bounded wait | PASS |
+| `rebuild_stuck.py` | `MKTSIM_REBUILD_STUCK`: force every rebuild poll to `ERROR`+`ETIMEDOUT`; the retry bound is exhausted and it fails with the one-line diagnostic, no hang | FAIL |
 
 **Every plant row must prove its plant fired (v1.18).** Each plant prints a
 `PLANT <name> …` line at the moment it changes behaviour: the snapshotter
@@ -416,7 +441,9 @@ plants in `snapshotter.log` (`PLANT snapshotter-off-by-one`, `gc-keep-one`,
 `arch-before-snap`, `reclaim-ahead-of-mark`), the trader plants in the trader
 log (`PLANT batch-reorder`, `batch-partial-read`, `runtime-misclassify`,
 `rejoin-stale-seq` — the last only when the snapshot's `next_seq` differs from
-the rebuilt one), the gateway plant (`PLANT commit-before-gap`), the export
+the rebuilt one — and the rebuild-poll plants `rebuild-race` (two lines:
+`copy-aside`, then `start_index-moved`), `rebuild-timeout`, `rebuild-stuck`,
+`rebuild-eos`), the gateway plant (`PLANT commit-before-gap`), the export
 plant (`PLANT export-truncate`), and the engine plant (`PLANT tiebreak-bug`).
 A plant row whose run has no `PLANT` line is `got=VACUOUS
 reason=plant_not_fired`, never `got=PASS`. Three plants that are inherently
@@ -424,9 +451,10 @@ racy under churn (`MKTSIM_REJOIN_STALE_SEQ`, `MKTSIM_RUNTIME_MISCLASSIFY`,
 `MKTSIM_GW_NO_SNAPSEQ`) run as dedicated scenario harnesses instead of churn
 rows, so the plant fires deterministically.
 
-**Measured runtimes** (house machine, 2026-11-01, `-O3`): `run_short.sh`
-**~56 s** for 27 rows; determinism check **10× sequential and 5× two-at-once,
-0 mismatches**; one `run_soak.sh` at the defaults (12 seeds, 60 kills, 8
+**Measured runtimes** (house machine, `-O3`): `run_short.sh` **~56 s** for the
+original 27 rows (2026-11-01), **~57 s** for 31 rows with the four `rebuild-*`
+rows (2026-11-05; `rebuild-race`/`-timeout`/`-eos`/`-stuck` each **< 1 s**);
+determinism check **10× sequential and 5× two-at-once, 0 mismatches**; one `run_soak.sh` at the defaults (12 seeds, 60 kills, 8
 traders; 76 runs, 29,746,451 messages, 4,401 kills, 6,630 undercuts, 8,863
 snapshot cycles, peak live disk 102,088 KiB, all 152 survivor FINALs at the
 live digest) **33 m 14 s** — see `audit/DEMO-01-stage-e/E6/`.

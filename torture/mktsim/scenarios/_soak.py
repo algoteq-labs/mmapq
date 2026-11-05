@@ -83,6 +83,15 @@ def main():
     th.join(timeout=2.0)
     out = r.stdout
     lines = out.splitlines()
+    # Keep churn's stderr: capture_output separates it, and reading only stdout
+    # would silently drop a reason printed there. Full text on disk; the tail
+    # joins the SOAKTAIL block below.
+    err = r.stderr or ""
+    try:
+        with open(os.path.join(a.dir, "churn.stderr"), "w") as f:
+            f.write(err)
+    except OSError:
+        pass
 
     verify = [l for l in lines if l.startswith("VERIFY ")]
     vdig = field(verify[-1], "digest") if verify else None
@@ -120,6 +129,9 @@ def main():
              1 if a.hand_delete else 0, result))
     if result != "PASS":
         tail = "\n".join(lines[-15:])
+        if err.strip():
+            tail += "\n--- churn stderr (tail; full text in %s) ---\n%s" % (
+                os.path.join(a.dir, "churn.stderr"), "\n".join(err.splitlines()[-15:]))
         print("SOAKTAIL %s\n%s" % (a.name, tail))
     return 0 if result == "PASS" else 1
 

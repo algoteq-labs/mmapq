@@ -84,8 +84,9 @@ scenario_run() { # name script
 echo "plant inventory (grep $CODE):" >&2
 STAGE_E_PLANTS="MKTSIM_SNAPSHOTTER_OFF_BY_ONE MKTSIM_GC_KEEP_ONE MKTSIM_SNAPSHOTTER_DIE_AFTER_WRITE MKTSIM_ARCH_BEFORE_SNAP MKTSIM_SNAP_BODY_CORRUPT MKTSIM_GW_NO_SNAPSEQ MKTSIM_SNAP_OLD_MAGIC"
 STAGE_BD_PLANTS="MKTSIM_RECLAIM_AHEAD_OF_MARK MKTSIM_BATCH_REORDER MKTSIM_BATCH_PARTIAL_READ MKTSIM_TIEBREAK_BUG MKTSIM_REJOIN_STALE_SEQ MKTSIM_COMMIT_BEFORE_GAP MKTSIM_RUNTIME_MISCLASSIFY MKTSIM_EXPORT_TRUNCATE"
+REBUILD_PLANTS="MKTSIM_REBUILD_RACE MKTSIM_REBUILD_TIMEOUT MKTSIM_REBUILD_STUCK MKTSIM_REBUILD_EOS"
 MISSING=""
-for p in $STAGE_E_PLANTS $STAGE_BD_PLANTS; do
+for p in $STAGE_E_PLANTS $STAGE_BD_PLANTS $REBUILD_PLANTS; do
     if grep -q "$p" "$CODE"; then
         printf '  present  %s\n' "$p" >&2
     else
@@ -125,6 +126,10 @@ scenario_run lock                "$SCEN/lock.py"
 scenario_run removed-snapshot    "$SCEN/removed_snapshot.py"
 scenario_run corrupt-snapshot    "$SCEN/corrupt_snapshot.py"
 scenario_run arch-before-snap    "$SCEN/arch_before_snap.py"
+scenario_run rebuild-race        "$SCEN/rebuild_race.py"
+scenario_run rebuild-timeout     "$SCEN/rebuild_timeout.py"
+scenario_run rebuild-eos         "$SCEN/rebuild_eos.py"
+scenario_run rebuild-stuck       "$SCEN/rebuild_stuck.py"
 
 # ── 3. clean churn (expected green) ─────────────────────────────────────────
 echo "" >&2
