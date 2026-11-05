@@ -288,7 +288,9 @@ recovery. `archive/` stays for durability and export.
 not after a failed one: under a fast snapshotter a file can be reclaimed
 between the check and the read, so the poll returns `ERROR`+`ETIMEDOUT` (a
 failed payload or header wrap, e.g. a reclaimed file) while `start_index` has
-already moved past the cursor, or `END_OF_STREAM` (an unwritten slot). Every
+already moved past the cursor, or `END_OF_STREAM` (an unwritten slot — or a
+reclaimed HEADER file, whose read fails with err=0 and collapses to
+`END_OF_STREAM`, so EOS also covers a missing header file). Every
 rebuild loop (`trader_rejoin`, the non-archivable rebuild, the batch rebuild)
 applies the rule: at the archivable rejoin site it re-checks `start_index`
 after any result other than `ADVANCED` and returns `DRAIN_ARCHIVED` when it

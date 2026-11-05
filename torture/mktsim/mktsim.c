@@ -1027,13 +1027,16 @@ static int publish_batch(MmapqIndexedBatchAppender *ba, Engine *be, uint16_t tra
  * The poller checks start_index before a read but not after a failed one, so a
  * rebuild can observe a result other than ADVANCED while start_index has
  * already moved past the cursor. ERROR+ETIMEDOUT is a failed payload or header
- * wrap (e.g. a reclaimed file); END_OF_STREAM is an unwritten slot. Every
- * rebuild loop therefore re-checks start_index after ANY result other than
- * ADVANCED and returns DRAIN_ARCHIVED when it moved past the current index —
- * the same rule the move_to_index branch uses; the bounded rejoin loop then
- * re-recovers. Only otherwise is ERROR+ETIMEDOUT retried (the main loop's bound
- * and counter) and END_OF_STREAM re-polled with a bounded wait; anything else,
- * or a bound exhausted, fails with one diagnostic line.
+ * wrap (e.g. a reclaimed file); END_OF_STREAM is an unwritten slot — or a
+ * reclaimed HEADER file, whose read collapses to err=0 END_OF_STREAM, so EOS
+ * also covers a missing header file. Either way the answer is the same: the
+ * rebuild loops' start_index re-check after ANY non-ADVANCED result (below)
+ * classifies it. Every rebuild loop therefore re-checks start_index after ANY
+ * result other than ADVANCED and returns DRAIN_ARCHIVED when it moved past the
+ * current index — the same rule the move_to_index branch uses; the bounded
+ * rejoin loop then re-recovers. Only otherwise is ERROR+ETIMEDOUT retried (the
+ * main loop's bound and counter) and END_OF_STREAM re-polled with a bounded
+ * wait; anything else, or a bound exhausted, fails with one diagnostic line.
  * For a non-archivable queue start_index is fixed at creation, so those sites
  * carry no ARCHIVED re-check (stated in a comment there, not a dead branch). */
 
