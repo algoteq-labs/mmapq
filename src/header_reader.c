@@ -18,6 +18,30 @@ void mmapq_test_hook_header_wrap_inject(int wrap_result)
 {
     header_wrap_inject = wrap_result;
 }
+/* POLL-ARCH-01 §6.2(a): peek at the armed value for the sequential read's
+ * static inline (internal/header_reader.h), which cannot see this TU's
+ * storage — the same armed value as the plain/checked reads; reads, never
+ * clears. */
+int mmapqi_header_wrap_inject_peek(void)
+{
+    return header_wrap_inject;
+}
+
+/* ── POLL-ARCH-01 pre-read seam — see internal/test_hooks.h ────────────────
+ * Fires at the six pre-read start_index checks (pollers, readers'
+ * reader_fill_context, readers' entry_status), after the check passes and
+ * before the header read, so a pin can reproduce the archive race
+ * (advance start_index + unlink the entry's files) inside the exact
+ * window. */
+static void (*pre_read_seam_hook)(int64_t);
+void mmapq_test_hook_set_pre_read_seam(void (*fn)(int64_t))
+{
+    pre_read_seam_hook = fn;
+}
+void mmapqi_hook_pre_read_seam(int64_t index)
+{
+    if (pre_read_seam_hook != NULL) pre_read_seam_hook(index);
+}
 #endif
 
 /* ── mmapqi_header_read ─────────────────────────────────────────────────────────── */
@@ -58,7 +82,14 @@ uint64_t mmapqi_header_read(
     return HEADER_NULL;  /* unreachable */
 }
 
-int mmapqi_header_read_checked(
+/* ── checked header reads ─────────────────────────────────────────────────── */
+
+/* Shared body (POLL-ARCH-01 §2.8): identical to the historical
+ * mmapqi_header_read_checked except the absent/not-yet-grown branch
+ * returns the internal MMAPQI_HEADER_FILE_MISSING signal. The
+ * MMAPQ_TEST_HOOKS header_wrap_inject substitution lives here, so both
+ * entry points remain injected. */
+int mmapqi_header_read_checked_missing(
     RegionAccessor *header_accessor, Buffer *buf, int64_t index, uint64_t *header)
 {
     *header = HEADER_NULL;
@@ -66,12 +97,24 @@ int mmapqi_header_read_checked(
 #ifdef MMAPQ_TEST_HOOKS
     if (header_wrap_inject != 0) result = (WrapResult)header_wrap_inject;
 #endif
-    if (result == WRAP_FILE_NOT_FOUND || result == WRAP_BEYOND_FILE_SIZE) return 0;
+    if (result == WRAP_FILE_NOT_FOUND || result == WRAP_BEYOND_FILE_SIZE)
+        return MMAPQI_HEADER_FILE_MISSING;
     if (result == WRAP_MAP_TIMED_OUT) return MMAPQ_ETIMEDOUT;
     if (result != WRAP_SUCCESS || buf->capacity < HEADER_SIZE) return MMAPQ_ECORRUPT;
     /* Acquire pairs with the appender's publication CAS, as in the legacy reader. */
     *header = atomic_load_explicit((const _Atomic uint64_t *)buf->data, memory_order_acquire);
     return 0;
+}
+
+int mmapqi_header_read_checked(
+    RegionAccessor *header_accessor, Buffer *buf, int64_t index, uint64_t *header)
+{
+    int rc = mmapqi_header_read_checked_missing(header_accessor, buf, index, header);
+    /* CONTRACT UNCHANGED (POLL-ARCH-01 §2.8): every non-reader caller —
+     * the archivers (rollback / end-of-stream), the uncommitted iterators
+     * (CAND-58 overtaken-restart), the search helper — treats a missing
+     * header file as end-of-stream: 0 + HEADER_NULL. */
+    return rc == MMAPQI_HEADER_FILE_MISSING ? 0 : rc;
 }
 
 static int header_found_checked(

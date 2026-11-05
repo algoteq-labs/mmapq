@@ -13,10 +13,21 @@
  * READ OPERATION (read_at_index):
  *   1. If queue not yet created → status = MMAPQ_ENTRY_END_OF_STREAM.
  *   2. If index < startIndex → status = MMAPQ_ENTRY_ARCHIVED.
- *   3. Read header at index; if NULL_HEADER → status = MMAPQ_ENTRY_END_OF_STREAM.
+ *   3. Read header at index; if the read FAILS, re-check startIndex:
+ *      if it has moved past the index (the archiver reclaimed the file
+ *      after the step-2 check) → MMAPQ_ENTRY_ARCHIVED; otherwise the
+ *      failure is reported as today (END_OF_STREAM for a missing header
+ *      file below an unmoved start index; ENTRY_ERROR + last_error for a
+ *      mapping timeout). A NULL header from a successful wrap (an
+ *      unwritten slot) → status = MMAPQ_ENTRY_END_OF_STREAM.
  *   4. Decode appenderId + payloadPosition.
- *   5. Wrap payload accessor, read length, expose buffer.
+ *   5. Wrap payload accessor, read length, expose buffer; a FAILED payload
+ *      wrap gets the same start_index re-check (ARCHIVED if moved,
+ *      otherwise ENTRY_ERROR + last_error).
  *   6. status = MMAPQ_ENTRY_AVAILABLE; data pointer and length are valid.
+ *
+ * END_OF_STREAM is never terminal on an archivable queue: re-read — a
+ * later call returns ARCHIVED if the index was archived meanwhile.
  *
  * The MmapqReadingContext flyweight is reused across calls. Its data pointer
  * into mapped memory is valid until the next read call.
@@ -37,10 +48,20 @@
 /* ── Entry status ────────────────────────────────────────────────────────── */
 
 typedef enum {
-    MMAPQ_ENTRY_AVAILABLE,     /* entry exists and is readable                    */
-    MMAPQ_ENTRY_END_OF_STREAM, /* entry not yet written (index beyond last)       */
-    MMAPQ_ENTRY_ARCHIVED,      /* entry was archived (index below startIndex)     */
-    MMAPQ_ENTRY_ERROR,         /* mapping timeout, I/O failure, or invalid argument  */
+    /* entry exists and is readable */
+    MMAPQ_ENTRY_AVAILABLE,
+    /* entry not yet written (index beyond last), or the header file is
+     * absent below an unmoved start index (the written frontier); never
+     * terminal on an archivable queue — re-read, a later call returns
+     * ARCHIVED if the index was archived meanwhile */
+    MMAPQ_ENTRY_END_OF_STREAM,
+    /* entry was archived (index below startIndex), including after a
+     * failed read whose index the archiver moved below startIndex
+     * mid-call (the failure-path re-check) */
+    MMAPQ_ENTRY_ARCHIVED,
+    /* mapping timeout, I/O failure, or invalid argument whose index is
+     * still at or above startIndex (see last_error) */
+    MMAPQ_ENTRY_ERROR,
 } MmapqEntryStatus;
 
 /* ── MmapqReadingContext ──────────────────────────────────────────────────────── */
@@ -148,6 +169,13 @@ int64_t mmapq_indexed_reader_start_index(MmapqIndexedReader *r);
  * index above 2^56 - 1 returns MMAPQ_ENTRY_ERROR with last_error ==
  * MMAPQ_EINVAL (such indices would alias already-written slots);
  * has_entry inherits this as 0.
+ *
+ * A header read that fails is classified like the read path: a mapping
+ * timeout is MMAPQ_ENTRY_ERROR + last_error (not END_OF_STREAM), unless
+ * start_index has moved past the index (the archiver reclaimed the file
+ * mid-call), which is MMAPQ_ENTRY_ARCHIVED; a missing header file below
+ * an unmoved start index is MMAPQ_ENTRY_END_OF_STREAM. has_entry is
+ * unchanged: 0 for END_OF_STREAM, ERROR and ARCHIVED alike.
  */
 MmapqEntryStatus mmapq_indexed_reader_entry_status(MmapqIndexedReader *r, int64_t index);
 

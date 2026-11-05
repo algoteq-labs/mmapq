@@ -5,6 +5,7 @@
 #include "internal/header_codec.h"
 #include "batch_payload_iterator.h"
 #include "internal/mmap_assert.h"
+#include "internal/test_hooks.h"
 #include "mmap_platform.h"
 #include "internal/batch_payload_iterator_internal.h"
 
@@ -122,16 +123,34 @@ BatchPollResult mmapq_indexed_batch_poller_poll(MmapqIndexedBatchPoller *p, Mmap
 
     long start_idx = queue_meta_start_index(p->queue_meta);
     if (p->current_batch_index < start_idx) return MMAPQ_POLL_ARCHIVED;
+    /* POLL-ARCH-01 pin seam: after the check, before the header read. */
+    PRE_READ_SEAM_HOOK(p->current_batch_index);
 
     /* Header read: a mapping timeout is MMAPQ_POLL_ERROR + last_error
-     * ETIMEDOUT (CAND-17, single-poller parity); the cursor does not
-     * advance. Only a genuinely absent entry is END_OF_STREAM. herr stays
-     * 0 unless wrap() itself failed — a successful wrap of an unwritten
-     * slot does not touch it. */
+     * ETIMEDOUT (CAND-17, single-poller parity), unless start_index moved
+     * past the cursor in the window between the check above and this read
+     * — then ARCHIVED (POLL-ARCH-01; same reclaim ordering proof as the
+     * single poller). A MISSING header file below an unmoved start_index
+     * is the written frontier — END_OF_STREAM (revised Q6). The cursor
+     * does not advance on any failure. herr stays 0 unless wrap() itself
+     * failed — a successful wrap of an unwritten slot does not touch it. */
     int herr = 0;
     uint64_t header = mmapqi_header_read_sequential(p->header_acc, &p->header_buf, p->current_batch_index, &herr);
     if (header == HEADER_NULL) {
-        if (herr != 0) { p->last_error = herr; return MMAPQ_POLL_ERROR; }
+        if (herr != 0) {
+            /* POLL-ARCH-01 failure-path re-check. Unconditional gate
+             * (owner Q3), like the pre-read check above: a non-archivable
+             * queue's start_index is fixed at creation, so the gate is an
+             * optimisation, not a semantic requirement. */
+            if (p->current_batch_index < queue_meta_start_index(p->queue_meta)) {
+                return MMAPQ_POLL_ARCHIVED;
+            }
+            if (herr == MMAPQI_HEADER_FILE_MISSING) {
+                return MMAPQ_POLL_END_OF_STREAM;
+            }
+            p->last_error = herr;
+            return MMAPQ_POLL_ERROR;
+        }
         return MMAPQ_POLL_END_OF_STREAM;
     }
 
@@ -142,6 +161,16 @@ BatchPollResult mmapq_indexed_batch_poller_poll(MmapqIndexedBatchPoller *p, Mmap
     if (it == NULL) { p->last_error = MMAPQ_ENOMEM; return MMAPQ_POLL_ERROR; }
     int32_t msg_count = mmapq_batch_iterator_read_message_count(it, pos);
     if (msg_count <= 0) {
+        /* POLL-ARCH-01: the re-check runs BEFORE the CORRUPT/ERROR
+         * decision — outside walk mode a reclaimed batch file maps to
+         * MMAPQ_ECORRUPT (src/batch_payload_iterator.c; the
+         * BATCH-MAP-MISS-CODE conflation is out of scope), so the code
+         * alone cannot tell a reclaim from real corruption; a start_index
+         * moved past the cursor can. Unconditional gate (owner Q3), like
+         * the pre-read check. */
+        if (p->current_batch_index < queue_meta_start_index(p->queue_meta)) {
+            return MMAPQ_POLL_ARCHIVED;
+        }
         p->last_error = msg_count < 0 ? msg_count : MMAPQ_ECORRUPT;
         return p->last_error == MMAPQ_ECORRUPT ? MMAPQ_POLL_CORRUPT : MMAPQ_POLL_ERROR;
     }
@@ -158,6 +187,12 @@ BatchPollResult mmapq_indexed_batch_poller_poll(MmapqIndexedBatchPoller *p, Mmap
 
     MmapqNextMove move = handler(p->current_batch_index, &batch_ctx, ctx);
     if (it->last_error != 0) {
+        /* POLL-ARCH-01: a failed mid-batch payload read gets the same
+         * re-check, before the CORRUPT/ERROR decision (same reasoning as
+         * read_message_count above; owner Q3 unconditional gate). */
+        if (p->current_batch_index < queue_meta_start_index(p->queue_meta)) {
+            return MMAPQ_POLL_ARCHIVED;
+        }
         p->last_error = it->last_error;
         return it->last_error == MMAPQ_ECORRUPT ? MMAPQ_POLL_CORRUPT : MMAPQ_POLL_ERROR;
     }

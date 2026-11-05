@@ -4,6 +4,7 @@
 #include "internal/header_reader.h"
 #include "internal/header_codec.h"
 #include "internal/mmap_assert.h"
+#include "internal/test_hooks.h"
 #include "mmap_platform.h"
 
 #include <stdlib.h>
@@ -141,10 +142,34 @@ static void reader_fill_context(MmapqIndexedReader *r, int64_t index, MmapqReadi
         ctx->status = MMAPQ_ENTRY_ARCHIVED;
         return;
     }
+    /* POLL-ARCH-01 pin seam: after the check, before the header read. */
+    PRE_READ_SEAM_HOOK(index);
 
     uint64_t header;
-    r->last_error = mmapqi_header_read_checked(r->header_acc, &r->header_buf, index, &header);
-    if (r->last_error != 0) {
+    int hr = mmapqi_header_read_checked_missing(r->header_acc, &r->header_buf, index, &header);
+    if (hr != 0) {
+        /* POLL-ARCH-01 failure-path re-check: a failed header read is
+         * ENTRY_ARCHIVED when start_index moved past the index in the
+         * window between the pre-read check above and this read (the
+         * archiver reclaims a header file only once start_index is past
+         * every index in it — the moved start_index is the proof). A
+         * MISSING header file below an unmoved start_index is the written
+         * frontier — END_OF_STREAM, as an unwritten slot is (revised Q6);
+         * anything else keeps today's ENTRY_ERROR + last_error. Gated on
+         * archivable (owner Q3): a non-archivable queue's start_index is
+         * fixed at creation, so the gate is an optimisation, not a
+         * semantic requirement. MMAPQI_HEADER_FILE_MISSING is internal —
+         * never stored in the public last_error. */
+        if (r->queue_meta->archivable &&
+            index < queue_meta_start_index(r->queue_meta)) {
+            ctx->status = MMAPQ_ENTRY_ARCHIVED;
+            return;
+        }
+        if (hr == MMAPQI_HEADER_FILE_MISSING) {
+            ctx->status = MMAPQ_ENTRY_END_OF_STREAM;
+            return;
+        }
+        r->last_error = hr;
         ctx->status = MMAPQ_ENTRY_ERROR;
         return;
     }
@@ -160,7 +185,22 @@ static void reader_fill_context(MmapqIndexedReader *r, int64_t index, MmapqReadi
         mmapqi_queue_region_accessor_payload(r->ro_acc, appender_id);
 
     WrapResult wr = region_accessor_wrap(payload_acc, payload_position, &r->payload_buf);
-    if (wr != WRAP_SUCCESS) { ctx->status = MMAPQ_ENTRY_ERROR; r->last_error = MMAPQ_ETIMEDOUT; return; }
+    if (wr != WRAP_SUCCESS) {
+        /* POLL-ARCH-01 failure-path re-check (the soak's path: a reclaimed
+         * payload file). Same gate and reasoning as the header branch
+         * above (Q3 comment); otherwise today's ENTRY_ERROR + ETIMEDOUT.
+         * The capacity/length checks below run only after a successful
+         * wrap, so a reclaimed file cannot reach them — they get no
+         * re-check. */
+        if (r->queue_meta->archivable &&
+            index < queue_meta_start_index(r->queue_meta)) {
+            ctx->status = MMAPQ_ENTRY_ARCHIVED;
+            return;
+        }
+        ctx->status = MMAPQ_ENTRY_ERROR;
+        r->last_error = MMAPQ_ETIMEDOUT;
+        return;
+    }
 
     if (r->payload_buf.capacity <= PAYLOAD_LENGTH_SIZE) {
         ctx->status = MMAPQ_ENTRY_ERROR;
@@ -281,10 +321,33 @@ MmapqEntryStatus mmapq_indexed_reader_entry_status(MmapqIndexedReader *r, int64_
      * position would alias an already-written slot. */
     if (index > MMAPQI_MAX_INDEX) { r->last_error = MMAPQ_EINVAL; return MMAPQ_ENTRY_ERROR; }
     if (index < queue_meta_start_index(r->queue_meta)) return MMAPQ_ENTRY_ARCHIVED;
+    /* POLL-ARCH-01 pin seam: after the check, before the header read. */
+    PRE_READ_SEAM_HOOK(index);
 
-    return header_found(r->header_acc, &r->header_buf, index, r->queue_name)
-        ? MMAPQ_ENTRY_AVAILABLE
-        : MMAPQ_ENTRY_END_OF_STREAM;
+    /* POLL-ARCH-01 (owner ACCEPTED Q1): the checked read, so a header
+     * mapping timeout surfaces ENTRY_ERROR + last_error instead of
+     * collapsing to END_OF_STREAM (the enum comment at
+     * include/indexed_reader.h is now true), plus the failure-path
+     * start_index re-check: moved past the index → ARCHIVED; a MISSING
+     * header file below an unmoved start_index stays END_OF_STREAM
+     * (revised Q6). last_error is set only on the error branch, exactly
+     * as before; the internal MMAPQI_HEADER_FILE_MISSING never reaches
+     * it. has_entry is unchanged: false for EOS, ERROR and ARCHIVED
+     * alike. */
+    uint64_t header;
+    int hr = mmapqi_header_read_checked_missing(r->header_acc, &r->header_buf, index, &header);
+    if (hr != 0) {
+        if (r->queue_meta->archivable &&
+            index < queue_meta_start_index(r->queue_meta)) {
+            return MMAPQ_ENTRY_ARCHIVED;
+        }
+        if (hr == MMAPQI_HEADER_FILE_MISSING) {
+            return MMAPQ_ENTRY_END_OF_STREAM;
+        }
+        r->last_error = hr;
+        return MMAPQ_ENTRY_ERROR;
+    }
+    return header != HEADER_NULL ? MMAPQ_ENTRY_AVAILABLE : MMAPQ_ENTRY_END_OF_STREAM;
 }
 
 /* ── Accessors ─────────────────────────────────────────────────────────────── */

@@ -36,11 +36,14 @@
  *   listing's live-header scan (CAND-35); a nonzero return arms the
  *   wrap-level injection for that read — same discipline as
  *   archiver_live_pass.
- * header_wrap_inject: substitutes the wrap result inside both
- *   mmapqi_header_read and mmapqi_header_read_checked while armed — so an
+ * header_wrap_inject: substitutes the wrap result inside
+ *   mmapqi_header_read, mmapqi_header_read_checked, and (POLL-ARCH-01
+ *   §6.2 option (a)) mmapqi_header_read_sequential while armed — so an
  *   injected timeout collapses to end-of-stream through the plain read but
  *   reports MMAPQ_ETIMEDOUT through the checked read (this is what makes
- *   the plain-read mutation observable).
+ *   the plain-read mutation observable). The archivers disarm it after
+ *   every internal read, so a pin that both archives and injects must
+ *   re-arm it inside its seam callback, after the archiver call.
  * set_page_size: overrides the runtime page size seen by the CAND-38
  *   geometry checks (region_size % page_size == 0) — the only way to pin
  *   16/64 KB-page host behaviour on a 4 KB-page host (CAND-38 P4).
@@ -70,6 +73,14 @@
  *   interleaving (re-list reads start_offset before the commit's min and
  *   the intent after its clear), which is the only way the archived file
  *   is legitimately deletable while a commit min is pending.
+ * pre_read_seam (POLL-ARCH-01): invoked at the six pre-read start_index
+ *   checks — the single poller (inside its archivable branch, after the
+ *   check), the batch poller, both readers' reader_fill_context (after
+ *   the check), and both readers' entry_status (after the check) — with
+ *   the index about to be read. Lets a pin advance start_index and unlink
+ *   the entry's header/payload files in the exact archive-race window
+ *   between the pre-read check and the read, reproducing the archiver's
+ *   reclaim effect deterministically.
  */
 #ifdef MMAPQ_TEST_HOOKS
 void mmapq_test_hook_set_commit_pre(void (*fn)(void));
@@ -163,6 +174,14 @@ void mmapqi_c59_header_not_found_note(void);
 void mmapq_test_hook_set_c59_force_floor_reject(int n);
 int  mmapqi_c59_force_floor_reject_take(void);
 #define C59_HOOK_HEADER_NOT_FOUND_NOTE() mmapqi_c59_header_not_found_note()
+/* POLL-ARCH-01 archive-race pins. The seam setter installs a
+ * process-global callback (NULL disarms); the fire entry is invoked from
+ * the six pre-read start_index checks (single/batch poller, single/batch
+ * reader_fill_context, single/batch entry_status) with the index about to
+ * be read, after the check has passed and before the header read. */
+void mmapq_test_hook_set_pre_read_seam(void (*fn)(int64_t index));
+void mmapqi_hook_pre_read_seam(int64_t index);
+#define PRE_READ_SEAM_HOOK(index) mmapqi_hook_pre_read_seam((index))
 #else
 #define C58_HOOK_SCAN_SPAN_PRE_WALK(off, ss, line) ((void)0)
 #define C58_HOOK_SCAN_HEADER_PRE_READ(idx)         ((void)0)
@@ -170,6 +189,7 @@ int  mmapqi_c59_force_floor_reject_take(void);
 #define C58_HOOK_JOIN_WALK_STEP(off)               ((void)0)
 #define C58_WALK_RESTART_NOTE()                    ((void)0)
 #define C59_HOOK_HEADER_NOT_FOUND_NOTE()           ((void)0)
+#define PRE_READ_SEAM_HOOK(index)                  ((void)0)
 #endif
 
 #endif /* TEST_HOOKS_H */

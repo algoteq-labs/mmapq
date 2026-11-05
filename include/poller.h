@@ -33,12 +33,19 @@ typedef enum {
  *
  * Shared by both MmapqIndexedPoller and MmapqIndexedBatchPoller.
  *
- * END_OF_STREAM — no data at current index; retry on next poll()
+ * END_OF_STREAM — no data at current index; retry on next poll(). Never
+ *                 terminal on an archivable queue: re-poll — a later call
+ *                 returns ARCHIVED if the index was archived meanwhile.
  * ADVANCED      — data delivered and cursor moved forward
  * STOPPED       — data delivered and cursor held (handler returned STOP)
  * RETREATED     — data delivered and cursor moved backward
- * ARCHIVED      — current index is below the queue's start index
- * ERROR         — mapping timeout or I/O failure
+ * ARCHIVED      — current index is below the queue's start index —
+ *                 including after a read that failed because the archiver
+ *                 reclaimed the entry's file after advancing start_index
+ *                 past the cursor (the failure-path re-check)
+ * ERROR         — mapping timeout or I/O failure whose index is still at
+ *                 or above start_index (a failure whose index is now
+ *                 below start_index is reported as ARCHIVED)
  * CORRUPT       — committed header with invalid payload (corruption detected)
  */
 typedef enum {

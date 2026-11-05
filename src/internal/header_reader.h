@@ -35,6 +35,18 @@
 
 #define HEADER_NULL_INDEX  ((int64_t)-1)
 
+/*
+ * MMAPQI_HEADER_FILE_MISSING — internal signal (POLL-ARCH-01 §2.8), never
+ * an MMAPQ_* code and never stored in a public last_error: the header
+ * file is missing or not yet grown (WRAP_FILE_NOT_FOUND /
+ * WRAP_BEYOND_FILE_SIZE). Distinct from 0 (success / unwritten slot), from
+ * the MMAPQ_* codes, and from MMAPQI_WALK_MAP_MISS (INT32_MIN,
+ * internal/walk_classify.h). Carries the revised-Q6 distinction between a
+ * MISSING header file (re-check start_index: archived vs end-of-stream)
+ * and a successful wrap of an unwritten slot (end-of-stream, no re-check).
+ */
+#define MMAPQI_HEADER_FILE_MISSING ((int32_t)(INT32_MIN + 1))
+
 /**
  * mmapqi_header_read — read the header at the given index.
  *
@@ -44,7 +56,7 @@
  * queue_name:      used in assertion messages only.
  *
  * Returns the uint64 header, or HEADER_NULL if not yet written.
- * Aborts on MAP_TIMED_OUT or WRAP_UNWRAPPED.
+ * Aborts on WRAP_UNWRAPPED.
  */
 uint64_t mmapqi_header_read(
     RegionAccessor *header_accessor,
@@ -65,13 +77,16 @@ uint64_t mmapqi_header_read(
  * buf:             caller-provided Buffer, filled by wrap().
  * index:           queue index to read.
  * err:             required output, written ONLY when wrap() fails:
- *                  0 for a genuinely not-yet-accessible entry (file
- *                  absent or not yet grown), MMAPQ_ETIMEDOUT on mapping
- *                  timeout, MMAPQ_ECORRUPT after the fatal assert
- *                  (release-build fallback). A successful wrap of an
- *                  unwritten slot ALSO returns HEADER_NULL without
- *                  touching err — zero-initialise it before the call and
- *                  read it only when the return value is HEADER_NULL.
+ *                  MMAPQI_HEADER_FILE_MISSING for an absent/not-yet-grown
+ *                  header file (POLL-ARCH-01 §2.8 — was 0; the callers,
+ *                  exactly the two pollers, re-check start_index and map
+ *                  it to ARCHIVED or END_OF_STREAM, never to last_error),
+ *                  MMAPQ_ETIMEDOUT on mapping timeout, MMAPQ_ECORRUPT
+ *                  after the fatal assert (release-build fallback). A
+ *                  successful wrap of an unwritten slot ALSO returns
+ *                  HEADER_NULL without touching err — zero-initialise it
+ *                  before the call and read it only when the return value
+ *                  is HEADER_NULL.
  *
  * Returns the uint64 header, or HEADER_NULL on an unwritten entry
  * (err untouched or 0) or a mapping failure (err set).
@@ -79,7 +94,20 @@ uint64_t mmapqi_header_read(
  * static inline (CAND-17): the call must disappear into both pollers —
  * as a separate TU without LTO, inlining saved ~10 Ir/msg on poll
  * (107 → 97, callgrind); the err store is dead on the inlined success path.
+ *
+ * Test builds (MMAPQ_TEST_HOOKS) substitute the wrap result with the armed
+ * header_wrap_inject value (POLL-ARCH-01 §6.2 option (a) — CAND-17a's
+ * "stays uninjected" was a then-current statement, not a prohibition; the
+ * poller header-timeout branch is now pinnable). Release builds compile
+ * neither the accessor nor the substitution, so the shipped inline is
+ * unchanged.
  */
+#ifdef MMAPQ_TEST_HOOKS
+/* Peeks at the armed inject value (storage lives in header_reader.c, the
+ * test_hooks registry) for this inline, which cannot see that TU's
+ * storage — reads, never clears. */
+int mmapqi_header_wrap_inject_peek(void);
+#endif
 static inline uint64_t mmapqi_header_read_sequential(
     RegionAccessor *header_accessor,
     Buffer         *buf,
@@ -89,6 +117,12 @@ static inline uint64_t mmapqi_header_read_sequential(
     int64_t position = header_position(index);
 
     WrapResult r = region_accessor_wrap(header_accessor, position, buf);
+#ifdef MMAPQ_TEST_HOOKS
+    {
+        int inject = mmapqi_header_wrap_inject_peek();
+        if (inject != 0) r = (WrapResult)inject;
+    }
+#endif
 
     if (r == WRAP_SUCCESS) {
         /*
@@ -106,8 +140,10 @@ static inline uint64_t mmapqi_header_read_sequential(
     }
 
     if (r == WRAP_FILE_NOT_FOUND || r == WRAP_BEYOND_FILE_SIZE) {
-        /* Queue not yet accessible — genuinely unwritten */
-        *err = 0;
+        /* Header file absent or not yet grown — MISSING, not unwritten
+         * (POLL-ARCH-01 §2.8, revised Q6): the callers re-check
+         * start_index and answer ARCHIVED (moved) or END_OF_STREAM. */
+        *err = MMAPQI_HEADER_FILE_MISSING;
         return HEADER_NULL;
     }
 
@@ -179,8 +215,38 @@ int64_t mmapqi_header_search_last_index(
  * Returns 0 on a successful read or an absent/not-yet-grown header file,
  * MMAPQ_ETIMEDOUT on mapping timeout, or MMAPQ_ECORRUPT on an unexpected
  * mapping result or insufficient capacity for a header.
+ *
+ * CONTRACT UNCHANGED (POLL-ARCH-01 §2.8): a missing header file reads as
+ * 0 + HEADER_NULL — the end-of-stream case for the archivers (rollback /
+ * end-of-stream), the uncommitted iterators (the CAND-58
+ * overtaken-restart logic depends on it), and the search helper. A thin
+ * wrapper over mmapqi_header_read_checked_missing that maps
+ * MMAPQI_HEADER_FILE_MISSING to 0.
  */
 int mmapqi_header_read_checked(
+    RegionAccessor *header_accessor, Buffer *buf, int64_t index, uint64_t *header);
+
+/*
+ * mmapqi_header_read_checked_missing — like mmapqi_header_read_checked,
+ * but a missing/not-yet-grown header file is reported with the internal
+ * MMAPQI_HEADER_FILE_MISSING signal instead of collapsing to 0, so the
+ * caller (the readers' reader_fill_context and entry_status — its only
+ * users, POLL-ARCH-01 §2.3/§2.4/§2.7) can re-check start_index and
+ * distinguish archived from end-of-stream. The signal is internal: it is
+ * never an MMAPQ_* code and is never stored in a public last_error.
+ *
+ * header_accessor: accessor for the header file
+ * buf:             caller-provided Buffer, reused for the read
+ * index:           queue index to read
+ * header:          required output; receives HEADER_NULL on failure or an
+ *                  unwritten entry, otherwise the committed header
+ *
+ * Returns 0 on a successful read, MMAPQI_HEADER_FILE_MISSING for an
+ * absent/not-yet-grown header file (with *header = HEADER_NULL),
+ * MMAPQ_ETIMEDOUT on mapping timeout, or MMAPQ_ECORRUPT on an unexpected
+ * mapping result or insufficient capacity for a header.
+ */
+int mmapqi_header_read_checked_missing(
     RegionAccessor *header_accessor, Buffer *buf, int64_t index, uint64_t *header);
 
 /*

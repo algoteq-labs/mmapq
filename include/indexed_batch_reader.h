@@ -47,23 +47,30 @@ typedef enum {
 
     /**
      * The batch has not been committed yet. The queried index is beyond the
-     * last committed batch. Once a batch is committed at this index it will
-     * become MMAPQ_BATCH_ENTRY_AVAILABLE.
+     * last committed batch, or the header file is absent below an unmoved
+     * start index (the written frontier). Once a batch is committed at this
+     * index it will become MMAPQ_BATCH_ENTRY_AVAILABLE. Never terminal on
+     * an archivable queue — re-read; a later call returns ARCHIVED if the
+     * index was archived meanwhile.
      * Mirrors Java MmapqEntryStatus.END_OF_STREAM.
      */
     MMAPQ_BATCH_ENTRY_END_OF_STREAM,
 
     /**
      * The batch was previously available but has been archived and is no
-     * longer accessible. Its index is below start_index().
+     * longer accessible. Its index is below start_index() — including
+     * after a failed read whose index the archiver moved below
+     * start_index mid-call (the failure-path re-check).
      * Mirrors Java MmapqEntryStatus.ARCHIVED.
      */
     MMAPQ_BATCH_ENTRY_ARCHIVED,
 
     /**
-     * A mapping, I/O, corruption, or invalid-argument error occurred.
-     * Inspect last_error to distinguish a retryable timeout from invalid
-     * stored data or an invalid index (MMAPQ_EINVAL).
+     * A mapping, I/O, corruption, or invalid-argument error occurred whose
+     * index is still at or above start_index(). Inspect last_error to
+     * distinguish a retryable timeout from invalid stored data or an
+     * invalid index (MMAPQ_EINVAL); a failure whose index is now below
+     * start_index is reported as MMAPQ_BATCH_ENTRY_ARCHIVED.
      * Mirrors Java MmapqEntryStatus.ERROR.
      */
     MMAPQ_BATCH_ENTRY_ERROR
@@ -144,10 +151,18 @@ int mmapq_indexed_batch_reader_create(
  * checked mmapq_batch_iterator_next step needs no such post-check.
  *
  * If the batch is not available, ctx->status indicates why:
- *   MMAPQ_BATCH_ENTRY_END_OF_STREAM — index beyond the last committed batch
- *   MMAPQ_BATCH_ENTRY_ARCHIVED      — index below start_index()
+ *   MMAPQ_BATCH_ENTRY_END_OF_STREAM — index beyond the last committed
+ *                                     batch, or a missing header file
+ *                                     below an unmoved start index
+ *   MMAPQ_BATCH_ENTRY_ARCHIVED      — index below start_index(), including
+ *                                     after a failed header/payload read
+ *                                     whose index the archiver moved below
+ *                                     start_index mid-call (the
+ *                                     failure-path re-check)
  *   MMAPQ_BATCH_ENTRY_ERROR         — mapping timeout, I/O failure, or
  *                                     invalid index (last_error == MMAPQ_EINVAL)
+ *                                     whose index is still at or above
+ *                                     start_index
  *
  * r:     the reader
  * index: zero-based batch index to read (must be in [0, 2^56 - 1]; beyond
@@ -218,7 +233,15 @@ int64_t mmapq_indexed_batch_reader_start_index(MmapqIndexedBatchReader *r);
  * index: zero-based batch index to check; above 2^56 - 1 returns
  *        MMAPQ_BATCH_ENTRY_ERROR with last_error == MMAPQ_EINVAL (such
  *        indices would alias already-written slots); has_entry inherits 0
- * Returns: MMAPQ_BATCH_ENTRY_AVAILABLE, MMAPQ_BATCH_ENTRY_END_OF_STREAM, or MMAPQ_BATCH_ENTRY_ARCHIVED
+ * Returns: MMAPQ_BATCH_ENTRY_AVAILABLE, MMAPQ_BATCH_ENTRY_END_OF_STREAM,
+ *          MMAPQ_BATCH_ENTRY_ARCHIVED, or MMAPQ_BATCH_ENTRY_ERROR
+ *
+ * A header read that fails is classified like the read path: a mapping
+ * timeout is MMAPQ_BATCH_ENTRY_ERROR + last_error (not END_OF_STREAM),
+ * unless start_index has moved past the index (the archiver reclaimed the
+ * file mid-call), which is MMAPQ_BATCH_ENTRY_ARCHIVED; a missing header
+ * file below an unmoved start index is MMAPQ_BATCH_ENTRY_END_OF_STREAM.
+ * has_entry is unchanged: 0 for END_OF_STREAM, ERROR and ARCHIVED alike.
  */
 MmapqBatchEntryStatus mmapq_indexed_batch_reader_entry_status(MmapqIndexedBatchReader *r, int64_t index);
 

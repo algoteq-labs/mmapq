@@ -35,6 +35,7 @@ TESTS=(
     test_cand54_pins
     test_c58_walk_pins
     test_c59_commit_floor_pins
+    test_poll_arch_pins
 )
 
 # Hook-only suites (TEST-01): main() wraps every RUN_TEST in
@@ -45,6 +46,7 @@ TESTS=(
 HOOK_ONLY_SUITES=(
     test_c58_walk_pins
     test_c59_commit_floor_pins
+    test_poll_arch_pins
 )
 
 # MMAPQ_TEST_HOOKS enables the deterministic race/failure-injection hooks

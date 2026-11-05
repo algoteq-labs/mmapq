@@ -98,13 +98,13 @@ Lines 28-29, 52. Internal dispatch null checks.
 
 ### header_reader.c — 1 (all I)
 
-Lines 55. Internal dispatch fatal check (WRAP_UNWRAPPED in mmapqi_header_read).
+Lines 79. Internal dispatch fatal check (WRAP_UNWRAPPED in mmapqi_header_read). (POLL-ARCH-01: line moved by the test-hook block above it, site unchanged.)
 
 ### header_reader.h — 1 (all I)
 
 | Line | Disposition | Verified |
 |---|---|---|
-| 115 | I | WRAP_UNWRAPPED fatal in the static-inline mmapqi_header_read_sequential — internal accessor-state invariant (region corruption), unreachable from caller input. Release builds report MMAPQ_ECORRUPT via the err out-param instead of the pre-CAND-17 silent HEADER_NULL. |
+| 151 | I | WRAP_UNWRAPPED fatal in the static-inline mmapqi_header_read_sequential — internal accessor-state invariant (region corruption), unreachable from caller input. Release builds report MMAPQ_ECORRUPT via the err out-param instead of the pre-CAND-17 silent HEADER_NULL. (POLL-ARCH-01: line moved by the MMAPQI_HEADER_FILE_MISSING block and doc updates above it, site unchanged.) |
 
 ### header_codec.h — 5 (all I)
 
@@ -126,7 +126,7 @@ Lines 55. Internal dispatch fatal check (WRAP_UNWRAPPED in mmapqi_header_read).
 
 | Line | Disposition | Verified |
 |---|---|---|
-| 216 unknown handler directive | I | Internal: MMAP_ASSERT(0) guards unreachable default in switch. (CAND-17: line moved, site unchanged. DOC-01: moved by the X6 comment rewrite above it, site unchanged.) |
+| 250 unknown handler directive | I | Internal: MMAP_ASSERT(0) guards unreachable default in switch. (CAND-17: line moved, site unchanged. DOC-01: moved by the X6 comment rewrite above it, site unchanged. POLL-ARCH-01: moved by the failure-path re-check blocks above it, site unchanged.) |
 
 ### indexed_reader.c — 1 (0 V)
 

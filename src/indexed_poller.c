@@ -4,6 +4,7 @@
 #include "internal/header_reader.h"
 #include "internal/header_codec.h"
 #include "internal/mmap_assert.h"
+#include "internal/test_hooks.h"
 #include "mmap_platform.h"
 
 #include <stdlib.h>
@@ -149,20 +150,43 @@ MmapqPollResult mmapq_indexed_poller_poll(
         if (p->current_index < start_index) {
             return MMAPQ_POLL_ARCHIVED;
         }
+        /* POLL-ARCH-01 pin seam: after the check, before the header read. */
+        PRE_READ_SEAM_HOOK(p->current_index);
     }
 
     /* Read header at current index — sequential wrap to trigger premap.
      * A mapping timeout is MMAPQ_POLL_ERROR + last_error ETIMEDOUT, exactly
-     * like the payload wrap below (CAND-17; Java throws in the same spot).
-     * The cursor does not advance. Only a genuinely absent entry is
-     * END_OF_STREAM. herr stays 0 unless wrap() itself failed — a
-     * successful wrap of an unwritten slot does not touch it. */
+     * like the payload wrap below (CAND-17; Java throws in the same spot),
+     * UNLESS start_index moved past the cursor in the window between the
+     * pre-read check above and this read — then the answer is ARCHIVED
+     * (POLL-ARCH-01): the archiver reclaims a header file only once
+     * start_index is past every index in it, so a moved start_index is the
+     * proof the entry was archived, not a timeout. A MISSING header file
+     * below an unmoved start_index is the written frontier (the next
+     * region not yet created/grown) — END_OF_STREAM, as an unwritten slot
+     * is (revised Q6). The cursor does not advance on any failure. herr
+     * stays 0 unless wrap() itself failed — a successful wrap of an
+     * unwritten slot does not touch it. */
     int herr = 0;
     uint64_t header = mmapqi_header_read_sequential(p->header_acc, &p->header_buf,
                                                     p->current_index, &herr);
 
     if (header == HEADER_NULL) {
-        if (herr != 0) { p->last_error = herr; return MMAPQ_POLL_ERROR; }
+        if (herr != 0) {
+            /* POLL-ARCH-01 failure-path re-check. Gated on archivable
+             * (owner Q3): a non-archivable queue's start_index is fixed
+             * at creation, so the gate is an optimisation, not a semantic
+             * requirement — the load would read the same value. */
+            if (p->queue_meta->archivable &&
+                p->current_index < queue_meta_start_index(p->queue_meta)) {
+                return MMAPQ_POLL_ARCHIVED;
+            }
+            if (herr == MMAPQI_HEADER_FILE_MISSING) {
+                return MMAPQ_POLL_END_OF_STREAM;
+            }
+            p->last_error = herr;
+            return MMAPQ_POLL_ERROR;
+        }
         return MMAPQ_POLL_END_OF_STREAM;
     }
 
@@ -177,7 +201,17 @@ MmapqPollResult mmapq_indexed_poller_poll(
         mmapqi_queue_region_accessor_payload(p->ro_acc, appender_id);
 
     WrapResult r = region_accessor_wrap(payload_acc, payload_position, &p->payload_buf);
-    if (r != WRAP_SUCCESS) { p->last_error = MMAPQ_ETIMEDOUT; return MMAPQ_POLL_ERROR; }
+    if (r != WRAP_SUCCESS) {
+        /* POLL-ARCH-01 failure-path re-check (the soak's path: a reclaimed
+         * payload file). Same gate and reasoning as the header branch
+         * above (Q3 comment); otherwise today's ERROR + ETIMEDOUT. */
+        if (p->queue_meta->archivable &&
+            p->current_index < queue_meta_start_index(p->queue_meta)) {
+            return MMAPQ_POLL_ARCHIVED;
+        }
+        p->last_error = MMAPQ_ETIMEDOUT;
+        return MMAPQ_POLL_ERROR;
+    }
 
     if (p->payload_buf.capacity <= PAYLOAD_LENGTH_SIZE) {
         p->last_error = MMAPQ_ECORRUPT;
