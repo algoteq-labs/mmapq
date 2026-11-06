@@ -73,6 +73,11 @@ void setUp(void)
 void tearDown(void)
 {
     if (q) { mmapq_indexed_queue_close(q); q = NULL; }
+    /* Release this test's region-mapper clone (a plain refcount decrement
+     * while the singleton is open; the last release after a close frees
+     * it — without this the closed runtime's remaining test-side handles
+     * are unreachable at exit and LSan flags the runtime). */
+    if (rt) { mmapq_runtime_destroy(rt); rt = NULL; }
     cleanup();
 }
 
@@ -903,6 +908,7 @@ void test_appender_iterator_out_of_range_offset_no_double_free(void)
     TEST_ASSERT_EQUAL_MEMORY("data", buf->data, 4);
     TEST_ASSERT_EQUAL_INT(0, mmapqi_payload_iterator_advance(it));
 
+    mmapqi_payload_iterator_destroy(it);
     d5_close_payload_access(&px);
     mmapq_indexed_appender_close(a);
 }
@@ -1067,6 +1073,7 @@ void test_payload_iterator_advance_timeout_propagates(void)
     TEST_ASSERT_EQUAL_MEMORY("d1", buf->data, 2);
     TEST_ASSERT_EQUAL_INT(0, mmapqi_payload_iterator_advance(it));   /* end of stream */
 
+    mmapqi_payload_iterator_destroy(it);
     d5_close_payload_access(&px);
     mmapq_indexed_appender_close(a);
 }
@@ -3773,6 +3780,7 @@ void test_c51e_rejoin_exact_infile_region_end_async(void)
     mmapq_indexed_appender_close(a);
     mmapq_indexed_queue_close(q);
     mmapq_runtime_close(rt);
+    mmapq_runtime_destroy(rt);
     cce_cleanup();
 }
 

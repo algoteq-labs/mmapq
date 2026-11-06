@@ -1096,6 +1096,7 @@ void test_payload_iterator_init_rejects_out_of_range(void)
     TEST_ASSERT_EQUAL_INT32(4, buf->capacity);
     TEST_ASSERT_EQUAL_MEMORY("msg2", buf->data, 4);
 
+    mmapqi_payload_iterator_destroy(it);
     d5_close_payload_access(&px);
     mmapq_indexed_appender_close(a);
 }
