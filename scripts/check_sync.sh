@@ -205,6 +205,13 @@ bash mmapq/scripts/check_cmake_sources.sh
 # Verify no unprefixed symbols in the archive (strong linker gate)
 bash mmapq/scripts/api_surface.sh --linker
 
+# Verify every public C function has at least one direct call in the C
+# tests (E2 / COV-01). Reads nm exports of mmapq/libmmapq.a — run make
+# first (CI does, immediately before this gate). Local scope: inputs are
+# mmapq-only, so no run_cross wrap (the GATE-01c structural guard classifies
+# by the registry's declared inputs).
+bash mmapq/scripts/check_api_coverage.sh
+
 # Verify no stale macOS/Darwin/__APPLE__ references remain in the C tree (16a).
 # The platform decision is "Linux only"; allow-list is zero.
 MMAP_MACOS=$(grep -rn "__APPLE__\|Darwin\|macOS" mmapq/src mmapq/include mmapq/CMakeLists.txt mmapq/Makefile 2>/dev/null || true)

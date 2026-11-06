@@ -34,6 +34,7 @@ REGISTRY+=("mmapq-py/scripts/check_enum_sync.sh||mmapq/include mmapq-py/src/mmap
 REGISTRY+=("mmapq-py/scripts/check_no_layout_mirrors.sh||mmapq/include mmapq-py/setup.py")
 REGISTRY+=("mmapq/scripts/check_published_urls.sh||mmapq-rs/.gitmodules mmapq-py/.gitmodules mmapq-rs/Cargo.toml mmapq-py/pyproject.toml mmapq-py/setup.py")
 REGISTRY+=("mmapq/scripts/check_mirrors.sh||mmapq-rs/c/src mmapq-py/c/src")
+REGISTRY+=("mmapq/scripts/check_api_coverage.sh||mmapq/libmmapq.a mmapq/test mmapq/include")
 
 # ── --list-registry: print gates with their derived scope and inputs ─────────
 # --list-registry=csv emits machine-readable `scope\tpath\targs` lines so
@@ -116,11 +117,14 @@ WORK="$TMPDIR/mmapq-gate-work"
 
 copy_subsets() {
     rm -rf "$WORK"
-    mkdir -p "$WORK/mmapq/src" "$WORK/mmapq/include" "$WORK/mmapq/scripts" "$WORK/mmapq/doc"
+    mkdir -p "$WORK/mmapq/src" "$WORK/mmapq/include" "$WORK/mmapq/scripts" "$WORK/mmapq/doc" "$WORK/mmapq/test"
     cp -a "$ROOT/mmapq/src/." "$WORK/mmapq/src/"
     cp -a "$ROOT/mmapq/include/." "$WORK/mmapq/include/"
     cp -a "$ROOT/mmapq/scripts/." "$WORK/mmapq/scripts/"
     cp -a "$ROOT/mmapq/doc/." "$WORK/mmapq/doc/"
+    # mmapq/test: check_api_coverage.sh scans the C tests for call sites.
+    # Inert for the other gates — nothing outside test/ scans test/.
+    cp -a "$ROOT/mmapq/test/." "$WORK/mmapq/test/"
     cp "$ROOT/mmapq/README.md" "$WORK/mmapq/README.md"
     # DOC-02 (check_doc_links.sh): the subset must carry every relative-link
     # target the scanned Markdown points at, or the link gate's pristine
@@ -150,6 +154,27 @@ copy_subsets() {
     cp "$ROOT/mmapq-rs/.gitmodules" "$WORK/mmapq-rs/.gitmodules"
     cp "$ROOT/mmapq-py/.gitmodules" "$WORK/mmapq-py/.gitmodules"
     cp "$ROOT/mmapq-py/pyproject.toml" "$WORK/mmapq-py/pyproject.toml"
+}
+
+# Compile the subset's mmapq/src into $WORK/mmapq/libmmapq.a for
+# check_api_coverage.sh. The gate reads nm exports of a BUILT archive and
+# must itself fail when the archive is absent, so the subset cannot rely
+# on the gate building one — the harness provides it instead (same
+# precedent as check_readme_examples needing the crate's build inputs).
+# Symbols are optimization-independent, so -O0 keeps the per-test cost
+# low; .o files go to a scratch dir, never src/ — binary artifacts in
+# src/ would pollute the grep-based gates that scan it.
+build_subset_archive() {
+    (
+        cd "$WORK/mmapq" || return 1
+        mkdir -p .gate-obj || return 1
+        for f in src/*.c; do
+            gcc -std=gnu11 -O0 -D_GNU_SOURCE -I include -I src \
+                -c "$f" -o ".gate-obj/$(basename "$f" .c).o" || return 1
+        done
+        ar rcs libmmapq.a .gate-obj/*.o || return 1
+        rm -rf .gate-obj
+    )
 }
 
 run_gate() {
@@ -182,6 +207,17 @@ for entry in "${REGISTRY[@]}"; do
 
     # Baseline control: pristine copy must exit 0.
     copy_subsets
+    # check_api_coverage.sh needs a built archive in the subset; targeted
+    # at this gate only so other gates' iterations stay cheap. Built right
+    # after copy_subsets and BEFORE any input removal (rebuilding after the
+    # removal would mask a removed libmmapq.a; skipping the build would make
+    # the test/ and include/ input tests fail vacuously on the missing
+    # archive instead of the removed input). A build failure is not fatal
+    # here — the control below reports it through the standard CONTROL-FAIL
+    # path.
+    case "$path" in
+        */check_api_coverage.sh) build_subset_archive || true ;;
+    esac
     if run_gate "$path" "$args"; then
         echo "  CONTROL-PASS: $name"
     else
@@ -197,6 +233,10 @@ for entry in "${REGISTRY[@]}"; do
     # One test per declared input: that input absent must exit non-zero.
     for input in $inputs; do
         copy_subsets
+        # Same placement rule as the control above: build before removal.
+        case "$path" in
+            */check_api_coverage.sh) build_subset_archive || true ;;
+        esac
         if [ -d "$WORK/$input" ]; then
             rm -rf "$WORK/$input"
         else
