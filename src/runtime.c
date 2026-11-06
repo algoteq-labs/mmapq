@@ -990,6 +990,27 @@ static void registry_on_close(MmapqRuntime *rt, void *ctx)
     }
     pthread_mutex_unlock(&registry_mutex);
     free(runtime_id);
+    /*
+     * The registry's reference (the refcount 1 from mmapq_runtime_create,
+     * held so the singleton stayed alive while no caller had a handle —
+     * see get_instance) has no purpose once the entry is gone: a closed
+     * runtime removed from the registry can never be handed out again.
+     * Release it here so the last caller's destroy frees the runtime
+     * instead of leaking it (the runtime struct and its thread state).
+     *
+     * Plain decrement, never a nested destroy: if close was reached from
+     * a destroy whose decrement took the count to zero, a nested destroy
+     * here would free rt and the outer destroy would then read
+     * rt->thread_detached — use-after-free and double free. The caller of
+     * close must hold its own reference, so this never reaches zero in
+     * correct use; if it does (misuse, or a close with no caller
+     * reference), the runtime is leaked rather than freed inside close —
+     * the next legitimate destroy frees it as usual. acq_rel matches
+     * mmapq_runtime_destroy's decrement: the thread whose decrement
+     * observes zero does the freeing, so every releaser's prior accesses
+     * to rt must be visible to it.
+     */
+    atomic_fetch_sub_explicit(&rt->refcount, 1, memory_order_acq_rel);
 }
 
 int mmapq_runtime_get_instance(
@@ -1030,9 +1051,12 @@ int mmapq_runtime_get_instance(
     registry_count++;
 
     pthread_mutex_unlock(&registry_mutex);
-    /* Registry holds one permanent reference (refcount 1 from mmapq_runtime_create).
-     * Every caller, including the first, receives a clone — caller owns their
-     * own reference and destroy-all-handles never drops the registry's hold. */
+    /* Registry holds one reference (refcount 1 from mmapq_runtime_create)
+     * while the entry exists, so the singleton stays alive between callers;
+     * every caller, including the first, receives a clone and owns their own
+     * reference. When the runtime closes, registry_on_close removes the entry
+     * and releases this reference — a closed runtime removed from the
+     * registry can never be handed out again. */
     return mmapq_runtime_clone(rt, out);
 }
 

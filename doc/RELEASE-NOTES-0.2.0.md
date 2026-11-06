@@ -287,6 +287,25 @@ the 0.2.0 cycle are not listed.
   the on-disk count. Tests: `test_batch_iterator_rejects_invalid_lengths`,
   `test_batch_reader_rejects_zero_message_count`,
   `test_batch_message_count_propagates_mapping_failure`.)
+- **Async poller, reader and appender close no longer leak mappings and
+  fds when the mapping timeout is small; closing a singleton runtime no
+  longer leaks it.** `async_ring_close` bounded its deregistration wait by
+  the queue's mapping timeout — a per-map latency budget that can
+  legitimately be 0 — so a close racing an in-flight region map gave up on
+  a healthy runtime thread, leaked the mapper state and skipped the
+  region/file-mapper teardown (the appender's rings take the same path);
+  the wait is now floored at 1 s — generous for a healthy thread to reach
+  the deregistration executable, while a wedged runtime's close stays
+  bounded at about 1 s per ring. Separately, the singleton registry kept
+  its permanent reference to a runtime after close removed the entry,
+  stranding the runtime struct and its thread state; the reference is now
+  released when the entry is removed.
+  (Basis: LeakSanitizer roots found at c2487a5 by enabling the ASan gate;
+  test-side iterator leaks found in the same triage are fixed in the
+  tests. Tests: `test_poller_close_with_zero_mapping_timeout_takes_normal_path`
+  (`test/test_indexed_queue.c`),
+  `test_runtime_get_instance_close_destroy_frees_singleton`
+  (`test/test_runtime.c`), and the full `test.sh --asan` loop.)
 
 ## Performance
 

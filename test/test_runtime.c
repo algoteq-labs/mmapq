@@ -469,6 +469,38 @@ void test_runtime_get_instance_returns_one_runtime(void)
     mmapq_runtime_destroy(h3);
 }
 
+/* ASAN-01 (C): closing a singleton runtime must release the registry's
+ * permanent reference. Pre-fix, registry_on_close removed the registry
+ * entry when the runtime closed but never released the reference the
+ * registry holds, so after close + every caller's destroy the runtime
+ * struct and its thread state were unreachable — the 240-byte leak (plus
+ * indirects) seen under --asan in the c59 pins and the indexed-queue
+ * suites. Once closed and out of the registry the runtime can never be
+ * handed out again, so the registry's reference has no purpose left. A
+ * singleton that is NOT closed keeps its registry reference — pinned by
+ * test_runtime_get_instance_returns_one_runtime above. Under --asan this
+ * test leaks at the base and is clean after the fix. */
+void test_runtime_get_instance_close_destroy_frees_singleton(void)
+{
+    /* runtime_id 14: none of the well-known IDs, unused by other tests */
+    MmapqIdleStrategy *idle = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_idle_strategy_sleep_create(1000000ULL, 4000000ULL, &idle));
+    MmapqRuntime *h = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_runtime_get_instance(14, "asan01-c", idle,
+        MMAPQ_RUNTIME_DEFAULT_CLOSE_TIMEOUT_NS, &h));
+    TEST_ASSERT_NOT_NULL(h);
+
+    /* exact outcome for a healthy empty runtime: the thread joins */
+    TEST_ASSERT_EQUAL_INT(0, mmapq_runtime_close(h));
+    TEST_ASSERT_EQUAL_INT(1, mmapq_runtime_is_closed(h));
+
+    /* releases the caller's reference; with the registry's released in
+     * on_close at close time this is the last one — the runtime is freed
+     * here, not leaked. */
+    mmapq_runtime_destroy(h);
+}
+
 /* runtime.h:345-359 — metrics_processor: "Get the singleton metrics
  * processor MmapqRuntime. Creates it with backoff idle strategy if it
  * does not exist." */
@@ -1044,6 +1076,7 @@ int main(void)
 
     /* COV-01: direct tests for previously-untested public functions */
     RUN_TEST(test_runtime_get_instance_returns_one_runtime);
+    RUN_TEST(test_runtime_get_instance_close_destroy_frees_singleton);
     RUN_TEST(test_runtime_metrics_processor_returns_same_singleton);
     RUN_TEST(test_runtime_set_affinity_pins_runtime_thread);
     RUN_TEST(test_runtime_set_affinity_out_of_range_cpu_runtime_survives);
