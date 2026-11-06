@@ -218,7 +218,16 @@ void mmapq_runtime_unregister_and_wait(MmapqRuntime *rt, MmapqExecutable *exec);
  * May be called from any thread. If called before the MmapqRuntime thread
  * has started, the affinity will be applied as soon as it starts.
  *
- * Returns 0 on success, or an error code.
+ * cpu_core outside [0, CPU_SETSIZE) is rejected with MMAPQ_EINVAL. A
+ * cpu_core inside that range but not schedulable for this process (an
+ * offline CPU, or one outside the process's allowed set) is NOT rejected
+ * here: the pin is applied asynchronously by a one-shot executable on
+ * the runtime thread, and that asynchronous failure is dropped — the
+ * runtime thread keeps its existing affinity.
+ *
+ * Returns: 0 on success, MMAPQ_EINVAL for a NULL runtime or a cpu_core
+ *          outside [0, CPU_SETSIZE), MMAPQ_ECLOSED on a closed runtime,
+ *          or MMAPQ_ENOMEM on an allocation failure.
  */
 int mmapq_runtime_set_affinity(MmapqRuntime *rt, int cpu_core);
 

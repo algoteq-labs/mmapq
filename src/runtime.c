@@ -592,30 +592,52 @@ int mmapq_runtime_unregister(MmapqRuntime *rt, MmapqExecutable *exec)
  * ═══════════════════════════════════════════════════════════════════════════ */
 
 typedef struct {
-    int        cpu_core;
-    MmapqExecutable self_exec;
+    MmapqRuntime    *rt;
+    int              cpu_core;
+    MmapqExecutable  self_exec;
 } AffinityImpl;
 
+/* RUNTIME-AFFINITY-01: the DeregisterExecutable pattern (see
+ * deregister_execute below) — unregister self from WITHIN execute() and
+ * return positive, so the poll loop's work < 0 path (which calls
+ * close() and unregister() on the executable) never runs for this
+ * executable. The pre-fix shape freed impl here and returned -1, making
+ * the loop call exec->close(exec) and unregister on freed memory (a
+ * heap-use-after-free on every set_affinity whose one-shot runs, caught
+ * by ASan/TSan via the COV-01 tests). */
 static int affinity_execute(MmapqExecutable *self)
 {
     AffinityImpl *impl = (AffinityImpl *)self->ctx;
     mmapq_thread_set_affinity(impl->cpu_core);
+    mmapq_runtime_unregister(impl->rt, self);
     free(impl);
-    return -1; /* unregister self after one-shot */
+    return 1;
 }
 
+/* Drain path only: the runtime closed before the one-shot ran — free the
+ * impl here (pre-fix this path leaked it). The two never both run: after
+ * affinity_execute's unregister the drain no longer sees this executable
+ * in the list. */
 static void affinity_close(MmapqExecutable *self)
 {
-    (void)self;
+    AffinityImpl *impl = (AffinityImpl *)self->ctx;
+    free(impl);
 }
 
 int mmapq_runtime_set_affinity(MmapqRuntime *rt, int cpu_core)
 {
-    if (rt == NULL) return -1;
+    if (rt == NULL) return MMAPQ_EINVAL;
+    /* Range check only: an index cpu_set_t cannot encode is rejected up
+     * front. A cpu_core in range but not schedulable for this process
+     * (offline, or outside its allowed set) is NOT rejected here — the
+     * pin is applied asynchronously on the runtime thread and that
+     * failure is dropped (see the header comment). */
+    if (cpu_core < 0 || cpu_core >= CPU_SETSIZE) return MMAPQ_EINVAL;
 
     AffinityImpl *impl = calloc(1, sizeof(AffinityImpl));
-    if (impl == NULL) return -1;
+    if (impl == NULL) return MMAPQ_ENOMEM;
 
+    impl->rt                = rt;
     impl->cpu_core          = cpu_core;
     impl->self_exec.execute = affinity_execute;
     impl->self_exec.close   = affinity_close;
@@ -623,7 +645,12 @@ int mmapq_runtime_set_affinity(MmapqRuntime *rt, int cpu_core)
 
     if (!mmapq_runtime_register(rt, &impl->self_exec)) {
         free(impl);
-        return -1;
+        /* register() reports 0 both for a closed runtime and for a
+         * transient internal allocation failure; is_closed distinguishes
+         * them because their remedies differ — ECLOSED is terminal (the
+         * runtime thread is gone, retrying is pointless), ENOMEM is
+         * transient (retry after freeing memory). */
+        return mmapq_runtime_is_closed(rt) ? MMAPQ_ECLOSED : MMAPQ_ENOMEM;
     }
 
     return 0;

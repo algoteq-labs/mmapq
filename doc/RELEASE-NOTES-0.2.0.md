@@ -98,6 +98,10 @@ guarantees are the C library's to state).
 - **Commit floor:** committing an offset below the archive line fails
   with `MMAPQ_EINVAL` — an uncommitted payload that archiving has
   overtaken can never become live. Append it again instead.
+- **`mmapq_runtime_set_affinity`:** fixes a heap-use-after-free in its
+  one-shot executable; now returns `MMAPQ_EINVAL` for a NULL runtime or a
+  cpu_core outside `[0, CPU_SETSIZE)`, `MMAPQ_ECLOSED` on a closed runtime
+  and `MMAPQ_ENOMEM` on allocation failure (previously -1).
 
 ## New
 

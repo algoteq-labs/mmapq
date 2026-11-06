@@ -490,7 +490,69 @@ void test_runtime_metrics_processor_returns_same_singleton(void)
     mmapq_runtime_destroy(m2);
 }
 
+/* runtime.h:216-223 — set_affinity: "Pin the background thread of this
+ * MmapqRuntime to a specific CPU core... Returns 0 on success, or an error
+ * code." The pin is applied on the runtime thread by a one-shot
+ * executable; the probe below only runs after it (list order plus the
+ * one-shot's unregister-and-restart). */
+void test_runtime_set_affinity_pins_runtime_thread(void)
+{
+    int cpu = first_allowed_cpu();
+    TEST_ASSERT_GREATER_OR_EQUAL_INT(0, cpu);
 
+    TEST_ASSERT_EQUAL_INT(0, mmapq_runtime_set_affinity(rt, cpu));
+
+    ThreadProbe probe;
+    thread_probe_init(&probe);
+    TEST_ASSERT_EQUAL_INT(1, mmapq_runtime_register(rt, &probe.exec));
+    wait_probe_runs(&probe, 1);
+
+    cpu_set_t actual;
+    TEST_ASSERT_EQUAL_INT(0, pthread_getaffinity_np(probe.ran_on, sizeof(actual), &actual));
+    TEST_ASSERT_EQUAL_INT(1, CPU_COUNT(&actual));
+    TEST_ASSERT_TRUE(CPU_ISSET(cpu, &actual));
+
+    mmapq_runtime_unregister_and_wait(rt, &probe.exec);
+}
+
+void test_runtime_set_affinity_out_of_range_cpu_runtime_survives(void)
+{
+    /* cpu_core outside [0, CPU_SETSIZE) is rejected synchronously with
+     * MMAPQ_EINVAL (runtime.h, RUNTIME-AFFINITY-01). */
+    TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL,
+        mmapq_runtime_set_affinity(rt, CPU_SETSIZE));
+    TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL,
+        mmapq_runtime_set_affinity(rt, -1));
+
+    /* A cpu_core in range but not schedulable for this process (>= the
+     * configured processor count) fails only asynchronously: rc 0, the
+     * one-shot's pin is dropped, the runtime thread survives with its
+     * affinity unchanged. */
+    int bad = first_disallowed_cpu();
+    if (bad < CPU_SETSIZE) {
+        ThreadProbe probe;
+        thread_probe_init(&probe);
+        TEST_ASSERT_EQUAL_INT(1, mmapq_runtime_register(rt, &probe.exec));
+        wait_probe_runs(&probe, 1);
+
+        cpu_set_t before;
+        TEST_ASSERT_EQUAL_INT(0,
+            pthread_getaffinity_np(probe.ran_on, sizeof(before), &before));
+
+        TEST_ASSERT_EQUAL_INT(0, mmapq_runtime_set_affinity(rt, bad));
+
+        /* the one-shot runs within an iteration (registered after the
+         * probe, so list order guarantees it); the probe keeps running */
+        wait_probe_runs(&probe, 3);
+        usleep(50000);
+        cpu_set_t after;
+        TEST_ASSERT_EQUAL_INT(0,
+            pthread_getaffinity_np(probe.ran_on, sizeof(after), &after));
+        TEST_ASSERT_TRUE(CPU_EQUAL(&before, &after));
+
+        mmapq_runtime_unregister_and_wait(rt, &probe.exec);
+    }
+}
 
 /* runtime.h:106-112 — sleep idle: "Sleep — calls nanosleep() with
  * increasing duration when idle. min_sleep_ns: initial sleep duration,
@@ -983,6 +1045,8 @@ int main(void)
     /* COV-01: direct tests for previously-untested public functions */
     RUN_TEST(test_runtime_get_instance_returns_one_runtime);
     RUN_TEST(test_runtime_metrics_processor_returns_same_singleton);
+    RUN_TEST(test_runtime_set_affinity_pins_runtime_thread);
+    RUN_TEST(test_runtime_set_affinity_out_of_range_cpu_runtime_survives);
     RUN_TEST(test_idle_strategy_sleep_runs_executables);
     RUN_TEST(test_idle_strategy_sleep_min_above_max_refused);
     RUN_TEST(test_deregister_executable_stops_target);
