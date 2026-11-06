@@ -88,6 +88,12 @@ struct MmapqIndexedBatchAppender {
      * the queue meta — NEVER the factory argument (see the single-message
      * twin in indexed_appender.c). */
     int                  archivable;
+
+    /* APPEND-HOTPATH-01 R2: region_size − PAYLOAD_LENGTH_SIZE, cached once
+     * at create from the reconciled meta — see the single-message twin in
+     * indexed_appender.c (region_size is immutable after creation; the
+     * struct-end placement follows the CAND-49 offset discipline). */
+    int32_t              max_message_length;
 };
 
 /* §3.7 batch state machine values (batch_state). */
@@ -505,6 +511,7 @@ static int batch_appender_create_internal(
     }
     int32_t rec_reg = queue_meta_region_size(a->queue_meta);
     int64_t rec_max = queue_meta_max_file_size(a->queue_meta);
+    a->max_message_length = rec_reg - PAYLOAD_LENGTH_SIZE;   /* APPEND-HOTPATH-01 R2 */
 
     rc = mmapqi_appender_meta_open_rw(directory, queue_name, a->appender_id, &a->appender_meta);
     if (rc != 0) {
@@ -1130,7 +1137,7 @@ int64_t mmapq_indexed_batch_appender_append_and_commit(MmapqIndexedBatchAppender
      * best-effort rollback). The checked start preserves the failure code
      * (ECLOSED/EINVAL/ENOMEM/timeout) — never the -1 collapse. */
     if (a == NULL || data == NULL || length <= 0) return MMAPQ_EINVAL;
-    if (length > queue_meta_region_size(a->queue_meta) - PAYLOAD_LENGTH_SIZE) return MMAPQ_EINVAL;
+    if (length > a->max_message_length) return MMAPQ_EINVAL;
     MmapqMutableBatch *b = NULL;
     int started = mmapq_indexed_batch_appender_start_batch_checked(a, &b);
     if (started != 0) return started;
@@ -1200,7 +1207,7 @@ int32_t mmapq_mutable_batch_append(MmapqMutableBatch *b, const void *data, int32
 {
     if (b == NULL || data == NULL || length <= 0) return MMAPQ_EINVAL;
     MmapqIndexedBatchAppender *a = b->appender;
-    if (length > queue_meta_region_size(a->queue_meta) - PAYLOAD_LENGTH_SIZE) return MMAPQ_EINVAL;
+    if (length > a->max_message_length) return MMAPQ_EINVAL;
     /* Order the previous record's payload bytes before this record's
      * length prefix (and before any padding marker below) — the batch
      * side of the torn-tail rule (CAND-50 item 2; the full text is on the
@@ -1224,7 +1231,7 @@ int32_t mmapq_mutable_batch_append_reserved(MmapqMutableBatch *b, int32_t length
 {
     if (b == NULL || out_data == NULL || length <= 0) return MMAPQ_EINVAL;
     MmapqIndexedBatchAppender *a = b->appender;
-    if (length > queue_meta_region_size(a->queue_meta) - PAYLOAD_LENGTH_SIZE) return MMAPQ_EINVAL;
+    if (length > a->max_message_length) return MMAPQ_EINVAL;
     /* Order the previous record's payload bytes before this record's
      * length prefix (and before any padding marker below) — the batch
      * side of the torn-tail rule (CAND-50 item 2; the full text is on the

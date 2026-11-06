@@ -87,6 +87,13 @@ struct MmapqIndexedAppender {
      * the disk, or a mismatched reopen silently drops the intent). */
     int                  archivable;
 
+    /* APPEND-HOTPATH-01 R2: region_size − PAYLOAD_LENGTH_SIZE, cached once
+     * at create from the reconciled meta. region_size is written once at
+     * queue creation and cached in the meta (queue_meta.h — nothing mutates
+     * it afterward), so the append boundary check needs no per-call pointer
+     * chase into the meta. At the struct's end per the CAND-49 offset
+     * discipline. */
+    int32_t              max_message_length;
 };
 
 /* ── Stream offset callbacks ─────────────────────────────────────────────── */
@@ -757,6 +764,7 @@ static int appender_create_internal(
     int32_t reconciled_region_size   = queue_meta_region_size(a->queue_meta);
     int64_t reconciled_max_file_size = queue_meta_max_file_size(a->queue_meta);
     a->archivable = queue_meta_archivable(a->queue_meta);   /* CAND-54: on-disk value, never the argument */
+    a->max_message_length = reconciled_region_size - PAYLOAD_LENGTH_SIZE;   /* APPEND-HOTPATH-01 R2 */
 
     /* Open appender meta (creates file if new) */
     rc = mmapqi_appender_meta_open_rw(directory, queue_name, appender_id, &a->appender_meta);
@@ -970,7 +978,7 @@ int64_t mmapq_indexed_appender_append(
 {
     if (a == NULL || data == NULL || length <= 0) return MMAPQ_EINVAL;
     if (a->closed) return MMAPQ_ECLOSED;
-    if (length > queue_meta_region_size(a->queue_meta) - PAYLOAD_LENGTH_SIZE) return MMAPQ_EINVAL;
+    if (length > a->max_message_length) return MMAPQ_EINVAL;
 
     int64_t payload_offset;
     if (write_payload(a, data, length, &payload_offset)) return -1;
@@ -990,7 +998,7 @@ int64_t mmapq_indexed_appender_append_uncommitted(
 {
     if (a == NULL || data == NULL || length <= 0) return MMAPQ_EINVAL;
     if (a->closed) return MMAPQ_ECLOSED;
-    if (length > queue_meta_region_size(a->queue_meta) - PAYLOAD_LENGTH_SIZE) return MMAPQ_EINVAL;
+    if (length > a->max_message_length) return MMAPQ_EINVAL;
 
     /* CAND-49 §3.3: the latest uncommitted offset is flag-tracked; the
      * previous flag-tracked offset (if any) moves into the outstanding set.

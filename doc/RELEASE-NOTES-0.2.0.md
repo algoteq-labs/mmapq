@@ -309,10 +309,22 @@ the 0.2.0 cycle are not listed.
 
 ## Performance
 
-No performance delta against 0.1.0 is claimed — no 0.1.0 benchmark
-comparison has been executed. (A v0.1.0 vs 0.2.0 callgrind comparison on
-the house recipe is a release-gate item; this section stays as-is until
-it runs.)
+- **`mmapq_indexed_appender_append` is back at the 0.1.0 instruction
+  count** — 121 Ir per call in the callgrind reference harness (public
+  API, synchronous mapping, 4 MB region, 64 B messages, exact release
+  flags), where the commit-path frontier wrap added in 0.2.0 had raised it
+  to 128. The corrupt flag now rides the header-wrap return value with
+  the cold frontier-recovery loop out of line (−4 Ir/call, −4 Ir per
+  batch publish), and the max-message-length bound is cached at appender
+  create (−3 Ir/call) — the 0.1.0-era validation checks themselves are
+  all still executed. No behaviour change: same return values, error
+  codes, stderr diagnostics and memory orderings; the frontier-wrap
+  tests and their mutation checks still pass.
+
+No further performance delta against 0.1.0 is claimed — no broader 0.1.0
+benchmark comparison has been executed. (A v0.1.0 vs 0.2.0 callgrind
+comparison on the house recipe beyond the append/poll harnesses is a
+release-gate item.)
 
 ## Bindings
 
