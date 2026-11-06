@@ -11,7 +11,10 @@ committed_ranges.c with the extracted helpers.)
 internal/header_reader.h so the call disappears into both pollers; its
 WRAP_UNWRAPPED fatal assert moved with it — header_reader.c 2→1,
 header_reader.h 0→1, total unchanged.)
-Last verified: 2026-10-30 (CAND-59 — the existing-only header mapper and
+Last verified: 2026-11-07 (APPEND-HOTPATH-01 — the corrupt-flag fold and
+cold-frontier-loop split in indexed_appender.c shifted the one site below
+them; re-pinned, dispositions unchanged. Previously: 2026-10-30 (CAND-59 —
+the existing-only header mapper and
 explicit frontier create added three asserts (file_mapper_rolled.c ×2,
 region_ring_accessor.c ×1) and shifted the sites below them; re-pinned,
 dispositions unchanged. Previously: 2026-10-15 (CAND-32 — the header_encode
@@ -120,7 +123,7 @@ Lines 79. Internal dispatch fatal check (WRAP_UNWRAPPED in mmapqi_header_read). 
 
 | Line | Disposition | Verified |
 |---|---|---|
-| 202 length + 4 > region_size | I | Phase 6a converted. Guarded by EINVAL checks at public entry points. (CAND-49: line moved, site unchanged; CAND-54: moved again by the archivable-field struct addition, site unchanged; CAND-50: moved by the torn-tail leading fence, then back by the item-5 payload_iter field removal, site unchanged; CAND-58: moved by the walk-accessor struct fields, site unchanged.) |
+| 210 length + 4 > region_size | I | Phase 6a converted. Guarded by EINVAL checks at public entry points. (CAND-49: line moved, site unchanged; CAND-54: moved again by the archivable-field struct addition, site unchanged; CAND-50: moved by the torn-tail leading fence, then back by the item-5 payload_iter field removal, site unchanged; CAND-58: moved by the walk-accessor struct fields, site unchanged; APPEND-HOTPATH-01: moved by the cold-frontier-loop split, site unchanged.) |
 
 ### indexed_poller.c — 1 (1 I)
 

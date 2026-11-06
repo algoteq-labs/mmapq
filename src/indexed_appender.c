@@ -86,6 +86,7 @@ struct MmapqIndexedAppender {
      * its on-disk value; the commit-intent protocol's branch must follow
      * the disk, or a mismatched reopen silently drops the intent). */
     int                  archivable;
+
 };
 
 /* ── Stream offset callbacks ─────────────────────────────────────────────── */
@@ -255,28 +256,21 @@ static int commit_header_below_floor(void *ctx, int64_t position)
     return header_index(position) < queue_meta_start_index((const QueueMeta *)ctx);
 }
 
-/* CAND-59 items 1+2 (spec v1.1 §3.3): the commit path's header wrap.
- * In-region identical to a bare region_accessor_wrap (always_inline,
- * CAND-45). On WRAP_FILE_NOT_FOUND — a genuinely missing frontier file or
- * the item-2 floor rejection — re-read start_index: slot below si → jump
- * to si; at/above si → create the file (O_CREAT|O_EXCL; EEXIST = another
- * lane created it) and re-wrap. A repeat NOT_FOUND whose classifying floor
- * did not advance is a bug, not a timeout: ECORRUPT + a distinct stderr
- * line (the region_ring.c convention); the 1024 cap has a second line.
- * *out_corrupt is written on every non-SUCCESS exit (cold); on SUCCESS it
- * is never written nor read. */
-static __attribute__((always_inline)) inline WrapResult
-header_wrap_frontier(MmapqIndexedAppender *a, int *out_corrupt)
+/* CAND-59 items 1+2 (spec v1.1 §3.3), cold half: the NOT_FOUND recovery
+ * loop (start_index re-read, explicit header create, 1024-retry cap,
+ * ECORRUPT diagnostics, prev_floor). noinline (APPEND-HOTPATH-01 R1):
+ * always_inline'd into append, the loop's register pressure and its
+ * fprintf stack alignment are paid statically in append's prologue on
+ * EVERY call (one extra callee-saved push/pop + sub/add — the 4 Ir/msg
+ * CAND-59 regression), although the loop never runs on the success path.
+ * C59_HOOK_HEADER_NOT_FOUND_NOTE() (mutation-3 witness) fires once per
+ * ANOMALOUS entry only: a below-si jump (the stale lane probed below
+ * start_index) or a no-progress/cap failure. A clean frontier create —
+ * the ordinary boundary crossing — does NOT count. */
+__attribute__((noinline)) static int
+header_wrap_frontier_cold(MmapqIndexedAppender *a)
 {
-    WrapResult r = region_accessor_wrap(a->header_acc,
-                                        a->current_header_position,
-                                        &a->header_buf);
-    if (__builtin_expect(r == WRAP_SUCCESS, 1)) return r;
-    if (r != WRAP_FILE_NOT_FOUND) { *out_corrupt = 0; return r; }
-    /* C59_HOOK_HEADER_NOT_FOUND_NOTE() (mutation-3 witness) fires once per
-     * ANOMALOUS entry only: a below-si jump (the stale lane probed below
-     * start_index) or a no-progress/cap failure. A clean frontier create —
-     * the ordinary boundary crossing — does NOT count. */
+    WrapResult r = WRAP_FILE_NOT_FOUND;
     int noted = 0;
     int64_t prev_floor = -1;
     for (int iter = 0; ; iter++) {
@@ -287,29 +281,53 @@ header_wrap_frontier(MmapqIndexedAppender *a, int *out_corrupt)
             a->current_header_position = header_position(si);
         } else if (mmapqi_queue_region_accessor_header_create(
                        a->rw_acc, a->current_header_position) != 0) {
-            *out_corrupt = 0;
-            return r;   /* create I/O error (not EEXIST): fail, retryable */
+            return -1;   /* create I/O error (not EEXIST): fail, retryable */
         }
         r = region_accessor_wrap(a->header_acc,
                                  a->current_header_position, &a->header_buf);
-        if (r == WRAP_SUCCESS) return r;
-        if (r != WRAP_FILE_NOT_FOUND) { *out_corrupt = 0; return r; }
+        if (r == WRAP_SUCCESS) return 0;
+        if (r != WRAP_FILE_NOT_FOUND) return -1;
         if (si <= prev_floor) {
             if (!noted) { C59_HOOK_HEADER_NOT_FOUND_NOTE(); noted = 1; }
-            *out_corrupt = 1;
             fprintf(stderr, "mmapq: commit-path header wrap made no progress "
                             "(floor did not advance) — MMAPQ_ECORRUPT\n");
-            return r;
+            return MMAPQ_ECORRUPT;
         }
         if (iter >= 1024) {
             if (!noted) { C59_HOOK_HEADER_NOT_FOUND_NOTE(); noted = 1; }
-            *out_corrupt = 1;
             fprintf(stderr, "mmapq: commit-path header wrap exceeded the "
                             "1024-retry cap — MMAPQ_ECORRUPT\n");
-            return r;
+            return MMAPQ_ECORRUPT;
         }
         prev_floor = si;
     }
+}
+
+/* CAND-59 items 1+2 (spec v1.1 §3.3): the commit path's header wrap.
+ * In-region identical to a bare region_accessor_wrap (always_inline,
+ * CAND-45): the fast path is the wrap + one predicted branch; every
+ * non-SUCCESS outcome falls through to the cold half above. On
+ * WRAP_FILE_NOT_FOUND — a genuinely missing frontier file or the item-2
+ * floor rejection — the cold half re-reads start_index: slot below si →
+ * jump to si; at/above si → create the file (O_CREAT|O_EXCL; EEXIST =
+ * another lane created it) and re-wrap. A repeat NOT_FOUND whose
+ * classifying floor did not advance is a bug, not a timeout: ECORRUPT +
+ * a distinct stderr line (the region_ring.c convention); the 1024 cap has
+ * a second line. Returns 0 on WRAP_SUCCESS, MMAPQ_ECORRUPT on the two
+ * corruption exits, -1 on every other failure — the corrupt flag rides
+ * the return value instead of an out-parameter (APPEND-HOTPATH-01 R1):
+ * an address-taken local lives on the stack, forcing a frame on callers
+ * that inline this. The call sites map the result exactly as they mapped
+ * the flag pair. */
+static __attribute__((always_inline)) inline int
+header_wrap_frontier(MmapqIndexedAppender *a)
+{
+    WrapResult r = region_accessor_wrap(a->header_acc,
+                                        a->current_header_position,
+                                        &a->header_buf);
+    if (__builtin_expect(r == WRAP_SUCCESS, 1)) return 0;
+    if (r != WRAP_FILE_NOT_FOUND) return -1;
+    return header_wrap_frontier_cold(a);
 }
 
 static int move_to_last_header(MmapqIndexedAppender *a)
@@ -326,9 +344,8 @@ static int move_to_last_header(MmapqIndexedAppender *a)
         a->current_index++;
         a->current_header_position = header_position(a->current_index);
 
-        int corrupt = 0;
-        WrapResult r = header_wrap_frontier(a, &corrupt);
-        if (r != WRAP_SUCCESS) return corrupt ? MMAPQ_ECORRUPT : -1;
+        int rc = header_wrap_frontier(a);
+        if (rc != 0) return rc;
 
         _Atomic uint64_t *hp = (_Atomic uint64_t *)a->header_buf.data;
         if (atomic_load_explicit(hp, memory_order_acquire) == HEADER_NULL) {
@@ -356,9 +373,8 @@ static int move_to_last_header(MmapqIndexedAppender *a)
 
     a->current_header_position = header_position(a->current_index);
 
-    int corrupt = 0;
-    WrapResult r = header_wrap_frontier(a, &corrupt);
-    if (r != WRAP_SUCCESS) return corrupt ? MMAPQ_ECORRUPT : -1;
+    int rc = header_wrap_frontier(a);
+    if (rc != 0) return rc;
 
     return 0;
 }
@@ -378,9 +394,8 @@ static __attribute__((always_inline)) inline int commit_header(MmapqIndexedAppen
 
     uint64_t header = header_encode(a->appender_id, payload_offset);
 
-    int corrupt;
-    WrapResult r = header_wrap_frontier(a, &corrupt);
-    if (r != WRAP_SUCCESS) return corrupt ? MMAPQ_ECORRUPT : -1;
+    int rc = header_wrap_frontier(a);
+    if (rc != 0) return rc;
 
     _Atomic uint64_t *hp = (_Atomic uint64_t *)a->header_buf.data;
     ASSERT_HEADER_ALIGNED(hp);
@@ -392,8 +407,8 @@ static __attribute__((always_inline)) inline int commit_header(MmapqIndexedAppen
         int mrc = move_to_last_header(a);
         if (mrc) return mrc;
 
-        r = header_wrap_frontier(a, &corrupt);
-        if (r != WRAP_SUCCESS) return corrupt ? MMAPQ_ECORRUPT : -1;
+        rc = header_wrap_frontier(a);
+        if (rc != 0) return rc;
 
         hp       = (_Atomic uint64_t *)a->header_buf.data;
         expected = HEADER_NULL;
@@ -664,9 +679,8 @@ static int initialise_append_position(MmapqIndexedAppender *a, int64_t start_ind
      *         mapping before the first append. Eliminates first-message
      *         latency spike.
      */
-    int join_corrupt = 0;
-    WrapResult ewr = header_wrap_frontier(a, &join_corrupt);
-    if (ewr != WRAP_SUCCESS) return join_corrupt ? MMAPQ_ECORRUPT : -1;
+    int join_rc = header_wrap_frontier(a);
+    if (join_rc != 0) return join_rc;
     if (region_accessor_wrap(a->payload_acc, a->current_payload_position, &a->payload_buf) != WRAP_SUCCESS) return -1;
     return 0;
 }
