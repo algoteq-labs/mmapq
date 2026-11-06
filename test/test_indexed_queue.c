@@ -3854,6 +3854,257 @@ void test_c51e_uncommitted_gap_end_padding(void)
         "c51e gap-end padding cells failed (see per-cell lines)");
 }
 
+/* ── COV-01: direct tests for previously-untested public functions ───────── */
+
+/* indexed_poller.h:141-146 — move_to_last: "Returns 1 if a committed entry
+ * exists, 0 if the queue is empty." */
+void test_poller_move_to_last_empty_queue_returns_zero(void)
+{
+    /* No appender yet: the queue files do not exist, so the poller's lazy
+     * init cannot open the meta — the queue is empty from its view. */
+    MmapqIndexedPoller *p = NULL;
+    int rc_p = mmapq_indexed_queue_create_poller(q, &p);
+    TEST_ASSERT_EQUAL_INT(0, rc_p);
+    TEST_ASSERT_NOT_NULL(p);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_poller_move_to_last(p));
+    mmapq_indexed_poller_close(p);
+
+    /* Queue exists on disk (an appender created it) but has zero entries. */
+    MmapqIndexedAppender *a = NULL;
+    int rc_a = mmapq_indexed_queue_create_appender(q, &a);
+    TEST_ASSERT_EQUAL_INT(0, rc_a);
+    TEST_ASSERT_NOT_NULL(a);
+
+    MmapqIndexedPoller *p2 = NULL;
+    int rc_p2 = mmapq_indexed_queue_create_poller(q, &p2);
+    TEST_ASSERT_EQUAL_INT(0, rc_p2);
+    TEST_ASSERT_NOT_NULL(p2);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_poller_move_to_last(p2));
+
+    PollCapture cap = { .directive = MMAPQ_NEXT_ADVANCE };
+    MmapqPollResult r = mmapq_indexed_poller_poll(p2, capture_handler, &cap);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_END_OF_STREAM, r);
+    TEST_ASSERT_EQUAL_INT(0, cap.call_count);
+
+    mmapq_indexed_poller_close(p2);
+    mmapq_indexed_appender_close(a);
+}
+
+void test_poller_move_to_last_positions_at_last_entry(void)
+{
+    MmapqIndexedAppender *a = NULL;
+    int rc_a = mmapq_indexed_queue_create_appender(q, &a);
+    TEST_ASSERT_EQUAL_INT(0, rc_a);
+    MmapqIndexedPoller *p = NULL;
+    int rc_p = mmapq_indexed_queue_create_poller(q, &p);
+    TEST_ASSERT_EQUAL_INT(0, rc_p);
+
+    for (int i = 0; i < 5; i++) {
+        char msg[32];
+        snprintf(msg, sizeof(msg), "cov01-m%d", i);
+        TEST_ASSERT_EQUAL_INT64(i,
+            mmapq_indexed_appender_append(a, msg, (int32_t)strlen(msg)));
+    }
+
+    TEST_ASSERT_EQUAL_INT(1, mmapq_indexed_poller_move_to_last(p));
+    TEST_ASSERT_EQUAL_INT64(4, mmapq_indexed_poller_current_index(p));
+
+    PollCapture cap = { .directive = MMAPQ_NEXT_ADVANCE };
+    MmapqPollResult r = mmapq_indexed_poller_poll(p, capture_handler, &cap);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_ADVANCED, r);
+    TEST_ASSERT_EQUAL_INT64(4, cap.index);
+    TEST_ASSERT_EQUAL_INT(1, cap.call_count);
+
+    mmapq_indexed_appender_close(a);
+    mmapq_indexed_poller_close(p);
+}
+
+void test_poller_move_to_last_after_archive_still_positions_at_last(void)
+{
+    const char *qn = "mmap_test_iq_cov01_mtl";
+    char cmd[512];
+    snprintf(cmd, sizeof(cmd), "rm -rf %s/%s", DIR, qn);
+    int rc = system(cmd); (void)rc;
+    char dir_path[512];
+    snprintf(dir_path, sizeof(dir_path), "%s/%s", DIR, qn);
+    mkdir(dir_path, 0775);
+
+    MmapqIndexedAppender *a = NULL;
+    int rc_a = mmapq_indexed_appender_create(DIR, qn,
+        REGION_SZ, RING_SZ, MAX_FILE, TIMEOUT_NS, 1 /* archivable */, rt, 0, &a);
+    TEST_ASSERT_EQUAL_INT(0, rc_a);
+    TEST_ASSERT_NOT_NULL(a);
+    for (int i = 0; i < 5; i++) {
+        char msg[32];
+        snprintf(msg, sizeof(msg), "cov01-a%d", i);
+        TEST_ASSERT_EQUAL_INT64(i,
+            mmapq_indexed_appender_append(a, msg, (int32_t)strlen(msg)));
+    }
+    mmapq_indexed_appender_close(a);
+
+    MmapqIndexedArchiver *arch = NULL;
+    int rc_arch = mmapq_indexed_archiver_create(DIR, qn, RING_SZ, rt, &arch);
+    TEST_ASSERT_EQUAL_INT(0, rc_arch);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_archiver_archive_up_to_index(arch, 2));
+    TEST_ASSERT_EQUAL_INT64(2, mmapq_indexed_archiver_start_index(arch));
+
+    /* A poller created after the archive still positions ON the last
+     * committed entry (4), not one past it. */
+    MmapqIndexedPoller *p = NULL;
+    int rc_p = mmapq_indexed_poller_create(DIR, qn, RING_SZ, TIMEOUT_NS, rt, &p);
+    TEST_ASSERT_EQUAL_INT(0, rc_p);
+    TEST_ASSERT_EQUAL_INT(1, mmapq_indexed_poller_move_to_last(p));
+    TEST_ASSERT_EQUAL_INT64(4, mmapq_indexed_poller_current_index(p));
+
+    PollCapture cap = { .directive = MMAPQ_NEXT_ADVANCE };
+    MmapqPollResult r = mmapq_indexed_poller_poll(p, capture_handler, &cap);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_ADVANCED, r);
+    TEST_ASSERT_EQUAL_INT64(4, cap.index);
+
+    mmapq_indexed_poller_close(p);
+    mmapq_indexed_archiver_close(arch);
+    rc = system(cmd); (void)rc;
+}
+
+/* indexed_appender.h:276-278 — start_offset: "return the earliest valid
+ * payload position." */
+void test_appender_start_offset_fresh_queue_is_initial_position(void)
+{
+    MmapqIndexedAppender *a = NULL;
+    int rc_a = mmapq_indexed_queue_create_appender(q, &a);
+    TEST_ASSERT_EQUAL_INT(0, rc_a);
+    /* The payload file reserves its first 64 bytes as a prefix
+     * (INITIAL_PAYLOAD_POSITION, src/internal/header_codec.h:116-117),
+     * and appender meta initialises start_offset to exactly that at
+     * creation (src/appender_meta.c:34-43): the earliest valid payload
+     * position on a fresh queue is 64. */
+    TEST_ASSERT_EQUAL_INT64(64, mmapq_indexed_appender_start_offset(a));
+    TEST_ASSERT_EQUAL_INT64(INITIAL_PAYLOAD_POSITION,
+        mmapq_indexed_appender_start_offset(a));
+    mmapq_indexed_appender_close(a);
+}
+
+void test_appender_start_offset_after_archive_is_entry_k_boundary(void)
+{
+    /* Fixed-size messages: every record is a 4-byte length prefix plus 100
+     * payload bytes, so entry i's record starts at INITIAL_PAYLOAD_POSITION
+     * + i * 104. Archiving [0, 4) sets the lane's start_offset to the END
+     * of the last archived record — "start_offset is the END of the last
+     * archived message" (src/internal/appender_meta.h) — which is exactly
+     * 64 + 4*104 = 480: where entry 4's length prefix begins, i.e. the
+     * reader ctx's msg_offset for entry 4 (indexed_reader.h:78, "absolute
+     * payload offset of length prefix"). The asserted relationship between
+     * the appender's start_offset and the reader's msg_offset(4) is exact
+     * equality. */
+    const int32_t LEN = 100;
+    const int64_t ENTRY4_OFFSET =
+        INITIAL_PAYLOAD_POSITION + 4 * (PAYLOAD_LENGTH_SIZE + LEN);
+
+    const char *qn = "mmap_test_iq_cov01_so";
+    char cmd[512];
+    snprintf(cmd, sizeof(cmd), "rm -rf %s/%s", DIR, qn);
+    int rc = system(cmd); (void)rc;
+    char dir_path[512];
+    snprintf(dir_path, sizeof(dir_path), "%s/%s", DIR, qn);
+    mkdir(dir_path, 0775);
+
+    MmapqIndexedAppender *a = NULL;
+    int rc_a = mmapq_indexed_appender_create(DIR, qn,
+        REGION_SZ, RING_SZ, MAX_FILE, TIMEOUT_NS, 1 /* archivable */, rt, 0, &a);
+    TEST_ASSERT_EQUAL_INT(0, rc_a);
+    TEST_ASSERT_NOT_NULL(a);
+    TEST_ASSERT_EQUAL_INT64(64, mmapq_indexed_appender_start_offset(a));
+
+    static char buf[100];   /* fixed message length, 100 bytes */
+    memset(buf, 'K', sizeof(buf));
+    for (int i = 0; i < 8; i++) {
+        TEST_ASSERT_EQUAL_INT64(i, mmapq_indexed_appender_append(a, buf, LEN));
+    }
+    uint8_t id = mmapq_indexed_appender_id(a);
+    mmapq_indexed_appender_close(a);
+
+    MmapqIndexedReader *r = NULL;
+    int rc_r = mmapq_indexed_reader_create(DIR, qn, RING_SZ, TIMEOUT_NS, rt, &r);
+    TEST_ASSERT_EQUAL_INT(0, rc_r);
+    MmapqReadingContext rctx;
+    TEST_ASSERT_NOT_NULL(mmapq_indexed_reader_read(r, 4, &rctx));
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ENTRY_AVAILABLE, rctx.status);
+    TEST_ASSERT_EQUAL_INT32(LEN, rctx.length);
+    TEST_ASSERT_EQUAL_INT64(ENTRY4_OFFSET, rctx.msg_offset);
+
+    MmapqIndexedArchiver *arch = NULL;
+    int rc_arch = mmapq_indexed_archiver_create(DIR, qn, RING_SZ, rt, &arch);
+    TEST_ASSERT_EQUAL_INT(0, rc_arch);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_archiver_archive_up_to_index(arch, 4));
+    TEST_ASSERT_EQUAL_INT64(4, mmapq_indexed_archiver_start_index(arch));
+    {
+        int64_t lane_off = -1;
+        TEST_ASSERT_EQUAL_INT(1,
+            mmapq_indexed_archiver_start_offset(arch, id, &lane_off));
+        TEST_ASSERT_EQUAL_INT64(ENTRY4_OFFSET, lane_off);
+    }
+
+    /* An appender rejoining the same lane afterwards reports the entry-4
+     * boundary (indexed_appender.h:276-278). */
+    MmapqIndexedAppender *b = NULL;
+    int rc_b = mmapq_indexed_appender_create_with_id(DIR, qn,
+        REGION_SZ, RING_SZ, MAX_FILE, TIMEOUT_NS, 1, rt, id, 0, &b);
+    TEST_ASSERT_EQUAL_INT(0, rc_b);
+    TEST_ASSERT_NOT_NULL(b);
+    TEST_ASSERT_EQUAL_INT64(ENTRY4_OFFSET, mmapq_indexed_appender_start_offset(b));
+    /* Cross-check against the reader: exactly equal, no fixed difference. */
+    TEST_ASSERT_EQUAL_INT64(rctx.msg_offset, mmapq_indexed_appender_start_offset(b));
+
+    mmapq_indexed_appender_close(b);
+    mmapq_indexed_reader_close(r);
+    mmapq_indexed_archiver_close(arch);
+    rc = system(cmd); (void)rc;
+}
+
+/* indexed_queue.h:62-72 — min_ring_size: "Returns a power-of-two
+ * ring_size, or MMAPQ_INDEXED_QUEUE_DEFAULT_RING_SIZE for invalid
+ * region_size (<= 0)." */
+void test_min_ring_size_invalid_region_returns_default(void)
+{
+    TEST_ASSERT_EQUAL_INT(MMAPQ_INDEXED_QUEUE_DEFAULT_RING_SIZE,
+        mmapq_min_ring_size(0));
+    TEST_ASSERT_EQUAL_INT(MMAPQ_INDEXED_QUEUE_DEFAULT_RING_SIZE,
+        mmapq_min_ring_size(-1));
+    TEST_ASSERT_EQUAL_INT(MMAPQ_INDEXED_QUEUE_DEFAULT_RING_SIZE,
+        mmapq_min_ring_size(-32768));
+    /* pin the default's literal value */
+    TEST_ASSERT_EQUAL_INT(4, mmapq_min_ring_size(0));
+}
+
+void test_min_ring_size_valid_regions_power_of_two_and_span(void)
+{
+    /* Expected values derived from the layout: the ring span must hold one
+     * 32 KiB transposed header block plus REGION_RING_ACCESSOR_DEFAULT_
+     * REGIONS_AHEAD (1) regions — need = ceil(32768 / region) + 1, rounded
+     * up to a power of two (src/indexed_queue.c:36-44). 4096/16384/32769
+     * are valid helper inputs but not legal create geometry (CAND-38
+     * requires a power of two >= 32768). */
+    struct { int32_t region; int want; } cases[] = {
+        { 4096,    16 },
+        { 16384,    4 },
+        { 32768,    2 },
+        { 32769,    2 },
+        { 65536,    2 },
+        { 4194304,  2 },
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        int ring = mmapq_min_ring_size(cases[i].region);
+        TEST_ASSERT_EQUAL_INT(cases[i].want, ring);
+        /* a power of two */
+        TEST_ASSERT_EQUAL_INT(0, ring & (ring - 1));
+        /* the header's stated invariant: the ring span holds one header
+         * block plus regions_to_map_ahead regions */
+        int64_t span = (int64_t)ring * cases[i].region;
+        TEST_ASSERT_TRUE(span >= MMAPQI_HEADER_BLOCK_BYTES
+            + (int64_t)REGION_RING_ACCESSOR_DEFAULT_REGIONS_AHEAD * cases[i].region);
+    }
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -3975,6 +4226,15 @@ int main(void)
     RUN_TEST(test_c51e_rejoin_exact_infile_region_end_sync);
     RUN_TEST(test_c51e_rejoin_exact_infile_region_end_async);
     RUN_TEST(test_c51e_uncommitted_gap_end_padding);
+
+    /* COV-01: direct tests for previously-untested public functions */
+    RUN_TEST(test_poller_move_to_last_empty_queue_returns_zero);
+    RUN_TEST(test_poller_move_to_last_positions_at_last_entry);
+    RUN_TEST(test_poller_move_to_last_after_archive_still_positions_at_last);
+    RUN_TEST(test_appender_start_offset_fresh_queue_is_initial_position);
+    RUN_TEST(test_appender_start_offset_after_archive_is_entry_k_boundary);
+    RUN_TEST(test_min_ring_size_invalid_region_returns_default);
+    RUN_TEST(test_min_ring_size_valid_regions_power_of_two_and_span);
 
     return UNITY_END();
 }

@@ -6,6 +6,8 @@
 #include <unistd.h>
 #include <stdatomic.h>
 #include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
 #include <signal.h>
 #include <sched.h>
 #include <pthread.h>
@@ -319,6 +321,384 @@ void test_runtime_double_acquire(void)
     mmapq_runtime_destroy(rt3);
 }
 
+/* ── COV-01: direct tests for previously-untested public functions ───────── */
+
+/* An executable that records which thread executed it (proves runtimes
+ * share a thread without relying on pointer equality, which the header
+ * does not promise). */
+typedef struct {
+    pthread_t       ran_on;
+    atomic_int      execute_count;
+    MmapqExecutable exec;
+} ThreadProbe;
+
+static int thread_probe_execute(MmapqExecutable *self)
+{
+    ThreadProbe *tp = (ThreadProbe *)self->ctx;
+    pthread_t me = pthread_self();
+    /* ran_on is written exactly once, and BEFORE the count's release
+     * RMW, so a main-thread read that acquire-observes execute_count >= 1
+     * is happens-before-ordered with the write — placing the write after
+     * the RMW (or writing on every execution) leaves a window where the
+     * observer reads ran_on unordered with the write (TSan). */
+    if (atomic_load_explicit(&tp->execute_count, memory_order_relaxed) == 0)
+        tp->ran_on = me;
+    atomic_fetch_add_explicit(&tp->execute_count, 1, memory_order_acq_rel);
+    return 1;
+}
+
+static void thread_probe_close(MmapqExecutable *self) { (void)self; }
+
+static void thread_probe_init(ThreadProbe *tp)
+{
+    atomic_store(&tp->execute_count, 0);
+    tp->exec.execute = thread_probe_execute;
+    tp->exec.close   = thread_probe_close;
+    tp->exec.ctx     = tp;
+}
+
+/* Bounded wait until the probe has executed at least `want` times. */
+static void wait_probe_runs(ThreadProbe *tp, int want)
+{
+    int waited_ms = 0;
+    while (atomic_load(&tp->execute_count) < want && waited_ms < 2000) {
+        usleep(1000);
+        waited_ms++;
+    }
+    TEST_ASSERT_GREATER_OR_EQUAL_INT(want, atomic_load(&tp->execute_count));
+}
+
+/* Bounded wait until a counting executable's count stops increasing (the
+ * busy-spin setUp runtime re-executes a registered target every few
+ * microseconds, so 50 ms of no change means it is unregistered). */
+static void wait_counting_frozen(CountingExec *ce)
+{
+    int frozen = 0;
+    for (int i = 0; i < 40 && !frozen; i++) {
+        int c1 = atomic_load(&ce->execute_count);
+        usleep(50000);
+        int c2 = atomic_load(&ce->execute_count);
+        if (c1 == c2) frozen = 1;
+    }
+    TEST_ASSERT_EQUAL_INT(1, frozen);
+}
+
+/* First CPU in the process's current affinity mask. */
+static int first_allowed_cpu(void)
+{
+    cpu_set_t allowed;
+    if (sched_getaffinity(0, sizeof(allowed), &allowed) != 0) return -1;
+    for (int i = 0; i < CPU_SETSIZE; i++) {
+        if (CPU_ISSET(i, &allowed)) return i;
+    }
+    return -1;
+}
+
+/* A CPU index in range for cpu_set_t but not schedulable for this
+ * process: at or beyond the number of configured processors (schedulable
+ * cpu indices never reach it) and outside the process's allowed mask;
+ * CPU_SETSIZE-1 as the fallback. Deterministic on any host, unlike a
+ * literal small index that a wide cgroup might legitimately allow. */
+static int first_disallowed_cpu(void)
+{
+    long conf = sysconf(_SC_NPROCESSORS_CONF);
+    cpu_set_t allowed;
+    if (conf > 0 && conf < CPU_SETSIZE) {
+        int start = (int)conf;
+        if (sched_getaffinity(0, sizeof(allowed), &allowed) == 0) {
+            for (int i = start; i < CPU_SETSIZE; i++) {
+                if (!CPU_ISSET(i, &allowed)) return i;
+            }
+        }
+        return start;
+    }
+    return CPU_SETSIZE - 1;
+}
+
+/* runtime.h:324-343 — get_instance: "Get or create a singleton MmapqRuntime
+ * by ID. If a MmapqRuntime with runtime_id already exists, returns it...
+ * If an existing singleton was found, the caller-supplied idle strategy is
+ * destroyed (never used)." */
+void test_runtime_get_instance_returns_one_runtime(void)
+{
+    /* runtime_id 15: none of the well-known IDs, unused by other suites. */
+    MmapqIdleStrategy *idle1 = NULL, *idle2 = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_idle_strategy_sleep_create(1000000ULL, 4000000ULL, &idle1));
+    MmapqRuntime *h1 = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_runtime_get_instance(15, "cov01-gi", idle1,
+        MMAPQ_RUNTIME_DEFAULT_CLOSE_TIMEOUT_NS, &h1));
+    TEST_ASSERT_NOT_NULL(h1);
+
+    /* Second call with a heap-allocated idle: get_instance must destroy it
+     * (never used) — a leak here fails the ASan/LSan loop. */
+    TEST_ASSERT_EQUAL_INT(0, mmapq_idle_strategy_sleep_create(1000000ULL, 4000000ULL, &idle2));
+    MmapqRuntime *h2 = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_runtime_get_instance(15, "cov01-gi2", idle2,
+        MMAPQ_RUNTIME_DEFAULT_CLOSE_TIMEOUT_NS, &h2));
+    TEST_ASSERT_NOT_NULL(h2);
+
+    /* One runtime, shown by behaviour: executables registered via the two
+     * handles execute on the SAME thread. */
+    ThreadProbe e1, e2;
+    thread_probe_init(&e1);
+    thread_probe_init(&e2);
+    TEST_ASSERT_EQUAL_INT(1, mmapq_runtime_register(h1, &e1.exec));
+    TEST_ASSERT_EQUAL_INT(1, mmapq_runtime_register(h2, &e2.exec));
+    wait_probe_runs(&e1, 1);
+    wait_probe_runs(&e2, 1);
+    TEST_ASSERT_TRUE(pthread_equal(e1.ran_on, e2.ran_on));
+
+    /* Destroying both caller handles does NOT make the next call create a
+     * fresh runtime: the registry keeps its own reference (runtime.c,
+     * mmapq_runtime_get_instance), so the same singleton is returned —
+     * proven by passing NULL as the idle (a fresh create would fail with
+     * MMAPQ_EINVAL) and by e1 still executing afterwards. */
+    mmapq_runtime_destroy(h1);
+    mmapq_runtime_destroy(h2);
+    MmapqRuntime *h3 = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_runtime_get_instance(15, "cov01-gi3", NULL,
+        MMAPQ_RUNTIME_DEFAULT_CLOSE_TIMEOUT_NS, &h3));
+    TEST_ASSERT_NOT_NULL(h3);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_runtime_is_closed(h3));
+    int c1 = atomic_load(&e1.execute_count);
+    usleep(100000);
+    TEST_ASSERT_GREATER_THAN_INT(c1, atomic_load(&e1.execute_count));
+
+    mmapq_runtime_unregister_and_wait(h3, &e1.exec);
+    mmapq_runtime_unregister_and_wait(h3, &e2.exec);
+    mmapq_runtime_destroy(h3);
+}
+
+/* runtime.h:345-359 — metrics_processor: "Get the singleton metrics
+ * processor MmapqRuntime. Creates it with backoff idle strategy if it
+ * does not exist." */
+void test_runtime_metrics_processor_returns_same_singleton(void)
+{
+    MmapqRuntime *m1 = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_runtime_metrics_processor(&m1));
+    TEST_ASSERT_NOT_NULL(m1);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_runtime_is_closed(m1));
+
+    MmapqRuntime *m2 = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_runtime_metrics_processor(&m2));
+    TEST_ASSERT_NOT_NULL(m2);
+    /* a clone hands back the same pointer: the same singleton */
+    TEST_ASSERT_EQUAL_PTR(m1, m2);
+
+    /* both caller references released cleanly (the registry keeps its own) */
+    mmapq_runtime_destroy(m1);
+    mmapq_runtime_destroy(m2);
+}
+
+
+
+/* runtime.h:106-112 — sleep idle: "Sleep — calls nanosleep() with
+ * increasing duration when idle. min_sleep_ns: initial sleep duration,
+ * max_sleep_ns: maximum sleep duration (doubles each idle cycle)." */
+void test_idle_strategy_sleep_runs_executables(void)
+{
+    MmapqIdleStrategy *s = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_idle_strategy_sleep_create(1000000ULL, 2000000ULL, &s));
+    TEST_ASSERT_NOT_NULL(s);
+
+    /* a runtime using the sleep strategy runs a registered counting
+     * executable (work 0, so the idle/nanosleep path actually executes) */
+    MmapqRuntime *srt = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_runtime_create("cov01-sleep", s,
+        MMAPQ_RUNTIME_DEFAULT_CLOSE_TIMEOUT_NS, NULL, NULL, &srt));
+    TEST_ASSERT_NOT_NULL(srt);
+    CountingExec *ce = counting_exec_create(0);
+    TEST_ASSERT_EQUAL_INT(1, mmapq_runtime_register(srt, &ce->exec));
+    int waited_ms = 0;
+    while (atomic_load(&ce->execute_count) < 3 && waited_ms < 2000) {
+        usleep(1000);
+        waited_ms++;
+    }
+    TEST_ASSERT_GREATER_OR_EQUAL_INT(3, atomic_load(&ce->execute_count));
+
+    mmapq_runtime_destroy(srt);
+    free(ce);
+}
+
+void test_idle_strategy_sleep_min_above_max_refused(void)
+{
+    /* The header documents only "Returns: 0 on success, or an MMAPQ_*
+     * error code". Observed behaviour for min > max is MMAPQ_EINVAL with
+     * *out cleared to NULL (pinned as found; noted in the COV-01 report). */
+    MmapqIdleStrategy *s = (MmapqIdleStrategy *)1;   /* sentinel: must be cleared */
+    TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL,
+        mmapq_idle_strategy_sleep_create(2000000ULL, 1000000ULL, &s));
+    TEST_ASSERT_NULL(s);
+}
+
+/* runtime.h:283-298 — deregister_executable_create: "Create a one-shot
+ * MmapqExecutable that, when executed on the MmapqRuntime thread,
+ * unregisters target from the MmapqRuntime and then unregisters itself...
+ * The DeregisterExecutable frees itself after execution." */
+void test_deregister_executable_stops_target(void)
+{
+    CountingExec *ce = counting_exec_create(1);
+    TEST_ASSERT_EQUAL_INT(1, mmapq_runtime_register(rt, &ce->exec));
+    int waited_ms = 0;
+    while (atomic_load(&ce->execute_count) < 1 && waited_ms < 2000) {
+        usleep(1000);
+        waited_ms++;
+    }
+    TEST_ASSERT_GREATER_OR_EQUAL_INT(1, atomic_load(&ce->execute_count));
+
+    MmapqExecutable *dereg = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_deregister_executable_create(rt, &ce->exec, &dereg));
+    TEST_ASSERT_NOT_NULL(dereg);
+    TEST_ASSERT_EQUAL_INT(1, mmapq_runtime_register(rt, dereg));
+
+    /* the dereg ran on the runtime thread: the target's count freezes */
+    wait_counting_frozen(ce);
+    TEST_ASSERT_GREATER_OR_EQUAL_INT(1, atomic_load(&ce->execute_count));
+
+    /* the DeregisterExecutable freed itself — nothing in this test frees
+     * `dereg`; the ASan/LSan loop proves it */
+    free(ce);
+}
+
+/* runtime.h:301-309 — deregister_executable_create_with_free: "Like
+ * mmapq_deregister_executable_create() but also frees ctx_to_free after
+ * unregistration." */
+void test_deregister_executable_with_free_frees_ctx(void)
+{
+    CountingExec *ce = counting_exec_create(1);
+    TEST_ASSERT_EQUAL_INT(1, mmapq_runtime_register(rt, &ce->exec));
+    int waited_ms = 0;
+    while (atomic_load(&ce->execute_count) < 1 && waited_ms < 2000) {
+        usleep(1000);
+        waited_ms++;
+    }
+    TEST_ASSERT_GREATER_OR_EQUAL_INT(1, atomic_load(&ce->execute_count));
+
+    void *ctx_to_free = malloc(64);
+    TEST_ASSERT_NOT_NULL(ctx_to_free);
+    MmapqExecutable *dereg = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_deregister_executable_create_with_free(rt, &ce->exec, ctx_to_free, &dereg));
+    TEST_ASSERT_NOT_NULL(dereg);
+    TEST_ASSERT_EQUAL_INT(1, mmapq_runtime_register(rt, dereg));
+
+    wait_counting_frozen(ce);
+
+    /* ctx_to_free was freed by the dereg executable after unregistration —
+     * nothing in this test frees it; the ASan/LSan loop proves no leak */
+    free(ce);
+}
+
+/* mmap_platform.h:157-162 — thread_set_affinity: "pin the current thread
+ * to a specific CPU core." */
+void test_thread_set_affinity_pins_current_thread(void)
+{
+    cpu_set_t original;
+    TEST_ASSERT_EQUAL_INT(0, sched_getaffinity(0, sizeof(original), &original));
+    int cpu = first_allowed_cpu();
+    TEST_ASSERT_GREATER_OR_EQUAL_INT(0, cpu);
+
+    TEST_ASSERT_EQUAL_INT(0, mmapq_thread_set_affinity(cpu));
+
+    cpu_set_t now;
+    TEST_ASSERT_EQUAL_INT(0, sched_getaffinity(0, sizeof(now), &now));
+    TEST_ASSERT_EQUAL_INT(1, CPU_COUNT(&now));
+    TEST_ASSERT_TRUE(CPU_ISSET(cpu, &now));
+
+    /* restore the process's original mask for the remaining tests */
+    TEST_ASSERT_EQUAL_INT(0,
+        pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &original));
+}
+
+void test_thread_set_affinity_out_of_range_cpu_fails(void)
+{
+    cpu_set_t before;
+    TEST_ASSERT_EQUAL_INT(0, sched_getaffinity(0, sizeof(before), &before));
+    int bad = first_disallowed_cpu();
+    TEST_ASSERT_NOT_EQUAL_INT(0, mmapq_thread_set_affinity(bad));
+
+    /* the current affinity is unchanged */
+    cpu_set_t after;
+    TEST_ASSERT_EQUAL_INT(0, sched_getaffinity(0, sizeof(after), &after));
+    TEST_ASSERT_TRUE(CPU_EQUAL(&before, &after));
+}
+
+static void *parked_thread_main(void *arg)
+{
+    atomic_int *release = (atomic_int *)arg;
+    while (!atomic_load(release)) usleep(1000);
+    return NULL;
+}
+
+/* mmap_platform.h:137-142 — thread_set_affinity_of: "pin a specific
+ * thread to a specific CPU core. Linux: uses pthread_setaffinity_np." */
+void test_thread_set_affinity_of_pins_second_thread(void)
+{
+    int cpu = first_allowed_cpu();
+    TEST_ASSERT_GREATER_OR_EQUAL_INT(0, cpu);
+
+    atomic_int release;
+    atomic_store(&release, 0);
+    pthread_t t;
+    TEST_ASSERT_EQUAL_INT(0, pthread_create(&t, NULL, parked_thread_main, &release));
+
+    TEST_ASSERT_EQUAL_INT(0, mmapq_thread_set_affinity_of(t, cpu));
+    cpu_set_t mask;
+    TEST_ASSERT_EQUAL_INT(0, pthread_getaffinity_np(t, sizeof(mask), &mask));
+    TEST_ASSERT_EQUAL_INT(1, CPU_COUNT(&mask));
+    TEST_ASSERT_TRUE(CPU_ISSET(cpu, &mask));
+
+    /* out-of-range CPU: nonzero return, affinity untouched */
+    cpu_set_t before;
+    TEST_ASSERT_EQUAL_INT(0, pthread_getaffinity_np(t, sizeof(before), &before));
+    int bad = first_disallowed_cpu();
+    TEST_ASSERT_NOT_EQUAL_INT(0, mmapq_thread_set_affinity_of(t, bad));
+    cpu_set_t after;
+    TEST_ASSERT_EQUAL_INT(0, pthread_getaffinity_np(t, sizeof(after), &after));
+    TEST_ASSERT_TRUE(CPU_EQUAL(&before, &after));
+
+    atomic_store(&release, 1);
+    TEST_ASSERT_EQUAL_INT(0, pthread_join(t, NULL));
+}
+
+/* mmap_platform.h:126-134 — thread_set_name: "Set the name of a pthread
+ * (for debugger visibility). Linux: pthread_setname_np(thread, name)." */
+void test_thread_set_name_roundtrips(void)
+{
+    atomic_int release;
+    atomic_store(&release, 0);
+    pthread_t t;
+    TEST_ASSERT_EQUAL_INT(0, pthread_create(&t, NULL, parked_thread_main, &release));
+
+    mmapq_thread_set_name(t, "cov01-thr");   /* 8 chars: Linux caps names at 15 */
+    char name[16] = {0};
+    TEST_ASSERT_EQUAL_INT(0, pthread_getname_np(t, name, sizeof(name)));
+    TEST_ASSERT_EQUAL_STRING("cov01-thr", name);
+
+    atomic_store(&release, 1);
+    TEST_ASSERT_EQUAL_INT(0, pthread_join(t, NULL));
+
+    /* NOTE (reported, not changed — COV-01 is tests-only): the function
+     * returns void, so pthread_setname_np's ERANGE for names longer than
+     * 15 bytes is silently dropped. */
+}
+
+/* mmap_platform.h:49-63 — mmapq_version: "return the library version
+ * string... Never NULL." It must equal MMAPQ_VERSION_STR and begin with
+ * MAJOR.MINOR.PATCH assembled from the MMAPQ_VERSION_* macros, so a
+ * release bump that forgets one of them fails here. */
+void test_mmapq_version_string_matches_macros(void)
+{
+    const char *v = mmapq_version();
+    TEST_ASSERT_NOT_NULL(v);
+    TEST_ASSERT_EQUAL_STRING(MMAPQ_VERSION_STR, v);
+
+    char built[32];
+    snprintf(built, sizeof(built), "%d.%d.%d",
+        MMAPQ_VERSION_MAJOR, MMAPQ_VERSION_MINOR, MMAPQ_VERSION_PATCH);
+    TEST_ASSERT_EQUAL_INT(0, strncmp(v, built, strlen(built)));
+}
+
 /* ── C-02: close with a wedged executable ───────────────────────────────────── */
 
 #ifndef __SANITIZE_THREAD__
@@ -599,6 +979,19 @@ int main(void)
     RUN_TEST(test_deregister_executable);
     RUN_TEST(test_unregister_and_wait_safe_free);
     RUN_TEST(test_runtime_double_acquire);
+
+    /* COV-01: direct tests for previously-untested public functions */
+    RUN_TEST(test_runtime_get_instance_returns_one_runtime);
+    RUN_TEST(test_runtime_metrics_processor_returns_same_singleton);
+    RUN_TEST(test_idle_strategy_sleep_runs_executables);
+    RUN_TEST(test_idle_strategy_sleep_min_above_max_refused);
+    RUN_TEST(test_deregister_executable_stops_target);
+    RUN_TEST(test_deregister_executable_with_free_frees_ctx);
+    RUN_TEST(test_thread_set_affinity_pins_current_thread);
+    RUN_TEST(test_thread_set_affinity_out_of_range_cpu_fails);
+    RUN_TEST(test_thread_set_affinity_of_pins_second_thread);
+    RUN_TEST(test_thread_set_name_roundtrips);
+    RUN_TEST(test_mmapq_version_string_matches_macros);
 #ifndef __SANITIZE_THREAD__
     RUN_TEST(test_runtime_close_with_wedged_executable_returns);
     RUN_TEST(test_runtime_destroy_after_detach_no_uaf);

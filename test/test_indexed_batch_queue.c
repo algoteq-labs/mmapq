@@ -3035,9 +3035,500 @@ void test_doc03_complete_publishes_and_returns_index(void)
     mmapq_indexed_batch_appender_close(a);
 }
 
+/* ── COV-01: direct tests for previously-untested public functions ───────── */
+
+/* indexed_batch_poller.h:158-165 — move_to_start: "Move the cursor to the
+ * first unarchived batch index. This is the lowest index still available
+ * for reading. Returns: 1 always." */
+void test_batch_poller_move_to_start_delivers_batch_zero(void)
+{
+    MmapqIndexedBatchPoller *p = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_poller(q, &p));
+    TEST_ASSERT_NOT_NULL(p);
+
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
+    TEST_ASSERT_NOT_NULL(a);
+    for (int i = 0; i < 3; i++) {
+        char msg[32];
+        snprintf(msg, sizeof(msg), "cov-s%d", i);
+        TEST_ASSERT_EQUAL_INT64(i,
+            mmapq_indexed_batch_appender_append_and_commit(a, msg, (int32_t)strlen(msg)));
+    }
+
+    TEST_ASSERT_EQUAL_INT(1, mmapq_indexed_batch_poller_move_to_start(p));
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_batch_poller_current_batch_index(p));
+
+    BatchPollCapture cap = { .directive = MMAPQ_NEXT_ADVANCE };
+    BatchPollResult pr = mmapq_indexed_batch_poller_poll(p, capture_handler, &cap);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_ADVANCED, pr);
+    TEST_ASSERT_EQUAL_INT64(0, cap.captured_batch_index);
+    TEST_ASSERT_EQUAL_INT(1, cap.call_count);
+
+    mmapq_indexed_batch_appender_close(a);
+    mmapq_indexed_batch_poller_close(p);
+}
+
+void test_batch_poller_move_to_start_after_archive_delivers_batch_k(void)
+{
+    const char *qn = "mmap_test_ibq_cov01_mts";
+    char cmd[512];
+    snprintf(cmd, sizeof(cmd), "rm -rf %s/%s", DIR, qn);
+    int rc = system(cmd); (void)rc;
+
+    MmapqIndexedBatchQueue *qa = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create(DIR, qn,
+        REGION_SZ, RING_SZ, 1, MAX_FILE, 0, TIMEOUT,
+        1 /* archivable */, rt, rt, &qa));
+
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(qa, &a));
+    TEST_ASSERT_NOT_NULL(a);
+    for (int i = 0; i < 6; i++) {
+        char msg[32];
+        snprintf(msg, sizeof(msg), "cov-t%d", i);
+        TEST_ASSERT_EQUAL_INT64(i,
+            mmapq_indexed_batch_appender_append_and_commit(a, msg, (int32_t)strlen(msg)));
+    }
+
+    /* Poll two batches so the cursor (2) is mid-queue, then archive past
+     * it: move_to_start must re-read the (moved) start_index. */
+    MmapqIndexedBatchPoller *p = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_poller(qa, &p));
+    TEST_ASSERT_NOT_NULL(p);
+    BatchPollCapture cap = { .directive = MMAPQ_NEXT_ADVANCE };
+    TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_ADVANCED,
+        mmapq_indexed_batch_poller_poll(p, capture_handler, &cap));
+    TEST_ASSERT_EQUAL_INT64(0, cap.captured_batch_index);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_ADVANCED,
+        mmapq_indexed_batch_poller_poll(p, capture_handler, &cap));
+    TEST_ASSERT_EQUAL_INT64(1, cap.captured_batch_index);
+
+    mmapq_indexed_batch_appender_close(a);
+
+    MmapqIndexedBatchArchiver *arch = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_batch_archiver_create(DIR, qn, RING_SZ, rt, &arch));
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_archiver_archive_up_to_index(arch, 4));
+    TEST_ASSERT_EQUAL_INT64(4, mmapq_indexed_batch_archiver_start_index(arch));
+
+    /* the cursor (2) is below start_index (4): ARCHIVED, handler not called */
+    TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_ARCHIVED,
+        mmapq_indexed_batch_poller_poll(p, capture_handler, &cap));
+    TEST_ASSERT_EQUAL_INT(2, cap.call_count);
+
+    /* move_to_start repositions at the first unarchived batch (4) */
+    TEST_ASSERT_EQUAL_INT(1, mmapq_indexed_batch_poller_move_to_start(p));
+    TEST_ASSERT_EQUAL_INT64(4, mmapq_indexed_batch_poller_current_batch_index(p));
+    TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_ADVANCED,
+        mmapq_indexed_batch_poller_poll(p, capture_handler, &cap));
+    TEST_ASSERT_EQUAL_INT64(4, cap.captured_batch_index);
+    TEST_ASSERT_EQUAL_INT(3, cap.call_count);
+
+    mmapq_indexed_batch_poller_close(p);
+    mmapq_indexed_batch_archiver_close(arch);
+    mmapq_indexed_batch_queue_close(qa);
+    rc = system(cmd); (void)rc;
+}
+
+/* indexed_batch_poller.h:139-146 — move_to_end: "Move the cursor to one
+ * past the last committed batch. Subsequent poll() calls will return
+ * MMAPQ_POLL_END_OF_STREAM until a new batch is appended. Returns: 1
+ * always." */
+void test_batch_poller_move_to_end_waits_at_frontier(void)
+{
+    MmapqIndexedBatchPoller *p = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_poller(q, &p));
+    TEST_ASSERT_NOT_NULL(p);
+    BatchPollCapture cap = { .directive = MMAPQ_NEXT_ADVANCE };
+
+    /* Empty queue (no appender yet — the files do not exist): 1, then EOS. */
+    TEST_ASSERT_EQUAL_INT(1, mmapq_indexed_batch_poller_move_to_end(p));
+    TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_END_OF_STREAM,
+        mmapq_indexed_batch_poller_poll(p, capture_handler, &cap));
+    TEST_ASSERT_EQUAL_INT(0, cap.call_count);
+
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
+    TEST_ASSERT_NOT_NULL(a);
+
+    /* the empty-queue case continues: batch 0 is delivered where the
+     * earlier move_to_end left the cursor */
+    TEST_ASSERT_EQUAL_INT64(0,
+        mmapq_indexed_batch_appender_append_and_commit(a, "cov-e0", 6));
+    TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_ADVANCED,
+        mmapq_indexed_batch_poller_poll(p, capture_handler, &cap));
+    TEST_ASSERT_EQUAL_INT64(0, cap.captured_batch_index);
+    TEST_ASSERT_EQUAL_INT(1, cap.call_count);
+
+    TEST_ASSERT_EQUAL_INT64(1,
+        mmapq_indexed_batch_appender_append_and_commit(a, "cov-e1", 6));
+    TEST_ASSERT_EQUAL_INT64(2,
+        mmapq_indexed_batch_appender_append_and_commit(a, "cov-e2", 6));
+
+    /* N = 3 batches: one past the last, then EOS (handler not called) */
+    TEST_ASSERT_EQUAL_INT(1, mmapq_indexed_batch_poller_move_to_end(p));
+    TEST_ASSERT_EQUAL_INT64(3, mmapq_indexed_batch_poller_current_batch_index(p));
+    TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_END_OF_STREAM,
+        mmapq_indexed_batch_poller_poll(p, capture_handler, &cap));
+    TEST_ASSERT_EQUAL_INT(1, cap.call_count);
+
+    /* append one more batch: the poll delivers batch N (3) */
+    TEST_ASSERT_EQUAL_INT64(3,
+        mmapq_indexed_batch_appender_append_and_commit(a, "cov-e3", 6));
+    TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_ADVANCED,
+        mmapq_indexed_batch_poller_poll(p, capture_handler, &cap));
+    TEST_ASSERT_EQUAL_INT64(3, cap.captured_batch_index);
+    TEST_ASSERT_EQUAL_INT(2, cap.call_count);
+
+    mmapq_indexed_batch_appender_close(a);
+    mmapq_indexed_batch_poller_close(p);
+}
+
+/* indexed_batch_appender.h:373-388 — append_remaining_from: "Append all
+ * remaining messages from a MmapqBatchPayloadIterator into this batch...
+ * If any individual message exceeds the destination queue's region_size,
+ * the function returns MMAPQ_EINVAL immediately. On failure the batch is
+ * partially populated and must be discarded, not committed." */
+void test_mutable_batch_append_remaining_from_copies_remaining_messages(void)
+{
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
+    TEST_ASSERT_NOT_NULL(a);
+
+    MmapqMutableBatch *src = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &src));
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(src, "cov-rA", 6));
+    TEST_ASSERT_EQUAL_INT(1, mmapq_mutable_batch_append(src, "cov-rB", 6));
+    TEST_ASSERT_EQUAL_INT(2, mmapq_mutable_batch_append(src, "cov-rC", 6));
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_mutable_batch_complete(src));
+
+    MmapqIndexedBatchReader *r = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_reader(q, &r));
+    TEST_ASSERT_NOT_NULL(r);
+    MmapqBatchReadingContext ctx = {0};
+    TEST_ASSERT_NOT_NULL(mmapq_indexed_batch_reader_read(r, 0, &ctx));
+    TEST_ASSERT_EQUAL_INT(MMAPQ_BATCH_ENTRY_AVAILABLE, ctx.status);
+    /* the first batch sits at the reserved-prefix boundary (64) */
+    TEST_ASSERT_EQUAL_INT64(64, ctx.batch_offset);
+    /* Advance once — the iterator is on message 0 ("advanced past the
+     * first"); remaining-from copies messages 1 and 2. */
+    TEST_ASSERT_EQUAL_INT(1, mmapq_batch_iterator_advance(ctx.iterator));
+
+    MmapqMutableBatch *dst = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &dst));
+    TEST_ASSERT_EQUAL_INT(2, mmapq_mutable_batch_append_remaining_from(dst, ctx.iterator));
+    TEST_ASSERT_EQUAL_INT(2, mmapq_mutable_batch_message_count(dst));
+    TEST_ASSERT_EQUAL_INT64(1, mmapq_mutable_batch_complete(dst));
+
+    /* the committed destination batch holds messages 2 and 3 byte-for-byte */
+    MmapqBatchReadingContext dctx = {0};
+    TEST_ASSERT_NOT_NULL(mmapq_indexed_batch_reader_read(r, 1, &dctx));
+    TEST_ASSERT_EQUAL_INT(MMAPQ_BATCH_ENTRY_AVAILABLE, dctx.status);
+    TEST_ASSERT_EQUAL_INT(2, dctx.message_count);
+    TEST_ASSERT_EQUAL_INT(1, mmapq_batch_iterator_advance(dctx.iterator));
+    TEST_ASSERT_EQUAL_INT(6, mmapq_batch_iterator_current_length_ffi(dctx.iterator));
+    TEST_ASSERT_EQUAL_MEMORY("cov-rB", mmapq_batch_iterator_current_data_ffi(dctx.iterator), 6);
+    TEST_ASSERT_EQUAL_INT(1, mmapq_batch_iterator_advance(dctx.iterator));
+    TEST_ASSERT_EQUAL_INT(6, mmapq_batch_iterator_current_length_ffi(dctx.iterator));
+    TEST_ASSERT_EQUAL_MEMORY("cov-rC", mmapq_batch_iterator_current_data_ffi(dctx.iterator), 6);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_batch_iterator_advance(dctx.iterator));
+
+    mmapq_indexed_batch_reader_close(r);
+    mmapq_indexed_batch_appender_close(a);
+}
+
+void test_mutable_batch_append_remaining_from_exhausted_iterator_returns_zero(void)
+{
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
+    TEST_ASSERT_NOT_NULL(a);
+
+    MmapqMutableBatch *src = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &src));
+    mmapq_mutable_batch_append(src, "cov-x0", 6);
+    mmapq_mutable_batch_append(src, "cov-x1", 6);
+    mmapq_mutable_batch_append(src, "cov-x2", 6);
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_mutable_batch_complete(src));
+
+    MmapqIndexedBatchReader *r = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_reader(q, &r));
+    MmapqBatchReadingContext ctx = {0};
+    TEST_ASSERT_NOT_NULL(mmapq_indexed_batch_reader_read(r, 0, &ctx));
+    TEST_ASSERT_EQUAL_INT(MMAPQ_BATCH_ENTRY_AVAILABLE, ctx.status);
+    for (int i = 0; i < 3; i++) {
+        TEST_ASSERT_EQUAL_INT(1, mmapq_batch_iterator_advance(ctx.iterator));
+    }
+    TEST_ASSERT_EQUAL_INT(0, mmapq_batch_iterator_advance(ctx.iterator));
+    /* natural exhaustion, not a failure */
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_reader_last_error(r));
+
+    MmapqMutableBatch *dst = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &dst));
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append_remaining_from(dst, ctx.iterator));
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_message_count(dst));
+    /* empty batch: discard is the producer-invariant terminal */
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_discard(dst));
+
+    /* the lane is still usable afterwards */
+    TEST_ASSERT_EQUAL_INT64(1,
+        mmapq_indexed_batch_appender_append_and_commit(a, "cov-ex", 5));
+
+    mmapq_indexed_batch_reader_close(r);
+    mmapq_indexed_batch_appender_close(a);
+}
+
+void test_mutable_batch_append_remaining_from_oversized_message_rejected(void)
+{
+    /* Source: this suite's queue (64 KiB regions) with one 40000-byte
+     * message (40000 <= 65536 - 4). Destination: a queue with 32 KiB
+     * regions — the message exceeds the destination region
+     * (40000 > 32768 - 4). */
+    static char big[40000];
+    memset(big, 'B', sizeof(big));
+
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
+    TEST_ASSERT_NOT_NULL(a);
+    TEST_ASSERT_EQUAL_INT64(0,
+        mmapq_indexed_batch_appender_append_and_commit(a, big, (int32_t)sizeof(big)));
+
+    MmapqIndexedBatchReader *r = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_reader(q, &r));
+    MmapqBatchReadingContext ctx = {0};
+    TEST_ASSERT_NOT_NULL(mmapq_indexed_batch_reader_read(r, 0, &ctx));
+    TEST_ASSERT_EQUAL_INT(MMAPQ_BATCH_ENTRY_AVAILABLE, ctx.status);
+
+    const char *qn = "mmap_test_ibq_cov01_small";
+    char cmd[512];
+    snprintf(cmd, sizeof(cmd), "rm -rf %s/%s", DIR, qn);
+    int rc = system(cmd); (void)rc;
+    MmapqIndexedBatchQueue *q2 = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create(DIR, qn,
+        32768, RING_SZ, 1, (int64_t)32768 * 64, 0, TIMEOUT, 0, rt, rt, &q2));
+    MmapqIndexedBatchAppender *a2 = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q2, &a2));
+    TEST_ASSERT_NOT_NULL(a2);
+
+    MmapqMutableBatch *dst = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a2, &dst));
+    TEST_ASSERT_EQUAL_INT(MMAPQ_EINVAL,
+        mmapq_mutable_batch_append_remaining_from(dst, ctx.iterator));
+    /* nothing was appended — the batch is discarded, not committed */
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_message_count(dst));
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_discard(dst));
+
+    MmapqIndexedBatchReader *r2 = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_reader(q2, &r2));
+    TEST_ASSERT_EQUAL_INT64(-1, mmapq_indexed_batch_reader_last_index(r2));
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_reader_last_error(r2));
+    /* the destination queue still works: a fresh batch commits at index 0 */
+    TEST_ASSERT_EQUAL_INT64(0,
+        mmapq_indexed_batch_appender_append_and_commit(a2, "cov-ok", 6));
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_batch_reader_last_index(r2));
+
+    mmapq_indexed_batch_reader_close(r);
+    mmapq_indexed_batch_reader_close(r2);
+    mmapq_indexed_batch_appender_close(a);
+    mmapq_indexed_batch_appender_close(a2);
+    mmapq_indexed_batch_queue_close(q2);
+    rc = system(cmd); (void)rc;
+}
+
+/* indexed_batch_appender.h:434-439 — message_count: "Return the number of
+ * messages currently in the in-progress batch." */
+void test_mutable_batch_message_count_tracks_appends(void)
+{
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
+    TEST_ASSERT_NOT_NULL(a);
+
+    MmapqMutableBatch *b = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_message_count(b));
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(b, "cov-c0", 6));
+    TEST_ASSERT_EQUAL_INT(1, mmapq_mutable_batch_message_count(b));
+    TEST_ASSERT_EQUAL_INT(1, mmapq_mutable_batch_append(b, "cov-c1", 6));
+    TEST_ASSERT_EQUAL_INT(2, mmapq_mutable_batch_message_count(b));
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_mutable_batch_complete(b));
+
+    /* +n after append_remaining_from returns n (source: batch 0, a fresh
+     * iterator positioned before message 0). */
+    MmapqIndexedBatchReader *r = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_reader(q, &r));
+    MmapqBatchReadingContext ctx = {0};
+    TEST_ASSERT_NOT_NULL(mmapq_indexed_batch_reader_read(r, 0, &ctx));
+    TEST_ASSERT_EQUAL_INT(MMAPQ_BATCH_ENTRY_AVAILABLE, ctx.status);
+
+    MmapqMutableBatch *b2 = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b2));
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_message_count(b2));
+    TEST_ASSERT_EQUAL_INT(2, mmapq_mutable_batch_append_remaining_from(b2, ctx.iterator));
+    TEST_ASSERT_EQUAL_INT(2, mmapq_mutable_batch_message_count(b2));
+    TEST_ASSERT_EQUAL_INT64(1, mmapq_mutable_batch_complete(b2));
+
+    mmapq_indexed_batch_reader_close(r);
+    mmapq_indexed_batch_appender_close(a);
+}
+
+/* batch_payload_iterator.h:179-184 — exhaust: "Skip all remaining messages
+ * in the batch, leaving the iterator exhausted", and :166-176
+ * next_payload_position_ffi: "the byte offset immediately after the last
+ * message in the batch... where the next batch begins in the payload
+ * stream." */
+void test_batch_iterator_exhaust_positions_at_batch_end(void)
+{
+    /* One committed batch of three fixed 10-byte messages: count@64,
+     * messages at 68/82/96, so the next batch begins at
+     * 64 + 4 + 3 * (4 + 10) = 110. */
+    const int64_t BATCH_END =
+        64 + MMAPQ_BATCH_MSG_COUNT_SIZE + 3 * (PAYLOAD_LENGTH_SIZE + 10);
+
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
+    TEST_ASSERT_NOT_NULL(a);
+    MmapqMutableBatch *src = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &src));
+    char msg[11];
+    for (int i = 0; i < 3; i++) {
+        memset(msg, 'a' + i, 10);
+        msg[10] = '\0';
+        TEST_ASSERT_EQUAL_INT(i, mmapq_mutable_batch_append(src, msg, 10));
+    }
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_mutable_batch_complete(src));
+
+    MmapqIndexedBatchReader *r = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_reader(q, &r));
+    MmapqBatchReadingContext ctx = {0};
+    TEST_ASSERT_NOT_NULL(mmapq_indexed_batch_reader_read(r, 0, &ctx));
+    TEST_ASSERT_EQUAL_INT(MMAPQ_BATCH_ENTRY_AVAILABLE, ctx.status);
+
+    /* advance onto message 0, then exhaust the rest */
+    TEST_ASSERT_EQUAL_INT(1, mmapq_batch_iterator_advance(ctx.iterator));
+    mmapq_batch_iterator_exhaust(ctx.iterator);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_batch_iterator_advance(ctx.iterator));
+    TEST_ASSERT_EQUAL_INT64(BATCH_END,
+        mmapq_batch_iterator_next_payload_position_ffi(ctx.iterator));
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_reader_last_error(r));
+
+    /* a fresh iterator walked to the end message-by-message reaches the
+     * same next-payload position */
+    TEST_ASSERT_NOT_NULL(mmapq_indexed_batch_reader_read(r, 0, &ctx));
+    TEST_ASSERT_EQUAL_INT(MMAPQ_BATCH_ENTRY_AVAILABLE, ctx.status);
+    for (int i = 0; i < 3; i++) {
+        TEST_ASSERT_EQUAL_INT(1, mmapq_batch_iterator_advance(ctx.iterator));
+    }
+    TEST_ASSERT_EQUAL_INT(0, mmapq_batch_iterator_advance(ctx.iterator));
+    TEST_ASSERT_EQUAL_INT64(BATCH_END,
+        mmapq_batch_iterator_next_payload_position_ffi(ctx.iterator));
+
+    mmapq_indexed_batch_reader_close(r);
+    mmapq_indexed_batch_appender_close(a);
+}
+
+/* batch_payload_iterator.h:166-176 — next_payload_position_ffi: "Return
+ * the byte offset immediately after the last message in the batch...
+ * This is the position where the next batch begins in the payload
+ * stream." */
+void test_batch_iterator_next_payload_position_marks_next_batch_start(void)
+{
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(q, &a));
+    TEST_ASSERT_NOT_NULL(a);
+    /* two consecutive one-message batches from one appender */
+    TEST_ASSERT_EQUAL_INT64(0,
+        mmapq_indexed_batch_appender_append_and_commit(a, "cov-n0", 6));
+    TEST_ASSERT_EQUAL_INT64(1,
+        mmapq_indexed_batch_appender_append_and_commit(a, "cov-n1", 6));
+
+    MmapqIndexedBatchReader *r = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_reader(q, &r));
+    MmapqBatchReadingContext ctx = {0};
+
+    /* batch 0 = count@64 + one (4+6)-byte message: the next batch begins
+     * at 64 + 4 + 4 + 6 = 78 */
+    TEST_ASSERT_NOT_NULL(mmapq_indexed_batch_reader_read(r, 0, &ctx));
+    TEST_ASSERT_EQUAL_INT(MMAPQ_BATCH_ENTRY_AVAILABLE, ctx.status);
+    TEST_ASSERT_EQUAL_INT64(64, ctx.batch_offset);
+    TEST_ASSERT_EQUAL_INT(1, mmapq_batch_iterator_advance(ctx.iterator));
+    TEST_ASSERT_EQUAL_INT(0, mmapq_batch_iterator_advance(ctx.iterator));
+    TEST_ASSERT_EQUAL_INT64(64 + MMAPQ_BATCH_MSG_COUNT_SIZE + PAYLOAD_LENGTH_SIZE + 6,
+        mmapq_batch_iterator_next_payload_position_ffi(ctx.iterator));
+
+    /* the payload offset where batch 1 starts (from its read/init) */
+    MmapqBatchReadingContext ctx1 = {0};
+    TEST_ASSERT_NOT_NULL(mmapq_indexed_batch_reader_read(r, 1, &ctx1));
+    TEST_ASSERT_EQUAL_INT(MMAPQ_BATCH_ENTRY_AVAILABLE, ctx1.status);
+    TEST_ASSERT_EQUAL_INT64(64 + MMAPQ_BATCH_MSG_COUNT_SIZE + PAYLOAD_LENGTH_SIZE + 6,
+        ctx1.batch_offset);
+    /* cross-check: probing at the predicted position finds batch 1 there */
+    TEST_ASSERT_EQUAL_INT64(ctx1.batch_offset,
+        mmapq_batch_iterator_probe_batch(ctx1.iterator, ctx1.batch_offset));
+
+    mmapq_indexed_batch_reader_close(r);
+    mmapq_indexed_batch_appender_close(a);
+}
+
+/* batch_payload_iterator.h:86-102 — probe_batch: "Check whether a valid
+ * batch exists at offset, skipping short-padding markers... Returns: the
+ * resolved batch offset, or MMAPQ_BATCH_ITERATOR_INVALID_POSITION if none
+ * found." (The documented false-positive heuristic is deliberately not
+ * tested, per the header.) */
+void test_batch_iterator_probe_batch_resolves_offsets(void)
+{
+    /* Dedicated 32 KiB-region queue so the region boundary is exact:
+     * batch 0 = ONE 32695-byte message — count@64, message@68..32766 —
+     * leaving a single byte (32767) as a short pad at the region tail
+     * (the CAND-51e tail rule: <= 4 tail bytes are padding, never a
+     * batch count), so batch 1 starts at the region-1 boundary 32768.
+     * batch 1 = one 6-byte message: count@32768, message@32772..32781. */
+    const char *qn = "mmap_test_ibq_cov01_probe";
+    char cmd[512];
+    snprintf(cmd, sizeof(cmd), "rm -rf %s/%s", DIR, qn);
+    int rc = system(cmd); (void)rc;
+
+    MmapqIndexedBatchQueue *qp = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create(DIR, qn,
+        32768, RING_SZ, 1, (int64_t)32768 * 8, 0, TIMEOUT, 0, rt, rt, &qp));
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(qp, &a));
+    TEST_ASSERT_NOT_NULL(a);
+
+    static char big[32695];
+    memset(big, 'P', sizeof(big));
+    MmapqMutableBatch *b = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_appender_start_batch_checked(a, &b));
+    TEST_ASSERT_EQUAL_INT(0, mmapq_mutable_batch_append(b, big, (int32_t)sizeof(big)));
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_mutable_batch_complete(b));
+    TEST_ASSERT_EQUAL_INT64(1,
+        mmapq_indexed_batch_appender_append_and_commit(a, "cov-pb", 6));
+
+    MmapqIndexedBatchReader *r = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_reader(qp, &r));
+    MmapqBatchReadingContext ctx = {0};
+    TEST_ASSERT_NOT_NULL(mmapq_indexed_batch_reader_read(r, 1, &ctx));
+    TEST_ASSERT_EQUAL_INT(MMAPQ_BATCH_ENTRY_AVAILABLE, ctx.status);
+    /* pin the layout: batch 1 starts exactly at the region-1 boundary */
+    TEST_ASSERT_EQUAL_INT64(32768, ctx.batch_offset);
+
+    /* at a committed batch's offset: resolves to that offset */
+    TEST_ASSERT_EQUAL_INT64(64, mmapq_batch_iterator_probe_batch(ctx.iterator, 64));
+    /* at the 1-byte short-pad offset: resolves to the next region's batch */
+    TEST_ASSERT_EQUAL_INT64(32768, mmapq_batch_iterator_probe_batch(ctx.iterator, 32767));
+    /* at an unwritten (zero) offset past the last batch: no batch found */
+    TEST_ASSERT_EQUAL_INT64(MMAPQ_BATCH_ITERATOR_INVALID_POSITION,
+        mmapq_batch_iterator_probe_batch(ctx.iterator, 32768 + 4 + 4 + 6));
+
+    mmapq_indexed_batch_reader_close(r);
+    mmapq_indexed_batch_appender_close(a);
+    mmapq_indexed_batch_queue_close(qp);
+    rc = system(cmd); (void)rc;
+}
+
 int main(void)
 {
     UNITY_BEGIN();
+
     RUN_TEST(test_checked_batch_step);
     RUN_TEST(test_checked_batch_step_skips_short_and_long_padding);
     RUN_TEST(test_batch_iterator_rejects_invalid_lengths);
@@ -3128,5 +3619,17 @@ int main(void)
     RUN_TEST(test_batch_commit_batch_publish_failure_retains_member);
     RUN_TEST(test_append_and_commit_mid_append_failure_discards);
     RUN_TEST(test_batch_poll_mid_batch_corrupt_length_is_corrupt);
+
+    /* COV-01: direct tests for previously-untested public functions */
+    RUN_TEST(test_batch_poller_move_to_start_delivers_batch_zero);
+    RUN_TEST(test_batch_poller_move_to_start_after_archive_delivers_batch_k);
+    RUN_TEST(test_batch_poller_move_to_end_waits_at_frontier);
+    RUN_TEST(test_mutable_batch_append_remaining_from_copies_remaining_messages);
+    RUN_TEST(test_mutable_batch_append_remaining_from_exhausted_iterator_returns_zero);
+    RUN_TEST(test_mutable_batch_append_remaining_from_oversized_message_rejected);
+    RUN_TEST(test_mutable_batch_message_count_tracks_appends);
+    RUN_TEST(test_batch_iterator_exhaust_positions_at_batch_end);
+    RUN_TEST(test_batch_iterator_next_payload_position_marks_next_batch_start);
+    RUN_TEST(test_batch_iterator_probe_batch_resolves_offsets);
     return UNITY_END();
 }
