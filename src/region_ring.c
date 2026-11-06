@@ -140,6 +140,14 @@ static void async_mapping_close(MmapqExecutable *self)
 
 /* ── Async ring close ────────────────────────────────────────────────────── */
 
+/* Floor for the deregistration wait in async_ring_close. The wait's bound
+ * is a liveness bound on the runtime thread, and the floor only has to
+ * cover a HEALTHY thread reaching the deregistration executable — at most
+ * one executable step (a region map), milliseconds — so 1 s is generous by
+ * orders of magnitude while keeping a wedged runtime's close at about 1 s
+ * per ring (CAND-24's bound stays meaningful). */
+#define MMAPQI_RING_CLOSE_WAIT_FLOOR_NS UINT64_C(1000000000)   /* 1 s */
+
 typedef struct {
     FileMapper       *file_mapper;
     MmapqRuntime          *runtime;
@@ -238,6 +246,24 @@ static void async_ring_close(RegionRing *self)
     wait_impl->self_exec.ctx     = wait_impl;
 
     if (mmapq_runtime_register(impl->runtime, &wait_impl->self_exec)) {
+        /*
+         * The deadline below is a liveness bound on the runtime thread,
+         * not a mapping-latency budget. impl->timeout_ns is the queue's
+         * MAPPING timeout — a per-map latency budget that is legitimately
+         * 0 (mapping is opportunistic: timeout 0 means "fail this poll
+         * fast", not "the runtime thread is wedged"). Bounding the
+         * DEREGISTRATION wait by it made close give up after ~1000 spins
+         * on a perfectly healthy runtime thread that was merely still
+         * completing an in-flight map, then leak the mapper state and
+         * skip Steps 2-3 (mappings and fds left open). Floor the wait at
+         * MMAPQI_RING_CLOSE_WAIT_FLOOR_NS: close must stay bounded (never
+         * hang on a wedged thread) but must not give up before a healthy
+         * thread has reached the deregistration executable.
+         */
+        uint64_t wait_budget_ns = impl->timeout_ns;
+        if (wait_budget_ns < MMAPQI_RING_CLOSE_WAIT_FLOOR_NS) {
+            wait_budget_ns = MMAPQI_RING_CLOSE_WAIT_FLOOR_NS;
+        }
         uint64_t spins = 0;
         uint64_t start = mmapq_monotonic_nanos();
         for (;;) {
@@ -253,7 +279,7 @@ static void async_ring_close(RegionRing *self)
             if (++spins >= 1000) {
                 spins = 0;
                 sched_yield();
-                if (mmapq_monotonic_nanos() - start >= impl->timeout_ns) {
+                if (mmapq_monotonic_nanos() - start >= wait_budget_ns) {
                     /*
                      * CAND-24: the runtime thread is wedged or slow (the
                      * opposite ordering of C-02) — stop waiting. The

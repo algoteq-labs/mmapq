@@ -245,6 +245,62 @@ void test_poll_header_timeout_is_error_not_eos(void)
     mmapq_indexed_poller_close(p);
 }
 
+/* ASAN-01 (B): closing an async poller whose queue has mapping
+ * timeout_ns = 0 must take the NORMAL close path. Pre-fix,
+ * async_ring_close bounded its deregistration wait by that mapping
+ * timeout — 0 — so close gave up after ~1000 spins while the runtime
+ * thread was still completing the region map the poll had requested,
+ * and took the leak path: the stderr line asserted absent below, and
+ * under --asan the regions, the mapper state and the wait executable
+ * leak while Steps 2-3 (close regions, close file mapper) are skipped,
+ * leaving mappings and fds open. The wait keeps a bound — close must
+ * not hang on a wedged runtime thread — but the mapping timeout is a
+ * per-map latency budget, not a liveness bound for the runtime thread.
+ * The close happens immediately after the first timed-out poll, while
+ * the region map is still in flight. */
+void test_poller_close_with_zero_mapping_timeout_takes_normal_path(void)
+{
+    MmapqIndexedAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(q, &a));
+    TEST_ASSERT_NOT_NULL(a);
+    TEST_ASSERT_EQUAL_INT64(0, mmapq_indexed_appender_append(a, "hello", 5));
+    mmapq_indexed_appender_close(a);
+
+    MmapqIndexedPoller *p = NULL;
+    TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_poller_create(DIR, QUEUE, RING_SZ, 0, rt, &p));
+    TEST_ASSERT_NOT_NULL(p);
+
+    PollCapture cap = { .directive = MMAPQ_NEXT_ADVANCE };
+    TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_ERROR,
+        mmapq_indexed_poller_poll(p, capture_handler, &cap));
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ETIMEDOUT, mmapq_indexed_poller_last_error(p));
+    TEST_ASSERT_EQUAL_INT(0, cap.call_count);
+
+    /* Capture stderr across the close (idiom: test_c59_commit_floor_pins)
+     * — the deregister-wait timeout line is the leak path's signature. */
+    char cap_path[512];
+    snprintf(cap_path, sizeof cap_path, "%s/%s/asan01b_stderr.cap", DIR, QUEUE);
+    fflush(stderr);
+    int saved = dup(STDERR_FILENO);
+    TEST_ASSERT_TRUE(saved >= 0);
+    int capfd = open(cap_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    TEST_ASSERT_TRUE(capfd >= 0);
+    TEST_ASSERT_TRUE(dup2(capfd, STDERR_FILENO) >= 0);
+    mmapq_indexed_poller_close(p);
+    fflush(stderr);
+    TEST_ASSERT_TRUE(dup2(saved, STDERR_FILENO) >= 0);
+    close(saved);
+    close(capfd);
+
+    FILE *f = fopen(cap_path, "rb");
+    TEST_ASSERT_NOT_NULL(f);
+    char buf[4096];
+    size_t got = fread(buf, 1, sizeof buf - 1, f);
+    buf[got] = 0;
+    fclose(f);
+    TEST_ASSERT_NULL(strstr(buf, "deregister wait timed out"));
+}
+
 void test_append_multiple_and_poll_all(void)
 {
     MmapqIndexedAppender *a = NULL;
@@ -4125,6 +4181,7 @@ int main(void)
     RUN_TEST(test_poll_end_of_stream_when_empty);
     RUN_TEST(test_poller_before_queue_retries);
     RUN_TEST(test_poll_header_timeout_is_error_not_eos);
+    RUN_TEST(test_poller_close_with_zero_mapping_timeout_takes_normal_path);
     RUN_TEST(test_append_multiple_and_poll_all);
 
     RUN_TEST(test_reader_read_at_index);
