@@ -71,16 +71,17 @@ rationale — the setter is called by both archivers).
 
 ### file_mapper_rolled.c — 12 (all I)
 
-Lines 91, 163-164, 168, 190-192, 200, 206, 236, 265, 267.
+Lines 92, 164-165, 169, 191-193, 201, 207, 237, 266, 268.
+(E12: every site moved down one by the `internal/test_reach.h` include, sites unchanged.)
 Internal: null checks on self/entry, invariant checks on
 oldest_idx/ref_count/length coherence. No caller-controlled values.
 
 The two CAND-59 additions are both in `mmapqi_file_mapper_rolled_create_file`
 (the explicit frontier-create entry point):
-- **:265 `self != NULL`** — the dispatch null check every `FileMapper` entry
+- **:266 `self != NULL`** — the dispatch null check every `FileMapper` entry
   point carries; `self` is the accessor's retained header-mapper handle,
   never caller input.
-- **:267 `impl->mode == MAP_MODE_READ_WRITE`** — explicit frontier creation
+- **:268 `impl->mode == MAP_MODE_READ_WRITE`** — explicit frontier creation
   is a write-path operation, wired only to the header's read-write mapper.
   An RO or walk mapper reaching it is an internal wiring error (creating a
   file through a read-only mapper would break the read-only contract), not

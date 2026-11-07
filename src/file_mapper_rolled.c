@@ -1,5 +1,6 @@
 #include "internal/file_mapper.h"
 #include "internal/mmap_assert.h"
+#include "internal/test_reach.h"   /* prototype of mmapqi_rolled_prefix_and_mode */
 #include "mmap_platform.h"
 
 #include <stdlib.h>
