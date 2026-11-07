@@ -708,6 +708,28 @@ int mmapq_indexed_batch_appender_create_with_id(
 
 /* ── Batch Operations ────────────────────────────────────────────────────── */
 
+/* Cold half of start_batch: recover an ORPHANED batch to staged.
+ * noinline (RS-BATCH-LAT-01): inlined, this path's address-taken local cost
+ * every start_batch a stack frame, callee-saved spills and a stack-protector
+ * canary although it runs only after a discard's pre-store failure. */
+__attribute__((noinline)) static int
+start_batch_recover_orphan(MmapqIndexedBatchAppender *appender)
+{
+    int64_t new_pos;
+    int rc = recover_open_batch(appender, appender->current_batch.batch_offset,
+                                &new_pos);
+    /* CAND-58: MMAPQI_WALK_RESTART is unreachable here — the orphaned
+     * batch sits at this incarnation's live frontier, which the archive
+     * line never passes (the line advances only over committed
+     * records) — and the restart is a create-time concept; map the
+     * unreachable case loudly rather than leaking the internal code. */
+    if (rc == MMAPQI_WALK_RESTART) return MMAPQ_ECORRUPT;
+    if (rc != 0) return rc;   /* starts nothing */
+    appender->current_payload_position = new_pos;
+    appender->batch_state = BATCH_STATE_NONE;
+    return 0;
+}
+
 int mmapq_indexed_batch_appender_start_batch_checked(
     MmapqIndexedBatchAppender *appender, MmapqMutableBatch **out)
 {
@@ -722,18 +744,8 @@ int mmapq_indexed_batch_appender_start_batch_checked(
      * recovered to staged first. */
     if (appender->batch_state == BATCH_STATE_OPEN) return MMAPQ_EINVAL;
     if (appender->batch_state == BATCH_STATE_ORPHANED) {
-        int64_t new_pos;
-        int rc = recover_open_batch(appender, appender->current_batch.batch_offset,
-                                    &new_pos);
-        /* CAND-58: MMAPQI_WALK_RESTART is unreachable here — the orphaned
-         * batch sits at this incarnation's live frontier, which the archive
-         * line never passes (the line advances only over committed
-         * records) — and the restart is a create-time concept; map the
-         * unreachable case loudly rather than leaking the internal code. */
-        if (rc == MMAPQI_WALK_RESTART) return MMAPQ_ECORRUPT;
+        int rc = start_batch_recover_orphan(appender);
         if (rc != 0) return rc;   /* starts nothing */
-        appender->current_payload_position = new_pos;
-        appender->batch_state = BATCH_STATE_NONE;
     }
 
     int result = ensure_space_for_batch_header(appender);

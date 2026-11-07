@@ -165,7 +165,11 @@ corrupt:
     return 0;
 }
 
-int mmapq_batch_iterator_advance(MmapqBatchPayloadIterator *it)
+/* One step body shared by the boolean advance() and the checked next().
+ * next() must not call the exported advance(): the bindings build this file
+ * position-independent, where an exported callee is interposable and is not
+ * inlined, so next() paid a second call layer per message (RS-BATCH-LAT-01). */
+static inline int iterator_step(MmapqBatchPayloadIterator *it)
 {
     if (it->exhausted) return 0;
     if (it->current_msg_index + 1 < it->message_count) {
@@ -178,13 +182,26 @@ int mmapq_batch_iterator_advance(MmapqBatchPayloadIterator *it)
     return 0;
 }
 
+int mmapq_batch_iterator_advance(MmapqBatchPayloadIterator *it)
+{
+    return iterator_step(it);
+}
+
 int mmapq_batch_iterator_next(MmapqBatchPayloadIterator *iterator,
                              const void **data, int32_t *length)
 {
-    if (data != NULL) *data = NULL;
-    if (length != NULL) *length = 0;
-    if (iterator == NULL || data == NULL || length == NULL) return MMAPQ_EINVAL;
-    if (!mmapq_batch_iterator_advance(iterator)) return iterator->last_error;
+    /* Outputs are cleared on every non-success return (header contract);
+     * the success path overwrites both, so it skips the clearing stores. */
+    if (iterator == NULL || data == NULL || length == NULL) {
+        if (data != NULL) *data = NULL;
+        if (length != NULL) *length = 0;
+        return MMAPQ_EINVAL;
+    }
+    if (!iterator_step(iterator)) {
+        *data = NULL;
+        *length = 0;
+        return iterator->last_error;
+    }
     *data = batch_iterator_current_data(iterator);
     *length = batch_iterator_current_length(iterator);
     return 1;
