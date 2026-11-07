@@ -115,7 +115,10 @@ echo "=== Headers with zero binding usage ==="
 for hdr in "$INCLUDE_DIR"/*.h; do
     hdr_name=$(basename "$hdr")
     # Extract all identifier-like words from the header
-    fns_in_hdr=$(grep -oPh '\b[a-z_][a-zA-Z0-9_]{2,}\(' "$hdr" 2>/dev/null | sed 's/($//' | sort -u)
+    # || true: a header with no declarations (the umbrella mmapq.h) matches
+    # nothing, and grep's 1 would abort the script under pipefail (as in the
+    # --presence-matrix loop above).
+    fns_in_hdr=$(grep -oPh '\b[a-z_][a-zA-Z0-9_]{2,}\(' "$hdr" 2>/dev/null | sed 's/($//' | sort -u || true)
     # Check if any of those functions appear in either binding
     hits=0
     while IFS= read -r fn; do
