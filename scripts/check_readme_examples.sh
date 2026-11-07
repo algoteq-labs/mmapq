@@ -117,8 +117,10 @@ check_python_block() {
     script_dir=$(cd "$(dirname "$0")" && pwd)
 
     # Static import-name check: parse `from mmapq import ...` against __all__
-    # from the source tree (no build required).
-    local init_py="${script_dir}/../../mmapq-py/src/mmapq/__init__.py"
+    # from the source tree (no build required). MMAPQ_README_PY_INIT overrides
+    # the __init__.py path; the self-test points it at a missing file instead
+    # of moving the real one aside.
+    local init_py="${MMAPQ_README_PY_INIT:-${script_dir}/../../mmapq-py/src/mmapq/__init__.py}"
     local helper="${script_dir}/../../mmapq-py/scripts/check_py_readme_imports.py"
     if [ -f "$init_py" ] && [ -f "$helper" ]; then
         if python3 "$helper" "$src" "$init_py" 2>&1; then
@@ -250,25 +252,18 @@ self_test() {
         echo "  self-test Python arm: SKIP (no __init__.py found)"
     fi
 
-    # Python arm: missing __init__.py should also fail
-    if [ -f "$init_py" ]; then
-        local backup_init
-        backup_init=$(mktemp "$tmpdir/init_backup_XXXX")
-        cp "$init_py" "$backup_init"
-        mv "$init_py" "$tmpdir/init_hidden"
-        echo '```python' > "$tmpdir/py_readme.md"
-        echo 'from mmapq import IndexedQueue' >> "$tmpdir/py_readme.md"
-        echo '```' >> "$tmpdir/py_readme.md"
-        if env -u MMAPQ_SKIP_PYTHON_GATE bash "$0" "$tmpdir/py_readme.md" 2>&1 | grep -q 'FAIL:.*__init__.py not found'; then
-            echo "  self-test Python missing-init arm: OK"
-        else
-            echo "  self-test Python missing-init arm: FAIL (false positive)"
-            fail=1
-        fi
-        mv "$tmpdir/init_hidden" "$init_py"
-        rm -f "$backup_init"
+    # Python arm: missing __init__.py should also fail. The path is pointed
+    # at a file that does not exist; the real __init__.py is never touched,
+    # so an interrupted self-test cannot leave the package broken.
+    echo '```python' > "$tmpdir/py_readme.md"
+    echo 'from mmapq import IndexedQueue' >> "$tmpdir/py_readme.md"
+    echo '```' >> "$tmpdir/py_readme.md"
+    if MMAPQ_README_PY_INIT="$tmpdir/absent/__init__.py" env -u MMAPQ_SKIP_PYTHON_GATE \
+            bash "$0" "$tmpdir/py_readme.md" 2>&1 | grep -q 'FAIL:.*__init__.py not found'; then
+        echo "  self-test Python missing-init arm: OK"
     else
-        echo "  self-test Python missing-init arm: SKIP (no __init__.py to hide)"
+        echo "  self-test Python missing-init arm: FAIL (false positive)"
+        fail=1
     fi
 
     # Rust arm: deliberately broken block must fail — either as a compile
