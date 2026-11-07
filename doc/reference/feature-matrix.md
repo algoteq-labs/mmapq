@@ -91,6 +91,7 @@ Regression: `../mmapq-py/tests/test_reader_borrowing.py`
 |---|---|---|---|
 | Read at arbitrary index; read_first / read_last; appender_id per entry | ✓ | ✓ `../mmapq-rs/src/reader.rs` (`read`); `../mmapq-rs/tests/borrowing.rs` (`borrowing_contracts`) | ✓ |
 | Entry status (present / not yet / archived) | ✓ | ✓ | ✓ |
+| Read reports archived distinctly from not yet written | ✓ `MMAPQ_ENTRY_ARCHIVED` / `MMAPQ_BATCH_ENTRY_ARCHIVED` in the reading context | ✓ `ReadResult::{Available, EndOfStream, Archived}` in `../mmapq-rs/src/reader.rs`; tests `test_read_archived_below_moved_start_index`, `test_batch_read_archived_below_moved_start_index` | ✓ `ArchivedError` (`.index`; `None` = not yet written) in `../mmapq-py/src/mmapq/reader.py`; tests `test_reader_archived_raises_archived_error`, `test_batch_reader_archived_raises_archived_error` |
 | last_index / start_index | ✓ | ✓ | ✓ |
 | Batch reader | ✓ | ✓ | ✓ |
 
