@@ -37,6 +37,17 @@ Notes:
 - The three-way iterators return `1` message / `0` exhausted / negative
   `MMAPQ_*` code. A negative is truthy in C — compare explicitly, never
   `while (mmapq_uncommitted_iterator_next(...))`.
+- A missing permission on the queue's files, or a queue path with a
+  component that is not a directory, is currently reported as
+  `MMAPQ_ETIMEDOUT` (`POLL_ERROR` on a poll) on every attempt, although
+  retrying does not help — see the access each participant needs in
+  [chapter 9 of the guide](../guide/09-trade-offs-and-limits.md).
+- A payload file missing under a committed message — deleted by hand or
+  damaged, outside the persistence contract — is reported by the
+  single-message reader and poller as `MMAPQ_ETIMEDOUT` (`ENTRY_ERROR` /
+  `POLL_ERROR`) and by the batch reader and poller as `MMAPQ_ECORRUPT`
+  (`BATCH_ENTRY_ERROR` / `POLL_CORRUPT`). Neither recovers on retry:
+  recreate the queue.
 
 This table is pinned by `scripts/check_error_codes.sh`: every `MMAPQ_*`
 code defined in `include/mmap_platform.h` must appear here (and in the C

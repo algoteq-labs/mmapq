@@ -98,7 +98,8 @@ shifted by the no_create field and the rw_init/rw_map rework.)
 
 ### fixed_size_region.c — 3 (all I)
 
-Lines 28-29, 52. Internal dispatch null checks.
+Lines 30-31, 54. Internal dispatch null checks. (READONLY-OPEN-01: lines
+moved by two added includes, sites unchanged.)
 
 ### header_reader.c — 1 (all I)
 

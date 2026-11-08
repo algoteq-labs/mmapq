@@ -8,6 +8,16 @@ page uses the same text.
 - **Linux only, x86-64/ARM64.** Requires naturally aligned lock-free
   atomics over `MAP_SHARED` mmap — asserted at build. Verified on x86-64;
   ARM64: run `test/multiprocess/` on an aarch64 box before relying on it.
+- **File permissions.** Appenders and archivers need read-write access to
+  the queue directory and its files: they create files, and the queue
+  directory is created when the first appender is created. Readers and
+  pollers need read permission on the files, read and search (`r-x`) on
+  the queue directory and search (`x`) on its parents; they create and
+  modify nothing, so a consumer can run as a user with read-only access.
+  Queue files are created 0664 and directories 0775, filtered by the
+  umask: writers running as different users need a shared group and
+  umask 002. The archive lock file is created 0644, so run all archivers
+  as one user.
 - **Durability across process restarts, not power loss.** No commit path
   calls `fsync`/`fdatasync`; writes reach the page cache and the OS
   persists them eventually. Long-term data belongs in the

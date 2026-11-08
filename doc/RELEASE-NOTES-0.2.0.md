@@ -172,6 +172,18 @@ the 0.2.0 cycle are not listed.
   types. (Basis: recorded code-read at the v0.1.0 tag; crash reproduced
   on the pre-fix tree. Tests: `test_c51e_rejoin_exact_infile_region_end_sync`
   / `_async` (`test/test_indexed_queue.c`).)
+- **Readers and pollers needed write access to the meta file and could
+  re-create it (SIGBUS).** Their meta open was read-write with create, so
+  a user with read permission only got `MMAPQ_ETIMEDOUT` on every read and
+  poll, and a meta removed during the open was re-created empty and the
+  reader crashed on the mapping. Readers and pollers (single and batch)
+  now open the queue read-only: they need read permission only and never
+  create or modify a file. (Basis: code-read at the v0.1.0 tag; both
+  failures reproduced on the pre-fix tree. Tests:
+  `test_ro_single_reader_poller_readonly_queue` /
+  `test_ro_batch_reader_poller_readonly_queue`
+  (`test/test_readonly_open.c`), `test_open_ro_meta_vanishes_before_open`
+  (`test/test_queue_meta.c`).)
 - **Mapped-read fast path could serve a stale mapping or truncate
   capacity** (crash / spurious corruption). A failed wrap now invalidates
   the accessor cache, and mapped capacity is separate from the premap
