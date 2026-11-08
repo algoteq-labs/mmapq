@@ -193,12 +193,18 @@ int mmapqi_queue_meta_open_rw(
 /**
  * mmapqi_queue_meta_open_ro — open the meta file for reading only.
  *
+ * Opens O_RDONLY and maps PROT_READ: never creates or writes the file, so
+ * the caller needs only read permission. Waits out a creator's LOCK_EX
+ * initialisation (flock(LOCK_SH) at full size) and never maps a partially
+ * written meta.
+ *
  * directory:       base directory for the queue
  * queue_name:      queue subdirectory name
  * expected_type:   QUEUE_TYPE_NORMAL or QUEUE_TYPE_BATCH (FIXED8 is refused)
  * out:             out-parameter for the created QueueMeta (NULL on failure)
  *
  * Returns 0 on success, MMAPQ_ENOENT if file does not exist,
+ * MMAPQ_ENOTREADY if it exists but is not yet fully written,
  * MMAPQ_ETIMEDOUT on I/O error, MMAPQ_ESCHEMA on type/schema mismatch,
  * MMAPQ_EINVAL for NULL args. Sets *out to NULL on failure.
  */

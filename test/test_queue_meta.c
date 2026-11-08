@@ -9,6 +9,9 @@
 #include <pthread.h>
 #include <sys/file.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
+#include <errno.h>
+#include <time.h>
 
 static const char *DIR   = "/tmp";
 static const char *QUEUE = "mmap_test_qmeta_q";
@@ -264,10 +267,10 @@ void test_open_valid_geometry_control(void)
     TEST_ASSERT_NOT_NULL(meta);
 }
 
-/* 10. The RO open passes a non-NULL initialiser (mmapqi_file_init_none)
- *     precisely so that fixed_size_region_create takes the creator's
- *     flock(LOCK_EX): a reader must wait for initialisation to finish and
- *     can never map a partially written meta. Pin the blocking behavior;
+/* 10. The RO open takes flock(LOCK_SH) on a full-size meta, which waits
+ *     out the creator's flock(LOCK_EX): a reader must wait for
+ *     initialisation to finish and can never map a partially written
+ *     meta. Pin the blocking behavior;
  *     timing-based, but safe-direction only (the thread flags started
  *     before opening, so a slow machine cannot fake a pass). */
 typedef struct {
@@ -310,6 +313,96 @@ void test_open_ro_waits_for_creator_lock(void)
     TEST_ASSERT_EQUAL_INT(0, pthread_join(t, NULL));
     TEST_ASSERT_EQUAL_INT(0, res.rc);
     close(fd);
+}
+
+/* READONLY-OPEN-01: the read-only open never creates the meta. */
+void test_open_ro_missing_creates_nothing(void)
+{
+    char path[256];
+    snprintf(path, sizeof(path), "%s/%s/meta", DIR, QUEUE);
+    QueueMeta *ro = NULL;
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ENOENT,
+        mmapqi_queue_meta_open_ro(DIR, QUEUE, QUEUE_TYPE_NORMAL, &ro));
+    TEST_ASSERT_NULL(ro);
+    struct stat st;
+    TEST_ASSERT_EQUAL_INT(-1, stat(path, &st));
+    TEST_ASSERT_EQUAL_INT(ENOENT, errno);
+}
+
+/* READONLY-OPEN-01: a short meta is answered ENOTREADY without taking the
+ * shared lock. A creator ftruncates to the full length only under its
+ * LOCK_EX, so a short file needs no wait — and polling readers must not
+ * queue LOCK_SH against a creator waiting for LOCK_EX (flock is not fair).
+ * Here a holder keeps LOCK_EX on a 10-byte meta: open_ro must return
+ * within the bound, not block. Bounded so a regression fails, not hangs. */
+void test_open_ro_short_meta_takes_no_lock(void)
+{
+    char path[256];
+    snprintf(path, sizeof(path), "%s/%s/meta", DIR, QUEUE);
+    int fd = open(path, O_RDWR | O_CREAT, 0664);
+    TEST_ASSERT_TRUE(fd >= 0);
+    TEST_ASSERT_EQUAL_INT(10, (int)write(fd, "0123456789", 10));
+    TEST_ASSERT_EQUAL_INT(0, flock(fd, LOCK_EX));
+
+    RoOpenResult res = {0, 0, -1};
+    pthread_t t;
+    TEST_ASSERT_EQUAL_INT(0, pthread_create(&t, NULL, ro_open_thread, &res));
+    for (int i = 0; i < 200 && !atomic_load(&res.done); i++) {
+        struct timespec ts = {0, 10 * 1000 * 1000};
+        nanosleep(&ts, NULL);
+    }
+    int returned_while_locked = atomic_load(&res.done);
+    TEST_ASSERT_EQUAL_INT(0, flock(fd, LOCK_UN));   /* release before join */
+    TEST_ASSERT_EQUAL_INT(0, pthread_join(t, NULL));
+    close(fd);
+
+    TEST_ASSERT_TRUE_MESSAGE(returned_while_locked,
+        "open_ro blocked on LOCK_EX for a short meta");
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ENOTREADY, res.rc);
+    struct stat st;
+    TEST_ASSERT_EQUAL_INT(0, stat(path, &st));
+    TEST_ASSERT_EQUAL_INT64(10, (int64_t)st.st_size);
+}
+
+/* READONLY-OPEN-01: the meta vanishes just before the read-only open's
+ * open(). The open must report ENOENT and create nothing. Before the fix
+ * the O_CREAT open re-created a 0-byte meta and the 64-byte mapping
+ * raised SIGBUS, so the open runs in a forked child. */
+#ifdef MMAPQ_TEST_HOOKS
+static void unlink_path_hook(const char *p) { unlink(p); }
+#endif
+
+void test_open_ro_meta_vanishes_before_open(void)
+{
+#ifdef MMAPQ_TEST_HOOKS
+    create_valid_meta();
+    char path[256];
+    snprintf(path, sizeof(path), "%s/%s/meta", DIR, QUEUE);
+
+    fflush(NULL);
+    pid_t pid = fork();
+    TEST_ASSERT_NOT_EQUAL(-1, pid);
+    if (pid == 0) {
+        mmapq_test_hook_set_meta_ro_pre_open(unlink_path_hook);
+        QueueMeta *ro = NULL;
+        int rc = mmapqi_queue_meta_open_ro(DIR, QUEUE, QUEUE_TYPE_NORMAL, &ro);
+        _exit((rc == MMAPQ_ENOENT && ro == NULL) ? 0 : 1);
+    }
+    int st = 0;
+    TEST_ASSERT_EQUAL_INT(pid, waitpid(pid, &st, 0));
+    if (WIFSIGNALED(st)) {
+        char m[96];
+        snprintf(m, sizeof m, "child killed by signal %d", WTERMSIG(st));
+        TEST_FAIL_MESSAGE(m);
+    }
+    TEST_ASSERT_TRUE(WIFEXITED(st));
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, WEXITSTATUS(st), "open_ro did not return ENOENT");
+    struct stat sb;
+    TEST_ASSERT_EQUAL_INT_MESSAGE(-1, stat(path, &sb), "open_ro created a meta file");
+    TEST_ASSERT_EQUAL_INT(ENOENT, errno);
+#else
+    TEST_IGNORE_MESSAGE("needs MMAPQ_TEST_HOOKS (normal-loop build only)");
+#endif
 }
 
 /* ── D3: meta_validate start_index bounds ────────────────────────────────── */
@@ -568,6 +661,9 @@ int main(void)
     RUN_TEST(test_open_rw_caller_max_file_size_not_multiple_eINVAL);
     RUN_TEST(test_open_valid_geometry_control);
     RUN_TEST(test_open_ro_waits_for_creator_lock);
+    RUN_TEST(test_open_ro_missing_creates_nothing);
+    RUN_TEST(test_open_ro_short_meta_takes_no_lock);
+    RUN_TEST(test_open_ro_meta_vanishes_before_open);
     RUN_TEST(test_open_ro_corrupt_start_index_above_max);
     RUN_TEST(test_open_ro_corrupt_start_index_negative);
     RUN_TEST(test_open_rw_corrupt_start_index_above_max);

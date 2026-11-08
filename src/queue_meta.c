@@ -3,7 +3,6 @@
 #include "internal/mmap_assert.h"
 #include "internal/platform_internal.h"
 #include "mmap_platform.h"
-#include "internal/file_initialiser.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -232,27 +231,15 @@ int mmapqi_queue_meta_open_ro(
     char path[4096];
     meta_file_path(directory, queue_name, path, sizeof(path));
 
-    /* Check file exists before trying to map it */
-    struct stat st;
-    if (stat(path, &st) != 0) {
-        return (errno == ENOENT) ? MMAPQ_ENOENT : MMAPQ_ETIMEDOUT;
-    }
-    if (st.st_size < QUEUE_META_ENCODED_LENGTH) {
-        return MMAPQ_ENOTREADY;  /* file exists but not yet fully written — transient, retry */
-    }
-
+    /* Read-only open: O_RDONLY, PROT_READ, never creates the file, so
+     * readers and pollers need only read permission. It is also the
+     * existence check (ENOENT) and the size check (ENOTREADY: exists but
+     * not yet fully written — transient, retry). At full size it takes
+     * flock(LOCK_SH), which waits out a creator's LOCK_EX initialisation,
+     * so this never maps a partially written meta. */
     RegionAccessor *region = NULL;
-    /* The non-NULL initialiser is load-bearing: it makes
-     * fixed_size_region_create take the creator's flock(LOCK_EX), so this
-     * open waits for any in-progress initialisation and never maps a
-     * partially written meta. Do not "simplify" it to NULL. */
-    int fsrerr = mmapqi_fixed_size_region_create(
-        path,
-        QUEUE_META_ENCODED_LENGTH,
-        mmapqi_file_init_none,
-        NULL,
-        &region);
-
+    int fsrerr = mmapqi_fixed_size_region_open_ro(
+        path, QUEUE_META_ENCODED_LENGTH, &region);
     if (fsrerr != 0) return fsrerr;
 
     Buffer buf = {0};

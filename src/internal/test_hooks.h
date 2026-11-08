@@ -81,6 +81,10 @@
  *   the entry's header/payload files in the exact archive-race window
  *   between the pre-read check and the read, reproducing the archiver's
  *   reclaim effect deterministically.
+ * meta_ro_pre_open (READONLY-OPEN-01): invoked in the read-only
+ *   fixed-size-region open (the meta's read-only open) immediately before
+ *   its open(), with the file path — lets a pin unlink the meta in that
+ *   window.
  */
 #ifdef MMAPQ_TEST_HOOKS
 void mmapq_test_hook_set_commit_pre(void (*fn)(void));
@@ -103,6 +107,7 @@ void mmapq_test_hook_header_wrap_inject(int wrap_result);
 void mmapq_test_hook_set_page_size(long page_size);
 void mmapq_test_hook_set_appender_walk_result(int site, int32_t rc);
 int  mmapq_test_hook_appender_walk_fired(void);
+void mmapq_test_hook_set_meta_ro_pre_open(void (*fn)(const char *path));
 
 /* CAND-58 walk pins (audit/CAND-58-spec.md v2.2 §6). The four setters
  * install process-global callbacks (NULL disarms); the counter getter backs

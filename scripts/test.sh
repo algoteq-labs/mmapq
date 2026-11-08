@@ -22,6 +22,7 @@ TESTS=(
     test_header_codec
     test_appender_id_pool
     test_queue_meta
+    test_readonly_open
     test_payload_walk
     test_indexed_queue
     test_shared_queue

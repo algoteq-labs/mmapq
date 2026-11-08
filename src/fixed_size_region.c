@@ -3,7 +3,9 @@
 #include "internal/mmap_assert.h"
 #include "mmap_platform.h"
 #include "internal/platform_internal.h"
+#include "internal/test_hooks.h"
 
+#include <errno.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/file.h>
@@ -63,6 +65,53 @@ static void fixed_close(RegionAccessor *self)
     }
 }
 
+/* ── Accessor construction ───────────────────────────────────────────────── */
+
+/* Wrap an open fd and its mapping in a FixedSizeRegion accessor. Takes
+ * ownership of fd and the mapping: on failure both are released. */
+static int fixed_region_build(const char *file_path, int32_t size, int fd,
+                              void *addr, size_t map_len, RegionAccessor **out)
+{
+    FixedSizeImpl *impl = calloc(1, sizeof(FixedSizeImpl));
+    if (impl == NULL) {
+        munmap(addr, map_len);
+        close(fd);
+        return MMAPQ_ENOMEM;
+    }
+
+    impl->file_path = strdup(file_path);  /* keep for toString/debugging */
+    if (impl->file_path == NULL) {
+        free(impl); munmap(addr, map_len); close(fd); return MMAPQ_ENOMEM;
+    }
+    impl->size      = size;
+    impl->address   = (uintptr_t)addr;
+    impl->fd        = fd;
+
+    RegionAccessor *acc = calloc(1, sizeof(RegionAccessor));
+    if (acc == NULL) {
+        free(impl->file_path);
+        free(impl);
+        munmap(addr, map_len);
+        close(fd);
+        return MMAPQ_ENOMEM;
+    }
+
+    acc->wrap           = fixed_wrap;
+    acc->wrap_no_premap = fixed_wrap_no_premap;
+    acc->close          = fixed_close;
+    acc->region_size           = size;
+    acc->impl           = impl;
+
+    /* Initialize fast-path cache */
+    acc->active_address = (uint8_t *)addr;
+    acc->active_base    = 0;
+    acc->fast_path_end  = size;
+    acc->mapped_capacity = size;
+
+    *out = acc;
+    return 0;
+}
+
 /* ── Factory ─────────────────────────────────────────────────────────────── */
 
 int mmapqi_fixed_size_region_create(
@@ -117,45 +166,65 @@ int mmapqi_fixed_size_region_create(
     }
 
     huge_pages_hint(addr, map_len);
+    return fixed_region_build(file_path, size, fd, addr, map_len, out);
+}
 
-    FixedSizeImpl *impl = calloc(1, sizeof(FixedSizeImpl));
-    if (impl == NULL) {
-        munmap(addr, map_len);
-        close(fd);
-        return MMAPQ_ENOMEM;
+/* ── Read-only open ──────────────────────────────────────────────────────── */
+
+#ifdef MMAPQ_TEST_HOOKS
+static void (*meta_ro_pre_open_hook)(const char *path);
+void mmapq_test_hook_set_meta_ro_pre_open(void (*fn)(const char *path)) { meta_ro_pre_open_hook = fn; }
+#endif
+
+int mmapqi_fixed_size_region_open_ro(
+    const char      *file_path,
+    int32_t          size,
+    RegionAccessor **out)
+{
+    if (out == NULL) return MMAPQ_EINVAL;
+    *out = NULL;
+    if (file_path == NULL) return MMAPQ_EINVAL;
+    if (size <= 0)         return MMAPQ_EINVAL;
+
+#ifdef MMAPQ_TEST_HOOKS
+    if (meta_ro_pre_open_hook != NULL) meta_ro_pre_open_hook(file_path);
+#endif
+
+    /* O_RDONLY, never O_CREAT: a read-only participant needs only read
+     * permission, and a file that vanished is reported, not re-created. */
+    int fd = open(file_path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return (errno == ENOENT) ? MMAPQ_ENOENT : MMAPQ_ETIMEDOUT;
+
+    /* Short file: answer without the lock. A creator ftruncates to the
+     * full size only while holding its LOCK_EX, so a short file is not
+     * being initialised yet (or is outside damage) and needs no wait —
+     * and polling readers must not queue LOCK_SH against a creator
+     * waiting for LOCK_EX (flock gives no fairness). */
+    struct stat st;
+    if (fstat(fd, &st) != 0) { close(fd); return MMAPQ_ETIMEDOUT; }
+    if (st.st_size < size)   { close(fd); return MMAPQ_ENOTREADY; }
+
+    /* Full size means initialised, or being initialised under the
+     * creator's LOCK_EX: LOCK_SH waits that out, so this open never maps a
+     * partially written file. A failed lock is an error, not a reason to
+     * map unlocked. */
+    while (flock(fd, LOCK_SH) != 0) {
+        if (errno != EINTR) { close(fd); return MMAPQ_ETIMEDOUT; }
     }
+    if (fstat(fd, &st) != 0) { flock(fd, LOCK_UN); close(fd); return MMAPQ_ETIMEDOUT; }
+    if (st.st_size < size)   { flock(fd, LOCK_UN); close(fd); return MMAPQ_ENOTREADY; }
 
-    impl->file_path = strdup(file_path);  /* keep for toString/debugging */
-    if (impl->file_path == NULL) {
-        free(impl); munmap(addr, map_len); close(fd); return MMAPQ_ENOMEM;
-    }
-    impl->size      = size;
-    impl->address   = (uintptr_t)addr;
-    impl->fd        = fd;
+    long ps = page_size();
+    size_t map_len = (size_t)(((size + ps - 1) / ps) * ps);
+    void *addr = mmap(NULL, map_len, PROT_READ, MAP_SHARED | MAP_POPULATE, fd, 0);
+    /* Initialised content is fixed after the creator's unlock, apart from
+     * fields readers load atomically, so the lock is not held for the
+     * mapping's lifetime. */
+    flock(fd, LOCK_UN);
+    if (addr == MAP_FAILED) { close(fd); return MMAPQ_ETIMEDOUT; }
 
-    RegionAccessor *acc = calloc(1, sizeof(RegionAccessor));
-    if (acc == NULL) {
-        free(impl->file_path);
-        free(impl);
-        munmap(addr, map_len);
-        close(fd);
-        return MMAPQ_ENOMEM;
-    }
-
-    acc->wrap           = fixed_wrap;
-    acc->wrap_no_premap = fixed_wrap_no_premap;
-    acc->close          = fixed_close;
-    acc->region_size           = size;
-    acc->impl           = impl;
-
-    /* Initialize fast-path cache */
-    acc->active_address = (uint8_t *)addr;
-    acc->active_base    = 0;
-    acc->fast_path_end  = size;
-    acc->mapped_capacity = size;
-
-    *out = acc;
-    return 0;
+    huge_pages_hint(addr, map_len);
+    return fixed_region_build(file_path, size, fd, addr, map_len, out);
 }
 
 /* ── Destroy ─────────────────────────────────────────────────────────────── */
