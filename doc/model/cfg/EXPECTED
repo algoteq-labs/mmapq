@@ -63,6 +63,7 @@ cand54l_intent_na2_hand PASS 3
 cand54l_intent_core PASS 1
 cand54l_intent_hand_core PASS 1
 cand54l_clear_before_min_core PASS 1
+cand54l_intent_core_refill PASS 1
 # not reproducible via check.sh (exhaustive only); command in ../README.md
 cand54l_intent_na2_core PASS 3
 cand54l_intent_na2_core_witness FAIL 2

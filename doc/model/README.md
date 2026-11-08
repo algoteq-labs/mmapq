@@ -161,6 +161,7 @@ is inert when its switches are FALSE: `current_no_undo` re-run on
 | `cand54l_intent_hand` (L) | PASS | pass | 439,733,123 |
 | `cand54l_clear_before_min` (L) | PASS | pass | 459,672,512 |
 | `cand54l_intent_core` / `cand54l_intent_hand_core` / `cand54l_clear_before_min_core` (L, tier-1 guards) | PASS | pass | 13,908,615 / 15,286,465 / 16,179,432 |
+| `cand54l_intent_core_refill` (L + uncommitted iteration, `IterateRefill = TRUE`; tier 1; + `ArchiveLineNeverDecreases`) | PASS | pass | 20,934,554 (58,481,899 generated, depth 79; 7 min 00 s on 2 cores, 2026-11-08) |
 | `cand54l_intent_na2_core` (L; two lanes, NA=2 NIdx=3 NPos=3) | PASS | **incomplete** | 2,494,110,319 explored without violation at the 2026-10-26 host crash; total state space unknown — **not a passing guard** |
 | `cand54l_intent_na2` (L; two lanes, NA=2 NIdx=4 NPos=4) | PASS | **incomplete** | 582,263,069 explored without violation at the 2026-10-25 disk-full stop (TLC StatePoolWriter ENOSPC after ~1.5 h) |
 | `cand54l_intent_na2_hand` (L; two lanes, NA=2 NIdx=4 NPos=4) | PASS | simulation only | — |
