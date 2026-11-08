@@ -45,7 +45,7 @@ iterations:
 | p99.9      |       **1869 ns** |                 6,792 ns |
 | p99.99     |       **7411 ns** |                16,533 ns |
 | p99.999    |      **14984 ns** |                15,090 ns |
-| throughput | **3.2 M ops/sec** |           2.41 M ops/sec |
+| round trips/sec (closed loop) | **3.2 M** | 2.41 M |
 
 Batch queue — roundtrip to echo server in external process, 20M
 iterations:
@@ -60,7 +60,13 @@ iterations:
 | p99.9      |       **2030 ns** |
 | p99.99     |       **7313 ns** |
 | p99.999    |      **14895 ns** |
-| throughput |   **3 M ops/sec** |
+| round trips/sec (closed loop) | **3 M** |
+
+The round-trips row is iterations divided by the wall-clock time of the
+measured loop, which has one round trip in flight at a time — roughly
+1 / mean round-trip latency (the loop's own per-iteration cost is
+included). It is not the queue's capacity: a writer that does not wait
+for a reply is not bounded by it.
 
 ## The benchmark method
 

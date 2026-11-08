@@ -13,8 +13,11 @@ page uses the same text.
   persists them eventually. Long-term data belongs in the
   [export format](07-export-import-migration.md) or a database.
 - **Consumers own their checkpoints.** The library persists no consumer
-  position; a checkpoint that precedes the archived start index must be
-  detected by the application, which applies its own recovery policy.
+  position. A checkpoint that precedes the archived start index is
+  reported, not repaired: pollers return ARCHIVED and hold their cursor,
+  reads report the entry as archived, and the application chooses to skip
+  the gap (`move_to_start()`) or recover from a newer snapshot
+  (`move_to_index()`) — [chapter 6](06-archiving-and-reclamation.md#snapshots-plus-archiving).
 - **A SIGKILLed writer's lane needs `mmapq-ids --unset`** — valid on a
   dead process only (the [restart procedure](05-crash-and-restart.md)).
 - **Up to 256 writers** per queue, over the queue's whole lifetime unless

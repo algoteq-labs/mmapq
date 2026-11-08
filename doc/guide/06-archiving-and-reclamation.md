@@ -106,11 +106,35 @@ The application-level pattern (the
 3. Recovery becomes: load the snapshot, replay events since its index.
 
 A snapshot recorded below the current `start_index` is useless after
-reclamation unless you kept the copies (step 2 of the production loop)
-— consumers own their checkpoints, and a checkpoint that
-precedes the archived start index must be detected by the application,
-which applies its own recovery policy (re-snapshot, or rebuild from an
-export).
+reclamation unless you kept the copies (step 2 of the production loop).
+Consumers own their checkpoints: the library persists no consumer
+position, so the recovery policy is the application's. The library tells
+the application when a checkpoint has fallen behind:
+
+- **A poller whose cursor is below `start_index` returns ARCHIVED**
+  (`MMAPQ_POLL_ARCHIVED`; Rust `PollResult::Archived`, Python
+  `PollResult.ARCHIVED`) **and holds its cursor.** It never skips ahead on
+  its own and the handler is not called; every later poll returns ARCHIVED
+  until the application moves the cursor. Because nothing was skipped, an
+  undo (`archive_up_to_index()` below `start_index`, possible only while
+  the files still exist) lets the same poller resume at the entry it was
+  waiting for — nothing is lost.
+- **Random-access reads report it too:** `MMAPQ_ENTRY_ARCHIVED` (batch:
+  `MMAPQ_BATCH_ENTRY_ARCHIVED`) in C, `ReadResult::Archived` in Rust,
+  `ArchivedError` (carrying `.index`) in Python. An index that is merely
+  not written yet is a different answer: END_OF_STREAM, `EndOfStream`,
+  `None`.
+- **To skip the gap**, call `move_to_start()`: the cursor moves to
+  `start_index`, the first entry that is not archived, and the archived
+  entries are not delivered.
+- **To recover**, load a newer snapshot (or rebuild from an export) and
+  call `move_to_index()` with the index that snapshot covers.
+  `move_to_index()` refuses an archived index (it returns false — 0 in C — and leaves the
+  cursor where it was), so the snapshot must cover an index at or above
+  `start_index`.
+
+A poller starts at `start_index` on its first poll, so only a cursor that
+was already positioned can fall behind.
 
 ## Interactions with the rest of this guide
 
