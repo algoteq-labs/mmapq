@@ -122,6 +122,12 @@ guarantees are the C library's to state).
 - **`mmapq-ids`** (`tools/mmapq-ids/`): operator tool to inspect lane
   occupancy and release a crashed writer's appender ID
   (`--unset`, valid only when the holding process is dead).
+- **Transfer abort from the appender-ID mapper:** a mapper passed to an
+  export, import or copy may return `MMAPQ_APPENDER_ID_ABORT` to stop the
+  transfer; the transfer cleans up and returns the new error code
+  `MMAPQ_ECALLBACK` (−12). The Rust binding reports it as
+  `MmapError::CallbackAborted`; in Python, a mapper that raises stops the
+  transfer and the exception propagates to the caller.
 
 ## Fixed
 
@@ -338,11 +344,47 @@ benchmark comparison has been executed. (A v0.1.0 vs 0.2.0 callgrind
 comparison on the house recipe beyond the append/poll harnesses is a
 release-gate item.)
 
+## Documentation
+
+The documentation is reorganised into a user guide (`doc/guide/`:
+concepts, the single-message and batch queues, re-sequenced commits, crash
+and restart, archiving and reclamation, export and import, performance,
+trade-offs and limits, and event sourcing) and a reference
+(`doc/reference/`: API overview, error codes, guarantees, persistence
+contract, wire format, feature matrix, glossary). Chapter 6 of the guide
+describes how snapshots, archiving and the ARCHIVED outcome combine so that
+a consumer's whole state — the snapshot to start from, the changes, and
+the signal to rebase — comes from the queue itself.
+
+Paths from 0.1.0 that moved: `doc/feature-matrix.md` →
+`doc/reference/feature-matrix.md`, `doc/wire-format.md` →
+`doc/reference/wire-format.md`, `doc/event-sourcing-guide.md` →
+`doc/guide/event-sourcing.md`, `doc/maintainer_guide.md` →
+`doc/contributing/maintainer_guide.md`.
+
 ## Bindings
 
 Binding-specific entries live in the per-repository notes:
 `RELEASE-NOTES-0.2.0.md` in **mmapq-rs** (Rust) and **mmapq-py**
 (Python).
+
+## Known limitations
+
+- 0.2.0 is tested on Linux x86-64 only. Its memory-ordering argument
+  covers ARM64 too, but ARM64 is not tested.
+- A permanent failure to look up a queue file other than "it does not
+  exist" — no permission on a directory, or a path component that is not a
+  directory — is reported as `MMAPQ_ETIMEDOUT` (retryable) on every
+  attempt, although retrying does not help.
+- A payload file deleted under a committed message (outside the
+  persistence contract) is reported as `MMAPQ_ETIMEDOUT` by the
+  single-message reader and poller and as `MMAPQ_ECORRUPT` by the batch
+  reader and poller. Neither recovers on retry: recreate the queue.
+- The archive lock file is created with mode 0644, so run all archivers of
+  a queue as one user.
+
+Details: [error codes](reference/error-codes.md) and
+[trade-offs and limits](guide/09-trade-offs-and-limits.md).
 
 ## Java interop
 

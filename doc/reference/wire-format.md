@@ -109,7 +109,7 @@ Two padding cases at a region end:
 - **Long padding** — write a negative length; skip `abs(length) + 4` bytes
   (= the remaining region capacity) across the boundary.
 
-**One tail rule for every item (CAND-51e):** with ≤ 4 bytes left in a
+**One tail rule for every item:** with ≤ 4 bytes left in a
 region, skip to the next region. A message keeps its length and payload in
 one region; a batch count slot could fit in exactly 4 bytes but
 deliberately does not use them — four zero bytes at a region end must mean
@@ -187,11 +187,11 @@ schema bump.
   appender meta 64 B in `src/internal/appender_meta.h`); the export
   stream format (the "Export stream" section below — stream version 2 is
   the canonical little-endian form).
-- **C1 — geometry (CAND-38):** `region_size` a power of two, a multiple of
+- **C1 — geometry:** `region_size` a power of two, a multiple of
   32 KB (one transposed header block) and a multiple of the host page
   size; `max_file_size` a multiple of `region_size`; pre-rule geometry is
   refused with `MMAPQ_ESCHEMA`.
-- **C2 — the unified ≤ 4 tail rule (CAND-51e):** with ≤ 4 bytes left in a
+- **C2 — the unified ≤ 4 tail rule:** with ≤ 4 bytes left in a
   region, skip to the next region; four zero bytes at a region end mean
   only padding.
 - **C3 — appender meta `archive_offset` (byte 16) and `commit_intent`

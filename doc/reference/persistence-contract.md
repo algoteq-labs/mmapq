@@ -37,7 +37,7 @@ They do not provide power-loss-durable commit acknowledgments.
   delete, move or compress them yourself, they are safe provided no undo
   (`archive_up_to_index` below the current `start_index`) runs between
   this call and your last unlink. An undo that ran before this call is
-  harmless, because the listing already reflects it. (CAND-54 retired the
+  harmless, because the listing already reflects it. (0.2.0 retired the
   deletion wait: the commit-intent protocol never lists a file a stalled —
   or stopped — commit is about to publish into.)
   See `../design/archiving-design.md`.
@@ -45,7 +45,7 @@ They do not provide power-loss-durable commit acknowledgments.
   directory while an archiver or lister has it open lets two processes
   hold locks on different files. Recreate a queue only with all clients
   closed — the same rule as for every other queue file.
-- Queue geometry is constrained (CAND-38): `region_size` must be a power of
+- Queue geometry is constrained: `region_size` must be a power of
   two and a multiple of 32 KB (one transposed header block), and a multiple
   of the host's page size; `max_file_size` must be a multiple of `region_size`
   (and therefore of the 32 KB block). Header-file reclaim depends on each
