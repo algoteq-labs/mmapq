@@ -17,10 +17,17 @@ obligation for every change to the archiver, the commit path, join, or
 
 ```
 ./check.sh            # all checks except the ~70 min one   (~25 min, 2 cores)
-./check.sh --quick    # counterexample checks only            (~1 min)
+./check.sh --quick    # counterexample checks only            (~8 min on 2 cores)
 ./check.sh --all      # every tier-scheduled check            (~1.5 h)
 ./check.sh fixed      # one named check
 ```
+
+`EXPECTED_VIOLATIONS` names, one line per expected-FAIL row of
+`cfg/EXPECTED`, the invariant that check's counterexample must violate (the
+mapping comes from the results table below). `check.sh` grades it: a FAIL
+whose reported invariant differs from the named one — or that is not an
+invariant violation at all — is a mismatch, and any check, PASS or FAIL,
+whose log contains a TLC `Warning` is a mismatch.
 
 The speed-3 rows in `cfg/EXPECTED` (the `cand54l_intent_na2*` family) are
 manual-only: no tier run, `--all` included, ever schedules them — run them

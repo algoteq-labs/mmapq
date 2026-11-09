@@ -1,0 +1,29 @@
+# EXPECTED_VIOLATIONS — the invariant each expected-FAIL check must violate.
+# Purpose: read by check.sh; an expected-FAIL check is graded ok only when the
+# invariant its counterexample violates is the one named here.
+# Source: doc/model/README.md results table.
+# Rule: exactly one line per FAIL row of cfg/EXPECTED, and no other lines.
+# Format: <check name> <invariant>
+#
+cand36_undo_race NoLiveLoss
+naive_delete NoLiveLoss
+no_wait NoLiveLoss
+no_fence_archiver I1
+no_fence_committer I1
+cand33_arbitrary_commit HeadersReferenceMessages
+cand31_chase PassWithinSnapshot
+cand35_crash I1
+cand35_no_wait_listing_cap NoLiveLoss
+cand35_narrow_wait NoLiveLoss
+cand54_intent NoOverwrite
+cand54_intent_hand NoOverwrite
+cand54_clear_before_cas NoLiveLoss
+cand54_scan_before_intents NoLiveLoss
+cand54_no_live_floor NoLiveLoss
+cand54_clear_before_min NoOverwrite
+cand54_no_join_anchor NoOverwrite
+cand54_no_minskip NoDeleteUnderPending
+cand54l_clear_before_cas NoLiveLoss
+cand54l_scan_before_intents NoLiveLoss
+cand54l_no_live_floor NoLiveLoss
+cand54l_intent_na2_core_witness WitnessSlowCommitCrossDelete
