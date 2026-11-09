@@ -302,6 +302,16 @@ run_cross bash mmapq/scripts/check_published_urls.sh
 # Verify binding symbols are declared in public headers
 run_cross bash mmapq/scripts/check_binding_symbols.sh
 
+# Verify every public binding method has at least one direct test
+# (BIND-COV-01's gate). All three invocations are cross-scope (the gate's
+# registry inputs are mmapq-rs/), so they go through run_cross. The
+# --python arm traces the mmapq-py unittest suite and therefore needs the
+# Python extension built in place — the Gates job builds it before
+# check_sync runs; a missing build fails closed rather than skipping.
+run_cross bash mmapq/scripts/check_binding_coverage.sh --rust mmapq-rs
+run_cross bash mmapq/scripts/check_binding_coverage.sh --python mmapq-py
+run_cross bash mmapq/scripts/check_binding_coverage.sh --self-test
+
 # Verify every gate fails closed when its inputs are absent (P5). Reads the
 # sibling inputs, so cross-scope.
 run_cross bash mmapq/scripts/check_gates_fail_closed.sh

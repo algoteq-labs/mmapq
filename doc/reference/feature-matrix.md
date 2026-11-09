@@ -110,10 +110,10 @@ Regression: `../mmapq-py/tests/test_reader_borrowing.py`
 
 | Feature | C | Rust | Python |
 |---|---|---|---|
-| Export queue → stream (full + chunked) | ✓ | ✓ | ◐ full only (chunked omitted) |
+| Export queue → stream (full + chunked) | ✓ | ◐ full only (chunked omitted) | ◐ full only (chunked omitted) |
 | Import stream → queue (archivable flag preserved on a created destination; an existing destination keeps its on-disk flag) | ✓ pins `test_transfer_import_archivable_{rebase,preserve}`, `test_transfer_import_append_flag_mismatch` + batch twins in `test/test_queue_transfer.c` | ✓ (via C) | ✓ (via C) |
 | Queue-to-queue copy (archivable flag preserved, incl. cross-type) | ✓ pins `test_transfer_copy_preserves_archivable`, `test_transfer_copy_batch_to_normal_preserves_archivable` + batch twins in `test/test_queue_transfer.c` | ✓ (via C) | ✓ (via C) |
-| Batch variants (incl. flat-stream import) | ✓ | ✓ | — |
+| Batch variants (incl. flat-stream import) | ✓ | ✓ | ✓ `export_batch_queue` / `import_batch_queue` / `import_batch_stream` / `import_flat_to_batch` / `copy_batch_queue` / `copy_normal_to_batch` / `copy_batch_to_normal` in `../mmapq-py/src/mmapq/transfer.py`; tests `test_batch_import_preserves_appender_ids`, `test_import_batch_stream_preserve_nonzero`, `test_import_flat_to_batch_preserve_nonzero`, `test_batch_copy_preserve_to_new`, `test_copy_normal_to_batch`, `test_copy_batch_to_normal` (`../mmapq-py/tests/test_queue.py`) |
 | Appender ID mapper callback (identity / remap / merge) | ✓ | ✓ | ✓ |
 | MmapqConflictBehavior (AUTO fallback / ABORT error) | ✓ | ✓ | ✓ |
 

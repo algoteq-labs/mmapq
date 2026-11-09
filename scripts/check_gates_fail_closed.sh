@@ -35,6 +35,15 @@ REGISTRY+=("mmapq-py/scripts/check_no_layout_mirrors.sh||mmapq/include mmapq-py/
 REGISTRY+=("mmapq/scripts/check_published_urls.sh||mmapq-rs/.gitmodules mmapq-py/.gitmodules mmapq-rs/Cargo.toml mmapq-py/pyproject.toml mmapq-py/setup.py")
 REGISTRY+=("mmapq/scripts/check_mirrors.sh||mmapq-rs/c/src mmapq-py/c/src")
 REGISTRY+=("mmapq/scripts/check_api_coverage.sh||mmapq/libmmapq.a mmapq/test mmapq/include")
+# Binding-coverage gate, registered with the --rust arm only. The --python
+# arm is deliberately not meta-tested here: its pristine-input control
+# would need the cffi extension built inside the WORK copy (this harness
+# builds C archives, not Python extensions), and with an input removed the
+# arm fails before import anyway — its fail-closed behavior is pinned by
+# the --self-test canaries (Pe–Ph: import failure, missing src/mmapq,
+# missing tests, failing traced suite) instead. check_sync.sh invokes both
+# modes plus --self-test via run_cross.
+REGISTRY+=("mmapq/scripts/check_binding_coverage.sh|--rust mmapq-rs|mmapq-rs/src mmapq-rs/tests")
 
 # ── --list-registry: print gates with their derived scope and inputs ─────────
 # --list-registry=csv emits machine-readable `scope\tpath\targs` lines so
@@ -139,8 +148,12 @@ copy_subsets() {
     cp -a "$ROOT/mmapq-py/scripts/." "$WORK/mmapq-py/scripts/"
     cp "$ROOT/mmapq-py/README.md" "$WORK/mmapq-py/README.md"
 
-    mkdir -p "$WORK/mmapq-rs/src" "$WORK/mmapq-rs/c/src" "$WORK/mmapq-rs/c/include"
+    mkdir -p "$WORK/mmapq-rs/src" "$WORK/mmapq-rs/c/src" "$WORK/mmapq-rs/c/include" "$WORK/mmapq-rs/tests"
     cp -a "$ROOT/mmapq-rs/src/." "$WORK/mmapq-rs/src/"
+    # mmapq-rs/tests: check_binding_coverage.sh --rust scans the Rust tests
+    # for covers tags; the subset must carry them (tag files only — the
+    # support/ directory rides along, inert for the other gates).
+    cp -a "$ROOT/mmapq-rs/tests/." "$WORK/mmapq-rs/tests/"
     cp -a "$ROOT/mmapq-rs/c/src/." "$WORK/mmapq-rs/c/src/"
     cp -a "$ROOT/mmapq-rs/c/include/." "$WORK/mmapq-rs/c/include/"
     cp "$ROOT/mmapq-rs/Cargo.toml" "$WORK/mmapq-rs/Cargo.toml"

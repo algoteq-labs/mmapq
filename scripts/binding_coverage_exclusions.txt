@@ -1,0 +1,12 @@
+# binding_coverage_exclusions.txt — BIND-COV-01 exclusion list, read by
+# scripts/check_binding_coverage.sh (mirrored with it).
+#
+# One line per item:
+#   <binding> <item> <one-line reason>
+#     binding: rust | python
+#     item:    Rust `Type::method` (or a free fn name);
+#              Python `Class.method` (or a function name)
+#
+# A line naming no current inventory item is an error — the gate fails on
+# it — so an exclusion must be removed when its item disappears.
+# An exclusion is a last resort: prefer a real test over an exclusion.
