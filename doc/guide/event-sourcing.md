@@ -186,7 +186,10 @@ The event log grows forever only if you let it. The supported pattern:
 2. Create the event queue `archivable` (a creation-time flag) and use the
    archiver to advance `start_index` past snapshotted history;
    `archivable_files` reports which rolled files may be deleted.
-3. Recovery then means: load snapshot, replay events since.
+3. Recovery then means: read `start_index()` as N, load snapshot N (N is
+   the index of the next event to apply), `move_to_index(N)`, and replay
+   from there. The rules, and how ARCHIVED tells a running consumer to do
+   this: [archiving and reclamation](06-archiving-and-reclamation.md#snapshots-plus-archiving).
 
 Non-archivable queues (the default) skip an acquire-load on the read path;
 choose archivable only for queues you actually intend to trim. Queues are

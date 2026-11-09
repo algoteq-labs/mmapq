@@ -59,6 +59,34 @@ discarded batches reappear in recovery after a restart — recovery code
 decides. `mmapq_indexed_batch_appender_join_completed_open_batch()`
 reports a crash-interrupted open batch the rejoin completed to staged.
 
+## The committed prefix under archiving
+
+A re-sequencing writer that commits strictly in sequence order — message
+*n* only after messages 0 to *n*−1 — knows after a restart that what it
+committed is a prefix 0..C of its sequence numbers. This needs each
+message to carry its sequence number (and, if other writers share the
+queue, something that identifies the writer). Finding C:
+
+- **If any of its messages is still live** (at or above `start_index`), C
+  is the highest sequence number among them: scan the live range.
+- **If archiving has passed all of them**, C has to come from outside the
+  live queue: the writer's own commit log, corrected by the archived copies
+  of the queue's files if you keep them.
+
+The correction is needed because a commit and its log line are not one
+atomic step. With up to *k* commits in flight, a crash can leave the log
+up to *k* entries short of what was committed, and those messages may have
+been archived since. Where the log and the archived copies disagree, the
+copies are the queue's content and win.
+
+Without archived copies — reclamation deletes the files and keeps nothing —
+a commit that never reached the log and whose message is gone cannot be
+told apart from one that never happened. Resolve it as **at-least-once**:
+re-append from the logged C + 1, and have readers deduplicate by sequence
+number. For exactly-once across a restart, either keep the archived copies
+or never archive past the writer's last logged commit, so that every
+message the log may be missing is still live.
+
 ## The torn tail
 
 One caveat applies to what the walk can yield after a crash: see the

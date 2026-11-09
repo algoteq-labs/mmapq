@@ -96,16 +96,35 @@ archived files is not permission to touch live ones.
 
 ## Snapshots plus archiving
 
-The application-level pattern (the
-[event-sourcing guide](event-sourcing.md)):
+An archivable queue can carry a consumer's whole state, not only its
+updates. Every poll answers with either the next entry — a delta to apply —
+or ARCHIVED, which means the consumer's next position can no longer be
+reached by deltas; `start_index` then names the snapshot to rebase on. A
+consumer learns where to start, what changed and when to rebase from the
+queue alone, with no side channel, and the check is cheap: one acquire load
+of `start_index` per poll on an archivable queue, and one more to read
+`start_index()` after ARCHIVED. The queue does not build snapshots — they
+are the application's (the [event-sourcing guide](event-sourcing.md)) — it
+provides what makes this work, under three rules:
 
-1. Periodically fold the events into a snapshot of your derived state and
-   record the log index the snapshot covers.
-2. Archive past snapshotted history with `archive_up_to_index()`, then
-   reclaim.
-3. Recovery becomes: load the snapshot, replay events since its index.
+1. **A snapshot is identified by N, the index of the next entry to apply**
+   once it is loaded: it holds every entry below N. Store it where
+   consumers can find it by N.
+2. **Snapshot first, then archive.** Make snapshot N durable, then call
+   `archive_up_to_index(N)`, then reclaim. Let the snapshotter be the only
+   process that archives: then `start_index` is always the N of a durable
+   snapshot. (An undo, if you use one, goes back only to an earlier
+   snapshot's N.) Keep the previous snapshot until no consumer can still be
+   loading it.
+3. **Load, then position explicitly.** On start and on ARCHIVED — the
+   snapshotter too, when it restarts: read `start_index()` as S, load
+   snapshot S, call `move_to_index(S)`, then poll. Do not rely on the
+   first poll to position the cursor: an unpositioned poller starts at
+   whatever `start_index` is at its first poll, which is later than S if
+   an archive ran in between — the entries from S to there would be
+   skipped without an ARCHIVED.
 
-A snapshot recorded below the current `start_index` is useless after
+A snapshot whose N is below the current `start_index` is useless after
 reclamation unless you kept the copies (step 2 of the production loop).
 Consumers own their checkpoints: the library persists no consumer
 position, so the recovery policy is the application's. The library tells
@@ -127,14 +146,21 @@ the application when a checkpoint has fallen behind:
 - **To skip the gap**, call `move_to_start()`: the cursor moves to
   `start_index`, the first entry that is not archived, and the archived
   entries are not delivered.
-- **To recover**, load a newer snapshot (or rebuild from an export) and
-  call `move_to_index()` with the index that snapshot covers.
-  `move_to_index()` refuses an archived index (it returns false — 0 in C — and leaves the
-  cursor where it was), so the snapshot must cover an index at or above
-  `start_index`.
+- **To recover**, follow rule 3: read `start_index()` as S, load snapshot
+  S, call `move_to_index(S)`. `move_to_index()` refuses an archived index
+  (it returns false — 0 in C — and leaves the cursor where it was): if
+  another archive moved `start_index` past S in the meantime, start again
+  from reading `start_index()`. The retry ends because every archive point
+  is a durable snapshot (rule 2).
+- **`start_index` is one ID for the whole queue.** Every consumer state that
+  recovers this way must have a snapshot at each N the snapshotter
+  archives to. A consumer with a state of its own and no snapshot at N
+  either accepts the gap with `move_to_start()`, or the snapshotter
+  archives only up to that consumer's position.
 
-A poller starts at `start_index` on its first poll, so only a cursor that
-was already positioned can fall behind.
+A poller that has never been positioned starts at `start_index` on its
+first poll, so only a positioned cursor can fall behind — but after loading
+a snapshot, position explicitly (rule 3).
 
 ## Interactions with the rest of this guide
 
