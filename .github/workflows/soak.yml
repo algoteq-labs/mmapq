@@ -15,10 +15,16 @@ concurrency:
 jobs:
   soak:
     name: Soak (run_soak)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
     if: ${{ github.event_name == 'workflow_dispatch' || vars.MMAPQ_PUBLIC == 'true' }}
     steps:
+      - name: Platform (ARM64 trial)
+        run: |
+          uname -m
+          nproc
+          lscpu | grep -E '^(Architecture|Vendor ID|Model name)' || true
+          test "$(uname -m)" = aarch64
       - name: Checkout mmapq (SHA under test)
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:

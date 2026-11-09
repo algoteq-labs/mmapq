@@ -22,9 +22,15 @@ concurrency:
 jobs:
   c-suite:
     name: C suite (test.sh, both loops)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
     steps:
+      - name: Platform (ARM64 trial)
+        run: |
+          uname -m
+          nproc
+          lscpu | grep -E '^(Architecture|Vendor ID|Model name)' || true
+          test "$(uname -m)" = aarch64
       - name: Checkout mmapq (SHA under test)
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -41,9 +47,15 @@ jobs:
 
   gates:
     name: Gates (check_sync, GATE_SKIP==0)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 50
     steps:
+      - name: Platform (ARM64 trial)
+        run: |
+          uname -m
+          nproc
+          lscpu | grep -E '^(Architecture|Vendor ID|Model name)' || true
+          test "$(uname -m)" = aarch64
       - name: Checkout mmapq (SHA under test)
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -151,9 +163,15 @@ jobs:
 
   tsan:
     name: TSan (setarch -R)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
     steps:
+      - name: Platform (ARM64 trial)
+        run: |
+          uname -m
+          nproc
+          lscpu | grep -E '^(Architecture|Vendor ID|Model name)' || true
+          test "$(uname -m)" = aarch64
       - name: Checkout mmapq (SHA under test)
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -185,9 +203,15 @@ jobs:
 
   asan:
     name: ASan (test.sh --asan)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
     steps:
+      - name: Platform (ARM64 trial)
+        run: |
+          uname -m
+          nproc
+          lscpu | grep -E '^(Architecture|Vendor ID|Model name)' || true
+          test "$(uname -m)" = aarch64
       - name: Checkout mmapq (SHA under test)
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -204,9 +228,15 @@ jobs:
 
   wrappers-rust:
     name: "Wrappers: Rust vs mmapq SHA"
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
     steps:
+      - name: Platform (ARM64 trial)
+        run: |
+          uname -m
+          nproc
+          lscpu | grep -E '^(Architecture|Vendor ID|Model name)' || true
+          test "$(uname -m)" = aarch64
       - name: Checkout mmapq (SHA under test)
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -271,9 +301,15 @@ jobs:
 
   wrappers-python:
     name: "Wrappers: Python vs mmapq SHA"
-    runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 50
     steps:
+      - name: Platform (ARM64 trial)
+        run: |
+          uname -m
+          nproc
+          lscpu | grep -E '^(Architecture|Vendor ID|Model name)' || true
+          test "$(uname -m)" = aarch64
       - name: Checkout mmapq (SHA under test)
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -344,9 +380,15 @@ jobs:
 
   torture:
     name: Torture (mktsim run_short)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 40
     steps:
+      - name: Platform (ARM64 trial)
+        run: |
+          uname -m
+          nproc
+          lscpu | grep -E '^(Architecture|Vendor ID|Model name)' || true
+          test "$(uname -m)" = aarch64
       - name: Checkout mmapq (SHA under test)
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
