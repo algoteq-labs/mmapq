@@ -223,3 +223,40 @@ without crossing a mapping boundary. The immutable 32-bit `region_size` and
 32-bit `mapped_capacity` replace the size callback slot, retaining a 64-bit
 `fast_path_end` and the 64-byte accessor layout on supported 64-bit targets.
 No mapping state transitions or atomic orderings change for this correction.
+
+## 9. Releasing
+
+A release is three tags, pushed in order and all named `vX.Y.Z`: tag this
+repo first, on the commit that both wrapper gitlinks point at, then
+`mmapq-rs`, then `mmapq-py`. Tag rulesets restrict updates, deletions and
+force pushes on `v*` in all three repos.
+
+Each wrapper's `Release` workflow (`.github/workflows/release.yml`) runs on
+a `v*` tag push or a manual dispatch. It runs the packaging gate first
+(`scripts/check_package.sh`, the sdist checks); on a tag it additionally
+verifies that the package version, `MMAPQ_VERSION_STR` in
+`c/include/mmap_platform.h`, the `c/` gitlink and main-branch ancestry all
+agree with the tag before anything is published. A tag push waits for a
+required reviewer's approval in the `release` environment; that approval is
+the only manual gate. Publishing uses trusted publishing (OIDC) — no
+registry token is stored in any repo, environment or secret.
+
+Before the first real release through a workflow, rehearse it from `main`
+(Actions → Release → Run workflow). The Rust rehearsal is a
+`cargo publish --dry-run`: the token exchange rehearses the
+trusted-publisher configuration and the token is never used. The Python
+rehearsal uploads to TestPyPI under a fresh `.dev<run id>` version and
+smoke-tests installing that version from the registry.
+
+A release bump changes every version location together, in the same commit
+per repo:
+
+- `include/mmap_platform.h`: `MMAPQ_VERSION_STR` (and the
+  `MMAPQ_VERSION_MAJOR/MINOR/PATCH` defines above it).
+- `mmapq-rs/Cargo.toml`: `version`; then refresh `mmapq-rs/Cargo.lock` with
+  `cargo update -p mmapq --offline`. The `Package (crate)` CI job runs
+  `--locked`, so a stale lock fails CI on the bump commit itself.
+- `mmapq-py/src/mmapq/_version.py`: `__version__` — the single source; the
+  Python manifest reads it statically.
+
+`CMakeLists.txt` `VERSION` has no suffix and follows the same triple.
