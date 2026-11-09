@@ -25,9 +25,8 @@
  *
  * Thread safety: one reader per consumer thread. Must not be shared.
  *
- * Mirrors Java IIndexedBatchReader. MmapqBatchEntryStatus mirrors
- * IIndexedBatchReader.MmapqEntryStatus — defined here independently of
- * MmapqIndexedReader to keep the batch layer self-contained.
+ * MmapqBatchEntryStatus mirrors MmapqEntryStatus (indexed_reader.h) — defined here
+ * independently of MmapqIndexedReader to keep the batch layer self-contained.
  */
 
 typedef struct MmapqIndexedBatchReader MmapqIndexedBatchReader;
@@ -35,13 +34,11 @@ typedef struct MmapqIndexedBatchReader MmapqIndexedBatchReader;
 /**
  * MmapqBatchEntryStatus — availability status of a batch at a given index.
  *
- * Mirrors Java IIndexedBatchReader.MmapqEntryStatus.
  */
 typedef enum {
     /**
      * The batch exists and is readable. The MmapqBatchPayloadIterator in the
      * context is valid and positioned at the first message.
-     * Mirrors Java MmapqEntryStatus.AVAILABLE.
      */
     MMAPQ_BATCH_ENTRY_AVAILABLE,
 
@@ -52,7 +49,6 @@ typedef enum {
      * index it will become MMAPQ_BATCH_ENTRY_AVAILABLE. Never terminal on
      * an archivable queue — re-read; a later call returns ARCHIVED if the
      * index was archived meanwhile.
-     * Mirrors Java MmapqEntryStatus.END_OF_STREAM.
      */
     MMAPQ_BATCH_ENTRY_END_OF_STREAM,
 
@@ -61,7 +57,6 @@ typedef enum {
      * longer accessible. Its index is below start_index() — including
      * after a failed read whose index the archiver moved below
      * start_index mid-call (the failure-path re-check).
-     * Mirrors Java MmapqEntryStatus.ARCHIVED.
      */
     MMAPQ_BATCH_ENTRY_ARCHIVED,
 
@@ -71,7 +66,6 @@ typedef enum {
      * distinguish a retryable timeout from invalid stored data or an
      * invalid index (MMAPQ_EINVAL); a failure whose index is now below
      * start_index is reported as MMAPQ_BATCH_ENTRY_ARCHIVED.
-     * Mirrors Java MmapqEntryStatus.ERROR.
      */
     MMAPQ_BATCH_ENTRY_ERROR
 } MmapqBatchEntryStatus;

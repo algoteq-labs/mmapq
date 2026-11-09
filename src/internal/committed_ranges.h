@@ -15,7 +15,7 @@
  *     the scan; header order is commit order, so spans arrive out of order
  *     under resequenced commits (D-B).
  *   - mmapqi_ranges_sort_merge sorts by start and fuses overlapping/adjacent
- *     spans in one pass — the Java heap+map consumption order, restored.
+ *     spans in one pass, restoring ascending-start consumption order.
  *     After it, the array is sorted ascending by start and disjoint.
  *   - mmapqi_ranges_prune_up_to is valid only on a sorted, merged array.
  */

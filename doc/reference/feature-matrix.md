@@ -155,7 +155,7 @@ Regression: `../mmapq-py/tests/test_reader_borrowing.py`
 
 | C header | Rust (ffi.rs) | Python (cdef) |
 |---|---|---|
-| `batch_payload_iterator.h` | 7/12 | 6/12 |
+| `batch_payload_iterator.h` | 7/11 | 6/11 |
 | `batch_queue_transfer.h` | 7/7 | 6/7 |
 | `indexed_appender.h` | 11/17 | 8/17 |
 | `indexed_archiver.h` | 6/14 | 7/14 |

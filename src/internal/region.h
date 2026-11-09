@@ -157,7 +157,7 @@ void mmapqi_region_async_unmanage(Region *r);
  */
 void mmapqi_region_destroy(Region *r);
 
-/* ── Default error thresholds (mirrors Java IRegionFactory constants) ────── */
+/* ── Default error thresholds ────────────────────────────────────────────── */
 #define REGION_MAX_FILE_NOT_FOUND_ERRORS    3
 #define REGION_MAX_BEYOND_FILE_SIZE_ERRORS  3
 

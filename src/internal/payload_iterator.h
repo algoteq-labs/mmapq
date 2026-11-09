@@ -9,7 +9,7 @@
 /**
  * MmapqPayloadIterator — zero-copy sequential iterator over a payload stream.
  *
- * Mirrors Java MmapqPayloadIterator. Flyweight pattern — the Buffer returned by
+ * Flyweight pattern — the Buffer returned by
  * current() points directly into mapped memory and is invalidated by the
  * next advance() call.
  *

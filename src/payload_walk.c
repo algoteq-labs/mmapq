@@ -11,7 +11,6 @@
  * This is the only place in the codebase that handles padding.
  * Gets it right here so everything above it inherits correctness.
  *
- * Mirrors Java PayloadWalk.advancePayload exactly.
  *
  * Entry state:  *probing_offset = position to probe
  * Exit state:

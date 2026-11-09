@@ -12,8 +12,8 @@
  * HeaderReader — utilities for reading queue header entries and searching
  * the header space.
  *
- * Mirrors Java HeaderReader exactly, including the archive-hole-resilient
- * exponential + binary search for the last committed index.
+ * The last-index search is archive-hole-resilient: an exponential + binary
+ * search for the last committed index.
  *
  * All functions take a pre-allocated Buffer for the header region. The
  * buffer is written by wrap() and read immediately — no allocation.
@@ -180,7 +180,7 @@ typedef int64_t (*StartIndexSupplier)(void *ctx);
 /**
  * mmapqi_header_search_last_index — find the highest committed queue index.
  *
- * Algorithm (mirrors Java HeaderReader.searchLastIndex):
+ * Algorithm:
  *   1. Exponential probe forward from from_index to find an upper bound.
  *   2. Binary search between last known occupied and the upper bound.
  *   3. On NULL header: check if start_index advanced past probe point

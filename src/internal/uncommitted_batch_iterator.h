@@ -11,8 +11,7 @@
 
 /**
  * MmapqUncommittedBatchIterator — iterate only uncommitted BATCHES
- * (CAND-49 §3.6; C-first — the Java batch appender has no uncommitted
- * iterator).
+ * (CAND-49 §3.6).
  *
  * The batch-lane analogue of MmapqUncommittedPayloadIterator: scan the
  * header to learn committed batch spans, walk the gaps batch by batch from

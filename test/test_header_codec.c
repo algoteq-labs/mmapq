@@ -93,7 +93,6 @@ void test_header_position_index_4096(void)
 
 void test_header_round_trip(void)
 {
-    /* indexShouldBeInverseOfPosition from Java */
     for (int64_t i = 0; i < 100000; i++) {
         int64_t pos = header_position(i);
         TEST_ASSERT_EQUAL_INT64_MESSAGE(i, header_index(pos), "Round-trip failed");

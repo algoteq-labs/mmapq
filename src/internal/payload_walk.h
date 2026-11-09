@@ -9,7 +9,6 @@
 /**
  * PayloadWalk — advance through a payload stream handling region boundary padding.
  *
- * Mirrors Java PayloadWalk.advancePayload exactly.
  *
  * Normal queue polling does NOT use this — pollers use the header to jump
  * directly to the payload position. PayloadWalk is only needed during:

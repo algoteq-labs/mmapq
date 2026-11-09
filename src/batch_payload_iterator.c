@@ -105,7 +105,7 @@ MmapqBatchPayloadIterator *mmapq_batch_iterator_init(
 
     /* CAND-50 item 3b: a start outside [0, message_count] is refused —
      * the clamp-to-0 was a positioning-loop artifact, never deliberate
-     * (the D3.0 rule-13 record; Java moveTo has always thrown), and an
+     * (the D3.0 rule-13 record), and an
      * over-run start was indistinguishable from the legal empty
      * iteration. The upper bound is checked only when the count is
      * known-good — a failed count read keeps its own error.

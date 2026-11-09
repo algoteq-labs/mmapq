@@ -1768,10 +1768,9 @@ void test_batch_iterator_init_null_returns_null(void)
 /* ── D3.3 pins (CAND-50 item 3, owner ruling 2026-10-25) ────────────────
  * The checked in-batch accessor distinguishes the failure causes the
  * unchecked get collapsed to NULL (a negative index silently read message
- * 0 — the clamp the D3.0 rule-13 record shows was never deliberate; Java
- * moveTo has always thrown on < 0). The -1 refusal was fail-first
- * observed against the clamp (scratch mutant, transcript in the task
- * report). */
+ * 0 — the clamp the D3.0 rule-13 record shows was never deliberate). The -1
+ * refusal was fail-first observed against the clamp (scratch mutant, transcript in
+ * the task report). */
 
 static void d33_batch(MmapqIndexedBatchAppender **a, MmapqMutableBatch **b)
 {
@@ -1860,9 +1859,8 @@ void test_mutable_batch_get_checked_timeout_propagates(void)
 /* ── D3b pins (CAND-50 item 3b, owner 2026-10-26): a negative start index
  * is refused at the source — mmapq_batch_iterator_init sets
  * last_error = MMAPQ_EINVAL and the first advance returns false (the
- * clamp-to-0 was the positioning-loop artifact recorded at D3.0; Java
- * moveTo has always thrown on < 0). start == message_count stays a legal
- * empty iteration — guards existing behaviour (no fail-first). */
+ * clamp-to-0 was the positioning-loop artifact recorded at D3.0). start ==
+ * message_count stays a legal empty iteration — guards existing behaviour (no fail-first). */
 void test_mutable_batch_iterator_negative_start_refused(void)
 {
     MmapqIndexedBatchAppender *a = NULL;

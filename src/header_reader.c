@@ -129,8 +129,7 @@ static int header_found_checked(
 /* ── mmapqi_header_search_last_index ────────────────────────────────────────────── */
 
 /*
- * Mirrors Java HeaderReader.searchLastIndex exactly, including
- * the archive-hole detection restart logic.
+ * Last-index search, including the archive-hole detection restart logic.
  *
  * Algorithm:
  *   1. Verify from_index exists (handles empty queue and archive holes).
@@ -173,7 +172,7 @@ int64_t mmapqi_header_search_last_index_checked(
         /* ── exponential probe forward ──────────────────────────────────── */
         int64_t high = low + 1;
         if (high < low + 1) high = low + 1;  /* overflow guard */
-        /* Start at max(low+1, low<<1) — mirrors Java */
+        /* Start at max(low+1, low<<1) */
         if (low > 0 && (low << 1) > high) high = low << 1;
 
         int hole_detected = 0;

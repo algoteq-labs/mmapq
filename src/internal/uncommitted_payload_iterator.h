@@ -11,7 +11,6 @@
 /**
  * MmapqUncommittedPayloadIterator — iterate only uncommitted (unconfirmed) messages.
  *
- * Mirrors Java MmapqUncommittedPayloadIterator exactly.
  *
  * Used during appender restart recovery. After a crash, the appender's payload
  * file may contain messages that were written but never committed into the header.
@@ -44,9 +43,8 @@
  *        range's start (D-A).
  *     2. Try to advance the inner MmapqPayloadIterator in the current gap.
  *     3. A yielded message must sit cleanly before the next committed range
- *        (overshoot or overlap is MMAPQ_ECORRUPT — stricter than Java, which
- *        silently skips); a bounded gap that ends short of current_gap_end
- *        is torn framing, also MMAPQ_ECORRUPT (previously silent EOS).
+ *        (overshoot or overlap is MMAPQ_ECORRUPT); a bounded gap that ends short
+ *        of current_gap_end is torn framing, also MMAPQ_ECORRUPT (previously silent EOS).
  *     4. On a yield, refill the owning appender's outstanding set via the
  *        refill callback (the appender-level helper skips the flag-tracked
  *        tail, §3.3). ENOMEM leaves the iterator parked at the same message:
@@ -204,7 +202,7 @@ int mmapqi_uncommitted_iterator_create(
  *
  * Returns 0 on success; MMAPQ_EINVAL if it is NULL, an explicit offset
  * is below start_of_stream_offset(), or start_offset > end_offset when both
- * are set (Java init parity); MMAPQ_ETIMEDOUT on a transient mapping
+ * are set; MMAPQ_ETIMEDOUT on a transient mapping
  * timeout during the scan (retryable — via a NEW factory call, see create);
  * MMAPQ_ECORRUPT if the header scan was genuinely truncated (a committed
  * header whose payload would not walk for a non-timeout reason) or the

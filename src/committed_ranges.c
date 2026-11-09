@@ -56,8 +56,8 @@ void mmapqi_ranges_sort_merge(CommittedRanges *r)
     qsort(r->v, (size_t)r->count, sizeof(CommittedRange), range_start_cmp);
 
     /* One merge pass: fuse overlapping (start <= running end) and adjacent
-     * (start == running end) spans — the Java heap+map consumption order
-     * (CAND-49 §3.1, D-B). */
+     * (start == running end) spans, so ranges are consumed in ascending start
+     * order (CAND-49 §3.1, D-B). */
     int w = 0;
     for (int i = 1; i < r->count; i++) {
         if (r->v[i].start <= r->v[w].end) {

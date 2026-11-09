@@ -200,8 +200,8 @@ void test_poller_before_queue_retries(void)
 }
 
 /* CAND-17(a): a mapping timeout on the poller's header read must report
- * MMAPQ_POLL_ERROR with last_error == MMAPQ_ETIMEDOUT (payload-path parity;
- * Java throws), never END_OF_STREAM — and the cursor must not advance.
+ * MMAPQ_POLL_ERROR with last_error == MMAPQ_ETIMEDOUT (payload-path parity),
+ * never END_OF_STREAM — and the cursor must not advance.
  * Pin shape from audit/repro/INV-24_timeout_as_eos.c: a standalone poller
  * with timeout_ns = 0 times out on the first header region map; once the
  * background map completes, the same message is delivered. */

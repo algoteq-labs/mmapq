@@ -36,7 +36,7 @@
  *   For archivable queues, read with atomic_load (acquire) to observe
  *   archiver writes from other processes. Written with atomic_store (release).
  *
- * Archiving is fully implemented in this C port — archivable may be 1
+ * Archiving is fully implemented — archivable may be 1
  * and start_index advances when entries are archived. The field layout
  * derives from Algoteq's Java implementation.
  */
@@ -63,9 +63,9 @@
 
 /*
  * Queue type discriminator, stored at offset 25.
- * Historically Java's boolean fixed_size_8bytes; values 0 and 1 keep
- * their Java meanings. Value 2 (batch) is mmapq's. Java interop is not
- * supported at schema 2 (see README).
+ * Historically a boolean (fixed 8-byte mode); values 0 and 1 keep that
+ * meaning. Value 2 (batch) is mmapq's. Java interop is not supported in
+ * 0.2.0 (see README).
  */
 #define QUEUE_TYPE_NORMAL           ((uint8_t)0)   /* single-message, length-prefixed */
 #define QUEUE_TYPE_FIXED8           ((uint8_t)1)   /* Java fixed 8-byte — NOT supported */

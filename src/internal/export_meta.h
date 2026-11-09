@@ -23,7 +23,7 @@
  *   2  CAND-57 canonical little-endian, written by C 0.2.0 and fixed Java.
  * Readers accept 1 and 2 and refuse anything else with MMAPQ_ESCHEMA.
  *
- * FIELD LAYOUT (mirrors Java QueueExportMeta.ENCODED_LENGTH):
+ * FIELD LAYOUT:
  *   Offset  Size  Field
  *   0       4     schema_version
  *   4       4     region_size

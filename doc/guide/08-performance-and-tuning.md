@@ -24,28 +24,22 @@ mapper thread. (Why: the Anti-Pattern Ledger in the
 
 ## Benchmarks
 
-Measured against the Java implementation the format derives from,
-measured 2026-06-24 (commit `d3cfb28`), on the same machine — the one comparison where every variable
-(format, framing, hardware, cores) is controlled. On isolated cores
-(physical cores 5, 7, 9 on an Intel i7-12700H) with Transparent Huge Pages
-enabled.
-
 *Measured 2026-06-24 (commit `d3cfb28`, pre-0.1.0), Intel i7-12700H,
 isolcpus 5,7,9 + THP as below. Refreshed at the 0.2.0 release gate.*
 
 Single-message queue — roundtrip to echo server in external process, 20M
 iterations:
 
-| Percentile | C (this library) | Java (JMH, same machine) |
-|:-----------|------------------:|-------------------------:|
-| min (p0)   |        **182 ns** |                   265 ns |
-| p50        |        **284 ns** |                   380 ns |
-| p90        |        **333 ns** |                   429 ns |
-| p99        |        **396 ns** |                   591 ns |
-| p99.9      |       **1869 ns** |                 6,792 ns |
-| p99.99     |       **7411 ns** |                16,533 ns |
-| p99.999    |      **14984 ns** |                15,090 ns |
-| round trips/sec (closed loop) | **3.2 M** | 2.41 M |
+| Percentile | C (this library) |
+|:-----------|------------------:|
+| min (p0)   |        **182 ns** |
+| p50        |        **284 ns** |
+| p90        |        **333 ns** |
+| p99        |        **396 ns** |
+| p99.9      |       **1869 ns** |
+| p99.99     |       **7411 ns** |
+| p99.999    |      **14984 ns** |
+| round trips/sec (closed loop) | **3.2 M** |
 
 Batch queue — roundtrip to echo server in external process, 20M
 iterations:

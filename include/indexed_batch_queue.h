@@ -25,7 +25,6 @@
  * The queue does not own the appenders/pollers/readers it creates — each must
  * be closed independently before or after closing the queue.
  *
- * Mirrors Java IIndexedBatchQueue / MmapqIndexedBatchQueue.
  */
 
 typedef struct MmapqIndexedBatchQueue MmapqIndexedBatchQueue;

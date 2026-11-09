@@ -149,7 +149,7 @@ propagation — comment lines only above the catalogued sites.)
 ### queue_meta.h — 1 (all I)
 
 Lines 156. (DOC-01: line moved by the schema-2 contract comment above the
-constants and again by the X6/Java comment corrections, site unchanged.)
+constants and again by the comment corrections, site unchanged.)
 Archivable contract on the start_index setter; called by both archivers
 (`queue_meta_set_start_index` in `indexed_archiver.c` and
 `indexed_batch_archiver.c`, two sites each), guarded by the
@@ -192,13 +192,14 @@ room for giving up.)
 
 ### uncommitted_payload_iterator.c — 3 (all I)
 
-Lines 529, 694, 710. Internal dispatch null checks. (CAND-58: moved by the classification/restart logic, sites unchanged. CAND-51e: the
+Lines 528, 692, 708. Internal dispatch null checks. (CAND-58: moved by the classification/restart logic, sites unchanged. CAND-51e: the
 gap-end padding-skip check shifted the last two from 434/450. A5/CAND-22:
 init and rewind NULL checks became MMAPQ_EINVAL returns. D8: scan floor,
 checked header read, and three-way advance propagation shifted the
 catalogued sites. CAND-49: the gap-overlap MMAP_ASSERT(0) became a runtime
 MMAPQ_ECORRUPT return (spec §3.2 — the exact-gap-end contract); the
-ranges_insert start < end assert moved to committed_ranges.c.)
+ranges_insert start < end assert moved to committed_ranges.c. Comment-only
+edits above the sites shifted the numbers; sites unchanged.)
 
 ### uncommitted_batch_iterator.c — 1 (1 I)
 

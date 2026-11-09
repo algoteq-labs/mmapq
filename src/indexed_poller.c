@@ -156,7 +156,7 @@ MmapqPollResult mmapq_indexed_poller_poll(
 
     /* Read header at current index — sequential wrap to trigger premap.
      * A mapping timeout is MMAPQ_POLL_ERROR + last_error ETIMEDOUT, exactly
-     * like the payload wrap below (CAND-17; Java throws in the same spot),
+     * like the payload wrap below (CAND-17),
      * UNLESS start_index moved past the cursor in the window between the
      * pre-read check above and this read — then the answer is ARCHIVED
      * (POLL-ARCH-01): the archiver reclaims a header file only once

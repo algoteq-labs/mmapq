@@ -10,7 +10,7 @@
  * Encapsulates two queues (request and response).
  * The client appends to 'request' and polls 'response'.
  *
- * This component is a pure client. An external server (C echo_server or Java EchoServer)
+ * This component is a pure client. An external server (C echo_server)
  * must be running to receive requests and echo them back.
  */
 

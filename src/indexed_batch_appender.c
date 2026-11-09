@@ -1290,8 +1290,7 @@ int mmapq_mutable_batch_get_checked(MmapqMutableBatch *b, int32_t message_index,
     if (b == NULL || out_data == NULL || out_length == NULL) return MMAPQ_EINVAL;
     /* CAND-50 item 3: an out-of-range index is an error, never message 0 —
      * the negative-index clamp was a positioning-loop artifact, never
-     * deliberate (the D3.0 rule-13 record; Java moveTo has always
-     * thrown). */
+     * deliberate (the D3.0 rule-13 record). */
     if (message_index < 0 || message_index >= b->message_count) return MMAPQ_EINVAL;
     MmapqIndexedBatchAppender *a = b->appender;
     mmapq_batch_iterator_init(&a->batch_iterator, b->batch_offset,

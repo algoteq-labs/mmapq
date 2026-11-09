@@ -1,7 +1,8 @@
 # mmapq payload alignment design
 
 **Status:** Approved design
-**Scope:** Java / C / Rust / Python interoperability over the operational queue file format
+**Scope:** C / Rust / Python interoperability over the operational queue file format
+**Java:** not covered — Java-written queues are refused at open in 0.2.0 (schema_version 1); Java support is planned at schema 2.
 **Audience:** Implementers across all supported language bindings
 
 ---
@@ -110,14 +111,8 @@ This pattern is already how each target language naturally handles
 exactly this situation, and the queue's design leans on that rather than
 working against it:
 
-- **Java** — `Agrona`-style `MutableDirectBuffer`/`UnsafeBuffer` accessors
-  (`getLong(offset)`, `getInt(offset)`) read individual fields at byte
-  offsets, with no assumption that the buffer as a whole is aligned for
-  any particular struct layout. This has always been the pattern in the
-  Java implementation and tolerates arbitrary offsets transparently.
-
 - **C** — field access via `memcpy` of individual fields, or an
-  offset-based accessor layer analogous to the Java flyweight pattern,
+  offset-based accessor layer (the flyweight pattern),
   rather than `*(MyStruct*)ptr`. A direct struct cast on a pointer with no
   alignment guarantee is undefined behaviour in C and must be avoided
   regardless of whether the consequence happens to be observable on any
@@ -152,18 +147,16 @@ languages, and the queue's design simply does not need to disturb it.
 
 ---
 
-## 4. Interoperability across Java, C, Rust, and Python
+## 4. Interoperability across C, Rust, and Python
 
 Because the wire format places no alignment requirement on individual
 messages — only on regions, which is a property every language's region
 mapper independently enforces identically — the same set of queue files
 can be written and read live, concurrently, by processes in any
-combination of these four languages, with no translation layer and no
+combination of these three languages, with no translation layer and no
 format negotiation required:
 
-- A **Java** sequencer process can append messages that a **C** execution
-  engine or **Rust** risk service polls in real time from the same queue
-  directory.
+- A **C** sequencer process can append messages that a **Rust** execution engine or risk service polls in real time from the same queue directory.
 - A **Python** analytics or monitoring consumer can attach as a reader to
   the same live files without any special accommodation, using `cffi`/
   `ctypes` bindings to the C library and `struct.unpack` for field
@@ -193,10 +186,10 @@ unconstrained by, anything in the transport format itself.
   synchronization point; payload visibility is inherited from it via the
   memory model, requiring no alignment of payload bytes themselves.
 - Field access: via offset-based codecs/flyweights in every supported
-  language — the natural, already-idiomatic pattern in Java, C, Rust, and
+  language — the natural, already-idiomatic pattern in C, Rust, and
   Python alike — never via direct struct-cast dereferencing of a
   raw pointer.
-- Interoperability: any combination of Java/C/Rust/Python processes can
+- Interoperability: any combination of C/Rust/Python processes can
   share live operational queue files directly, with field-level decoding
   handled uniformly by a codec layer that sits above, and is decoupled
   from, the transport format described here.

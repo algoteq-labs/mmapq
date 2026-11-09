@@ -23,7 +23,7 @@
  *   appender_meta_A         — per-appender start offset
  *   appender_id_pool        — bitset for ID allocation
  *
- * DEFAULTS (mirrors Java IndexedQueueBuilder):
+ * DEFAULTS:
  *   region_size:        4 MB  (4096 * 1024)
  *   ring_size:          4
  *   regions_to_map_ahead: 1

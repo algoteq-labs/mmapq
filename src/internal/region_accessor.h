@@ -7,7 +7,6 @@
 /**
  * WrapResult — outcome of a region wrap operation.
  *
- * Mirrors Java WrapResult enum exactly.
  * The caller MUST check for SUCCESS before using the buffer.
  * Using a buffer after any non-SUCCESS result is undefined behaviour.
  */
@@ -26,7 +25,6 @@ typedef enum {
  * The region populates data and capacity on a successful wrap.
  *
  * capacity: available bytes from data to end of the mapped region.
- *           Equivalent to Java DirectBuffer.capacity() after wrap.
  *           Set by the region on WRAP_SUCCESS only.
  *           May be less than the full region size if the logical position
  *           falls near the end of a region — the queue must skip in this case.

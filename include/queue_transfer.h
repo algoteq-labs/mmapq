@@ -41,8 +41,6 @@
  * All functions support optional include/exclude filters.  Pass NULL for
  * both to accept all entries.
  *
- * Mirrors Java QueueTransfer, IndexedQueueCopy, IndexedQueueExport,
- * IndexedQueueImport.
  */
 
 #include <stdint.h>

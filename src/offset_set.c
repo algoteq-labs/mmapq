@@ -43,8 +43,7 @@ int mmapqi_offset_set_reserve(OffsetSet *s, int extra)
     return offset_set_grow(s, (int)need);
 }
 
-/* Binary search: index of off, or -1- insertion_point (the Java
- * Arrays.binarySearch contract) when absent. */
+/* Binary search: index of off, or -1- insertion_point when absent. */
 static int offset_set_find(const OffsetSet *s, int64_t off)
 {
     int lo = 0, hi = s->count - 1;

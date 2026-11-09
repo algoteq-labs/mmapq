@@ -6,8 +6,8 @@ commands and the batch queue carries events, and in which replay, recovery,
 replication, and audit are all the same mechanism — reading a committed
 log.
 
-The pattern predates this library. It was developed for production FX
-trading platforms and exists in two open-source Java implementations by the
+The pattern predates this library. It was developed for trading platforms
+and exists in two open-source Java implementations by the
 same lineage: [tools4j/event-sourcing](https://github.com/tools4j/event-sourcing)
 and its successor [elara](https://github.com/tools4j/elara), whose
 terminology this guide borrows. It is a variation of the *sequencer*

@@ -420,8 +420,7 @@ int mmapqi_uncommitted_iterator_init(
     int64_t stream_start = it->start_of_stream_offset(it->stream_ctx);
 
     /* Reject out-of-range caller offsets as plain argument validation,
-     * before any state is touched (Java init parity: start > end when both
-     * are set is EINVAL too). */
+     * before any state is touched (start > end when both are set is EINVAL too). */
     if (start_offset != PAYLOAD_ITERATOR_NOT_SET) {
         if (start_offset < stream_start) return MMAPQ_EINVAL;
     }
@@ -662,8 +661,7 @@ int mmapqi_uncommitted_iterator_advance(MmapqUncommittedPayloadIterator *it)
          * MMAP_ASSERT here, which compiled out in release): the message
          * must sit cleanly before the next committed range — an overlap or
          * an overshoot past the range's start is corruption. Runtime check
-         * in both configs (stricter than Java's silent skip — owner
-         * ruling). */
+         * in both configs (owner ruling). */
         if (it->current_range < it->ranges.count &&
             (it->inner->current_message_offset >= it->ranges.v[it->current_range].start ||
              it->inner->next_probing_offset   >  it->ranges.v[it->current_range].start))

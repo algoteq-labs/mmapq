@@ -28,7 +28,6 @@
  * operate concurrently on separate appender instances; they must not share
  * a single MmapqIndexedBatchAppender.
  *
- * Mirrors Java IIndexedBatchAppender.
  */
 
 typedef struct MmapqIndexedBatchAppender MmapqIndexedBatchAppender;
@@ -50,7 +49,6 @@ typedef struct MmapqUncommittedBatchIterator MmapqUncommittedBatchIterator;
  * the iterator returned by mmapq_mutable_batch_iterator(); do not
  * interleave them, even on one thread.
  *
- * Mirrors Java IMutableBatch.
  */
 typedef struct MmapqMutableBatch       MmapqMutableBatch;
 

@@ -31,11 +31,11 @@
  *   - Read-write for the owning appender
  *   - Read-only for pollers/readers
  *
- * FILE NAMING MATCHES Java:
+ * FILE NAMING:
  *   header files  = "header_<N>"      (N = roll index, decimal)
  *   payload files = "payload_<A>_<N>" (A = appender ID, N = roll index)
  *
- * PRE-MAP TRIGGER RATIOS (from Java RegionAccessorSupplier):
+ * PRE-MAP TRIGGER RATIOS:
  *   RO: 0.5 (premap at halfway through current region)
  *   RW: 0.0 (premap immediately — appender always at the frontier)
  *

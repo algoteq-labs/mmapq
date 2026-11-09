@@ -320,7 +320,7 @@ the same rules:
    (reject below `start_offset`, CAS). Batch queues: the same at batch
    granularity — the one-call complete is the tail (no check); the
    deferred batch commit is membership-gated, then the same protocol.
-   (The current Java batch appender has no commit validation at all; Java
+   (Java
    does not yet read batch queues, so no mixed C/Java batch queue can
    exist.)
 6. Join: never read headers below `start_index`; with no own live entry,

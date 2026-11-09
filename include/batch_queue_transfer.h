@@ -51,8 +51,6 @@
  *   mmapq_queue_transfer_import_batch_stream() — batch stream → normal queue (flatten)
  *   mmapq_batch_queue_transfer_import_flat_stream() — flat stream → batch queue (1-msg batches)
  *
- * Mirrors Java BatchQueueTransfer, IndexedBatchQueueCopy,
- * IndexedBatchQueueExport, IndexedBatchQueueImport.
  */
 
 #include <stdint.h>

@@ -48,7 +48,6 @@
  *
  * Thread-confined: not safe for concurrent access.
  *
- * Mirrors Java IIndexedArchiver / MmapqIndexedArchiver.
  */
 
 typedef struct MmapqIndexedArchiver MmapqIndexedArchiver;

@@ -1,6 +1,6 @@
 # mmapq Maintainer's Guide
 
-This document preserves the critical architectural insights and hard-won optimizations developed during the C11 port of the Algoteq mmap-queue.
+This document preserves the critical architectural insights and hard-won optimizations developed for this library.
 
 ---
 
@@ -54,7 +54,7 @@ We deliberately avoided 8-byte message alignment (which would require a `[length
 Because of the 4-byte length prefix, a message body starting at an 8-byte aligned offset (like the initial offset 64) will land at offset 68, which is **not 8-byte aligned**.
 *   **Never** cast the payload pointer directly to a struct with `int64_t` or `double` fields. This will trigger UBSan "misaligned address" errors.
 *   **Always** use `memcpy` to copy data into a local struct, or use an offset-based flyweight/codec.
-*   Modern compilers (GCC/Clang) optimize these `memcpy` calls into the same unaligned-load instructions that Java's `Unsafe` uses. There is **zero performance penalty** for this safety.
+*   Modern compilers (GCC/Clang) optimize these `memcpy` calls into unaligned-load instructions. There is **zero performance penalty** for this safety.
 
 **Correct Implementation Pattern:**
 ```c
@@ -101,19 +101,19 @@ During development, several aggressive optimizations were attempted and subseque
 ### Anti-Pattern A: `mlockall(MCL_FUTURE)`
 *   **Theory**: Use `mlockall` to guarantee zero page faults.
 *   **Reality**: In multi-process IPC on non-RT kernels, this forces the kernel to track every page as "pinned," making every `mmap` call and growth event significantly heavier due to kernel-level synchronization.
-*   **Java Clue**: Java achieves 17µs stability **without** `mlockall` by being "quiet" and relying on user-space pre-touch.
+*   **Why it is unnecessary**: stability is reached **without** `mlockall` by staying "quiet" and relying on user-space pre-touch.
 *   **Current code status**: `mlockall` is absent from the codebase. ✓
 
 ### Anti-Pattern B: Synchronous Eager Unmapping
 *   **Theory**: Call `munmap` and `close` the instant a rolled file is finished to keep the address space lean.
 *   **Reality**: Triggers synchronous kernel Inter-Processor Interrupts (IPIs) to all cores. This "Stop-the-World" event (TLB Shootdown) creates 2ms+ spikes.
-*   **Java Clue**: Java's GC handles unmapping lazily. During a benchmark, it never happens, so Java never triggers this kernel noise.
+*   **The lazy alternative**: unmapping can be deferred; if it never happens during a benchmark, this kernel noise is never triggered.
 *   **Current code status**: The `munmap` call inside `map_req_process` (`region_async.c`) is **not** an instance of this anti-pattern. It is a deliberate fused "unmap old region, map new region" single processing step for a slot transitioning directly from one valid mapping to the next. The anti-pattern is standalone eager unmapping of a region with nothing immediately following it. The dedicated `UNMAP_REQUESTED` state handles that case (triggered only at `close()` time), keeping standalone unmaps off the hot path. Do not conflate the two.
 
 ### Anti-Pattern C: Aggressive `MAP_POPULATE` — Removing It
 *   **Theory**: Remove `MAP_POPULATE` from `mmap` calls to let the kernel map lazily and avoid heavy locks during mapping.
 *   **Reality**: Removing `MAP_POPULATE` was tried and **made latency worse**. Without it, the kernel only allocates virtual address space during `mmap` — when the hot reader thread enters a new region for the first time it takes ~1,000 page faults synchronously on the critical path (one per 4KB page in a 4MB region).
-*   **Java Clue**: Java warms pages via a user-space atomic CAS pre-touch loop. The C port achieves the equivalent via `rw_pretouch` (writer side) and `MAP_POPULATE` (mapper thread, reader side). Both keep the hot path page-fault-free.
+*   **The approach**: the writer warms new pages with a user-space atomic CAS pre-touch loop (`rw_pretouch`); on the reader side the mapper thread maps with `MAP_POPULATE`. Both keep the hot path page-fault-free.
 *   **Current code status**: `MAP_POPULATE` is **present and intentional** at all three `mmap` call sites (`file_mapper_single_rw.c`, `file_mapper_single_ro.c`, `fixed_size_region.c`). The background `MmapqRuntime` mapper thread absorbs all page-fault cost asynchronously, keeping the hot poll/append loop clean. Do not remove it.
 
 ### Anti-Pattern D: Early Parent Pinning (Affinity Inheritance)
@@ -124,7 +124,7 @@ During development, several aggressive optimizations were attempted and subseque
 ### Anti-Pattern E: File-Size Checks on the Payload Read Path
 *   **Theory**: Verify `position < file size` before mapping a payload region (`check_file_size = 1` on RO payload accessors), so a corrupt header pointing past EOF returns a clean error instead of SIGBUSing the reader.
 *   **Reality**: A committed header already implies readability — the writer's commit order is `ftruncate` → payload write → acq_rel header CAS, so once the header is visible the payload is written. On coherent local filesystems the check therefore only ever fires on genuine corruption. Worse, file-size visibility is **not synchronous with the data** on metadata-lagging filesystems (NFS-class attribute caching): a committed, readable message can fail `BEYOND_FILE_SIZE` against a stale size, and the region rings give up after `REGION_MAX_BEYOND_FILE_SIZE_ERRORS` spin attempts (`region_sync.c`, `region_async.c`), turning "await sync" into an immediate `POLL_ERROR`/`ETIMEDOUT` for valid data. The check also costs an `fstat` per frontier region map when tailing the writer. Tried as the C-07 fix in the 2026-10-09 audit cycle (fail-firsted, verified, then rolled back by owner decision).
-*   **Java Clue**: Java passes `CHECK_FILE_SIZE_FALSE` on the payload path for exactly this reason; the C port mirrors it deliberately.
+*   **Rationale**: this is why the payload path deliberately skips the file-size check.
 *   **Current code status**: `queue_region_accessor.c` passes `check_file_size = acc->read_only ? 0 : 1` for payload accessors — the `0` for RO is intentional. Header accessors keep the check (literal `1` in `create_ro`), where `BEYOND_FILE_SIZE` bounds re-wrap attempts on out-of-range seeks (`move_to_index`). A corrupt header pointing past payload EOF is accepted risk (SIGBUS): queues are transient — recreate. Do not add the check.
 
 ---
@@ -147,7 +147,7 @@ The `meta` file is the sole source of the configuration contract.
 *   **Appender (Authoritative)**: The only component permitted to create or initialize the `meta` file. If the file exists, the appender **must** adopt the on-disk parameters and ignore its own constructor arguments.
 *   **Poller/Reader (Follower)**: Pure consumers. They must open the `meta` file Read-Only and discover configuration lazily from disk.
 *   **Parity**: All control files (`meta`, `appender_meta`, `id_pool`) are standardized to **64 bytes** (matching Java).
-*   **Lazy Growth**: Files grow region-by-region (e.g. 4MB) only when a writer enters a new region. This matches Java's behavior and eliminates the massive filesystem journaling noise caused by eager 1GB truncation.
+*   **Lazy Growth**: Files grow region-by-region (e.g. 4MB) only when a writer enters a new region. This eliminates the massive filesystem journaling noise caused by eager 1GB truncation.
 *   **Permissions**: Standardized to **`0664`** (files) and **`0775`** (directories) for seamless cross-process and cross-language access.
 
 ### Confirmed Shutdown Handshake

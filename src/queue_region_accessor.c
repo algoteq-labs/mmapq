@@ -345,8 +345,7 @@ RegionAccessor *mmapqi_queue_region_accessor_payload(QueueRegionAccessor *acc,
     MapMode mode = acc->read_only ? MAP_MODE_READ_ONLY : MAP_MODE_READ_WRITE;
 
     /*
-     * No file-size check on the payload read path (mirrors Java
-     * CHECK_FILE_SIZE_FALSE). A committed header implies the writer has
+     * No file-size check on the payload read path. A committed header implies the writer has
      * already extended the file and written the message — commit order is
      * ftruncate → payload write → acq_rel header CAS. Checking the size
      * here is both hot-path cost (fstat per frontier region map) and wrong

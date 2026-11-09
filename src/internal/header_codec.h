@@ -213,7 +213,7 @@ static inline int header_index_in_range(int64_t index)
 /**
  * header_position — compute the file byte offset for index in the header file.
  *
- * Optimized non-linear mapping matching Java Layout.java.
+ * Optimized non-linear mapping.
  *
  * Transposing from horizontal walk to vertical walk to eliminate false sharing:
  * using modulo for sector_index (fast stride) and division for word_index (slow shift).
@@ -279,9 +279,9 @@ static inline int payload_is_short_padding(int32_t capacity)
  * abs(length) counts the bytes after the 4-byte length field itself;
  * the caller skips forward by abs(length) + PAYLOAD_LENGTH_SIZE (= remaining region capacity).
  *
- * NOTE: The Java implementation writes (PAYLOAD_LENGTH_SIZE - capacity) as the negative
+ * NOTE: A padding header stores (PAYLOAD_LENGTH_SIZE - capacity) as the negative
  * length, so abs(length) + PAYLOAD_LENGTH_SIZE = original capacity.
- * In C: the walk skips by -length + PAYLOAD_LENGTH_SIZE (see payload_walk.c).
+ * The walk skips by -length + PAYLOAD_LENGTH_SIZE (see payload_walk.c).
  */
 static inline int payload_is_long_padding(int32_t length)
 {

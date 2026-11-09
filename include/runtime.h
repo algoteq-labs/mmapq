@@ -7,13 +7,12 @@
 /**
  * MmapqRuntime — a dedicated poll thread executing registered Executables.
  *
- * Mirrors Java IPCRuntime / IIPCRuntime exactly.
  *
  * A single MmapqRuntime thread iterates its list of Executables in a tight loop,
  * calling execute() on each in turn, accumulating work counts, and applying
  * an MmapqIdleStrategy at the end of each full iteration when no work was done.
  *
- * Threading contract (identical to Java):
+ * Threading contract:
  *   - register()   may be called from any thread.
  *   - unregister() MUST be called from the MmapqRuntime thread only.
  *     Cross-thread unregistration must be performed by registering a
@@ -113,7 +112,6 @@ int mmapq_idle_strategy_sleep_create(uint64_t min_sleep_ns, uint64_t max_sleep_n
 
 /**
  * Backoff — progressive backoff: spin → yield → sleep.
- * Mirrors Java MmapqIdleStrategy.BACKOFF behaviour.
  * spin_count:   iterations before switching to yield
  * yield_count:  yield iterations before switching to sleep
  * max_sleep_ns: maximum sleep duration
@@ -323,7 +321,7 @@ int mmapq_deregister_executable_create_with_free(
 /* ── Singleton MmapqRuntime registry ──────────────────────────────────────────── */
 
 /**
- * Well-known MmapqRuntime IDs — mirrors Java IPCRuntimes constants.
+ * Well-known MmapqRuntime IDs.
  */
 #define MMAPQ_RUNTIME_ID_REGION_MAPPER       0
 #define MMAPQ_RUNTIME_ID_SHARED_MEM_NOTIFIER 1

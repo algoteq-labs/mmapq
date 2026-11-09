@@ -25,7 +25,6 @@
  * mmapq_batch_iterator_current_data_ffi() and mmapq_batch_iterator_current_length_ffi()
  * are only valid after a successful call to mmapq_batch_iterator_advance() (returns 1).
  *
- * Mirrors Java IBatch / MmapqBatchPayloadIterator.
  */
 
 /** Offset of the message count field at the start of each batch. */
@@ -171,7 +170,6 @@ int32_t mmapq_batch_iterator_current_length_ffi(const MmapqBatchPayloadIterator 
  * returns 0. This is the position where the next batch begins in the
  * payload stream.
  *
- * Mirrors Java MmapqBatchPayloadIterator.nextPayloadPosition().
  */
 int64_t mmapq_batch_iterator_next_payload_position_ffi(const MmapqBatchPayloadIterator *it);
 
