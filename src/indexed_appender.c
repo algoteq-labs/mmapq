@@ -199,8 +199,8 @@ static __attribute__((always_inline)) inline int write_payload(
 {
     /* Order the previous record's payload bytes before this record's
      * length prefix (and before any padding marker below): the torn-tail
-     * rule — after a crash only the lane's highest-offset uncommitted
-     * record can be torn; every earlier uncommitted record is byte-intact
+     * rule — a crash can tear only the record being written when it
+     * happens, the lane's highest-offset uncommitted record at that crash
      * (CAND-50 item 2) — needs the prior append's payload memcpy complete
      * in program order before this record's length store. With LTO=1
      * consecutive appends can be inlined into one stream and plain

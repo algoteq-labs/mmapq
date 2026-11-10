@@ -377,7 +377,8 @@ Binding-specific entries live in the per-repository notes:
 - A permanent failure to look up a queue file other than "it does not
   exist" — no permission on a directory, or a path component that is not a
   directory — is reported as `MMAPQ_ETIMEDOUT` (retryable) on every
-  attempt, although retrying does not help.
+  attempt, although retrying does not help; so is a base directory that
+  does not exist when the first appender is created.
 - A payload file deleted under a committed message (outside the
   persistence contract) is reported as `MMAPQ_ETIMEDOUT` by the
   single-message reader and poller and as `MMAPQ_ECORRUPT` by the batch

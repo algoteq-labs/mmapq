@@ -219,12 +219,15 @@ int64_t mmapq_indexed_appender_commit(
  * committed with the existing mmapq_indexed_appender_commit() — any subset,
  * any order, same session or after rejoin; not committing = skip; an offset
  * archiving has overtaken returns EINVAL. Each yielded offset becomes
- * committable (refill). After a process crash only the lane's
- * highest-offset uncommitted record can be torn (single writer,
- * sequential writes, the length prefix is written before the data);
- * every earlier uncommitted record is byte-intact. Validate before
- * committing; with no payload integrity check, discard that record and
- * re-request or re-append it.
+ * committable (refill). After a process crash at most the record that
+ * was being written — the lane's highest-offset uncommitted record at
+ * that crash — can be torn (single writer, sequential writes, the length
+ * prefix is written before the data); every record written before it is
+ * byte-intact. A record that is not committed is never removed: one torn
+ * at an earlier crash reappears in every later walk at an offset that is
+ * no longer the highest. Discard the highest-offset record and re-request
+ * or re-append it; validate the others before committing (the library has
+ * no payload integrity check) or remember the offsets discarded earlier.
  */
 int mmapq_indexed_appender_uncommitted_iterator_checked(
     MmapqIndexedAppender *a,
@@ -248,11 +251,15 @@ int mmapq_indexed_appender_uncommitted_iterator_checked(
  * next call re-yields the same message; outputs cleared on any non-1
  * return). A negative is truthy in C: compare explicitly, never
  * `while (mmapq_uncommitted_iterator_next(...))`.
- * After a process crash only the lane's highest-offset uncommitted
- * record can be torn (single writer, sequential writes, the length
- * prefix is written before the data); every earlier uncommitted record
- * is byte-intact. Validate before committing; with no payload integrity
- * check, discard that record and re-request or re-append it.
+ * After a process crash at most the record that was being written — the
+ * lane's highest-offset uncommitted record at that crash — can be torn
+ * (single writer, sequential writes, the length prefix is written before
+ * the data); every record written before it is byte-intact. A record that
+ * is not committed is never removed: one torn at an earlier crash
+ * reappears in every later walk at an offset that is no longer the
+ * highest. Discard the highest-offset record and re-request or re-append
+ * it; validate the others before committing (the library has no payload
+ * integrity check) or remember the offsets discarded earlier.
  */
 int mmapq_uncommitted_iterator_next(
     MmapqUncommittedPayloadIterator *it,

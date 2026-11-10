@@ -82,7 +82,7 @@ MmapqRuntime *rt = NULL;
 int rc = mmapq_runtime_region_mapper(&rt);
 assert(rc == 0);
 
-/* Open or create a queue */
+/* Open or create a queue; "./data" must already exist */
 MmapqIndexedQueue *q = NULL;
 rc = mmapq_indexed_queue_create_default("./data", "orders", rt, rt, &q);
 assert(rc == 0);
@@ -127,6 +127,7 @@ MmapqRuntime *rt = NULL;
 int rc = mmapq_runtime_region_mapper(&rt);
 assert(rc == 0);
 
+/* "./data" must already exist */
 MmapqIndexedBatchQueue *q = NULL;
 rc = mmapq_indexed_batch_queue_create_default("./data", "events", rt, rt, &q);
 assert(rc == 0);

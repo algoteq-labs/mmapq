@@ -19,7 +19,11 @@ that appender came from. The settings stored then — `archivable`,
 `region_size`, `max_file_size` and `start_index` — are fixed: every later
 open uses the stored values and ignores its own. Create the queue and its
 first appender in one place with the intended settings, and have the
-archiving process check the archiver's `archivable` at startup.
+archiving process check the archiver's `archivable` at startup (C
+`mmapq_indexed_archiver_archivable_checked`, Rust and Python
+`archivable()`). Until the queue's first appender has written its files
+the check fails with a retryable `MMAPQ_ENOENT`, `MMAPQ_ENOTREADY` or
+`MMAPQ_ETIMEDOUT`: retry it on the same archiver.
 
 ## The three boundaries
 
@@ -91,6 +95,16 @@ and the unlink. Marks that dropped out of the re-list are skipped: they
 are live again (an undo ran before the hold) or already gone. **A mark is
 a snapshot, not permission** — that is why the re-list exists.
 
+Files are reclaimed whole: a payload file only when it is wholly below
+its lane's bound, a header file only when it is wholly below
+`start_index`. Freed space therefore comes in file-sized steps. A file
+grows region by region up to `max_file_size` and then rolls: with the
+defaults (4 MiB regions, 1 GiB files) a lane frees nothing until it has
+written more than 1 GiB, and a header file holds `max_file_size` / 8
+indices (134,217,728 with the defaults). Size `max_file_size` to the
+retention you want: disk use stays up to about one file per lane, plus
+one header file, above what archiving has released.
+
 ## Hand deletion (the X5 rule)
 
 If you delete, move or compress the listed files yourself instead of
@@ -119,6 +133,11 @@ provides what makes this work, under three rules:
 1. **A snapshot is identified by N, the index of the next entry to apply**
    once it is loaded: it holds every entry below N. Store it where
    consumers can find it by N.
+   Between polls, a poller's `current_index()` is the N of what it has
+   applied; inside the poll handler it is still the index being delivered,
+   so a snapshot taken there after applying that entry is that index + 1.
+   At the `start_index` of a queue never archived (0 by default) the
+   snapshot is the empty state.
 2. **Snapshot first, then archive.** Make snapshot N durable, then call
    `archive_up_to_index(N)`, then reclaim. Let the snapshotter be the only
    process that archives: then `start_index` is always the N of a durable

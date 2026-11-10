@@ -21,19 +21,31 @@ contract is the [persistence contract](../reference/persistence-contract.md).
 ## The torn-tail rule and the recipe
 
 Writers append sequentially and write each record's length before its data.
-It follows that after a crash:
+It follows that a crash tears at most one record:
 
-> Only the lane's **highest-offset uncommitted** record can be torn.
-> Earlier uncommitted records are byte-intact.
+> Only the record being written when the crash happens — the lane's
+> **highest-offset uncommitted record at that crash** — can be torn. Every
+> record written before it is byte-intact as written.
 
-There is no payload integrity check that can tell a torn record from a
-valid one. The recipe for the restart walk:
+A record that is not committed is never removed. A record you discard or
+skip stays in the lane and reappears in every later walk, until archiving
+passes it. After the rejoined writer appends again it is no longer the
+highest-offset record, so after a second crash the walk can yield a record
+torn at the first crash at an earlier offset — by position it looks intact.
+
+The library has no payload integrity check that can tell a torn record from
+a valid one. The recipe for the restart walk:
 
 1. Walk the lane's uncommitted iterator.
-2. For every record except the lane's highest-offset one: it is intact —
-   commit or skip by your application policy.
-3. For the highest-offset record: **discard it** — do not commit it.
+2. For the highest-offset record: **discard it** — do not commit it.
    Re-request it or re-append it from the source.
+3. For every other record: first rule out what an earlier restart
+   discarded. Either record the discarded offsets durably before the writer
+   appends again, and pass over them in later walks, or validate every
+   record (a checksum, or the application's own sequence number, in the
+   payload). A lane that can crash more than once needs one of the two.
+   Then commit or skip by your application policy; a record you skip
+   reappears too.
 
 Batch caveat: the rule holds only when the caller fills `append_reserved`
 bytes before reserving the next message. No fence can order caller writes

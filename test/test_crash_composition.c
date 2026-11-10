@@ -1684,6 +1684,87 @@ void test_cc_sm_torn_tail_earlier_intact(void)
     assert_payload_lane(CUR.dir, CC_QUEUE, 0,
                         cp + PAYLOAD_LENGTH_SIZE + 100);
 }
+
+/* Repeated-crash pin: a record torn at crash 1 is never removed. The rejoin
+ * walks past it and appends after it, so after crash 2 the walk yields it
+ * again — no longer the lane's highest-offset record — with its torn bytes
+ * unchanged. Guards existing behaviour (the walk-past-the-tail rejoin) —
+ * fail-first not applicable; the mutant check is in the card report. */
+static void cc_rep_child2(void)
+{
+    MmapqIndexedQueue *q = NULL;
+    MmapqIndexedAppender *a = NULL;
+    if (cc_s_open(CUR.dir, CUR.file_size, &q, &a) != 0) _exit(2);
+    static char buf[64];
+    /* U: appended after the rejoin, 24 bytes, fill 0x74 */
+    memset(buf, 0x74, 24);
+    int64_t after_a = cc_after(INITIAL_PAYLOAD_POSITION, 24);
+    int64_t cp = cc_place(cc_after(after_a, 24), 100);
+    int64_t up = cc_place(cc_after(cp, 100), 24);
+    if (mmapq_indexed_appender_append_uncommitted(a, buf, 24) != up) _exit(66);
+    cc_die();
+}
+
+void test_cc_sm_torn_tail_repeated_crash(void)
+{
+    cc_seq++;
+    memset(&CUR, 0, sizeof CUR);
+    CUR.file_size = CC_FILE_G1;
+    cc_case_dir();
+    cc_trace("sm-torn-tail-repeated");
+
+    cc_fork_kill(cc_d2_child);                    /* crash 1 */
+
+    /* T1: torn at crash 1 — declared length 100, half the payload written */
+    int64_t after_a = cc_after(INITIAL_PAYLOAD_POSITION, 24);
+    int64_t bp = cc_place(after_a, 24);
+    int64_t cp = cc_place(cc_after(after_a, 24), 100);
+    cc_pwrite32(cp, 100);
+    char pay[50];
+    memset(pay, 0x73, sizeof pay);
+    cc_pwrite_bytes(cp + PAYLOAD_DATA_OFFSET, pay, sizeof pay);
+
+    cc_fork_kill(cc_rep_child2);                  /* rejoin, append U, crash 2 */
+
+    /* rejoin 2: B intact, T1 torn and no longer highest, then U intact */
+    int64_t up = cc_place(cc_after(cp, 100), 24);
+    MmapqIndexedQueue *q = NULL;
+    MmapqIndexedAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, cc_s_open(CUR.dir, CUR.file_size, &q, &a));
+    MmapqUncommittedPayloadIterator *it = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_appender_uncommitted_iterator_checked(a,
+            MMAPQ_PAYLOAD_ITERATOR_NOT_SET, MMAPQ_PAYLOAD_ITERATOR_NOT_SET,
+            &it));
+    const void *data = NULL; int32_t len = 0; int64_t off = -2;
+    TEST_ASSERT_EQUAL_INT(1,
+        mmapq_uncommitted_iterator_next(it, &data, &len, &off));
+    TEST_ASSERT_EQUAL_INT64(bp, off);
+    TEST_ASSERT_EQUAL_INT32(24, len);
+    const uint8_t *d = data;
+    for (int32_t x = 0; x < 24; x++)
+        TEST_ASSERT_EQUAL_UINT8(0x72, d[x]);      /* B: byte-intact */
+    TEST_ASSERT_EQUAL_INT(1,
+        mmapq_uncommitted_iterator_next(it, &data, &len, &off));
+    TEST_ASSERT_EQUAL_INT64(cp, off);
+    TEST_ASSERT_EQUAL_INT32(100, len);
+    d = data;
+    for (int32_t x = 0; x < 50; x++)
+        TEST_ASSERT_EQUAL_UINT8(0x73, d[x]);      /* T1: written prefix */
+    for (int32_t x = 50; x < 100; x++)
+        TEST_ASSERT_EQUAL_UINT8(0, d[x]);         /* T1: still torn */
+    TEST_ASSERT_EQUAL_INT(1,
+        mmapq_uncommitted_iterator_next(it, &data, &len, &off));
+    TEST_ASSERT_EQUAL_INT64(up, off);             /* T1 is not the highest */
+    TEST_ASSERT_EQUAL_INT32(24, len);
+    d = data;
+    for (int32_t x = 0; x < 24; x++)
+        TEST_ASSERT_EQUAL_UINT8(0x74, d[x]);      /* U: byte-intact */
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_uncommitted_iterator_next(it, &data, &len, &off));
+    cc_s_close(q, a);
+    assert_payload_lane(CUR.dir, CC_QUEUE, 0, up + PAYLOAD_LENGTH_SIZE + 24);
+}
 #else
 void test_cc_batch_compose_g1(void) { TEST_IGNORE_MESSAGE("fork suite: excluded under TSan (test_runtime.c precedent)"); }
 void test_cc_batch_compose_g2(void) { TEST_IGNORE_MESSAGE("fork suite: excluded under TSan"); }
@@ -1693,6 +1774,7 @@ void test_cc_batch_header_cap4_next_region(void) { TEST_IGNORE_MESSAGE("excluded
 void test_cc_recovered_end4_rejoin(void)         { TEST_IGNORE_MESSAGE("excluded under TSan"); }
 void test_cc_orphan_recovery_end4(void)          { TEST_IGNORE_MESSAGE("excluded under TSan"); }
 void test_cc_sm_torn_tail_earlier_intact(void)   { TEST_IGNORE_MESSAGE("fork suite: excluded under TSan"); }
+void test_cc_sm_torn_tail_repeated_crash(void)   { TEST_IGNORE_MESSAGE("fork suite: excluded under TSan"); }
 #endif
 
 /* Guard pin (owner, finding #4 ruling): a staged batch followed by a
@@ -1816,6 +1898,7 @@ int main(void)
     RUN_TEST(test_cc_recovered_end4_rejoin);
     RUN_TEST(test_cc_orphan_recovery_end4);
     RUN_TEST(test_cc_sm_torn_tail_earlier_intact);
+    RUN_TEST(test_cc_sm_torn_tail_repeated_crash);
     RUN_TEST(test_cc_batch_compose_g1);
     RUN_TEST(test_cc_batch_compose_g2);
     RUN_TEST(test_cc_batch_recovery_crash);

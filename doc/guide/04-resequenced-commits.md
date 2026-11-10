@@ -38,7 +38,7 @@ assert(rc == 0);
 
 const void *data; int32_t len; int64_t off;
 while ((rc = mmapq_uncommitted_iterator_next(it, &data, &len, &off)) == 1) {
-    /* decide: commit it, or skip it */
+    /* decide: commit it, or skip it — after the torn-tail check below */
     int64_t idx = mmapq_indexed_appender_commit(a, off);
     assert(idx >= 0);
 }
@@ -52,6 +52,10 @@ The iterator snapshots at the factory call; the appending context must not
 be active while iterating. Commit found offsets in any subset, any order —
 skipping is fine. Archiving may remove messages the walk has not yielded,
 even after an undo.
+
+In the bindings: Rust `IndexedAppender::append_uncommitted`, `commit` and
+`uncommitted_iter`; Python `append_uncommitted()`, `commit()` and
+`uncommitted()` on the appender.
 
 Batch lanes: `mmapq_indexed_batch_appender_uncommitted_batches_checked()`
 yields staged-but-uncommitted batches (offset + message iterator);
@@ -90,5 +94,8 @@ message the log may be missing is still live.
 
 ## The torn tail
 
-One caveat applies to what the walk can yield after a crash: see the
-torn-tail rule and recipe in [chapter 5](05-crash-and-restart.md).
+A crash can leave the record being written torn, and a record that is
+not committed is never removed: one torn at an earlier crash reappears in
+every later walk, no longer at the highest offset. Validate before you
+commit, or remember what you discarded — the torn-tail rule and recipe
+are in [chapter 5](05-crash-and-restart.md).

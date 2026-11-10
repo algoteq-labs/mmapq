@@ -22,6 +22,6 @@ One definition per term; every other page links here.
 | **snapshot** | Application-level: a saved derived state plus the log index it covers. Recovery from a snapshot means loading it and replaying only the tail. Not a library object. |
 | **reclamation** | Deleting files that no live entry can need: `archivable_files()` lists them, `reclaim_files()` deletes them safely. |
 | **runtime** | The `MmapqRuntime` background thread that maps/unmaps regions ahead of the hot loop (async mapping); queues may instead map synchronously on the calling thread (sync), or mix the two per direction. |
-| **torn tail** | After a crash, the lane's highest-offset uncommitted record may be partially written; earlier uncommitted records are byte-intact. See the recovery recipe in `../guide/05-crash-and-restart.md`. |
+| **torn tail** | After a crash, the record that was being written — the lane's highest-offset uncommitted record at that crash — may be partially written; every record written before it is byte-intact. A record that is not committed is never removed, so one torn at an earlier crash reappears in later walks at an offset that is no longer the highest. See the recovery recipe in `../guide/05-crash-and-restart.md`. |
 | **schema 2** | The `schema_version` written by 0.2.0. Version-1 files are refused at open with `MMAPQ_ESCHEMA`; see `wire-format.md` for the protocol contract. |
 | **wire format** | The on-disk byte layout shared by the C, Rust and Python implementations, specified in `wire-format.md`. |

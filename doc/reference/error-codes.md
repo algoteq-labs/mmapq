@@ -42,6 +42,10 @@ Notes:
   `MMAPQ_ETIMEDOUT` (`POLL_ERROR` on a poll) on every attempt, although
   retrying does not help — see the access each participant needs in
   [chapter 9 of the guide](../guide/09-trade-offs-and-limits.md).
+- A base directory that does not exist is reported the same way: the first
+  appender returns `MMAPQ_ETIMEDOUT` on every attempt. The library creates
+  only the queue's own directory inside the base directory — create the
+  base directory first.
 - A payload file missing under a committed message — deleted by hand or
   damaged, outside the persistence contract — is reported by the
   single-message reader and poller as `MMAPQ_ETIMEDOUT` (`ENTRY_ERROR` /
