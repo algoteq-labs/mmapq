@@ -370,8 +370,10 @@ Binding-specific entries live in the per-repository notes:
 
 ## Known limitations
 
-- 0.2.0 is tested on Linux x86-64 only. Its memory-ordering argument
-  covers ARM64 too, but ARM64 is not tested.
+- ARM64 is not yet in the regular CI. 0.2.0 is tested on Linux x86-64 in
+  CI and passed a one-off run on Linux ARM64 of the full suite (both
+  sanitizers, the torture test, the Rust and Python suites) and a 76-run
+  soak.
 - A permanent failure to look up a queue file other than "it does not
   exist" — no permission on a directory, or a path component that is not a
   directory — is reported as `MMAPQ_ETIMEDOUT` (retryable) on every

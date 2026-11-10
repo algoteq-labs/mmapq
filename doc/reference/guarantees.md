@@ -75,7 +75,7 @@ allocated until it unmaps it. This is expected behaviour, not a leak.
 
 | Claim | Class | Evidence |
 |---|---|---|
-| Naturally aligned lock-free atomics over `MAP_SHARED` are relied on for x86-64 and ARM64; 0.2.0 is tested on Linux x86-64 only | A + C | Stated assumption (address-free lock-free atomics); **asserted at build**: `_Static_assert(ATOMIC_LLONG_LOCK_FREE == 2)` in `src/internal/header_codec.h` |
+| Naturally aligned lock-free atomics over `MAP_SHARED` are relied on for x86-64 and ARM64; tested on Linux x86-64 in CI, and on Linux ARM64 by a one-off run of the full CI suite and a 76-run soak (0.2.0) | A + C | Stated assumption (address-free lock-free atomics); **asserted at build**: `_Static_assert(ATOMIC_LLONG_LOCK_FREE == 2)` in `src/internal/header_codec.h` |
 | All on-disk and stream fields are little-endian | C | **Asserted at build**: `_Static_assert(__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)` in `src/internal/header_codec.h`; the export stream's bytes are pinned by the golden-block pins (`test_c57_export_golden_bytes_flat`/`_batch`) |
 | Cross-process happens-before through `flock` handover | A | Outside C11; stated in `doc/model/README.md` |
 | Up to 256 concurrent writers | C | `MAX_APPENDERS = 256` (`src/internal/header_codec.h`); the ID pool is 8 × 32-bit words in a 64-byte file (`src/internal/appender_id_pool.h`) |
