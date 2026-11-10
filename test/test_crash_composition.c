@@ -1765,6 +1765,89 @@ void test_cc_sm_torn_tail_repeated_crash(void)
     cc_s_close(q, a);
     assert_payload_lane(CUR.dir, CC_QUEUE, 0, up + PAYLOAD_LENGTH_SIZE + 24);
 }
+
+/* Batch repeated-crash pin: crash 1 with a batch open; the rejoin completes
+ * it to staged and join_completed_open_batch reports it once (read-and-clear).
+ * The batch is skipped, the writer stages another and crashes again; the
+ * walk after crash 2 yields the queue-completed batch again, unreported,
+ * then the newer one. Guards existing behaviour — fail-first not applicable;
+ * the mutant check is in the card report. */
+static void cc_bo_child1(void)
+{
+    MmapqIndexedBatchQueue *q = NULL;
+    MmapqIndexedBatchAppender *a = NULL;
+    if (cc_b_open(CUR.dir, CUR.file_size, &q, &a) != 0) _exit(2);
+    static char buf[64];
+    memset(buf, 0x51, 40);
+    MmapqMutableBatch *b = NULL;
+    if (mmapq_indexed_batch_appender_start_batch_checked(a, &b) != 0) _exit(3);
+    if (mmapq_mutable_batch_append(b, buf, 40) != 0) _exit(4);
+    if (mmapq_mutable_batch_append(b, buf, 40) != 1) _exit(5);
+    cc_die();                                     /* crash 1: batch open */
+}
+
+static void cc_bo_child2(void)
+{
+    MmapqIndexedBatchQueue *q = NULL;
+    MmapqIndexedBatchAppender *a = NULL;
+    if (cc_b_open(CUR.dir, CUR.file_size, &q, &a) != 0) _exit(2);
+    static char buf[64];
+    memset(buf, 0x52, 24);
+    MmapqMutableBatch *b = NULL;
+    if (mmapq_indexed_batch_appender_start_batch_checked(a, &b) != 0) _exit(6);
+    if (mmapq_mutable_batch_append(b, buf, 24) != 0) _exit(7);
+    if (mmapq_mutable_batch_complete_uncommitted(b) < 0) _exit(8);
+    cc_die();                                     /* crash 2: Y staged */
+}
+
+void test_cc_batch_open_repeated_crash(void)
+{
+    cc_seq++;
+    memset(&CUR, 0, sizeof CUR);
+    CUR.file_size = CC_FILE_G1;
+    cc_case_dir();
+    cc_trace("batch-open-repeated");
+
+    cc_fork_kill(cc_bo_child1);
+
+    /* rejoin 1: the open batch X is completed to staged and reported once */
+    MmapqIndexedBatchQueue *q = NULL;
+    MmapqIndexedBatchAppender *a = NULL;
+    TEST_ASSERT_EQUAL_INT(0, cc_b_open(CUR.dir, CUR.file_size, &q, &a));
+    int64_t x = -1, off = -1;
+    TEST_ASSERT_EQUAL_INT(1,
+        mmapq_indexed_batch_appender_join_completed_open_batch(a, &x));
+    TEST_ASSERT_EQUAL_INT64(cc_batch_start(INITIAL_PAYLOAD_POSITION), x);
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_batch_appender_join_completed_open_batch(a, &off));
+    MmapqUncommittedBatchIterator *it = NULL;
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_batch_appender_uncommitted_batches_checked(a, &it));
+    int64_t bo = -2; int32_t mc = -2; MmapqBatchPayloadIterator *mi = NULL;
+    TEST_ASSERT_EQUAL_INT(1, mmapq_uncommitted_batch_next(it, &bo, &mc, &mi));
+    TEST_ASSERT_EQUAL_INT64(x, bo);
+    TEST_ASSERT_EQUAL_INT32(2, mc);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_uncommitted_batch_next(it, &bo, &mc, &mi));
+    cc_b_close(q, a);                             /* X skipped */
+
+    cc_fork_kill(cc_bo_child2);
+
+    /* rejoin 2: nothing reported; the walk still yields X, then Y */
+    int64_t y = cc_batch_start(cc_after(cc_after(x + MMAPQ_BATCH_MSG_COUNT_SIZE, 40), 40));
+    TEST_ASSERT_EQUAL_INT(0, cc_b_open(CUR.dir, CUR.file_size, &q, &a));
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_batch_appender_join_completed_open_batch(a, &off));
+    TEST_ASSERT_EQUAL_INT(0,
+        mmapq_indexed_batch_appender_uncommitted_batches_checked(a, &it));
+    TEST_ASSERT_EQUAL_INT(1, mmapq_uncommitted_batch_next(it, &bo, &mc, &mi));
+    TEST_ASSERT_EQUAL_INT64(x, bo);               /* X again, unreported */
+    TEST_ASSERT_EQUAL_INT32(2, mc);
+    TEST_ASSERT_EQUAL_INT(1, mmapq_uncommitted_batch_next(it, &bo, &mc, &mi));
+    TEST_ASSERT_EQUAL_INT64(y, bo);
+    TEST_ASSERT_EQUAL_INT32(1, mc);
+    TEST_ASSERT_EQUAL_INT(0, mmapq_uncommitted_batch_next(it, &bo, &mc, &mi));
+    cc_b_close(q, a);
+}
 #else
 void test_cc_batch_compose_g1(void) { TEST_IGNORE_MESSAGE("fork suite: excluded under TSan (test_runtime.c precedent)"); }
 void test_cc_batch_compose_g2(void) { TEST_IGNORE_MESSAGE("fork suite: excluded under TSan"); }
@@ -1775,6 +1858,7 @@ void test_cc_recovered_end4_rejoin(void)         { TEST_IGNORE_MESSAGE("excluded
 void test_cc_orphan_recovery_end4(void)          { TEST_IGNORE_MESSAGE("excluded under TSan"); }
 void test_cc_sm_torn_tail_earlier_intact(void)   { TEST_IGNORE_MESSAGE("fork suite: excluded under TSan"); }
 void test_cc_sm_torn_tail_repeated_crash(void)   { TEST_IGNORE_MESSAGE("fork suite: excluded under TSan"); }
+void test_cc_batch_open_repeated_crash(void)     { TEST_IGNORE_MESSAGE("fork suite: excluded under TSan"); }
 #endif
 
 /* Guard pin (owner, finding #4 ruling): a staged batch followed by a
@@ -1899,6 +1983,7 @@ int main(void)
     RUN_TEST(test_cc_orphan_recovery_end4);
     RUN_TEST(test_cc_sm_torn_tail_earlier_intact);
     RUN_TEST(test_cc_sm_torn_tail_repeated_crash);
+    RUN_TEST(test_cc_batch_open_repeated_crash);
     RUN_TEST(test_cc_batch_compose_g1);
     RUN_TEST(test_cc_batch_compose_g2);
     RUN_TEST(test_cc_batch_recovery_crash);

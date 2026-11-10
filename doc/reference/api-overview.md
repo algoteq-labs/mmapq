@@ -17,8 +17,8 @@ The `i` in `mmapqi_*` means internal — those functions belong to
 | `mmapq_indexed_poller_poll(p, handler, ctx)` | Process one message via callback |
 | `mmapq_indexed_batch_queue_create_default(dir, name, wrt, rrt, &q)` | Open or create a batch queue |
 | `mmapq_indexed_batch_appender_start_batch_checked()` | Begin a new batch (0 or a negative `MMAPQ_*` code) |
+| `mmapq_mutable_batch_complete()` | Finalise the batch and publish it atomically |
 | `mmapq_mutable_batch_append()` | Add a message to an in-progress batch |
-| `mmapq_indexed_batch_appender_commit_batch()` | Commit the batch atomically |
 
 `mmapq_indexed_queue_create` and `mmapq_indexed_batch_queue_create` accept an
 `archivable` parameter (0 = non-archivable, performant; 1 = archivable,
@@ -55,7 +55,8 @@ The poll callback returns `MMAPQ_NEXT_ADVANCE`, `MMAPQ_NEXT_STOP`, or
 | `mmapq_indexed_batch_queue_create_poller()` | Create a batch sequential consumer |
 | `mmapq_indexed_batch_queue_create_reader()` | Create a batch random-access reader |
 | `mmapq_indexed_batch_queue_create_archiver()` | Create a batch archiver |
-| `mmapq_mutable_batch_complete()` | Finalise the batch |
+| `mmapq_mutable_batch_complete()` | Finalise the batch and publish it atomically |
+| `mmapq_indexed_batch_appender_commit_batch()` | Publish a staged or recovered batch by its offset |
 | `mmapq_mutable_batch_append_reserved()` | Reserve space in a batch and get raw write address |
 | `mmapq_mutable_batch_get_checked()` | Read a message from an in-progress batch by index (0 or a negative `MMAPQ_*` code) |
 | `mmapq_mutable_batch_iterator()` | Iterate over messages in an in-progress batch |

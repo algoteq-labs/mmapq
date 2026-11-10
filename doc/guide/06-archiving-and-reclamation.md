@@ -2,7 +2,7 @@
 
 Archiving lets a long-running queue drop old entries without rewriting
 data. A visual walk-through:
-[The Trail](https://claude.ai/artifact/9tzCHa3MMWTgrm4j7PHzeS).
+[The Trail](https://claude.ai/artifact/Bgd2hgGUoeeUst1r7VjTE4).
 
 Archiving is two separate things:
 

@@ -52,6 +52,39 @@ bytes before reserving the next message. No fence can order caller writes
 made after a later reservation — if you reserve two buffers and fill the
 second first, the first may be torn at any offset.
 
+## Batch lanes
+
+A batch lane follows the same rule, and the library reports the one batch
+a crash can leave incomplete:
+
+- A crash while a batch is open — started but neither staged nor
+  committed — leaves it to the rejoin, which completes it to staged.
+  `mmapq_indexed_batch_appender_join_completed_open_batch()` reports its
+  offset once: the call clears the report, and a later rejoin does not
+  repeat it. The queue completed this batch, not the application: it may
+  lack messages the application meant to add, and its last message may be
+  partially written. Every other staged batch is byte-intact as written
+  (subject to the batch caveat above).
+- No staged or discarded batch is ever removed. The uncommitted-batches
+  walk yields each of them — the batch the rejoin completed, and every
+  batch you staged, skipped or discarded — at every restart, until
+  archiving passes them. A discarded batch comes back committable.
+
+The recipe for the restart:
+
+1. Call `join_completed_open_batch()` first. If it reports an offset,
+   record it durably as completed by the queue before the writer appends
+   again.
+2. Walk `mmapq_indexed_batch_appender_uncommitted_batches_checked()`.
+3. Do not commit a batch the queue completed — at this restart or an
+   earlier one — unless your own check of its messages proves it complete
+   and intact (for example a message count and checksum, or the
+   application's own group id). Rule out the batches you discarded or
+   skipped at an earlier restart the same way as for single-message lanes:
+   by recorded offsets or by validation.
+4. Commit the rest with `mmapq_indexed_batch_appender_commit_batch()` in
+   your order, or skip them; a skipped batch reappears.
+
 ## The `--unset` restart procedure
 
 A SIGKILLed writer never releases its appender ID: the lane's bit stays set

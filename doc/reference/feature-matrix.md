@@ -13,10 +13,11 @@ same protocol contract (see `wire-format.md`).
 
 The C library is the complete surface and the source of truth. Rust exposes
 near-complete parity. **Python deliberately exposes the producer/consumer
-subset plus random-access reading and queue transfer** — append and poll for
-both queue types, random-access readers for replay and analysis, and
-export/import/copy for durable long-term storage. Archiving and low-level
-batch construction remain C/Rust territory. Gaps marked — in the Python
+subset plus random-access reading, archiving and queue transfer** — append
+and poll for both queue types, random-access readers for replay and
+analysis, archiving and file reclamation, and export/import/copy for
+durable long-term storage. Low-level batch construction (reserved append)
+remains C/Rust territory. Gaps marked — in the Python
 column are design decisions, not roadmap items.
 
 ## Queue lifecycle
