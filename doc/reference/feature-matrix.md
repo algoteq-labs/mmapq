@@ -158,9 +158,9 @@ Regression: `../mmapq-py/tests/test_reader_borrowing.py`
 | `batch_payload_iterator.h` | 7/11 | 6/11 |
 | `batch_queue_transfer.h` | 7/7 | 6/7 |
 | `indexed_appender.h` | 11/17 | 8/17 |
-| `indexed_archiver.h` | 6/14 | 7/14 |
+| `indexed_archiver.h` | 7/14 | 8/14 |
 | `indexed_batch_appender.h` | 17/22 | 12/22 |
-| `indexed_batch_archiver.h` | 4/11 | 6/11 |
+| `indexed_batch_archiver.h` | 5/11 | 7/11 |
 | `indexed_batch_poller.h` | 14/20 | 14/20 |
 | `indexed_batch_queue.h` | 12/12 | 12/12 |
 | `indexed_batch_reader.h` | 10/14 | 10/14 |

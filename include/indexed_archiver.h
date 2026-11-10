@@ -183,8 +183,8 @@ int mmapq_indexed_archiver_start_offset(
  *
  * a:         the archiver
  * paths_out: caller-allocated array of char* to populate; each returned
- *            path is a malloc'd string the caller owns and frees with
- *            free()
+ *            path is a malloc'd string the caller owns and must release
+ *            with free
  * max_paths: capacity of paths_out
  * Returns: number of paths written to paths_out (may be less than
  *          max_paths), or a negative MMAPQ_* code: MMAPQ_ENOMEM
