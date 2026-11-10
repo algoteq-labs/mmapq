@@ -24,21 +24,21 @@ mapper thread. (Why: the Anti-Pattern Ledger in the
 
 ## Benchmarks
 
-*Measured 2026-06-24 (commit `d3cfb28`, pre-0.1.0), Intel i7-12700H,
-isolcpus 5,7,9 + THP as below. Refreshed at the 0.2.0 release gate.*
+*Measured 2026-11-11 (0.2.0, commit `800a0b4`), Intel i7-11800H,
+isolcpus 5,7,9 + THP as below. Each figure is the median of 6 runs.*
 
 Single-message queue — roundtrip to echo server in external process, 20M
 iterations:
 
 | Percentile | C (this library) |
 |:-----------|------------------:|
-| min (p0)   |        **182 ns** |
-| p50        |        **284 ns** |
-| p90        |        **333 ns** |
-| p99        |        **396 ns** |
-| p99.9      |       **1869 ns** |
-| p99.99     |       **7411 ns** |
-| p99.999    |      **14984 ns** |
+| min (p0)   |        **187 ns** |
+| p50        |        **287 ns** |
+| p90        |        **336 ns** |
+| p99        |        **394 ns** |
+| p99.9      |       **1677 ns** |
+| p99.99     |       **8430 ns** |
+| p99.999    |      **16457 ns** |
 | round trips/sec (closed loop) | **3.2 M** |
 
 Batch queue — roundtrip to echo server in external process, 20M
@@ -46,15 +46,15 @@ iterations:
 
 | Percentile |  C (this library) |
 |:-----------|------------------:|
-| min (p0)   |        **196 ns** |
-| p50        |        **296 ns** |
-| p90        |        **348 ns** |
-| p95        |        **368 ns** |
-| p99        |        **422 ns** |
-| p99.9      |       **2030 ns** |
-| p99.99     |       **7313 ns** |
-| p99.999    |      **14895 ns** |
-| round trips/sec (closed loop) | **3 M** |
+| min (p0)   |        **225 ns** |
+| p50        |        **283 ns** |
+| p90        |        **345 ns** |
+| p95        |        **369 ns** |
+| p99        |        **429 ns** |
+| p99.9      |       **1637 ns** |
+| p99.99     |       **6728 ns** |
+| p99.999    |      **16773 ns** |
+| round trips/sec (closed loop) | **3.1 M** |
 
 The round-trips row is iterations divided by the wall-clock time of the
 measured loop, which has one round trip in flight at a time — roughly

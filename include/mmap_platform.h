@@ -50,7 +50,7 @@ const char *mmapq_strerror(int rc);
 #define MMAPQ_VERSION_MINOR 2
 #define MMAPQ_VERSION_PATCH 0
 
-#define MMAPQ_VERSION_STR "0.2.0-dev"
+#define MMAPQ_VERSION_STR "0.2.0"
 
 /**
  * mmapq_version — return the library version string.

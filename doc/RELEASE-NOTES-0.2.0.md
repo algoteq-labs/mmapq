@@ -327,22 +327,45 @@ the 0.2.0 cycle are not listed.
 
 ## Performance
 
-- **`mmapq_indexed_appender_append` is back at the 0.1.0 instruction
-  count** — 121 Ir per call in the callgrind reference harness (public
-  API, synchronous mapping, 4 MB region, 64 B messages, exact release
-  flags), where the commit-path frontier wrap added in 0.2.0 had raised it
-  to 128. The corrupt flag now rides the header-wrap return value with
-  the cold frontier-recovery loop out of line (−4 Ir/call, −4 Ir per
-  batch publish), and the max-message-length bound is cached at appender
-  create (−3 Ir/call) — the 0.1.0-era validation checks themselves are
-  all still executed. No behaviour change: same return values, error
-  codes, stderr diagnostics and memory orderings; the frontier-wrap
-  tests and their mutation checks still pass.
+Measured against v0.1.0 on the same machine in one session (2026-11-11),
+with the 0.2.0 code.
 
-No further performance delta against 0.1.0 is claimed — no broader 0.1.0
-benchmark comparison has been executed. (A v0.1.0 vs 0.2.0 callgrind
-comparison on the house recipe beyond the append/poll harnesses is a
-release-gate item.)
+**Round-trip latency** (`scripts/bench.sh`, `scripts/batch_bench.sh`;
+isolated cores 5/7/9; 20 M iterations of 64 B; p50 in ns, the median of
+6 runs; 0.1.0 → 0.2.0):
+
+| | internal | external, async | external, sync |
+|:--|--:|--:|--:|
+| single-message | 275 → 276 | 286 → 287 | 263 → 263 |
+| batch | 285 → 284 | 284 → 283 | 281 → 279 |
+
+The README's "~280 ns median round-trip" holds. Tail percentiles vary
+more from run to run than between the two versions; chapter 8 of the
+guide has the full 0.2.0 tables.
+
+**Instruction counts** (callgrind; public API, synchronous mapping, 4 MB
+region, 64 B messages, release flags; instructions per operation,
+0.1.0 → 0.2.0):
+
+- append: 121 → 121
+- batch append, per message (100 messages per batch, publish included):
+  96.3 → 82.7
+- poll, message available: 144 → 139
+- poll, end of stream: 76 → 67
+- batch poll and iteration, per batch of 10 messages: 830 → 921
+
+The batch-iteration increase (+9 per message) is the bounds checking
+added to every iteration step: each step now checks that the region wrap
+succeeded and that the message length fits in the mapped region, where
+0.1.0 went on reading the previous buffer after a failed wrap (see
+"Batch framing validation and error propagation hardened" under Fixed).
+Removing only those checks restores 0.1.0's count exactly; they are
+kept. The batch round-trip latency above does not show it.
+
+Append is at 0.1.0's count again: the commit-path frontier wrap added in
+0.2.0 had raised it to 128; its cold recovery loop now runs out of line
+and the maximum message length is cached when the appender is created.
+All validation checks still run.
 
 ## Documentation
 
