@@ -155,7 +155,11 @@ int mmapq_indexed_poller_move_to_start(MmapqIndexedPoller *p);
 /* ── Metadata ─────────────────────────────────────────────────────────────── */
 
 /**
- * mmapq_indexed_poller_current_index — current cursor position.
+ * mmapq_indexed_poller_current_index — the index the next poll will read.
+ *
+ * After a poll that delivered index i and advanced, it is i + 1; after a
+ * successful move to index i, it is i. A poller that has neither polled
+ * nor moved yet reports 0; its first poll positions it at start_index.
  */
 int64_t mmapq_indexed_poller_current_index(const MmapqIndexedPoller *p);
 

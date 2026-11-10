@@ -13,8 +13,9 @@ reordered.
 Semantics:
 
 - An uncommitted payload is invisible to consumers until its commit CAS.
-- Committing publishes at the payload's own position; a later-arriving
-  packet committed earlier simply fills its place in the history.
+- Committing assigns the next index at that moment and points it at the
+  payload where it was written in the lane. Commit in sequence order and
+  index order is sequence order, whatever order the payloads arrived in.
 - An uncommitted payload **overtaken by archiving** can never become live:
   committing it returns `MMAPQ_EINVAL`; append it again instead. This is
   what keeps reclamation safe under resequenced commits.

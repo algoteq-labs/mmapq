@@ -12,6 +12,15 @@ Archiving is two separate things:
    in. The library path is **mark → `reclaim_files()`**, always safe;
    hand deletion is safe under the rule below.
 
+Only a queue created archivable can be archived: on any other,
+`archive_up_to_index` returns `MMAPQ_EINVAL`. A queue's files are written
+when its first appender is created, from the settings of the queue handle
+that appender came from. The settings stored then — `archivable`,
+`region_size`, `max_file_size` and `start_index` — are fixed: every later
+open uses the stored values and ignores its own. Create the queue and its
+first appender in one place with the intended settings, and have the
+archiving process check the archiver's `archivable` at startup.
+
 ## The three boundaries
 
 | Boundary | Where | Meaning |
