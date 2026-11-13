@@ -38,7 +38,7 @@ assert(rc == 0);
 
 const void *data; int32_t len; int64_t off;
 while ((rc = mmapq_uncommitted_iterator_next(it, &data, &len, &off)) == 1) {
-    /* decide: commit it, or skip it — after the torn-tail check below */
+    /* decide: commit it, or skip it — validate it first (below) */
     int64_t idx = mmapq_indexed_appender_commit(a, off);
     assert(idx >= 0);
 }
@@ -92,10 +92,12 @@ number. For exactly-once across a restart, either keep the archived copies
 or never archive past the writer's last logged commit, so that every
 message the log may be missing is still live.
 
-## The torn tail
+## After a crash: validate before you commit
 
-A crash can leave the record being written torn, and a record that is
-not committed is never removed: one torn at an earlier crash reappears in
-every later walk, no longer at the highest offset. Validate before you
-commit, or remember what you discarded — the torn-tail rule and recipe
-are in [chapter 5](05-crash-and-restart.md).
+The queue keeps every record's framing through a crash, not its body: a
+record being written when the crash happened can come back with a
+complete length and partly written data, which the library cannot tell
+from a complete record. A record that is not committed is never removed,
+so it reappears in every later walk. Validate each record before you
+commit it — a sequence number or checksum carried in the payload; the
+contract and the recipe are in [chapter 5](05-crash-and-restart.md).

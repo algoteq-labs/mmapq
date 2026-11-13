@@ -18,53 +18,61 @@ library is on appender-ID release. Use an explicitly chosen file-backed
 directory for retained history; `/dev/shm` is volatile tmpfs. The full
 contract is the [persistence contract](../reference/persistence-contract.md).
 
-## The torn-tail rule and the recipe
+## What a crash can leave: framing, not bodies
 
-Writers append sequentially and write each record's length before its data.
-It follows that a crash tears at most one record:
+The queue guarantees the **framing** of every lane after a crash, and makes
+no promise about the **bodies** of uncommitted records:
 
-> Only the record being written when the crash happens — the lane's
-> **highest-offset uncommitted record at that crash** — can be torn. Every
-> record written before it is byte-intact as written.
+- **Guaranteed:** every record keeps its full declared length, and every
+  batch a complete message count (the rejoin sets an open batch's count
+  from the messages it finds). A crash never misframes a lane or wedges
+  it: the restart walk steps from record to record by those lengths, and
+  the writer rejoins and appends after them.
+- **Not guaranteed:** the bytes of an uncommitted record after a crash.
+  Writers store a record's length before its data, so a crash in between
+  leaves a record whose length is complete and whose data may be partly
+  written. Unwritten bytes read as zeros, and zeros are valid payload, so
+  the library cannot tell a partly written record from a complete one.
+- **A hint, not a promise:** a crash leaves at most one record partly
+  written — the one being written, the lane's last at that crash. Do not
+  rely on position: a record that is not committed is never removed, so a
+  record from an earlier crash reappears in every later walk, below the
+  records appended since, and looks no different from the rest. (On a
+  batch lane the hint also needs each `append_reserved` buffer filled
+  before the next is reserved.)
 
-A record that is not committed is never removed. A record you discard or
-skip stays in the lane and reappears in every later walk, until archiving
-passes it. After the rejoined writer appends again it is no longer the
-highest-offset record, so after a second crash the walk can yield a record
-torn at the first crash at an earlier offset — by position it looks intact.
-
-The library has no payload integrity check that can tell a torn record from
-a valid one. The recipe for the restart walk:
+The recipe for the restart walk:
 
 1. Walk the lane's uncommitted iterator.
-2. For the highest-offset record: **discard it** — do not commit it.
-   Re-request it or re-append it from the source.
-3. For every other record: first rule out what an earlier restart
-   discarded. Either record the discarded offsets durably before the writer
-   appends again, and pass over them in later walks, or validate every
-   record (a checksum, or the application's own sequence number, in the
-   payload). A lane that can crash more than once needs one of the two.
-   Then commit or skip by your application policy; a record you skip
-   reappears too.
-
-Batch caveat: the rule holds only when the caller fills `append_reserved`
-bytes before reserving the next message. No fence can order caller writes
-made after a later reservation — if you reserve two buffers and fill the
-second first, the first may be torn at any offset.
+2. **Validate each record before committing it**, with a check carried in
+   the payload — the application's own sequence number, or a checksum.
+   Commit a record only if it passes; re-request or re-append one that
+   fails.
+3. Commit or skip the records that pass by your application policy. A
+   record you skip, or one that failed the check, stays in the lane and
+   reappears in every later walk until archiving passes it — the check
+   handles it again each time. (Alternatively, record the offsets you
+   discarded durably before the writer appends again, and pass over them in
+   later walks.)
 
 ## Batch lanes
 
-A batch lane follows the same rule, and the library reports the one batch
-a crash can leave incomplete:
+A batch lane has the same contract, and the library reports the batch a
+crash left open:
 
 - A crash while a batch is open — started but neither staged nor
-  committed — leaves it to the rejoin, which completes it to staged.
+  committed — leaves it to the rejoin, which completes it to staged with
+  the messages it finds by their lengths.
   `mmapq_indexed_batch_appender_join_completed_open_batch()` reports its
   offset once: the call clears the report, and a later rejoin does not
   repeat it. The queue completed this batch, not the application: it may
-  lack messages the application meant to add, and its last message may be
-  partially written. Every other staged batch is byte-intact as written
-  (subject to the batch caveat above).
+  lack messages the application meant to add.
+- Bodies are not guaranteed in any batch after a crash, including batches
+  the application staged: a crash while a message is being written can
+  leave its data partly written, and the store of a batch's message count
+  is not ordered after its last message's data, so a batch staged just
+  before the crash can carry a partly written last message. Its count and
+  every message length are complete.
 - No staged or discarded batch is ever removed. The uncommitted-batches
   walk yields each of them — the batch the rejoin completed, and every
   batch you staged, skipped or discarded — at every restart, until
@@ -76,14 +84,14 @@ The recipe for the restart:
    record it durably as completed by the queue before the writer appends
    again.
 2. Walk `mmapq_indexed_batch_appender_uncommitted_batches_checked()`.
-3. Do not commit a batch the queue completed — at this restart or an
-   earlier one — unless your own check of its messages proves it complete
-   and intact (for example a message count and checksum, or the
-   application's own group id). Rule out the batches you discarded or
-   skipped at an earlier restart the same way as for single-message lanes:
-   by recorded offsets or by validation.
-4. Commit the rest with `mmapq_indexed_batch_appender_commit_batch()` in
-   your order, or skip them; a skipped batch reappears.
+3. Validate every batch's messages before committing the batch (for
+   example a message count and checksum, or the application's own group id
+   and sequence numbers). Do not commit a batch the queue completed — at
+   this restart or an earlier one — unless that check proves it is the
+   batch you meant to write.
+4. Commit the batches that pass with
+   `mmapq_indexed_batch_appender_commit_batch()` in your order, or skip
+   them; a skipped batch reappears.
 
 ## The `--unset` restart procedure
 

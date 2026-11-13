@@ -142,8 +142,9 @@ int64_t mmapq_indexed_appender_append(
  * Use case: UDP resequencing — append as packets arrive, commit when
  * the sequence is gapless.
  *
- * Crash caveat: after a process crash, the lane's last uncommitted
- * payload may have partial content; validate before committing.
+ * Crash caveat: after a process crash an uncommitted record keeps its
+ * full length, but its data may be partly written; validate it (a
+ * sequence number or checksum in the payload) before committing.
  */
 int64_t mmapq_indexed_appender_append_uncommitted(
     MmapqIndexedAppender *a,
@@ -219,15 +220,13 @@ int64_t mmapq_indexed_appender_commit(
  * committed with the existing mmapq_indexed_appender_commit() — any subset,
  * any order, same session or after rejoin; not committing = skip; an offset
  * archiving has overtaken returns EINVAL. Each yielded offset becomes
- * committable (refill). After a process crash at most the record that
- * was being written — the lane's highest-offset uncommitted record at
- * that crash — can be torn (single writer, sequential writes, the length
- * prefix is written before the data); every record written before it is
- * byte-intact. A record that is not committed is never removed: one torn
- * at an earlier crash reappears in every later walk at an offset that is
- * no longer the highest. Discard the highest-offset record and re-request
- * or re-append it; validate the others before committing (the library has
- * no payload integrity check) or remember the offsets discarded earlier.
+ * committable (refill). After a process crash every record keeps its
+ * full declared length (the length prefix is written before the data),
+ * so the walk never misframes; the data of an uncommitted record may be
+ * partly written, and the library cannot tell it from a complete record
+ * (unwritten bytes read as zeros). Validate each record before committing
+ * it (a sequence number or checksum in the payload). A record that is not
+ * committed is never removed: it reappears in every later walk.
  */
 int mmapq_indexed_appender_uncommitted_iterator_checked(
     MmapqIndexedAppender *a,
@@ -251,15 +250,12 @@ int mmapq_indexed_appender_uncommitted_iterator_checked(
  * next call re-yields the same message; outputs cleared on any non-1
  * return). A negative is truthy in C: compare explicitly, never
  * `while (mmapq_uncommitted_iterator_next(...))`.
- * After a process crash at most the record that was being written — the
- * lane's highest-offset uncommitted record at that crash — can be torn
- * (single writer, sequential writes, the length prefix is written before
- * the data); every record written before it is byte-intact. A record that
- * is not committed is never removed: one torn at an earlier crash
- * reappears in every later walk at an offset that is no longer the
- * highest. Discard the highest-offset record and re-request or re-append
- * it; validate the others before committing (the library has no payload
- * integrity check) or remember the offsets discarded earlier.
+ * After a process crash every record keeps its full declared length, so
+ * the walk never misframes; the data of an uncommitted record may be
+ * partly written, and the library cannot tell it from a complete record.
+ * Validate each record before committing it (a sequence number or
+ * checksum in the payload). A record that is not committed is never
+ * removed: it reappears in every later walk.
  */
 int mmapq_uncommitted_iterator_next(
     MmapqUncommittedPayloadIterator *it,

@@ -198,11 +198,14 @@ static __attribute__((always_inline)) inline int write_payload(
     int64_t *out_offset)
 {
     /* Order the previous record's payload bytes before this record's
-     * length prefix (and before any padding marker below): the torn-tail
-     * rule — a crash can tear only the record being written when it
-     * happens, the lane's highest-offset uncommitted record at that crash
-     * (CAND-50 item 2) — needs the prior append's payload memcpy complete
-     * in program order before this record's length store. With LTO=1
+     * length prefix (and before any padding marker below). Added for the
+     * torn-tail rule (CAND-50 item 2: a crash tears only the lane's
+     * highest-offset uncommitted record); that rule is no longer a
+     * promise — the crash contract is framing only (owner 2026-11-13,
+     * guide ch5). Framing does not need this fence: it needs only the
+     * length store before this record's data (the fence below). Kept: it
+     * costs no instructions and backs the documented hint (a crash leaves
+     * at most the lane's last record partly written). With LTO=1
      * consecutive appends can be inlined into one stream and plain
      * memcpys carry no ordering guarantee (the CAND-51c §0 reasoning).
      * Compiler barrier only — a signal fence emits no instructions. */

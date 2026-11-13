@@ -944,6 +944,12 @@ static int64_t batch_publish(MmapqIndexedBatchAppender *a, int64_t batch_offset)
  * store is what consumes the handle (§3.5) and PRECEDES any header CAS
  * (acq_rel) — invariant. Returns 0 with the handle consumed and the
  * appender state back to NONE; pre-store failures leave the handle open. */
+/* No fence before the count store, deliberately: every message length is
+ * already stored, so the batch's framing is complete whatever the order;
+ * a compiler (LTO) may move the count store above the last message's
+ * data copy, so a crash there leaves a completed batch whose last message
+ * data is partly written. The crash contract is framing only — bodies are
+ * the application's to validate (guide ch5; owner 2026-11-13). */
 static int batch_store_count(MmapqMutableBatch *b)
 {
     MmapqIndexedBatchAppender *a = b->appender;
@@ -1135,7 +1141,7 @@ int mmapq_indexed_batch_appender_join_completed_open_batch(
     if (a->closed) return MMAPQ_ECLOSED;
     /* Read-and-clear, once per join-completion event. The batch was
      * completed by the queue, not the app: it may lack messages the app
-     * intended; the last counted message may have partial content. */
+     * intended (no body is promised after a crash — framing only). */
     if (!a->join_completed_flag) return 0;
     *offset = a->join_completed_offset;
     a->join_completed_flag = 0;
@@ -1222,9 +1228,9 @@ int32_t mmapq_mutable_batch_append(MmapqMutableBatch *b, const void *data, int32
     if (length > a->max_message_length) return MMAPQ_EINVAL;
     /* Order the previous record's payload bytes before this record's
      * length prefix (and before any padding marker below) — the batch
-     * side of the torn-tail rule (CAND-50 item 2; the full text is on the
-     * leading fence in write_payload, indexed_appender.c). Compiler
-     * barrier only — no instructions emitted. */
+     * twin of the leading fence in write_payload (indexed_appender.c,
+     * which explains why it is kept now that the crash contract is
+     * framing only). Compiler barrier only — no instructions emitted. */
     atomic_signal_fence(memory_order_release);
     if (write_padding_if_needed(a, length)) return -1;
     memcpy(a->payload_buf.data + PAYLOAD_LENGTH_OFFSET, &length, sizeof(int32_t));
@@ -1246,11 +1252,11 @@ int32_t mmapq_mutable_batch_append_reserved(MmapqMutableBatch *b, int32_t length
     if (length > a->max_message_length) return MMAPQ_EINVAL;
     /* Order the previous record's payload bytes before this record's
      * length prefix (and before any padding marker below) — the batch
-     * side of the torn-tail rule (CAND-50 item 2; the full text is on the
-     * leading fence in write_payload, indexed_appender.c). Also covers
-     * the caller-written payload bytes of a preceding append_reserved:
-     * they are program-order-before this fence. Compiler barrier only —
-     * no instructions emitted. */
+     * twin of the leading fence in write_payload (indexed_appender.c,
+     * which explains why it is kept now that the crash contract is
+     * framing only). Also covers the caller-written payload bytes of a
+     * preceding append_reserved: they are program-order-before this
+     * fence. Compiler barrier only — no instructions emitted. */
     atomic_signal_fence(memory_order_release);
     if (write_padding_if_needed(a, length)) return -1;
     memcpy(a->payload_buf.data + PAYLOAD_LENGTH_OFFSET, &length, sizeof(int32_t));

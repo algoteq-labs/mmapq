@@ -1599,21 +1599,22 @@ void test_cc_orphan_recovery_end4(void)
                       CC_REG + 2 * MMAPQ_BATCH_MSG_COUNT_SIZE + 16);
 }
 
-/* D2.3 pin (CAND-50 item 2, owner ruling 2026-10-25): after a kill
- * mid-write, earlier uncommitted records are byte-intact and only the
- * lane's highest-offset uncommitted record may be torn (single writer,
- * sequential writes, the length prefix before the data). No matrix cell
- * asserted the earlier record's bytes (content compares covered only the
- * synthesized partial's prefix/zero shape), so the pin is added here;
- * it guards existing behaviour — fail-first not applicable. The kill is
- * real (SIGKILL at the API boundary after the earlier record's append);
- * the torn tail is pwrite synthesis — no intra-function seam exists in
+/* Framing pin (added as the D2.3 torn-tail pin, CAND-50 item 2; recast
+ * 2026-11-13 when the crash contract became framing only — the queue
+ * makes no promise about uncommitted bodies). State: a committed record,
+ * an earlier uncommitted record, and a last record whose length is
+ * complete and whose data is half written. The pin: the rejoin walk
+ * frames every record by its declared length — it yields the earlier
+ * record and the partly written one at their offsets with their declared
+ * lengths, returns the bytes on disk unchanged, and ends exactly after the
+ * partly written record's declared extent. The kill is real (SIGKILL at
+ * the API boundary after the earlier record's append); the partly written
+ * record is pwrite synthesis — no intra-function seam exists in
  * write_payload (the G-1(a) state-equivalence discipline, matrix
- * SQ_SYNTH_PARTIAL). Coverage split: this pin covers the recovery side
- * (what the rejoin walk yields for a torn tail); the write side is
- * carried by the leading atomic_signal_fence in write_payload
- * (indexed_appender.c) and its batch twins — a compiler-order guarantee
- * no runtime pin can fail-first (stated per the owner's instruction). */
+ * SQ_SYNTH_PARTIAL). The write side of framing (each record's length
+ * stored before its data) is the trailing atomic_signal_fence in
+ * write_payload (indexed_appender.c) and its batch twins — a
+ * compiler-order property no runtime pin can fail-first. */
 static void cc_d2_child(void)
 {
     MmapqIndexedQueue *q = NULL;
@@ -1642,7 +1643,7 @@ void test_cc_sm_torn_tail_earlier_intact(void)
 
     cc_fork_kill(cc_d2_child);
 
-    /* C: the torn tail (the kill mid-write state) — declared length 100,
+    /* C: the record being written at the kill — declared length 100,
      * half the payload written, the rest never touched */
     int64_t after_a = cc_after(INITIAL_PAYLOAD_POSITION, 24);
     int64_t bp = cc_place(after_a, 24);
@@ -1652,7 +1653,7 @@ void test_cc_sm_torn_tail_earlier_intact(void)
     memset(pay, 0x73, sizeof pay);
     cc_pwrite_bytes(cp + PAYLOAD_DATA_OFFSET, pay, sizeof pay);
 
-    /* rejoin: the uncommitted walk yields B byte-intact, then C torn */
+    /* rejoin: the walk yields B, then C framed by its declared length */
     MmapqIndexedQueue *q = NULL;
     MmapqIndexedAppender *a = NULL;
     TEST_ASSERT_EQUAL_INT(0, cc_s_open(CUR.dir, CUR.file_size, &q, &a));
@@ -1668,7 +1669,7 @@ void test_cc_sm_torn_tail_earlier_intact(void)
     TEST_ASSERT_EQUAL_INT32(24, len);
     const uint8_t *d = data;
     for (int32_t x = 0; x < 24; x++)
-        TEST_ASSERT_EQUAL_UINT8(0x72, d[x]);     /* B: byte-intact */
+        TEST_ASSERT_EQUAL_UINT8(0x72, d[x]);     /* B: bytes as on disk */
     TEST_ASSERT_EQUAL_INT(1,
         mmapq_uncommitted_iterator_next(it, &data, &len, &off));
     TEST_ASSERT_EQUAL_INT64(cp, off);
@@ -1685,11 +1686,13 @@ void test_cc_sm_torn_tail_earlier_intact(void)
                         cp + PAYLOAD_LENGTH_SIZE + 100);
 }
 
-/* Repeated-crash pin: a record torn at crash 1 is never removed. The rejoin
- * walks past it and appends after it, so after crash 2 the walk yields it
- * again — no longer the lane's highest-offset record — with its torn bytes
- * unchanged. Guards existing behaviour (the walk-past-the-tail rejoin) —
- * fail-first not applicable; the mutant check is in the card report. */
+/* Repeated-crash framing pin: a record partly written at crash 1 is never
+ * removed. The rejoin steps over it by its declared length and appends
+ * after it, so after crash 2 the walk yields it again — framed by its
+ * declared length, no longer the lane's last record, its bytes unchanged —
+ * and then the newer record. Guards existing behaviour (the
+ * walk-past-the-tail rejoin) — fail-first not applicable; the mutant check
+ * is in the card report. */
 static void cc_rep_child2(void)
 {
     MmapqIndexedQueue *q = NULL;
@@ -1715,7 +1718,7 @@ void test_cc_sm_torn_tail_repeated_crash(void)
 
     cc_fork_kill(cc_d2_child);                    /* crash 1 */
 
-    /* T1: torn at crash 1 — declared length 100, half the payload written */
+    /* T1: partly written at crash 1 — declared length 100, half written */
     int64_t after_a = cc_after(INITIAL_PAYLOAD_POSITION, 24);
     int64_t bp = cc_place(after_a, 24);
     int64_t cp = cc_place(cc_after(after_a, 24), 100);
@@ -1726,7 +1729,8 @@ void test_cc_sm_torn_tail_repeated_crash(void)
 
     cc_fork_kill(cc_rep_child2);                  /* rejoin, append U, crash 2 */
 
-    /* rejoin 2: B intact, T1 torn and no longer highest, then U intact */
+    /* rejoin 2: B, then T1 framed by its declared length and no longer
+     * the last record, then U */
     int64_t up = cc_place(cc_after(cp, 100), 24);
     MmapqIndexedQueue *q = NULL;
     MmapqIndexedAppender *a = NULL;
@@ -1743,7 +1747,7 @@ void test_cc_sm_torn_tail_repeated_crash(void)
     TEST_ASSERT_EQUAL_INT32(24, len);
     const uint8_t *d = data;
     for (int32_t x = 0; x < 24; x++)
-        TEST_ASSERT_EQUAL_UINT8(0x72, d[x]);      /* B: byte-intact */
+        TEST_ASSERT_EQUAL_UINT8(0x72, d[x]);      /* B: bytes as on disk */
     TEST_ASSERT_EQUAL_INT(1,
         mmapq_uncommitted_iterator_next(it, &data, &len, &off));
     TEST_ASSERT_EQUAL_INT64(cp, off);
@@ -1752,14 +1756,14 @@ void test_cc_sm_torn_tail_repeated_crash(void)
     for (int32_t x = 0; x < 50; x++)
         TEST_ASSERT_EQUAL_UINT8(0x73, d[x]);      /* T1: written prefix */
     for (int32_t x = 50; x < 100; x++)
-        TEST_ASSERT_EQUAL_UINT8(0, d[x]);         /* T1: still torn */
+        TEST_ASSERT_EQUAL_UINT8(0, d[x]);         /* T1: unwritten rest zero */
     TEST_ASSERT_EQUAL_INT(1,
         mmapq_uncommitted_iterator_next(it, &data, &len, &off));
-    TEST_ASSERT_EQUAL_INT64(up, off);             /* T1 is not the highest */
+    TEST_ASSERT_EQUAL_INT64(up, off);             /* T1 is not the last */
     TEST_ASSERT_EQUAL_INT32(24, len);
     d = data;
     for (int32_t x = 0; x < 24; x++)
-        TEST_ASSERT_EQUAL_UINT8(0x74, d[x]);      /* U: byte-intact */
+        TEST_ASSERT_EQUAL_UINT8(0x74, d[x]);      /* U: bytes as on disk */
     TEST_ASSERT_EQUAL_INT(0,
         mmapq_uncommitted_iterator_next(it, &data, &len, &off));
     cc_s_close(q, a);

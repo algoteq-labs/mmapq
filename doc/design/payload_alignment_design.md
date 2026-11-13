@@ -167,10 +167,13 @@ walker steps over its declared extent), or a committed record. A kill never leav
 bytes past the end of stream without the length that frames them. This framing argument rests
 on two properties of the appender, not on alignment:
 
-1. **Store order.** The previous record's payload is stored before this record's length, and
-   this record's length before its payload. Plain `memcpy` gives no ordering guarantee, so the
-   appender places compiler barriers (`atomic_signal_fence(memory_order_release)`) around the
-   length store, in `write_payload` and both batch append paths. No hardware fence is needed: a
+1. **Store order.** Each record's length is stored before its payload. Plain `memcpy` gives
+   no ordering guarantee, so the appender places a compiler barrier
+   (`atomic_signal_fence(memory_order_release)`) after the length store, in `write_payload` and
+   both batch append paths. A second barrier before the length store keeps the previous
+   record's payload ahead of it; framing does not depend on that one (it backs the
+   [crash-contract](../guide/05-crash-and-restart.md) hint that a crash leaves at most the
+   lane's last record partly written). No hardware fence is needed: a
    killed process's executed stores are not lost, and any later observer either opens the files
    after the process has died or synchronizes through the header CAS. (The batch count store at
    completion has no barrier before it. A compiler may move it above the last message's payload

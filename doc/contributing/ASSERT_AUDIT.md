@@ -125,7 +125,7 @@ Lines 79. Internal dispatch fatal check (WRAP_UNWRAPPED in mmapqi_header_read). 
 
 | Line | Disposition | Verified |
 |---|---|---|
-| 210 length + 4 > region_size | I | Phase 6a converted. Guarded by EINVAL checks at public entry points. (CAND-49: line moved, site unchanged; CAND-54: moved again by the archivable-field struct addition, site unchanged; CAND-50: moved by the torn-tail leading fence, then back by the item-5 payload_iter field removal, site unchanged; CAND-58: moved by the walk-accessor struct fields, site unchanged; APPEND-HOTPATH-01: moved by the cold-frontier-loop split, site unchanged.) |
+| 213 length + 4 > region_size | I | Phase 6a converted. Guarded by EINVAL checks at public entry points. (CAND-49: line moved, site unchanged; CAND-54: moved again by the archivable-field struct addition, site unchanged; CAND-50: moved by the torn-tail leading fence, then back by the item-5 payload_iter field removal, site unchanged; CAND-58: moved by the walk-accessor struct fields, site unchanged; APPEND-HOTPATH-01: moved by the cold-frontier-loop split, site unchanged; moved again by the framing-only crash-contract comment on the leading fence, site unchanged.) |
 
 ### indexed_poller.c — 1 (1 I)
 
