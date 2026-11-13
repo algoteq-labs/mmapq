@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 project(mmapq
-    VERSION 0.2.0
+    VERSION 0.2.1
     DESCRIPTION "Low-latency shared memory primitives in C"
     LANGUAGES C
 )
