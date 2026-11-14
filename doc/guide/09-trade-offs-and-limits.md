@@ -6,9 +6,9 @@ page uses the same text.
 - **One machine.** mmapq is same-host inter-process messaging. The wire
   path belongs to a network messaging system.
 - **Linux only, x86-64/ARM64.** Requires naturally aligned lock-free
-  atomics over `MAP_SHARED` mmap — asserted at build. Tested on x86-64 in
-  CI; on ARM64 the full suite and a 76-run soak passed once for 0.2.0 (not
-  yet in regular CI). To check your own aarch64 machine, run
+  atomics over `MAP_SHARED` mmap — asserted at build. Tested in CI on
+  x86-64 and ARM64 (the C suite with ASan and TSan, the torture run, and
+  the Rust and Python suites). To check your own machine, run
   `bash scripts/test.sh`.
 - **File permissions.** Appenders and archivers need read-write access to
   the queue directory and its files: they create files, and the queue

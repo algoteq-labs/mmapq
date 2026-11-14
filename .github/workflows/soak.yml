@@ -2,6 +2,12 @@ name: Soak
 
 on:
   workflow_dispatch:
+    inputs:
+      arch:
+        description: 'Runner architecture (scheduled runs are x86_64)'
+        type: choice
+        options: [x86_64, aarch64]
+        default: x86_64
   schedule:
     - cron: '23 3 * * *'
 
@@ -14,11 +20,16 @@ concurrency:
 
 jobs:
   soak:
-    name: Soak (run_soak)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    name: Soak (run_soak)${{ inputs.arch == 'aarch64' && ' [arm64]' || '' }}
+    runs-on: ${{ inputs.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    timeout-minutes: ${{ inputs.arch == 'aarch64' && 120 || 60 }}
     if: ${{ github.event_name == 'workflow_dispatch' || vars.MMAPQ_PUBLIC == 'true' }}
     steps:
+      - name: Platform
+        run: |
+          uname -m
+          nproc
+          test "$(uname -m)" = "${{ inputs.arch || 'x86_64' }}"
       - name: Checkout mmapq (SHA under test)
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -53,7 +64,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          name: mktsim-soak-evidence
+          name: mktsim-soak-evidence-${{ inputs.arch || 'x86_64' }}
           path: ${{ runner.temp }}/mktsim_soak
           if-no-files-found: ignore
           retention-days: 14

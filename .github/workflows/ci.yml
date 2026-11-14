@@ -21,10 +21,21 @@ concurrency:
 
 jobs:
   c-suite:
-    name: C suite (test.sh, both loops)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    name: C suite (test.sh, both loops)${{ matrix.suffix }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-24.04, arch: x86_64, suffix: '', timeout: 30 }
+          - { runner: ubuntu-24.04-arm, arch: aarch64, suffix: ' [arm64]', timeout: 60 }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: ${{ matrix.timeout }}
     steps:
+      - name: Platform
+        run: |
+          uname -m
+          nproc
+          test "$(uname -m)" = "${{ matrix.arch }}"
       - name: Checkout mmapq (SHA under test)
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -150,10 +161,21 @@ jobs:
           exit "$RC"
 
   tsan:
-    name: TSan (setarch -R)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    name: TSan (setarch -R)${{ matrix.suffix }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-24.04, arch: x86_64, suffix: '', timeout: 30 }
+          - { runner: ubuntu-24.04-arm, arch: aarch64, suffix: ' [arm64]', timeout: 60 }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: ${{ matrix.timeout }}
     steps:
+      - name: Platform
+        run: |
+          uname -m
+          nproc
+          test "$(uname -m)" = "${{ matrix.arch }}"
       - name: Checkout mmapq (SHA under test)
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -184,10 +206,21 @@ jobs:
           exit 1
 
   asan:
-    name: ASan (test.sh --asan)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    name: ASan (test.sh --asan)${{ matrix.suffix }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-24.04, arch: x86_64, suffix: '', timeout: 30 }
+          - { runner: ubuntu-24.04-arm, arch: aarch64, suffix: ' [arm64]', timeout: 60 }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: ${{ matrix.timeout }}
     steps:
+      - name: Platform
+        run: |
+          uname -m
+          nproc
+          test "$(uname -m)" = "${{ matrix.arch }}"
       - name: Checkout mmapq (SHA under test)
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -203,10 +236,21 @@ jobs:
         run: bash scripts/test.sh --asan
 
   wrappers-rust:
-    name: "Wrappers: Rust vs mmapq SHA"
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    name: "Wrappers: Rust vs mmapq SHA${{ matrix.suffix }}"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-24.04, arch: x86_64, suffix: '', timeout: 30 }
+          - { runner: ubuntu-24.04-arm, arch: aarch64, suffix: ' [arm64]', timeout: 60 }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: ${{ matrix.timeout }}
     steps:
+      - name: Platform
+        run: |
+          uname -m
+          nproc
+          test "$(uname -m)" = "${{ matrix.arch }}"
       - name: Checkout mmapq (SHA under test)
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -270,10 +314,21 @@ jobs:
         run: cargo test --no-fail-fast
 
   wrappers-python:
-    name: "Wrappers: Python vs mmapq SHA"
-    runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    name: "Wrappers: Python vs mmapq SHA${{ matrix.suffix }}"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-24.04, arch: x86_64, suffix: '', timeout: 25 }
+          - { runner: ubuntu-24.04-arm, arch: aarch64, suffix: ' [arm64]', timeout: 50 }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: ${{ matrix.timeout }}
     steps:
+      - name: Platform
+        run: |
+          uname -m
+          nproc
+          test "$(uname -m)" = "${{ matrix.arch }}"
       - name: Checkout mmapq (SHA under test)
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -343,10 +398,21 @@ jobs:
           "$RUNNER_TEMP/venv/bin/python" -m unittest discover -s tests -v
 
   torture:
-    name: Torture (mktsim run_short)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    name: Torture (mktsim run_short)${{ matrix.suffix }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-24.04, arch: x86_64, suffix: '', timeout: 20 }
+          - { runner: ubuntu-24.04-arm, arch: aarch64, suffix: ' [arm64]', timeout: 40 }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: ${{ matrix.timeout }}
     steps:
+      - name: Platform
+        run: |
+          uname -m
+          nproc
+          test "$(uname -m)" = "${{ matrix.arch }}"
       - name: Checkout mmapq (SHA under test)
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -369,7 +435,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          name: mktsim-short-evidence
+          name: mktsim-short-evidence-${{ matrix.arch }}
           path: ${{ runner.temp }}/mktsim_short
           if-no-files-found: ignore
           retention-days: 14
