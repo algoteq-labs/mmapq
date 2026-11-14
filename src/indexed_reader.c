@@ -188,7 +188,9 @@ static void reader_fill_context(MmapqIndexedReader *r, int64_t index, MmapqReadi
     if (wr != WRAP_SUCCESS) {
         /* POLL-ARCH-01 failure-path re-check (the soak's path: a reclaimed
          * payload file). Same gate and reasoning as the header branch
-         * above (Q3 comment); otherwise today's ENTRY_ERROR + ETIMEDOUT.
+         * above (Q3 comment). Not reclaimed: ENTRY_ERROR with ETIMEDOUT
+         * for a mapping timeout, ECORRUPT for a missing or short payload
+         * file under a committed header (mmapqi_committed_wrap_rc).
          * The capacity/length checks below run only after a successful
          * wrap, so a reclaimed file cannot reach them — they get no
          * re-check. */
@@ -198,7 +200,7 @@ static void reader_fill_context(MmapqIndexedReader *r, int64_t index, MmapqReadi
             return;
         }
         ctx->status = MMAPQ_ENTRY_ERROR;
-        r->last_error = MMAPQ_ETIMEDOUT;
+        r->last_error = mmapqi_committed_wrap_rc(wr);
         return;
     }
 

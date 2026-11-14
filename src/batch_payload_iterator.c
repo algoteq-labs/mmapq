@@ -16,7 +16,7 @@ static int wrap_or_fail(MmapqBatchPayloadIterator *it, int64_t position)
         (r == WRAP_FILE_NOT_FOUND || r == WRAP_BEYOND_FILE_SIZE))
         it->last_error = MMAPQI_WALK_MAP_MISS;
     else
-        it->last_error = r == WRAP_MAP_TIMED_OUT ? MMAPQ_ETIMEDOUT : MMAPQ_ECORRUPT;
+        it->last_error = mmapqi_committed_wrap_rc(r);
     it->exhausted = 1;
     return 0;
 }
@@ -32,7 +32,10 @@ int32_t mmapq_batch_iterator_read_message_count(MmapqBatchPayloadIterator *it, i
         if (it->walk_mode &&
             (result == WRAP_FILE_NOT_FOUND || result == WRAP_BEYOND_FILE_SIZE))
             return MMAPQI_WALK_MAP_MISS;
-        return MMAPQ_ECORRUPT;
+        /* a miss under a committed header is ECORRUPT, one rule for both
+         * lanes (the timeout returned above; kept first so the object code
+         * of this per-batch path is unchanged) */
+        return mmapqi_committed_wrap_rc(result);
     }
     /* capacity <= 4: a batch count never occupies a region tail (the
      * CAND-51e unified tail rule) — a batch offset there is corrupt. */

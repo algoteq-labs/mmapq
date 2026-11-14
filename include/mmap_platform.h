@@ -5,7 +5,7 @@
  * Return codes used across the queue API.
  *
  *   >= 0  success (index, count, etc.)
- *    -1   MMAPQ_ETIMEDOUT   — mapping timeout or I/O (transient, retry)
+ *    -1   MMAPQ_ETIMEDOUT   — mapping timeout or a transient OS condition (retry)
  *    -2   MMAPQ_EINVAL      — invalid argument (NULL, zero length, etc.)
  *    -3   MMAPQ_ECLOSED     — operation on closed handle
  *    -4   MMAPQ_ECORRUPT    — on-disk corruption detected
@@ -16,11 +16,13 @@
  *    -7   MMAPQ_ENOENT      — file or queue does not exist
  *    -8   MMAPQ_EIDCONFLICT — requested appender ID already in use
  *    -9   MMAPQ_ENOMEM      — internal allocation failure (back off, do not retry hot-loop)
- *   -10   MMAPQ_EIO         — I/O error (metadata file write failure, retry)
+ *   -10   MMAPQ_EIO         — I/O error on a queue file or directory: a write failed, or it
+ *                             cannot be created or opened (permission, not a directory,
+ *                             read-only or full filesystem) — fix the cause, then retry
  *   -11   MMAPQ_ENOTREADY   — meta file exists but not yet fully initialised (transient, retry)
  *   -12   MMAPQ_ECALLBACK   — appender-ID mapper returned MMAPQ_APPENDER_ID_ABORT; transfer stopped after cleanup
  */
-#define MMAPQ_ETIMEDOUT  (-1)   /* mapping timeout or I/O — transient, retry */
+#define MMAPQ_ETIMEDOUT  (-1)   /* mapping timeout or transient OS condition — retry */
 #define MMAPQ_EINVAL     (-2)   /* invalid argument (NULL, zero length, etc.) */
 #define MMAPQ_ECLOSED    (-3)   /* operation on closed handle */
 #define MMAPQ_ECORRUPT   (-4)   /* on-disk corruption detected */
@@ -29,7 +31,7 @@
 #define MMAPQ_ENOENT     (-7)   /* file or queue does not exist */
 #define MMAPQ_EIDCONFLICT (-8)  /* requested appender ID already in use */
 #define MMAPQ_ENOMEM     (-9)   /* internal allocation failure (calloc, strdup, etc.) — back off, do not retry hot-loop */
-#define MMAPQ_EIO        (-10)  /* I/O error — metadata file write failure, retry */
+#define MMAPQ_EIO        (-10)  /* I/O error on a queue file — fix the cause, then retry */
 #define MMAPQ_ENOTREADY  (-11)  /* meta file exists but not yet fully initialised — transient, retry */
 #define MMAPQ_ECALLBACK  (-12)  /* transfer aborted by appender-ID mapper callback */
 

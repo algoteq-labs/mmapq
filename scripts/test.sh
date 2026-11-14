@@ -37,6 +37,7 @@ TESTS=(
     test_c58_walk_pins
     test_c59_commit_floor_pins
     test_poll_arch_pins
+    test_permanent_errors
 )
 
 # Hook-only suites (TEST-01): main() wraps every RUN_TEST in

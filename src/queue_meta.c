@@ -170,7 +170,7 @@ int mmapqi_queue_meta_open_rw(
      * on empty files. */
     struct stat st;
     if (stat(path, &st) != 0) {
-        if (errno != ENOENT) return MMAPQ_ETIMEDOUT;
+        if (errno != ENOENT) return mmapqi_fs_errno_rc(errno);
     } else if (st.st_size > 0 && st.st_size < QUEUE_META_ENCODED_LENGTH) {
         return MMAPQ_ENOTREADY;
     }

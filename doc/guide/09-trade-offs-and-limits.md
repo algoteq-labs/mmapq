@@ -19,7 +19,8 @@ page uses the same text.
   Queue files are created 0664 and directories 0775, filtered by the
   umask: writers running as different users need a shared group and
   umask 002. The archive lock file is created 0644, so run all archivers
-  as one user.
+  as one user. A missing permission is reported as `MMAPQ_EIO`, a missing
+  base directory as `MMAPQ_ENOENT` — neither is retried.
 - **Durability across process restarts, not power loss.** No commit path
   calls `fsync`/`fdatasync`; writes reach the page cache and the OS
   persists them eventually. Long-term data belongs in the

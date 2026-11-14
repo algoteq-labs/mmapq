@@ -131,7 +131,7 @@ Lines 79. Internal dispatch fatal check (WRAP_UNWRAPPED in mmapqi_header_read). 
 
 | Line | Disposition | Verified |
 |---|---|---|
-| 250 unknown handler directive | I | Internal: MMAP_ASSERT(0) guards unreachable default in switch. (CAND-17: line moved, site unchanged. DOC-01: moved by the X6 comment rewrite above it, site unchanged. POLL-ARCH-01: moved by the failure-path re-check blocks above it, site unchanged.) |
+| 253 unknown handler directive | I | Internal: MMAP_ASSERT(0) guards unreachable default in switch. (CAND-17: line moved, site unchanged. DOC-01: moved by the X6 comment rewrite above it, site unchanged. POLL-ARCH-01: moved by the failure-path re-check blocks above it, site unchanged. PERMANENT-NOT-TRANSIENT: moved by the payload-miss classification above it, site unchanged.) |
 
 ### indexed_reader.c — 1 (0 V)
 

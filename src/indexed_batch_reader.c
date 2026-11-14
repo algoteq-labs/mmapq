@@ -191,11 +191,10 @@ static void reader_fill_context(MmapqIndexedBatchReader *r, int64_t index, Mmapq
     int32_t message_count = mmapq_batch_iterator_read_message_count(&r->batch_iterator, payload_position);
     if (message_count <= 0) {
         /* POLL-ARCH-01: the re-check runs BEFORE the error decision — a
-         * reclaimed batch file maps to MMAPQ_ECORRUPT outside walk mode
-         * (the BATCH-MAP-MISS-CODE conflation is out of scope), so the
-         * code alone cannot tell a reclaim from real corruption; a
-         * start_index moved past the index can. Same Q3 gate as the
-         * header branch above. */
+         * file miss under a committed header maps to MMAPQ_ECORRUPT outside
+         * walk mode (mmapqi_committed_wrap_rc), so the code alone cannot
+         * tell a reclaim from real corruption; a start_index moved past
+         * the index can. Same Q3 gate as the header branch above. */
         if (r->queue_meta->archivable &&
             index < queue_meta_start_index(r->queue_meta)) {
             ctx->status = MMAPQ_BATCH_ENTRY_ARCHIVED;

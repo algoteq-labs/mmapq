@@ -50,7 +50,8 @@
  *
  * Controls (unchanged by the fix, must pass at the base): a missing header
  *   file WITHOUT a move -> END_OF_STREAM; a payload failure WITHOUT a move
- *   -> today's ERROR+ETIMEDOUT (single) / CORRUPT+ECORRUPT (batch); an
+ *   -> ERROR+ETIMEDOUT (single; CORRUPT+ECORRUPT since 0.2.1 E3(a)) /
+ *   CORRUPT+ECORRUPT (batch); an
  *   idle unwritten slot (successful wrap) -> END_OF_STREAM with no
  *   re-check; a non-archivable queue -> today's outcome (its start_index
  *   never moves — the archivable gate is an optimisation, not a semantic
@@ -996,8 +997,10 @@ static void ctrl_payload_no_move_poller(void)
     MmapqPollResult pr = mmapq_indexed_poller_poll(p, on_msg, NULL);
     mmapq_test_hook_set_pre_read_seam(NULL);
 
-    TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_ERROR, pr);
-    TEST_ASSERT_EQUAL_INT(MMAPQ_ETIMEDOUT, mmapq_indexed_poller_last_error(p));
+    /* 0.2.1 E3(a): a payload missing under a committed header with no
+     * start_index move is corruption (was POLL_ERROR + ETIMEDOUT) */
+    TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_CORRUPT, pr);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ECORRUPT, mmapq_indexed_poller_last_error(p));
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_poller_start_index(p));
     TEST_ASSERT_EQUAL_INT(1, g_fired);
     TEST_ASSERT_EQUAL_INT(0, g_unlink_rc);
@@ -1021,8 +1024,9 @@ static void ctrl_payload_no_move_reader(void)
     TEST_ASSERT_NOT_NULL(mmapq_indexed_reader_read(r, 0, &ctx));
     mmapq_test_hook_set_pre_read_seam(NULL);
 
+    /* 0.2.1 E3(a): corruption (was ENTRY_ERROR + ETIMEDOUT) */
     TEST_ASSERT_EQUAL_INT(MMAPQ_ENTRY_ERROR, ctx.status);
-    TEST_ASSERT_EQUAL_INT(MMAPQ_ETIMEDOUT, mmapq_indexed_reader_last_error(r));
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ECORRUPT, mmapq_indexed_reader_last_error(r));
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_reader_start_index(r));
     TEST_ASSERT_EQUAL_INT(1, g_fired);
     TEST_ASSERT_EQUAL_INT(0, g_unlink_rc);
@@ -1144,10 +1148,11 @@ static void ctrl_nonarchivable_poller(void)
     MmapqPollResult pr = mmapq_indexed_poller_poll(p, on_msg, NULL);
     mmapq_test_hook_set_pre_read_seam(NULL);
 
-    /* a non-archivable queue's start_index never moves — today's outcome
-     * stands; the seam never fires (it lives inside the archivable gate) */
-    TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_ERROR, pr);
-    TEST_ASSERT_EQUAL_INT(MMAPQ_ETIMEDOUT, mmapq_indexed_poller_last_error(p));
+    /* a non-archivable queue's start_index never moves — the miss is
+     * corruption (0.2.1 E3(a); was POLL_ERROR + ETIMEDOUT); the seam never
+     * fires (it lives inside the archivable gate) */
+    TEST_ASSERT_EQUAL_INT(MMAPQ_POLL_CORRUPT, pr);
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ECORRUPT, mmapq_indexed_poller_last_error(p));
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_poller_start_index(p));
     TEST_ASSERT_EQUAL_INT(0, g_fired);
     mmapq_indexed_poller_close(p);
@@ -1180,9 +1185,9 @@ static void ctrl_nonarchivable_reader(void)
     mmapq_test_hook_set_pre_read_seam(NULL);
 
     /* the reader's re-check is unconditional but reads a fixed value —
-     * today's outcome stands */
+     * the miss is corruption (0.2.1 E3(a); was ETIMEDOUT) */
     TEST_ASSERT_EQUAL_INT(MMAPQ_ENTRY_ERROR, ctx.status);
-    TEST_ASSERT_EQUAL_INT(MMAPQ_ETIMEDOUT, mmapq_indexed_reader_last_error(r));
+    TEST_ASSERT_EQUAL_INT(MMAPQ_ECORRUPT, mmapq_indexed_reader_last_error(r));
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_reader_start_index(r));
     TEST_ASSERT_EQUAL_INT(1, g_fired);
     TEST_ASSERT_EQUAL_INT(0, g_unlink_rc);

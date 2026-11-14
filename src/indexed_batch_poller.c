@@ -162,12 +162,11 @@ BatchPollResult mmapq_indexed_batch_poller_poll(MmapqIndexedBatchPoller *p, Mmap
     int32_t msg_count = mmapq_batch_iterator_read_message_count(it, pos);
     if (msg_count <= 0) {
         /* POLL-ARCH-01: the re-check runs BEFORE the CORRUPT/ERROR
-         * decision — outside walk mode a reclaimed batch file maps to
-         * MMAPQ_ECORRUPT (src/batch_payload_iterator.c; the
-         * BATCH-MAP-MISS-CODE conflation is out of scope), so the code
-         * alone cannot tell a reclaim from real corruption; a start_index
-         * moved past the cursor can. Unconditional gate (owner Q3), like
-         * the pre-read check. */
+         * decision — outside walk mode a file miss under a committed
+         * header maps to MMAPQ_ECORRUPT (mmapqi_committed_wrap_rc), so the
+         * code alone cannot tell a reclaim from real corruption; a
+         * start_index moved past the cursor can. Unconditional gate
+         * (owner Q3), like the pre-read check. */
         if (p->current_batch_index < queue_meta_start_index(p->queue_meta)) {
             return MMAPQ_POLL_ARCHIVED;
         }

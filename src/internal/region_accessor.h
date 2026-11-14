@@ -4,6 +4,8 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#include "mmap_platform.h"
+
 /**
  * WrapResult — outcome of a region wrap operation.
  *
@@ -17,6 +19,23 @@ typedef enum {
     WRAP_BEYOND_FILE_SIZE, /* position exceeds current file size                   */
     WRAP_UNWRAPPED,        /* buffer explicitly unwrapped (non-queue contexts)      */
 } WrapResult;
+
+/*
+ * mmapqi_committed_wrap_rc — the MMAPQ_* code for a failed wrap of a file
+ * that a COMMITTED header points to (the single-message reader and poller
+ * payload paths). Only a mapping timeout is transient. A missing or short
+ * file never appears later: the writer creates and grows a payload file
+ * before it writes the record and before the header CAS, and the read-only
+ * mapper re-checks the size with fstat before reporting BEYOND_FILE_SIZE —
+ * so once a reclaim is ruled out (the POLL-ARCH-01 start_index re-check,
+ * done first), it is damage: MMAPQ_ECORRUPT, as on the batch path. Not for
+ * the frontier (a next header file not yet written is end-of-stream) or the
+ * walk mode, which classify misses themselves.
+ */
+static inline int mmapqi_committed_wrap_rc(WrapResult r)
+{
+    return r == WRAP_MAP_TIMED_OUT ? MMAPQ_ETIMEDOUT : MMAPQ_ECORRUPT;
+}
 
 /**
  * Buffer — flyweight view over a memory-mapped region.

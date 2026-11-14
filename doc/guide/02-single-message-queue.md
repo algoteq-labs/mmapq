@@ -64,7 +64,8 @@ See `examples/demo.c` for a complete producer/consumer.
 - Poll results: `MMAPQ_POLL_ADVANCED`, `MMAPQ_POLL_END_OF_STREAM`,
   `MMAPQ_POLL_ERROR` (the code is then in
   `mmapq_indexed_poller_last_error()` — a mapping timeout there is
-  `MMAPQ_ETIMEDOUT`, never end-of-stream).
+  `MMAPQ_ETIMEDOUT`, never end-of-stream), `MMAPQ_POLL_CORRUPT` (on-disk
+  damage, `MMAPQ_ECORRUPT`).
 - Random access without a cursor: `mmapq_indexed_queue_create_reader()` +
   `mmapq_indexed_reader_read()` / `read_last()`.
 - Appender IDs come from the pool automatically and are released when the

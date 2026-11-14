@@ -1,9 +1,12 @@
 #ifndef PLATFORM_INTERNAL_H
 #define PLATFORM_INTERNAL_H
 
+#include <errno.h>
 #include <stddef.h>
 #include <unistd.h>
 #include <sys/mman.h>
+
+#include "mmap_platform.h"
 
 /**
  * huge_pages_hint — advise the kernel to use huge pages for a mapped region.
@@ -46,5 +49,31 @@ static inline long page_size(void)
  * is a queue geometry rule, not a mapper rule.
  */
 long mmapqi_page_size(void);
+
+/**
+ * mmapqi_fs_errno_rc — the MMAPQ_* code for a failed open, mkdir, stat,
+ * mmap, flock or file-initialiser call on a queue file or directory.
+ *
+ * Permanent failures are never MMAPQ_ETIMEDOUT ("transient, retry"):
+ *   ENOENT                                      -> MMAPQ_ENOENT (does not exist)
+ *   ENOMEM                                      -> MMAPQ_ENOMEM
+ *   EINTR, EAGAIN, EMFILE, ENFILE, EBUSY, ENOLCK -> MMAPQ_ETIMEDOUT (transient)
+ *   anything else — EACCES, EPERM, ENOTDIR, ELOOP, ENAMETOOLONG, EROFS,
+ *   EISDIR, ENODEV, ENOSPC, EDQUOT, EFBIG, EIO, …  -> MMAPQ_EIO (fix the cause)
+ *
+ * Before 0.2.1 every one of these was MMAPQ_ETIMEDOUT: the int-return
+ * conversion mapped each failed call to it without looking at errno.
+ * Pass errno saved before any close()/flock() cleanup.
+ */
+static inline int mmapqi_fs_errno_rc(int err)
+{
+    switch (err) {
+    case ENOENT: return MMAPQ_ENOENT;
+    case ENOMEM: return MMAPQ_ENOMEM;
+    case EINTR: case EAGAIN: case EMFILE: case ENFILE: case EBUSY: case ENOLCK:
+        return MMAPQ_ETIMEDOUT;
+    default:     return MMAPQ_EIO;
+    }
+}
 
 #endif /* PLATFORM_INTERNAL_H */

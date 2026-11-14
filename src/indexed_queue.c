@@ -50,11 +50,11 @@ static int create_queue_directory(const char *directory, const char *queue_name)
     char path[4096];
     snprintf(path, sizeof(path), "%s/%s", directory, queue_name);
 
-    if (mkdir(path, 0775) != 0) {
-        if (errno != EEXIST) {
-            return -1;
-        }
-        /* EEXIST is fine — directory already exists */
+    /* EEXIST is fine — the directory already exists. A missing base
+     * directory is MMAPQ_ENOENT; any other failure is permanent or
+     * transient by errno (mmapqi_fs_errno_rc), never a bare -1. */
+    if (mkdir(path, 0775) != 0 && errno != EEXIST) {
+        return mmapqi_fs_errno_rc(errno);
     }
     return 0;
 }
@@ -172,7 +172,8 @@ int mmapq_indexed_queue_create_appender(MmapqIndexedQueue *q, MmapqIndexedAppend
     if (q == NULL) return MMAPQ_EINVAL;
     if (atomic_load_explicit(&q->closed, memory_order_relaxed)) return MMAPQ_ECLOSED;
 
-    if (create_queue_directory(q->directory, q->queue_name) != 0) return MMAPQ_ETIMEDOUT;
+    int drc = create_queue_directory(q->directory, q->queue_name);
+    if (drc != 0) return drc;
 
     return mmapq_indexed_appender_create(
         q->directory, q->queue_name,
@@ -192,7 +193,8 @@ int mmapq_indexed_queue_create_appender_with_id(
     if (q == NULL) return MMAPQ_EINVAL;
     if (atomic_load_explicit(&q->closed, memory_order_relaxed)) return MMAPQ_ECLOSED;
 
-    if (create_queue_directory(q->directory, q->queue_name) != 0) return MMAPQ_ETIMEDOUT;
+    int drc = create_queue_directory(q->directory, q->queue_name);
+    if (drc != 0) return drc;
 
     return mmapq_indexed_appender_create_with_id(
         q->directory, q->queue_name,

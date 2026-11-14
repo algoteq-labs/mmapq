@@ -128,7 +128,7 @@ int mmapqi_fixed_size_region_create(
 
     /* Open or create the backing file */
     int fd = open(file_path, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
-    if (fd < 0) return MMAPQ_ETIMEDOUT;
+    if (fd < 0) return mmapqi_fs_errno_rc(errno);
 
     /*
      * Coordination for multi-process initialisation:
@@ -142,8 +142,9 @@ int mmapqi_fixed_size_region_create(
             struct stat st;
             if (fstat(fd, &st) == 0 && st.st_size == 0) {
                 if (initialiser(fd, (size_t)size, initialiser_ctx) != 0) {
+                    int err = errno;
                     close(fd);
-                    return MMAPQ_ETIMEDOUT;
+                    return mmapqi_fs_errno_rc(err);
                 }
             }
             flock(fd, LOCK_UN);
@@ -161,8 +162,9 @@ int mmapqi_fixed_size_region_create(
                       PROT_READ | PROT_WRITE,
                       MAP_SHARED | MAP_POPULATE, fd, 0);
     if (addr == MAP_FAILED) {
+        int err = errno;
         close(fd);
-        return MMAPQ_ETIMEDOUT;
+        return mmapqi_fs_errno_rc(err);
     }
 
     huge_pages_hint(addr, map_len);
@@ -193,7 +195,7 @@ int mmapqi_fixed_size_region_open_ro(
     /* O_RDONLY, never O_CREAT: a read-only participant needs only read
      * permission, and a file that vanished is reported, not re-created. */
     int fd = open(file_path, O_RDONLY | O_CLOEXEC);
-    if (fd < 0) return (errno == ENOENT) ? MMAPQ_ENOENT : MMAPQ_ETIMEDOUT;
+    if (fd < 0) return mmapqi_fs_errno_rc(errno);   /* ENOENT stays MMAPQ_ENOENT */
 
     /* Short file: answer without the lock. A creator ftruncates to the
      * full size only while holding its LOCK_EX, so a short file is not
@@ -201,7 +203,7 @@ int mmapqi_fixed_size_region_open_ro(
      * and polling readers must not queue LOCK_SH against a creator
      * waiting for LOCK_EX (flock gives no fairness). */
     struct stat st;
-    if (fstat(fd, &st) != 0) { close(fd); return MMAPQ_ETIMEDOUT; }
+    if (fstat(fd, &st) != 0) { int err = errno; close(fd); return mmapqi_fs_errno_rc(err); }
     if (st.st_size < size)   { close(fd); return MMAPQ_ENOTREADY; }
 
     /* Full size means initialised, or being initialised under the
@@ -209,9 +211,9 @@ int mmapqi_fixed_size_region_open_ro(
      * partially written file. A failed lock is an error, not a reason to
      * map unlocked. */
     while (flock(fd, LOCK_SH) != 0) {
-        if (errno != EINTR) { close(fd); return MMAPQ_ETIMEDOUT; }
+        if (errno != EINTR) { int err = errno; close(fd); return mmapqi_fs_errno_rc(err); }
     }
-    if (fstat(fd, &st) != 0) { flock(fd, LOCK_UN); close(fd); return MMAPQ_ETIMEDOUT; }
+    if (fstat(fd, &st) != 0) { int err = errno; flock(fd, LOCK_UN); close(fd); return mmapqi_fs_errno_rc(err); }
     if (st.st_size < size)   { flock(fd, LOCK_UN); close(fd); return MMAPQ_ENOTREADY; }
 
     long ps = page_size();
@@ -220,8 +222,9 @@ int mmapqi_fixed_size_region_open_ro(
     /* Initialised content is fixed after the creator's unlock, apart from
      * fields readers load atomically, so the lock is not held for the
      * mapping's lifetime. */
+    int map_err = errno;
     flock(fd, LOCK_UN);
-    if (addr == MAP_FAILED) { close(fd); return MMAPQ_ETIMEDOUT; }
+    if (addr == MAP_FAILED) { close(fd); return mmapqi_fs_errno_rc(map_err); }
 
     huge_pages_hint(addr, map_len);
     return fixed_region_build(file_path, size, fd, addr, map_len, out);

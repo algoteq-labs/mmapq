@@ -204,13 +204,16 @@ MmapqPollResult mmapq_indexed_poller_poll(
     if (r != WRAP_SUCCESS) {
         /* POLL-ARCH-01 failure-path re-check (the soak's path: a reclaimed
          * payload file). Same gate and reasoning as the header branch
-         * above (Q3 comment); otherwise today's ERROR + ETIMEDOUT. */
+         * above (Q3 comment). Not reclaimed: a mapping timeout is
+         * ERROR + ETIMEDOUT; a missing or short payload file under a
+         * committed header is CORRUPT + ECORRUPT, as on the batch path
+         * (mmapqi_committed_wrap_rc). */
         if (p->queue_meta->archivable &&
             p->current_index < queue_meta_start_index(p->queue_meta)) {
             return MMAPQ_POLL_ARCHIVED;
         }
-        p->last_error = MMAPQ_ETIMEDOUT;
-        return MMAPQ_POLL_ERROR;
+        p->last_error = mmapqi_committed_wrap_rc(r);
+        return p->last_error == MMAPQ_ETIMEDOUT ? MMAPQ_POLL_ERROR : MMAPQ_POLL_CORRUPT;
     }
 
     if (p->payload_buf.capacity <= PAYLOAD_LENGTH_SIZE) {
