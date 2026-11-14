@@ -1850,11 +1850,17 @@ static void *p11_archiver_main(void *arg)
     if (mmapq_indexed_archiver_create(DIR, QUEUE, 4, rt, &arch) != 0)
         return NULL;
     int64_t next_n = 0;
-    while (!atomic_load_explicit(&p11_appender_done, memory_order_acquire)
-           || next_n < atomic_load_explicit(&p11_rec_count, memory_order_acquire)) {
+    for (;;) {
+        /* done is read before the count: the appender stores its last count
+         * before done (release), so once done is seen, s is final. A commit
+         * rejected with EINVAL is not recorded, so the final count need not
+         * be a multiple of P11_STRIDE: archive the tail in one last step,
+         * else the loop could wait forever for a step that never fills
+         * (seen on ARM64 under ASan: the suite timed out at 300 s). */
+        int done = atomic_load_explicit(&p11_appender_done, memory_order_acquire);
         long s = atomic_load_explicit(&p11_rec_count, memory_order_acquire);
-        if (s >= next_n + P11_STRIDE) {
-            next_n += P11_STRIDE;
+        if (s >= next_n + P11_STRIDE || (done && s > next_n)) {
+            next_n = (s >= next_n + P11_STRIDE) ? next_n + P11_STRIDE : s;
             int rc = mmapq_indexed_archiver_archive_up_to_index(arch, next_n);
             if (rc != 0) { ck->archive_errors++; continue; }
             atomic_fetch_add(&ck->archives, 1);
@@ -1864,6 +1870,8 @@ static void *p11_archiver_main(void *arg)
                 if (p11_recs[i].idx >= si && p11_recs[i].pos < so)
                     atomic_fetch_add(&ck->violations, 1);
             }
+        } else if (done) {
+            break;
         } else {
             sched_yield();
         }
@@ -1893,6 +1901,7 @@ void test_commit_archive_race_stress(void)
     TEST_ASSERT_EQUAL_INT(0, pthread_create(&tc, NULL, p11_archiver_main, &ck));
     TEST_ASSERT_EQUAL_INT(0, pthread_join(ta, NULL));
     TEST_ASSERT_EQUAL_INT(0, pthread_join(tc, NULL));
+    printf("P11: rejects=%d archives=%d\n", rejects, atomic_load(&ck.archives));
 
     TEST_ASSERT_EQUAL_INT(0, ck.archive_errors);
     TEST_ASSERT_GREATER_OR_EQUAL(100, atomic_load(&ck.archives));

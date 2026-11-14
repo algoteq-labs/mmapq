@@ -195,7 +195,11 @@ run_test() {
     if [ "$test" = test_alloc_faults ]; then
         extra_ldflags="-Wl,--wrap=calloc"
     fi
-    if ! gcc $cflags -Wno-missing-prototypes -Wno-strict-prototypes $sources "test/${test}.c" $UNITY -o "$bin" $LDFLAGS $extra_ldflags 2>&1; then
+    # -DUNITY_USE_FLUSH_STDOUT: Unity flushes after every test, so a binary
+    # killed by the timeout below still shows the last test that finished
+    # (stdout into $(...) is a pipe, fully buffered; without the flush a
+    # killed binary prints nothing). Test builds only; both loops.
+    if ! gcc $cflags -DUNITY_USE_FLUSH_STDOUT -Wno-missing-prototypes -Wno-strict-prototypes $sources "test/${test}.c" $UNITY -o "$bin" $LDFLAGS $extra_ldflags 2>&1; then
         echo "FAIL ($label): $test (compile error)"
         return 1
     fi
@@ -208,6 +212,7 @@ run_test() {
     if [ "$STATUS" -ne 0 ] || echo "$OUT" | grep -qE \
         "FAIL|ASSERTION FAILED|Aborted|AddressSanitizer|LeakSanitizer|ThreadSanitizer|DATA RACE|heap-use-after-free|heap-buffer-overflow"; then
         echo "FAIL ($label): $test (exit=$STATUS)"
+        [ "$STATUS" -eq 124 ] && echo "  (killed by the 300 s timeout; the test after the last line below did not finish)"
         echo "$OUT" | tail -20
         rm -f "$bin"
         return 1
@@ -225,7 +230,7 @@ run_ids_integration() {
     local cflags="$2"
     local bin="/tmp/mmapq_test_ids_integration_${label}"
 
-    if ! gcc $cflags -I test -Wno-missing-prototypes -Wno-strict-prototypes \
+    if ! gcc $cflags -DUNITY_USE_FLUSH_STDOUT -I test -Wno-missing-prototypes -Wno-strict-prototypes \
          $SRCS tools/mmapq-ids/tests/test_ids_integration.c $UNITY \
          -o "$bin" $LDFLAGS 2>&1; then
         echo "FAIL ($label): test_ids_integration (compile error)"
