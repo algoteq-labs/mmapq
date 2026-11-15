@@ -91,7 +91,9 @@ The two CAND-59 additions are both in `mmapqi_file_mapper_rolled_create_file`
 
 ### file_mapper_single_ro.c — 6 (all I)
 
-Lines 71-72, 110-112, 125. Internal dispatch null checks.
+Lines 96-97, 136-138, 151. Internal dispatch null checks. (READ-PERM-EOS-01:
+shifted by the errno-classifying ro_fail and the out-parameter ro_init, sites
+unchanged.)
 
 ### file_mapper_single_rw.c — 7 (all I)
 
@@ -107,13 +109,13 @@ moved by two added includes, sites unchanged.)
 
 ### header_reader.c — 1 (all I)
 
-Lines 79. Internal dispatch fatal check (WRAP_UNWRAPPED in mmapqi_header_read). (POLL-ARCH-01: line moved by the test-hook block above it, site unchanged.)
+Lines 83. Internal dispatch fatal check (WRAP_UNWRAPPED in mmapqi_header_read). (POLL-ARCH-01: line moved by the test-hook block above it, site unchanged. READ-PERM-EOS-01: moved by WRAP_IO_ERROR joining the "treat as unwritten" set, site unchanged — WRAP_IO_ERROR no longer reaches it.)
 
 ### header_reader.h — 1 (all I)
 
 | Line | Disposition | Verified |
 |---|---|---|
-| 151 | I | WRAP_UNWRAPPED fatal in the static-inline mmapqi_header_read_sequential — internal accessor-state invariant (region corruption), unreachable from caller input. Release builds report MMAPQ_ECORRUPT via the err out-param instead of the pre-CAND-17 silent HEADER_NULL. (POLL-ARCH-01: line moved by the MMAPQI_HEADER_FILE_MISSING block and doc updates above it, site unchanged.) |
+| 161 | I | WRAP_UNWRAPPED fatal in the static-inline mmapqi_header_read_sequential — internal accessor-state invariant (region corruption), unreachable from caller input. Release builds report MMAPQ_ECORRUPT via the err out-param instead of the pre-CAND-17 silent HEADER_NULL. (POLL-ARCH-01: line moved by the MMAPQI_HEADER_FILE_MISSING block and doc updates above it, site unchanged. READ-PERM-EOS-01: moved by the WRAP_IO_ERROR → MMAPQ_EIO branch above it, which a read-only accessor now produces and which before this card would have reached the assert, site unchanged.) |
 
 ### header_codec.h — 5 (all I)
 
@@ -197,7 +199,8 @@ room for giving up.)
 
 ### uncommitted_payload_iterator.c — 3 (all I)
 
-Lines 528, 692, 708. Internal dispatch null checks. (CAND-58: moved by the classification/restart logic, sites unchanged. CAND-51e: the
+Lines 528, 693, 709. Internal dispatch null checks. (READ-PERM-EOS-01: the
+last two moved by the WRAP_IO_ERROR → MMAPQ_EIO line, sites unchanged. CAND-58: moved by the classification/restart logic, sites unchanged. CAND-51e: the
 gap-end padding-skip check shifted the last two from 434/450. A5/CAND-22:
 init and rewind NULL checks became MMAPQ_EINVAL returns. D8: scan floor,
 checked header read, and three-way advance propagation shifted the

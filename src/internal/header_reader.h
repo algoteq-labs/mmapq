@@ -81,7 +81,9 @@ uint64_t mmapqi_header_read(
  *                  header file (POLL-ARCH-01 §2.8 — was 0; the callers,
  *                  exactly the two pollers, re-check start_index and map
  *                  it to ARCHIVED or END_OF_STREAM, never to last_error),
- *                  MMAPQ_ETIMEDOUT on mapping timeout, MMAPQ_ECORRUPT
+ *                  MMAPQ_ETIMEDOUT on mapping timeout, MMAPQ_EIO for a
+ *                  header file that exists but cannot be read
+ *                  (READ-PERM-EOS-01), MMAPQ_ECORRUPT
  *                  after the fatal assert (release-build fallback). A
  *                  successful wrap of an unwritten slot ALSO returns
  *                  HEADER_NULL without touching err — zero-initialise it
@@ -144,6 +146,14 @@ static inline uint64_t mmapqi_header_read_sequential(
          * (POLL-ARCH-01 §2.8, revised Q6): the callers re-check
          * start_index and answer ARCHIVED (moved) or END_OF_STREAM. */
         *err = MMAPQI_HEADER_FILE_MISSING;
+        return HEADER_NULL;
+    }
+
+    if (r == WRAP_IO_ERROR) {
+        /* The file exists but could not be opened, stat'ed or mapped for a
+         * permanent errno (EACCES, ...): not the frontier — MMAPQ_EIO
+         * (READ-PERM-EOS-01; was FILE_MISSING, a silent end of stream). */
+        *err = MMAPQ_EIO;
         return HEADER_NULL;
     }
 

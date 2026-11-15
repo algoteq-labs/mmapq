@@ -23,6 +23,11 @@ page uses the same text.
   base directory as `MMAPQ_ENOENT` — neither is retried. That includes a
   writer that loses access while it runs: the append that needs the next
   file returns `MMAPQ_EIO` at once, and succeeds once access is restored.
+  The same holds for a consumer that cannot read a header or payload file
+  it reaches: the poll returns `MMAPQ_POLL_ERROR` and the read
+  `ENTRY_ERROR`, with `MMAPQ_EIO`, and the same poller or reader carries
+  on once the file is readable. Only a file that does not exist (not
+  written yet, or archived) or is still empty is end-of-stream.
 - **Durability across process restarts, not power loss.** No commit path
   calls `fsync`/`fdatasync`; writes reach the page cache and the OS
   persists them eventually. Long-term data belongs in the

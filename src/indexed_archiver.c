@@ -231,10 +231,8 @@ static int archive_forward_variable(MmapqIndexedArchiver *a,
             mmapqi_queue_region_accessor_payload(a->ro_acc, aid);
         Buffer pay_buf = {0};
         WrapResult wr = region_accessor_wrap(pay_acc, pos, &pay_buf);
-        if (wr == WRAP_MAP_TIMED_OUT)
-            return MMAPQ_ETIMEDOUT;
         if (wr != WRAP_SUCCESS)
-            return MMAPQ_ECORRUPT;
+            return mmapqi_committed_wrap_rc(wr);   /* READ-PERM-EOS-01: EIO */
 
         /* Headers must reference a complete message in this mapping.
          * A bogus length must not advance the deletion boundary. */

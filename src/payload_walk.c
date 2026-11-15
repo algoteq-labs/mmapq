@@ -44,6 +44,7 @@ int32_t mmapqi_payload_walk_advance(
         if (r == WRAP_MAP_TIMED_OUT) return MMAPQ_ETIMEDOUT;
         if (r == WRAP_FILE_NOT_FOUND || r == WRAP_BEYOND_FILE_SIZE)
             return MMAPQI_WALK_MAP_MISS;   /* CAND-58: the site classifies */
+        if (r == WRAP_IO_ERROR) return MMAPQ_EIO;   /* READ-PERM-EOS-01 */
         return MMAPQ_ECORRUPT;
     }
 
@@ -60,6 +61,7 @@ int32_t mmapqi_payload_walk_advance(
             if (r == WRAP_MAP_TIMED_OUT) return MMAPQ_ETIMEDOUT;
             if (r == WRAP_FILE_NOT_FOUND || r == WRAP_BEYOND_FILE_SIZE)
                 return MMAPQI_WALK_MAP_MISS;
+            if (r == WRAP_IO_ERROR) return MMAPQ_EIO;
             return MMAPQ_ECORRUPT;
         }
     }
@@ -87,6 +89,7 @@ int32_t mmapqi_payload_walk_advance(
             if (r == WRAP_MAP_TIMED_OUT) return MMAPQ_ETIMEDOUT;
             if (r == WRAP_FILE_NOT_FOUND || r == WRAP_BEYOND_FILE_SIZE)
                 return MMAPQI_WALK_MAP_MISS;
+            if (r == WRAP_IO_ERROR) return MMAPQ_EIO;
             return MMAPQ_ECORRUPT;
         }
 

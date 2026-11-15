@@ -20,9 +20,9 @@ typedef enum {
     WRAP_UNWRAPPED,        /* buffer explicitly unwrapped (non-queue contexts)      */
     WRAP_IO_ERROR,         /* the file could not be opened, created, extended or
                             * mapped and retrying will not fix it (the mapper
-                            * returned FILE_MAPPER_IO_ERROR). Read-write
-                            * accessors only, i.e. the appenders' write path;
-                            * read-only mappers never produce it.              */
+                            * returned FILE_MAPPER_IO_ERROR): the appenders'
+                            * write path, and read-only accessors for an
+                            * existing file they cannot read.                 */
 } WrapResult;
 
 /*
@@ -35,11 +35,15 @@ typedef enum {
  * so once a reclaim is ruled out (the POLL-ARCH-01 start_index re-check,
  * done first), it is damage: MMAPQ_ECORRUPT, as on the batch path. Not for
  * the frontier (a next header file not yet written is end-of-stream) or the
- * walk mode, which classify misses themselves.
+ * walk mode, which classify misses themselves. A file the read-only mapper
+ * could not open, stat or map for a permanent errno (EACCES, ...) is
+ * WRAP_IO_ERROR: MMAPQ_EIO, not damage (READ-PERM-EOS-01).
  */
 static inline int mmapqi_committed_wrap_rc(WrapResult r)
 {
-    return r == WRAP_MAP_TIMED_OUT ? MMAPQ_ETIMEDOUT : MMAPQ_ECORRUPT;
+    return r == WRAP_MAP_TIMED_OUT ? MMAPQ_ETIMEDOUT
+         : r == WRAP_IO_ERROR      ? MMAPQ_EIO
+         :                           MMAPQ_ECORRUPT;
 }
 
 /*

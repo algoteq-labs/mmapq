@@ -389,6 +389,7 @@ int mmapqi_uncommitted_batch_iterator_next(
                                              &it->msgs.payload_buf);
         if (wr != WRAP_SUCCESS) {
             if (wr == WRAP_MAP_TIMED_OUT) return MMAPQ_ETIMEDOUT;
+            if (wr == WRAP_IO_ERROR) return MMAPQ_EIO;   /* READ-PERM-EOS-01 */
             if (wr == WRAP_FILE_NOT_FOUND || wr == WRAP_BEYOND_FILE_SIZE) {
                 if (classify_payload_failure(it, it->gap_pos,
                                              it->fixed_end_of_stream)

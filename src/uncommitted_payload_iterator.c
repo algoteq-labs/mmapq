@@ -573,6 +573,7 @@ int mmapqi_uncommitted_iterator_advance(MmapqUncommittedPayloadIterator *it)
                                                  p, &it->inner->payload_buf);
             if (wr != WRAP_SUCCESS) {
                 if (wr == WRAP_MAP_TIMED_OUT) return MMAPQ_ETIMEDOUT;
+                if (wr == WRAP_IO_ERROR) return MMAPQ_EIO;   /* READ-PERM-EOS-01 */
                 /* CAND-58: a map miss classifies (the use phase is bounded
                  * by fixed_end_of_stream — positions below it were written
                  * at init): below the line → the use-phase restart;

@@ -45,7 +45,9 @@ typedef enum {
  *                 past the cursor (the failure-path re-check)
  * ERROR         — mapping timeout or I/O failure whose index is still at
  *                 or above start_index (a failure whose index is now
- *                 below start_index is reported as ARCHIVED)
+ *                 below start_index is reported as ARCHIVED); a header or
+ *                 payload file that exists but cannot be read is ERROR +
+ *                 MMAPQ_EIO, not END_OF_STREAM or CORRUPT
  * CORRUPT       — committed header with invalid payload (corruption detected)
  */
 typedef enum {

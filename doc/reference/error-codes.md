@@ -57,6 +57,19 @@ Notes:
   without `fallocate`, or a copy-on-write filesystem that allocates again
   on overwrite, running out of space can still end the process with
   `SIGBUS` on a write to the mapping.
+- On the read side, a header or payload file that exists but cannot be
+  opened or mapped (permission denied, a symlink loop, a path component
+  that is not a directory) is `MMAPQ_EIO` at once: `POLL_ERROR` for a
+  poller, `ENTRY_ERROR` / `BATCH_ENTRY_ERROR` for a reader, and
+  `last_index` returns −1 with `last_error` `MMAPQ_EIO` when it cannot read
+  a header file. A transient condition (a descriptor limit) is retried
+  until the timeout and returned as `MMAPQ_ETIMEDOUT`. Only a file that
+  does not exist (not written yet, or archived) or is still empty — a
+  writer creates a file before it extends it — reads as end-of-stream.
+  Once the file is readable again, the same poller or reader carries on.
+  Before 0.2.1 an unreadable header file read as end-of-stream (silently
+  stopping a poller as if caught up) and an unreadable payload file as
+  `POLL_CORRUPT` / `MMAPQ_ECORRUPT`.
 - A base directory that does not exist is `MMAPQ_ENOENT`: the library
   creates only the queue's own directory inside the base directory —
   create the base directory first. A reader or poller treats a queue that
@@ -65,7 +78,8 @@ Notes:
   too short — deleted by hand or damaged, outside the persistence contract
   — is `MMAPQ_ECORRUPT` on both lanes (single: `ENTRY_ERROR` /
   `POLL_CORRUPT`; batch: `BATCH_ENTRY_ERROR` / `POLL_CORRUPT`); it never
-  recovers on retry: recreate the queue. A file reclaimed by archiving is
+  recovers on retry: recreate the queue. A payload file that exists but
+  cannot be read is `MMAPQ_EIO` (above), not corruption. A file reclaimed by archiving is
   reported as archived, not as corruption.
 
 This table is pinned by `scripts/check_error_codes.sh`: every `MMAPQ_*`

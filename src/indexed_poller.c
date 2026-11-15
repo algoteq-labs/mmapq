@@ -213,7 +213,7 @@ MmapqPollResult mmapq_indexed_poller_poll(
             return MMAPQ_POLL_ARCHIVED;
         }
         p->last_error = mmapqi_committed_wrap_rc(r);
-        return p->last_error == MMAPQ_ETIMEDOUT ? MMAPQ_POLL_ERROR : MMAPQ_POLL_CORRUPT;
+        return p->last_error == MMAPQ_ECORRUPT ? MMAPQ_POLL_CORRUPT : MMAPQ_POLL_ERROR;
     }
 
     if (p->payload_buf.capacity <= PAYLOAD_LENGTH_SIZE) {

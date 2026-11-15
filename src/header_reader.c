@@ -70,8 +70,12 @@ uint64_t mmapqi_header_read(
         return atomic_load_explicit(p, memory_order_acquire);
     }
 
-    if (r == WRAP_FILE_NOT_FOUND || r == WRAP_BEYOND_FILE_SIZE || r == WRAP_MAP_TIMED_OUT) {
-        /* Queue not yet accessible — treat as unwritten */
+    if (r == WRAP_FILE_NOT_FOUND || r == WRAP_BEYOND_FILE_SIZE || r == WRAP_MAP_TIMED_OUT ||
+        r == WRAP_IO_ERROR) {
+        /* Queue not yet accessible — treat as unwritten. This read has no
+         * error channel; its callers are boolean probes (move_to_index,
+         * contains) or run after a checked read of the same range
+         * (READ-PERM-EOS-01: an IO_ERROR here was the fatal assert). */
         return HEADER_NULL;
     }
 
@@ -100,6 +104,7 @@ int mmapqi_header_read_checked_missing(
     if (result == WRAP_FILE_NOT_FOUND || result == WRAP_BEYOND_FILE_SIZE)
         return MMAPQI_HEADER_FILE_MISSING;
     if (result == WRAP_MAP_TIMED_OUT) return MMAPQ_ETIMEDOUT;
+    if (result == WRAP_IO_ERROR) return MMAPQ_EIO;   /* READ-PERM-EOS-01 */
     if (result != WRAP_SUCCESS || buf->capacity < HEADER_SIZE) return MMAPQ_ECORRUPT;
     /* Acquire pairs with the appender's publication CAS, as in the legacy reader. */
     *header = atomic_load_explicit((const _Atomic uint64_t *)buf->data, memory_order_acquire);

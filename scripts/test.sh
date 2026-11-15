@@ -39,6 +39,7 @@ TESTS=(
     test_poll_arch_pins
     test_permanent_errors
     test_write_path_errors
+    test_read_perm_errors
 )
 
 # Hook-only suites (TEST-01): main() wraps every RUN_TEST in

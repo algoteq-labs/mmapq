@@ -23,7 +23,9 @@
  *   FILE_MAPPER_IO_ERROR        : open/create/extend/map failed with an errno
  *                                 that retrying does not fix (EACCES, EROFS,
  *                                 ENOSPC, ENODEV, ...: mmapqi_fs_errno_rc is
- *                                 not ETIMEDOUT). Read-write mappers only.
+ *                                 not ETIMEDOUT); read-only mappers for an
+ *                                 existing file they cannot stat, open or
+ *                                 map (EACCES, ELOOP, ...).
  *
  * Positive return value: the mapped memory address (cast from uintptr_t).
  */

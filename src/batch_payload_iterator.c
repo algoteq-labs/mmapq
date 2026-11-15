@@ -6,6 +6,20 @@
 #include "internal/batch_payload_iterator_internal.h"
 #include <string.h>
 
+/* The code for a failed count wrap that is neither a timeout nor a walk-mode
+ * miss: mmapqi_committed_wrap_rc's rule (READ-PERM-EOS-01: an unreadable
+ * file is MMAPQ_EIO, anything else ECORRUPT). Out of line and cold on
+ * purpose: inlined, the extra compare made GCC keep the wrap result in a
+ * second register, one more instruction on the SUCCESS path of
+ * read_message_count whenever it maps a new region (the region's slow wrap;
+ * callgrind +1 Ir per such call); out of line the success path's
+ * instruction count is the baseline's. */
+__attribute__((noinline, cold))
+static int count_fail_rc(WrapResult r)
+{
+    return mmapqi_committed_wrap_rc(r);
+}
+
 static int wrap_or_fail(MmapqBatchPayloadIterator *it, int64_t position)
 {
     WrapResult r = region_accessor_wrap(it->payload_acc, position, &it->payload_buf);
@@ -34,8 +48,8 @@ int32_t mmapq_batch_iterator_read_message_count(MmapqBatchPayloadIterator *it, i
             return MMAPQI_WALK_MAP_MISS;
         /* a miss under a committed header is ECORRUPT, one rule for both
          * lanes (the timeout returned above; kept first so the object code
-         * of this per-batch path is unchanged) */
-        return mmapqi_committed_wrap_rc(result);
+         * of this per-batch path is unchanged); an unreadable file EIO */
+        return count_fail_rc(result);
     }
     /* capacity <= 4: a batch count never occupies a region tail (the
      * CAND-51e unified tail rule) — a batch offset there is corrupt. */
