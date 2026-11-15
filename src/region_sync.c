@@ -57,9 +57,7 @@ static int sync_map(Region *self, int64_t position)
 
     uintptr_t addr = file_mapper_map(impl->file_mapper, position, impl->region_size);
 
-    if (addr != FILE_MAPPER_NULL_ADDRESS &&
-        addr != FILE_MAPPER_FILE_NOT_FOUND &&
-        addr != FILE_MAPPER_BEYOND_FILE_SIZE) {
+    if (file_mapper_is_address(addr)) {
         impl->current_address          = addr;
         impl->current_position         = position;
         impl->error_code               = 0;
@@ -125,9 +123,7 @@ static WrapResult sync_do_wrap(RegionAccessor *self, int64_t position, Buffer *b
             uintptr_t addr = file_mapper_map(impl->file_mapper,
                                               region_start_position, impl->region_size);
 
-            if (addr != FILE_MAPPER_NULL_ADDRESS &&
-                addr != FILE_MAPPER_FILE_NOT_FOUND &&
-                addr != FILE_MAPPER_BEYOND_FILE_SIZE) {
+            if (file_mapper_is_address(addr)) {
                 impl->current_address          = addr;
                 impl->current_position         = region_start_position;
                 impl->error_code               = 0;
@@ -145,7 +141,14 @@ static WrapResult sync_do_wrap(RegionAccessor *self, int64_t position, Buffer *b
                 return WRAP_SUCCESS;
             }
 
-            if (addr == FILE_MAPPER_FILE_NOT_FOUND) {
+            if (addr == FILE_MAPPER_IO_ERROR) {
+                /* Permanent (the mapper classified the errno): report it
+                 * now instead of retrying until the timeout. */
+                impl->file_not_found_counter   = 0;
+                impl->beyond_file_size_counter = 0;
+                region_accessor_invalidate_fast_path(self);
+                return WRAP_IO_ERROR;
+            } else if (addr == FILE_MAPPER_FILE_NOT_FOUND) {
                 if (++impl->file_not_found_counter >= impl->max_file_not_found_errors) {
                     impl->file_not_found_counter = 0;
                     /* failure path may have unmapped the cached region */

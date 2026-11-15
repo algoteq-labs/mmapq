@@ -116,6 +116,8 @@ int mmapq_indexed_appender_create_with_id(
  *
  * Returns the queue index at which the message was committed,
  * or -1 on mapping timeout, or MMAPQ_EINVAL if message exceeds region size,
+ * or MMAPQ_EIO if the next queue file cannot be created, opened or mapped
+ * (permission, filesystem — fix the cause, then retry the same call),
  * or MMAPQ_ECORRUPT if the payload position is outside the encodable
  * 56-bit field (exhausted position space).
  */
@@ -136,7 +138,8 @@ int64_t mmapq_indexed_appender_append(
  * MMAPQ_EINVAL.
  *
  * Returns the payload offset (position of the 4-byte length prefix),
- * or -1 on mapping timeout, or MMAPQ_EINVAL if message exceeds region size.
+ * or -1 on mapping timeout, or MMAPQ_EINVAL if message exceeds region size,
+ * or MMAPQ_EIO if the next queue file cannot be created, opened or mapped.
  * The offset must be passed to mmapq_indexed_appender_commit() later.
  *
  * Use case: UDP resequencing — append as packets arrive, commit when
@@ -171,7 +174,8 @@ int64_t mmapq_indexed_appender_append_uncommitted(
  * the outstanding set — see
  * mmapq_indexed_appender_uncommitted_iterator_checked).
  * or MMAPQ_ECLOSED if the appender is closed,
- * or -1 on mapping timeout.
+ * or -1 on mapping timeout,
+ * or MMAPQ_EIO if the next header file cannot be created, opened or mapped.
  *
  * CONTRACT: Each offset may be committed at most once; a second commit of
  * the same offset returns MMAPQ_EINVAL.

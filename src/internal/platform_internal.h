@@ -76,4 +76,19 @@ static inline int mmapqi_fs_errno_rc(int err)
     }
 }
 
+/**
+ * mmapqi_write_errno_rc — the same rule on the write path, where an
+ * appender creates, opens, extends or maps the next header or payload file
+ * while it crosses a file boundary: a transient errno (mmapqi_fs_errno_rc
+ * says ETIMEDOUT) stays MMAPQ_ETIMEDOUT and anything else is MMAPQ_EIO.
+ * Two outcomes only, because the region layer between the mapper and the
+ * appender carries a WrapResult, not an errno; a missing directory or an
+ * ENOMEM from mmap here means the queue's files were moved, or a system
+ * limit was hit, under a live appender — fix the cause (MMAPQ_EIO).
+ */
+static inline int mmapqi_write_errno_rc(int err)
+{
+    return mmapqi_fs_errno_rc(err) == MMAPQ_ETIMEDOUT ? MMAPQ_ETIMEDOUT : MMAPQ_EIO;
+}
+
 #endif /* PLATFORM_INTERNAL_H */

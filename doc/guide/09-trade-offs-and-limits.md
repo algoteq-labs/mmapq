@@ -20,7 +20,9 @@ page uses the same text.
   umask: writers running as different users need a shared group and
   umask 002. The archive lock file is created 0644, so run all archivers
   as one user. A missing permission is reported as `MMAPQ_EIO`, a missing
-  base directory as `MMAPQ_ENOENT` — neither is retried.
+  base directory as `MMAPQ_ENOENT` — neither is retried. That includes a
+  writer that loses access while it runs: the append that needs the next
+  file returns `MMAPQ_EIO` at once, and succeeds once access is restored.
 - **Durability across process restarts, not power loss.** No commit path
   calls `fsync`/`fdatasync`; writes reach the page cache and the OS
   persists them eventually. Long-term data belongs in the

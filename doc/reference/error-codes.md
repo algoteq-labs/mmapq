@@ -44,6 +44,19 @@ Notes:
   component that is not a directory, a read-only or full filesystem) →
   `MMAPQ_EIO`. See the access each participant needs in
   [chapter 9 of the guide](../guide/09-trade-offs-and-limits.md).
+- The same holds for an appender crossing into a new header or payload
+  file: if the file cannot be created, opened, extended or mapped — the
+  queue directory lost write permission, the filesystem is read-only or
+  full — the append, commit or batch call returns `MMAPQ_EIO` at once.
+  A mapping timeout, or a transient condition (a descriptor limit, an
+  interrupted call), is still retried until the appender's timeout and
+  returned as `MMAPQ_ETIMEDOUT`. The appender is unchanged by the failure:
+  once the cause is fixed, the same call succeeds at the same index.
+  A full filesystem is detected because the appender reserves a region's
+  disk blocks (`fallocate`) before it writes to them. On a filesystem
+  without `fallocate`, or a copy-on-write filesystem that allocates again
+  on overwrite, running out of space can still end the process with
+  `SIGBUS` on a write to the mapping.
 - A base directory that does not exist is `MMAPQ_ENOENT`: the library
   creates only the queue's own directory inside the base directory —
   create the base directory first. A reader or poller treats a queue that

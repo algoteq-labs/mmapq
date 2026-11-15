@@ -71,17 +71,19 @@ rationale — the setter is called by both archivers).
 
 ### file_mapper_rolled.c — 12 (all I)
 
-Lines 92, 164-165, 169, 191-193, 201, 207, 237, 266, 268.
-(E12: every site moved down one by the `internal/test_reach.h` include, sites unchanged.)
+Lines 93, 165-166, 170, 190-192, 200, 206, 236, 265, 267.
+(E12: every site moved down one by the `internal/test_reach.h` include, sites unchanged.
+CAND-41: moved by the `platform_internal.h` include and the shorter
+success test in `rolled_map`, sites unchanged.)
 Internal: null checks on self/entry, invariant checks on
 oldest_idx/ref_count/length coherence. No caller-controlled values.
 
 The two CAND-59 additions are both in `mmapqi_file_mapper_rolled_create_file`
 (the explicit frontier-create entry point):
-- **:266 `self != NULL`** — the dispatch null check every `FileMapper` entry
+- **:265 `self != NULL`** — the dispatch null check every `FileMapper` entry
   point carries; `self` is the accessor's retained header-mapper handle,
   never caller input.
-- **:268 `impl->mode == MAP_MODE_READ_WRITE`** — explicit frontier creation
+- **:267 `impl->mode == MAP_MODE_READ_WRITE`** — explicit frontier creation
   is a write-path operation, wired only to the header's read-write mapper.
   An RO or walk mapper reaching it is an internal wiring error (creating a
   file through a read-only mapper would break the read-only contract), not
@@ -93,8 +95,10 @@ Lines 71-72, 110-112, 125. Internal dispatch null checks.
 
 ### file_mapper_single_rw.c — 7 (all I)
 
-Lines 47, 145-146, 197-199, 211. Internal dispatch null checks. (CAND-59:
-shifted by the no_create field and the rw_init/rw_map rework.)
+Lines 48, 204-205, 259-261, 273. Internal dispatch null checks. (CAND-59:
+shifted by the no_create field and the rw_init/rw_map rework; CAND-41:
+shifted by the errno-classifying rw_fail, the block reservation
+rw_reserve and its test hook, sites unchanged.)
 
 ### fixed_size_region.c — 3 (all I)
 
@@ -164,7 +168,7 @@ Internal dispatch NULL checks.
 
 ### region_async.c — 8 (all I)
 
-Lines 235, 316-317, 347, 392, 405, 420, 430. Internal dispatch null checks. (CAND-59: shifted by the map-process test hook.)
+Lines 236, 332-333, 363, 408, 421, 436, 446. Internal dispatch null checks. (CAND-59: shifted by the map-process test hook; CAND-41: shifted by the error_position field and the IO-error branch, sites unchanged.)
 
 ### region_ring.c — 2 (all I)
 
@@ -181,7 +185,8 @@ close sites shifted below it.)
 
 ### region_sync.c — 7 (all I)
 
-Lines 44, 81, 176-177, 183-184, 190. Internal dispatch null checks.
+Lines 44, 79, 179-180, 186-187, 193. Internal dispatch null checks.
+(CAND-41: shifted by the IO-error branch in the wrap loop, sites unchanged.)
 
 ### runtime.c — 1 (all I)
 

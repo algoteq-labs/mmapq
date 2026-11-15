@@ -153,7 +153,7 @@ static __attribute__((always_inline)) inline int write_padding_if_needed(
     WrapResult r = region_accessor_wrap(a->payload_acc,
                                          a->current_payload_position,
                                          &a->payload_buf);
-    if (r != WRAP_SUCCESS) return -1;
+    if (r != WRAP_SUCCESS) return mmapqi_write_wrap_rc(r);   /* EIO or ETIMEDOUT */
 
     int32_t capacity = a->payload_buf.capacity;
 
@@ -182,7 +182,7 @@ static __attribute__((always_inline)) inline int write_padding_if_needed(
     r = region_accessor_wrap(a->payload_acc,
                               a->current_payload_position,
                               &a->payload_buf);
-    if (r != WRAP_SUCCESS) return -1;
+    if (r != WRAP_SUCCESS) return mmapqi_write_wrap_rc(r);
     return 0;
 }
 
@@ -213,7 +213,8 @@ static __attribute__((always_inline)) inline int write_payload(
     MMAP_ASSERT(length + PAYLOAD_LENGTH_SIZE <= queue_meta_region_size(a->queue_meta),
         "write_payload: message too large — must fit within one region. "
         "Increase region_size or reduce message size.");
-    if (write_padding_if_needed(a, length)) return -1;
+    int prc = write_padding_if_needed(a, length);
+    if (prc != 0) return prc;   /* MMAPQ_EIO or MMAPQ_ETIMEDOUT */
 
     int64_t payload_offset = a->current_payload_position;
 
@@ -276,11 +277,14 @@ static int commit_header_below_floor(void *ctx, int64_t position)
  * C59_HOOK_HEADER_NOT_FOUND_NOTE() (mutation-3 witness) fires once per
  * ANOMALOUS entry only: a below-si jump (the stale lane probed below
  * start_index) or a no-progress/cap failure. A clean frontier create —
- * the ordinary boundary crossing — does NOT count. */
+ * the ordinary boundary crossing — does NOT count. Entered with the hot
+ * half's non-SUCCESS result r: anything but FILE_NOT_FOUND (a mapping
+ * timeout, or a permanent open/map failure — WRAP_IO_ERROR) is mapped at
+ * once (CAND-41). */
 __attribute__((noinline)) static int
-header_wrap_frontier_cold(MmapqIndexedAppender *a)
+header_wrap_frontier_cold(MmapqIndexedAppender *a, WrapResult r)
 {
-    WrapResult r = WRAP_FILE_NOT_FOUND;
+    if (r != WRAP_FILE_NOT_FOUND) return mmapqi_write_wrap_rc(r);
     int noted = 0;
     int64_t prev_floor = -1;
     for (int iter = 0; ; iter++) {
@@ -289,14 +293,18 @@ header_wrap_frontier_cold(MmapqIndexedAppender *a)
             if (!noted) { C59_HOOK_HEADER_NOT_FOUND_NOTE(); noted = 1; }
             a->current_index = si;
             a->current_header_position = header_position(si);
-        } else if (mmapqi_queue_region_accessor_header_create(
-                       a->rw_acc, a->current_header_position) != 0) {
-            return -1;   /* create I/O error (not EEXIST): fail, retryable */
+        } else {
+            /* create failure (not EEXIST), by cause: MMAPQ_EIO, or
+             * MMAPQ_ETIMEDOUT at once for a transient errno
+             * (mmapqi_write_errno_rc) */
+            int crc = mmapqi_queue_region_accessor_header_create(
+                          a->rw_acc, a->current_header_position);
+            if (crc != 0) return crc;
         }
         r = region_accessor_wrap(a->header_acc,
                                  a->current_header_position, &a->header_buf);
         if (r == WRAP_SUCCESS) return 0;
-        if (r != WRAP_FILE_NOT_FOUND) return -1;
+        if (r != WRAP_FILE_NOT_FOUND) return mmapqi_write_wrap_rc(r);
         if (si <= prev_floor) {
             if (!noted) { C59_HOOK_HEADER_NOT_FOUND_NOTE(); noted = 1; }
             fprintf(stderr, "mmapq: commit-path header wrap made no progress "
@@ -324,11 +332,13 @@ header_wrap_frontier_cold(MmapqIndexedAppender *a)
  * classifying floor did not advance is a bug, not a timeout: ECORRUPT +
  * a distinct stderr line (the region_ring.c convention); the 1024 cap has
  * a second line. Returns 0 on WRAP_SUCCESS, MMAPQ_ECORRUPT on the two
- * corruption exits, -1 on every other failure — the corrupt flag rides
- * the return value instead of an out-parameter (APPEND-HOTPATH-01 R1):
- * an address-taken local lives on the stack, forcing a frame on callers
- * that inline this. The call sites map the result exactly as they mapped
- * the flag pair. */
+ * corruption exits, and otherwise the failure by cause: MMAPQ_EIO for a
+ * permanent create/open/map failure, MMAPQ_ETIMEDOUT for a mapping timeout
+ * or a transient errno (CAND-41). Every non-SUCCESS result goes to the cold
+ * half, so the inlined part stays the wrap plus one predicted branch. The
+ * code rides the return value instead of an out-parameter
+ * (APPEND-HOTPATH-01 R1): an address-taken local lives on the stack,
+ * forcing a frame on callers that inline this. */
 static __attribute__((always_inline)) inline int
 header_wrap_frontier(MmapqIndexedAppender *a)
 {
@@ -336,8 +346,7 @@ header_wrap_frontier(MmapqIndexedAppender *a)
                                         a->current_header_position,
                                         &a->header_buf);
     if (__builtin_expect(r == WRAP_SUCCESS, 1)) return 0;
-    if (r != WRAP_FILE_NOT_FOUND) return -1;
-    return header_wrap_frontier_cold(a);
+    return header_wrap_frontier_cold(a, r);
 }
 
 static int move_to_last_header(MmapqIndexedAppender *a)
@@ -691,7 +700,8 @@ static int initialise_append_position(MmapqIndexedAppender *a, int64_t start_ind
      */
     int join_rc = header_wrap_frontier(a);
     if (join_rc != 0) return join_rc;
-    if (region_accessor_wrap(a->payload_acc, a->current_payload_position, &a->payload_buf) != WRAP_SUCCESS) return -1;
+    WrapResult pr = region_accessor_wrap(a->payload_acc, a->current_payload_position, &a->payload_buf);
+    if (pr != WRAP_SUCCESS) return mmapqi_write_wrap_rc(pr);
     return 0;
 }
 
@@ -984,7 +994,8 @@ int64_t mmapq_indexed_appender_append(
     if (length > a->max_message_length) return MMAPQ_EINVAL;
 
     int64_t payload_offset;
-    if (write_payload(a, data, length, &payload_offset)) return -1;
+    int wrc = write_payload(a, data, length, &payload_offset);
+    if (wrc != 0) return wrc;
 
     int64_t committed;
     int crc = commit_header(a, payload_offset, &committed);
@@ -1014,7 +1025,8 @@ int64_t mmapq_indexed_appender_append_uncommitted(
         return MMAPQ_ENOMEM;
 
     int64_t payload_offset;
-    if (write_payload(a, data, length, &payload_offset)) return -1;
+    int wrc = write_payload(a, data, length, &payload_offset);
+    if (wrc != 0) return wrc;
 
     if (prev != PAYLOAD_ITERATOR_NOT_SET)
         (void)mmapqi_offset_set_add(&a->outstanding, prev);  /* cannot allocate: spare ensured above */

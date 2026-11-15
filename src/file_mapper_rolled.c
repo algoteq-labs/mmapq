@@ -2,6 +2,7 @@
 #include "internal/mmap_assert.h"
 #include "internal/test_reach.h"   /* prototype of mmapqi_rolled_prefix_and_mode */
 #include "mmap_platform.h"
+#include "internal/platform_internal.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -175,9 +176,7 @@ static uintptr_t rolled_map(FileMapper *self, int64_t position, int32_t length)
     FileCacheEntry *entry = cache_get_or_open(impl, file_index);
 
     uintptr_t result = file_mapper_map(entry->mapper, position_in_file, length);
-    if (result != FILE_MAPPER_NULL_ADDRESS &&
-        result != FILE_MAPPER_FILE_NOT_FOUND &&
-        result != FILE_MAPPER_BEYOND_FILE_SIZE) {
+    if (file_mapper_is_address(result)) {
         entry->ref_count++;
     }
     return result;
@@ -275,12 +274,16 @@ int mmapqi_file_mapper_rolled_create_file(FileMapper *self, int64_t position)
 
     /* No-overwrite create: never replaces or re-opens an existing file
      * here — EEXIST means another lane created it first, which is success
-     * (the caller's retried map opens it). */
+     * (the caller's retried map opens it). A failure is reported by cause
+     * (mmapqi_write_errno_rc): a descriptor limit or an interrupted call is
+     * MMAPQ_ETIMEDOUT, anything else (EACCES, EROFS, ENOSPC, ...) MMAPQ_EIO —
+     * the same rule as the read-write mapper (CAND-41). */
     int fd = open(file_name, O_RDWR | O_CREAT | O_EXCL,
                   S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
     if (fd < 0) {
-        if (errno == EEXIST) return 0;
-        return MMAPQ_EIO;
+        int err = errno;
+        if (err == EEXIST) return 0;
+        return mmapqi_write_errno_rc(err != 0 ? err : EIO);
     }
     if (impl->initialiser != NULL) {
         struct stat st;
@@ -288,8 +291,9 @@ int mmapqi_file_mapper_rolled_create_file(FileMapper *self, int64_t position)
             (st.st_size == 0 &&
              impl->initialiser(fd, (size_t)impl->max_file_size,
                                impl->initialiser_ctx) != 0)) {
+            int err = errno;   /* saved before close() can change it */
             close(fd);
-            return MMAPQ_EIO;
+            return mmapqi_write_errno_rc(err != 0 ? err : EIO);
         }
     }
     close(fd);

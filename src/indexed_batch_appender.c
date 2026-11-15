@@ -103,16 +103,19 @@ struct MmapqIndexedBatchAppender {
 
 /* ── Internal Helpers ────────────────────────────────────────────────────── */
 
+/* 0, or the failure by cause: MMAPQ_EIO for a permanent open/create/map
+ * failure, MMAPQ_ETIMEDOUT otherwise (mmapqi_write_wrap_rc, CAND-41). */
 static int wrap_payload_or_fail(MmapqIndexedBatchAppender *a, int64_t position)
 {
     WrapResult r = region_accessor_wrap(a->payload_acc, position, &a->payload_buf);
-    if (r != WRAP_SUCCESS) return -1;
+    if (r != WRAP_SUCCESS) return mmapqi_write_wrap_rc(r);
     return 0;
 }
 
 static int ensure_space_for_batch_header(MmapqIndexedBatchAppender *a)
 {
-    if (wrap_payload_or_fail(a, a->current_payload_position)) return -1;
+    int rc = wrap_payload_or_fail(a, a->current_payload_position);
+    if (rc != 0) return rc;
     /* CAND-51e unified tail rule — one rule for every item: with <= 4
      * bytes left in a region, skip to the next region. A message keeps its
      * length and payload in one region; a batch count could fit in exactly
@@ -122,7 +125,8 @@ static int ensure_space_for_batch_header(MmapqIndexedBatchAppender *a)
      * wedge found by the crash-composition suite). */
     if (a->payload_buf.capacity <= MMAPQ_BATCH_MSG_COUNT_SIZE) {
         a->current_payload_position += a->payload_buf.capacity;
-        if (wrap_payload_or_fail(a, a->current_payload_position)) return -1;
+        rc = wrap_payload_or_fail(a, a->current_payload_position);
+        if (rc != 0) return rc;
     }
     return 0;
 }
@@ -133,7 +137,8 @@ static int ensure_space_for_batch_header(MmapqIndexedBatchAppender *a)
  * the attribute restores the shipped shape. */
 static __attribute__((always_inline)) inline int write_padding_if_needed(MmapqIndexedBatchAppender *a, int32_t length)
 {
-    if (wrap_payload_or_fail(a, a->current_payload_position)) return -1;
+    int rc = wrap_payload_or_fail(a, a->current_payload_position);
+    if (rc != 0) return rc;
     int32_t cap = a->payload_buf.capacity;
     int32_t total_needed = length + PAYLOAD_LENGTH_SIZE;
 
@@ -146,8 +151,7 @@ static __attribute__((always_inline)) inline int write_padding_if_needed(MmapqIn
     }
 
     a->current_payload_position += cap;
-    if (wrap_payload_or_fail(a, a->current_payload_position)) return -1;
-    return 0;
+    return wrap_payload_or_fail(a, a->current_payload_position);
 }
 
 #ifdef MMAPQ_TEST_HOOKS
@@ -224,7 +228,8 @@ static int recover_open_batch(MmapqIndexedBatchAppender *a, int64_t p, int64_t *
         return 0;
     }
 
-    if (wrap_payload_or_fail(a, p) != 0) return -1;
+    int wrc = wrap_payload_or_fail(a, p);
+    if (wrc != 0) return wrc;
     memcpy(a->payload_buf.data + MMAPQ_BATCH_MSG_COUNT_OFFSET, &walked, sizeof(int32_t));
     a->join_completed_flag   = 1;
     a->join_completed_offset = p;
@@ -448,7 +453,8 @@ static int initialise_append_position(MmapqIndexedBatchAppender *a, int64_t star
     /* Eager wrap */
     int join_rc = header_wrap_frontier(a);
     if (join_rc != 0) return join_rc;
-    if (region_accessor_wrap(a->payload_acc, a->current_payload_position, &a->payload_buf) != WRAP_SUCCESS) return -1;
+    join_rc = wrap_payload_or_fail(a, a->current_payload_position);
+    if (join_rc != 0) return join_rc;
 
     return 0;
 }
@@ -788,11 +794,14 @@ static int commit_header_below_floor(void *ctx, int64_t position)
  * C59_HOOK_HEADER_NOT_FOUND_NOTE() (mutation-3 witness) fires once per
  * ANOMALOUS entry only: a below-si jump (the stale lane probed below
  * start_index) or a no-progress/cap failure. A clean frontier create —
- * the ordinary boundary crossing — does NOT count. */
+ * the ordinary boundary crossing — does NOT count. Entered with the hot
+ * half's non-SUCCESS result r: anything but FILE_NOT_FOUND (a mapping
+ * timeout, or a permanent open/map failure — WRAP_IO_ERROR) is mapped at
+ * once (CAND-41). */
 __attribute__((noinline)) static int
-header_wrap_frontier_cold(MmapqIndexedBatchAppender *a)
+header_wrap_frontier_cold(MmapqIndexedBatchAppender *a, WrapResult r)
 {
-    WrapResult r = WRAP_FILE_NOT_FOUND;
+    if (r != WRAP_FILE_NOT_FOUND) return mmapqi_write_wrap_rc(r);
     int noted = 0;
     int64_t prev_floor = -1;
     for (int iter = 0; ; iter++) {
@@ -801,14 +810,18 @@ header_wrap_frontier_cold(MmapqIndexedBatchAppender *a)
             if (!noted) { C59_HOOK_HEADER_NOT_FOUND_NOTE(); noted = 1; }
             a->current_index = si;
             a->current_header_position = header_position(si);
-        } else if (mmapqi_queue_region_accessor_header_create(
-                       a->rw_acc, a->current_header_position) != 0) {
-            return -1;   /* create I/O error (not EEXIST): fail, retryable */
+        } else {
+            /* create failure (not EEXIST), by cause: MMAPQ_EIO, or
+             * MMAPQ_ETIMEDOUT at once for a transient errno
+             * (mmapqi_write_errno_rc) */
+            int crc = mmapqi_queue_region_accessor_header_create(
+                          a->rw_acc, a->current_header_position);
+            if (crc != 0) return crc;
         }
         r = region_accessor_wrap(a->header_acc,
                                  a->current_header_position, &a->header_buf);
         if (r == WRAP_SUCCESS) return 0;
-        if (r != WRAP_FILE_NOT_FOUND) return -1;
+        if (r != WRAP_FILE_NOT_FOUND) return mmapqi_write_wrap_rc(r);
         if (si <= prev_floor) {
             if (!noted) { C59_HOOK_HEADER_NOT_FOUND_NOTE(); noted = 1; }
             fprintf(stderr, "mmapq: commit-path header wrap made no progress "
@@ -836,11 +849,13 @@ header_wrap_frontier_cold(MmapqIndexedBatchAppender *a)
  * classifying floor did not advance is a bug, not a timeout: ECORRUPT +
  * a distinct stderr line (the region_ring.c convention); the 1024 cap has
  * a second line. Returns 0 on WRAP_SUCCESS, MMAPQ_ECORRUPT on the two
- * corruption exits, -1 on every other failure — the corrupt flag rides
- * the return value instead of an out-parameter (APPEND-HOTPATH-01 R1):
- * an address-taken local lives on the stack, forcing a frame on callers
- * that inline this. The call sites map the result exactly as they mapped
- * the flag pair. */
+ * corruption exits, and otherwise the failure by cause: MMAPQ_EIO for a
+ * permanent create/open/map failure, MMAPQ_ETIMEDOUT for a mapping timeout
+ * or a transient errno (CAND-41). Every non-SUCCESS result goes to the cold
+ * half, so the inlined part stays the wrap plus one predicted branch. The
+ * code rides the return value instead of an out-parameter
+ * (APPEND-HOTPATH-01 R1): an address-taken local lives on the stack,
+ * forcing a frame on callers that inline this. */
 static __attribute__((always_inline)) inline int
 header_wrap_frontier(MmapqIndexedBatchAppender *a)
 {
@@ -848,8 +863,7 @@ header_wrap_frontier(MmapqIndexedBatchAppender *a)
                                         a->current_header_position,
                                         &a->header_buf);
     if (__builtin_expect(r == WRAP_SUCCESS, 1)) return 0;
-    if (r != WRAP_FILE_NOT_FOUND) return -1;
-    return header_wrap_frontier_cold(a);
+    return header_wrap_frontier_cold(a, r);
 }
 
 static int move_to_last_header(MmapqIndexedBatchAppender *a)
@@ -953,7 +967,8 @@ static int64_t batch_publish(MmapqIndexedBatchAppender *a, int64_t batch_offset)
 static int batch_store_count(MmapqMutableBatch *b)
 {
     MmapqIndexedBatchAppender *a = b->appender;
-    if (wrap_payload_or_fail(a, b->batch_offset) != 0) return -1;
+    int rc = wrap_payload_or_fail(a, b->batch_offset);
+    if (rc != 0) return rc;
     memcpy(a->payload_buf.data + MMAPQ_BATCH_MSG_COUNT_OFFSET, &b->message_count, sizeof(int32_t));
     b->consumed = 1;
     a->batch_state = BATCH_STATE_NONE;
@@ -970,7 +985,8 @@ int64_t mmapq_mutable_batch_complete(MmapqMutableBatch *b)
     if (b->consumed) return MMAPQ_EINVAL;
     if (b->message_count == 0) return MMAPQ_EINVAL;
 
-    if (batch_store_count(b) != 0) return -1;
+    int src = batch_store_count(b);
+    if (src != 0) return src;
 
     /* complete = finalize + PUBLISH (CAND-49 §3.5). */
     int64_t idx = batch_publish(a, b->batch_offset);
@@ -998,7 +1014,8 @@ int64_t mmapq_mutable_batch_complete_uncommitted(MmapqMutableBatch *b)
      * (ruling 5). One compare when the spare exists (the normal case). */
     if (mmapqi_offset_set_reserve(&a->outstanding, 1) != 0) return MMAPQ_ENOMEM;
 
-    if (batch_store_count(b) != 0) return -1;
+    int src = batch_store_count(b);
+    if (src != 0) return src;
 
     (void)mmapqi_offset_set_add(&a->outstanding, b->batch_offset);  /* spare ensured */
     return b->batch_offset;
@@ -1018,11 +1035,12 @@ int mmapq_mutable_batch_discard(MmapqMutableBatch *b)
          * offset returns EINVAL; discard is final. After a restart the
          * walker reports it and refill makes it committable; the app
          * decides. */
-        if (batch_store_count(b) != 0) {
+        int src = batch_store_count(b);
+        if (src != 0) {
             /* Pre-store failure: the handle stays OPEN-ORPHANED (§3.7) —
              * the next start_batch recovers it to staged. */
             a->batch_state = BATCH_STATE_ORPHANED;
-            return -1;
+            return src;
         }
         return 0;
     }
@@ -1232,7 +1250,8 @@ int32_t mmapq_mutable_batch_append(MmapqMutableBatch *b, const void *data, int32
      * which explains why it is kept now that the crash contract is
      * framing only). Compiler barrier only — no instructions emitted. */
     atomic_signal_fence(memory_order_release);
-    if (write_padding_if_needed(a, length)) return -1;
+    int prc = write_padding_if_needed(a, length);
+    if (prc != 0) return prc;   /* MMAPQ_EIO or MMAPQ_ETIMEDOUT */
     memcpy(a->payload_buf.data + PAYLOAD_LENGTH_OFFSET, &length, sizeof(int32_t));
     /* Length store precedes payload bytes in program order — the
      * no-leftover argument (CAND-49 §3.7, CAND-51c §0; the twin comment in
@@ -1258,7 +1277,8 @@ int32_t mmapq_mutable_batch_append_reserved(MmapqMutableBatch *b, int32_t length
      * preceding append_reserved: they are program-order-before this
      * fence. Compiler barrier only — no instructions emitted. */
     atomic_signal_fence(memory_order_release);
-    if (write_padding_if_needed(a, length)) return -1;
+    int prc = write_padding_if_needed(a, length);
+    if (prc != 0) return prc;   /* MMAPQ_EIO or MMAPQ_ETIMEDOUT */
     memcpy(a->payload_buf.data + PAYLOAD_LENGTH_OFFSET, &length, sizeof(int32_t));
     /* Length store precedes the (caller-written) payload bytes in program
      * order — the no-leftover argument (CAND-49 §3.7, CAND-51c §0; the

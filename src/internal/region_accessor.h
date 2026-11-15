@@ -18,6 +18,11 @@ typedef enum {
     WRAP_FILE_NOT_FOUND,   /* backing file does not exist yet                      */
     WRAP_BEYOND_FILE_SIZE, /* position exceeds current file size                   */
     WRAP_UNWRAPPED,        /* buffer explicitly unwrapped (non-queue contexts)      */
+    WRAP_IO_ERROR,         /* the file could not be opened, created, extended or
+                            * mapped and retrying will not fix it (the mapper
+                            * returned FILE_MAPPER_IO_ERROR). Read-write
+                            * accessors only, i.e. the appenders' write path;
+                            * read-only mappers never produce it.              */
 } WrapResult;
 
 /*
@@ -35,6 +40,19 @@ typedef enum {
 static inline int mmapqi_committed_wrap_rc(WrapResult r)
 {
     return r == WRAP_MAP_TIMED_OUT ? MMAPQ_ETIMEDOUT : MMAPQ_ECORRUPT;
+}
+
+/*
+ * mmapqi_write_wrap_rc — the MMAPQ_* code for a failed wrap on the write
+ * path (an appender's read-write header or payload accessor), where the
+ * only results are SUCCESS, FILE_NOT_FOUND (header frontier only, handled
+ * by the caller), MAP_TIMED_OUT and IO_ERROR. A permanent open/create/
+ * extend/map failure is MMAPQ_EIO; a timeout, or a transient errno the
+ * region retried until its timeout, stays MMAPQ_ETIMEDOUT.
+ */
+static inline int mmapqi_write_wrap_rc(WrapResult r)
+{
+    return r == WRAP_IO_ERROR ? MMAPQ_EIO : MMAPQ_ETIMEDOUT;
 }
 
 /**

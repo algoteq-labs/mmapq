@@ -178,6 +178,13 @@ int  mmapq_test_hook_c59_header_wrap_not_found_count(void);
 void mmapqi_c59_header_not_found_note(void);
 void mmapq_test_hook_set_c59_force_floor_reject(int n);
 int  mmapqi_c59_force_floor_reject_take(void);
+/* CAND-41: arms N block-reservation failures in the read-write file
+ * mapper (rw_map's fallocate), each reported as ENOSPC — what a full
+ * filesystem returns — so a pin can drive the full-disk path without a
+ * small filesystem. 0 disarms. mmapqi_wpe_reserve_enospc_take is the
+ * internal fire entry point (returns 1 while armed, decrementing). */
+void mmapq_test_hook_set_wpe_reserve_enospc(int n);
+int  mmapqi_wpe_reserve_enospc_take(void);
 #define C59_HOOK_HEADER_NOT_FOUND_NOTE() mmapqi_c59_header_not_found_note()
 /* POLL-ARCH-01 archive-race pins. The seam setter installs a
  * process-global callback (NULL disarms); the fire entry is invoked from

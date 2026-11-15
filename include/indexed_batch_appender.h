@@ -145,7 +145,8 @@ int mmapq_indexed_batch_appender_create_with_id(
  *           complete/complete_uncommitted/discard or close
  * Returns: 0 on success; MMAPQ_EINVAL for a NULL argument or a second
  *         start while a batch is open; MMAPQ_ECLOSED on a closed appender;
- *         MMAPQ_ETIMEDOUT on a mapping timeout; MMAPQ_ECORRUPT from the
+ *         MMAPQ_ETIMEDOUT on a mapping timeout; MMAPQ_EIO if the next queue
+ *         file cannot be created, opened or mapped; MMAPQ_ECORRUPT from the
  *         orphan recovery.
  */
 int mmapq_indexed_batch_appender_start_batch_checked(
@@ -166,8 +167,9 @@ int mmapq_indexed_batch_appender_start_batch_checked(
  *         or MMAPQ_EINVAL for a NULL/consumed handle or an empty batch
  *         (message_count == 0 — the handle stays open; discard it instead),
  *         or MMAPQ_ECLOSED on a closed appender,
- *         or -1 on mapping timeout (before the count store the handle
- *         stays open; after it, see above),
+ *         or -1 on mapping timeout, or MMAPQ_EIO if the next queue file
+ *         cannot be created, opened or mapped (before the count store the
+ *         handle stays open; after it, see above),
  *         or MMAPQ_ECORRUPT if the batch offset is outside the encodable
  *         56-bit field
  */
@@ -185,7 +187,8 @@ int64_t mmapq_mutable_batch_complete(MmapqMutableBatch *b);
  *         or MMAPQ_ECLOSED on a closed appender,
  *         or MMAPQ_ENOMEM if the outstanding-offset set cannot grow (nothing
  *         is stored; the handle stays open),
- *         or -1 on mapping timeout (the handle stays open)
+ *         or -1 on mapping timeout, or MMAPQ_EIO if the next queue file
+ *         cannot be created, opened or mapped (the handle stays open)
  */
 int64_t mmapq_mutable_batch_complete_uncommitted(MmapqMutableBatch *b);
 
@@ -204,9 +207,9 @@ int64_t mmapq_mutable_batch_complete_uncommitted(MmapqMutableBatch *b);
  *
  * b: the in-progress batch
  * Returns: 0 on success, MMAPQ_EINVAL for a NULL/consumed handle,
- *         MMAPQ_ECLOSED on a closed appender, or -1 on a pre-store mapping
- *         failure (the handle stays open-orphaned; the next start_batch
- *         recovers it to staged — see
+ *         MMAPQ_ECLOSED on a closed appender, or -1 (timeout) or MMAPQ_EIO
+ *         on a pre-store mapping failure (the handle stays open-orphaned;
+ *         the next start_batch recovers it to staged — see
  *         mmapq_indexed_batch_appender_join_completed_open_batch)
  */
 int mmapq_mutable_batch_discard(MmapqMutableBatch *b);
@@ -222,6 +225,8 @@ int mmapq_mutable_batch_discard(MmapqMutableBatch *b);
  *              or an offset yielded by the uncommitted-batches iterator
  * Returns: the zero-based index of the committed batch,
  *         or -1 on mapping timeout,
+ *         or MMAPQ_EIO if the next header file cannot be created, opened or
+ *         mapped,
  *         or MMAPQ_EINVAL if batch_offset is not outstanding (never staged
  *         by this incarnation, already committed, a discarded batch, above
  *         the last started batch) or has been overtaken by archiving (its
@@ -324,6 +329,7 @@ int mmapq_uncommitted_batch_next(
  * length: number of bytes to write (must be <= region_size - 4)
  * Returns: the zero-based index of the committed batch,
  *         or -1 on mapping timeout, or MMAPQ_EINVAL if message exceeds region size,
+ *         or MMAPQ_EIO if the next queue file cannot be created, opened or mapped,
  *         or MMAPQ_ECORRUPT if the batch offset is outside the encodable
  *         56-bit field
  */
@@ -345,7 +351,8 @@ int64_t mmapq_indexed_batch_appender_append_and_commit(MmapqIndexedBatchAppender
  * than one region are rejected with MMAPQ_EINVAL.
  *
  * Returns: the zero-based index of the newly appended message within the batch,
- *         or -1 on mapping timeout, or MMAPQ_EINVAL if message exceeds region size
+ *         or -1 on mapping timeout, or MMAPQ_EINVAL if message exceeds region size,
+ *         or MMAPQ_EIO if the next payload file cannot be created, opened or mapped
  */
 int32_t mmapq_mutable_batch_append(MmapqMutableBatch *b, const void *data, int32_t length);
 
@@ -364,7 +371,8 @@ int32_t mmapq_mutable_batch_append(MmapqMutableBatch *b, const void *data, int32
  * length must be <= region_size - 4. Larger values are rejected with MMAPQ_EINVAL.
  *
  * Returns: the zero-based index of the reserved message slot within the batch,
- *         or -1 on mapping timeout, or MMAPQ_EINVAL if length exceeds region size
+ *         or -1 on mapping timeout, or MMAPQ_EINVAL if length exceeds region size,
+ *         or MMAPQ_EIO if the next payload file cannot be created, opened or mapped
  */
 int32_t mmapq_mutable_batch_append_reserved(MmapqMutableBatch *b, int32_t length, void **out_data);
 

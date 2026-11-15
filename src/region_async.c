@@ -70,6 +70,7 @@ struct AsyncRegionImpl {
     int64_t   requested_position;
 
     int       error_code;
+    int64_t   error_position;   /* the position whose map failed (ERROR state) */
     int       file_not_found_counter;
     int       beyond_file_size_counter;
 };
@@ -143,9 +144,7 @@ static const RegionStateOps *map_req_process(AsyncRegionImpl *impl)
     uintptr_t addr = file_mapper_map(impl->file_mapper,
                                       impl->requested_position, impl->region_size);
 
-    if (addr != FILE_MAPPER_NULL_ADDRESS &&
-        addr != FILE_MAPPER_FILE_NOT_FOUND &&
-        addr != FILE_MAPPER_BEYOND_FILE_SIZE) {
+    if (file_mapper_is_address(addr)) {
         impl->file_not_found_counter   = 0;
         impl->beyond_file_size_counter = 0;
         impl->address                  = addr;
@@ -157,11 +156,13 @@ static const RegionStateOps *map_req_process(AsyncRegionImpl *impl)
 
     impl->error_code = (addr == FILE_MAPPER_FILE_NOT_FOUND)   ? (int)FILE_MAPPER_FILE_NOT_FOUND
                      : (addr == FILE_MAPPER_BEYOND_FILE_SIZE) ? (int)FILE_MAPPER_BEYOND_FILE_SIZE
+                     : (addr == FILE_MAPPER_IO_ERROR)         ? (int)FILE_MAPPER_IO_ERROR
                      : 0;
 
     if (addr == FILE_MAPPER_FILE_NOT_FOUND)   impl->file_not_found_counter++;
     if (addr == FILE_MAPPER_BEYOND_FILE_SIZE) impl->beyond_file_size_counter++;
 
+    impl->error_position     = impl->requested_position;
     impl->requested_position = NULL_POSITION;
     return &ERROR_OPS;
 }
@@ -276,7 +277,22 @@ static WrapResult await_mapped(AsyncRegionImpl *impl, int64_t region_start_posit
 
         if (s == &ERROR_OPS) {
             WrapResult result = WRAP_MAP_TIMED_OUT;
-            if (impl->error_code == (int)FILE_MAPPER_FILE_NOT_FOUND &&
+            if (impl->error_code == (int)FILE_MAPPER_IO_ERROR) {
+                /* Permanent (the mapper classified the errno): report it
+                 * now instead of retrying until the timeout — but only for
+                 * the position that failed. The ERROR may belong to a
+                 * premap of another region that shares this ring slot
+                 * (the read-write premap fires at offset 0 of the region
+                 * before, CAND-41's batch case: a count store re-wrapping
+                 * region N while region N+2's file cannot be created);
+                 * then it says nothing about this position: fall through
+                 * to the reset below and map this one. */
+                if (impl->error_position == region_start_position) {
+                    impl->file_not_found_counter   = 0;   /* as the sync region does */
+                    impl->beyond_file_size_counter = 0;
+                    result = WRAP_IO_ERROR;
+                }
+            } else if (impl->error_code == (int)FILE_MAPPER_FILE_NOT_FOUND &&
                 impl->file_not_found_counter >= impl->max_file_not_found_errors) {
                 impl->file_not_found_counter = 0;
                 result = WRAP_FILE_NOT_FOUND;
@@ -459,6 +475,7 @@ int mmapqi_region_async_create(
     impl->address                     = 0;
     impl->requested_position          = NULL_POSITION;
     impl->error_code                  = 0;
+    impl->error_position              = NULL_POSITION;
     impl->file_not_found_counter      = 0;
     impl->beyond_file_size_counter    = 0;
     atomic_store_explicit(&impl->state, &UNMAPPED_OPS, memory_order_relaxed);

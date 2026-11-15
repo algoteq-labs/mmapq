@@ -16,9 +16,14 @@
  * All region sizes must be aligned to page_size() (typically 4096 bytes).
  *
  * Special return values from map():
- *   FILE_MAPPER_NULL_ADDRESS    : mapping failed (generic)
+ *   FILE_MAPPER_NULL_ADDRESS    : mapping failed, may succeed later (the
+ *                                 region retries it until its timeout)
  *   FILE_MAPPER_FILE_NOT_FOUND  : backing file does not exist yet
  *   FILE_MAPPER_BEYOND_FILE_SIZE: position exceeds current file size
+ *   FILE_MAPPER_IO_ERROR        : open/create/extend/map failed with an errno
+ *                                 that retrying does not fix (EACCES, EROFS,
+ *                                 ENOSPC, ENODEV, ...: mmapqi_fs_errno_rc is
+ *                                 not ETIMEDOUT). Read-write mappers only.
  *
  * Positive return value: the mapped memory address (cast from uintptr_t).
  */
@@ -26,6 +31,16 @@
 #define FILE_MAPPER_NULL_ADDRESS     ((uintptr_t)0)
 #define FILE_MAPPER_FILE_NOT_FOUND   ((uintptr_t)(uintptr_t)-2)
 #define FILE_MAPPER_BEYOND_FILE_SIZE ((uintptr_t)(uintptr_t)-3)
+#define FILE_MAPPER_IO_ERROR         ((uintptr_t)(uintptr_t)-4)
+
+/* 1 when map() returned an address, 0 for every sentinel above. */
+static inline int file_mapper_is_address(uintptr_t addr)
+{
+    return addr != FILE_MAPPER_NULL_ADDRESS &&
+           addr != FILE_MAPPER_FILE_NOT_FOUND &&
+           addr != FILE_MAPPER_BEYOND_FILE_SIZE &&
+           addr != FILE_MAPPER_IO_ERROR;
+}
 
 /**
  * Map mode — controls how files are opened and mapped.
