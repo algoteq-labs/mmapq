@@ -382,14 +382,19 @@ void test_header_file_boundary_fd_limit_stays_etimedout(void)
 }
 
 #ifdef MMAPQ_TEST_HOOKS
-/* Full filesystem, by hook: the next block reservation fails with ENOSPC.
- * The hook is armed after the queue and appender exist and before the
- * first append, so the first reservation it meets is region 1's: in sync
- * mode the map at index 32; in async mode the premap of region 1, issued
- * by the first append's wrap of region 0 — the premap fails and its error
- * is reported when index 32 wraps region 1. Either way index 32 gets
- * MMAPQ_EIO at once, and the same call succeeds once the hook is spent
- * (the space is back). Reviewer: 40 runs, index 32 in all four modes. */
+/* Full filesystem, by hook: the reservation of payload region 1 (position
+ * WP_REGION of the lane's first payload file) fails with ENOSPC. The hook
+ * is armed after the queue exists and before the appender joins, and it
+ * matches that one reservation only: in sync mode the map at index 32; in
+ * async mode the premap of region 1, whenever the mapper thread services
+ * it — the premap fails and its error is reported when index 32 wraps
+ * region 1. Either way index 32 gets MMAPQ_EIO at once, and the same call
+ * succeeds once the hook is spent (the space is back).
+ * WPE-ASYNC-ARM-RACE-01: the hook used to fail "the next reservation",
+ * armed after the appender existed; in async mode the header file's
+ * region-1 premap (also position 32768, issued by the join) could take it
+ * first, and EIO then arrived at index 4096 (about 1 run in 20 under
+ * ASan). */
 static void wp_full_disk(WpLane lane, int async, int64_t expect_at)
 {
     MmapqRuntime *rt = NULL;
@@ -404,13 +409,14 @@ static void wp_full_disk(WpLane lane, int async, int64_t expect_at)
     if (lane == WP_SINGLE) {
         TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create(base_dir, "q", WP_REGION,
             mmapq_min_ring_size(WP_REGION), ahead, WP_FILE, 0, WP_TIMEOUT, 0, rt, rt, &q));
+        mmapq_test_hook_set_wpe_reserve_enospc_at(MMAPQI_WPE_PAYLOAD, WP_REGION);
         TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_queue_create_appender(q, (MmapqIndexedAppender **)&app));
     } else {
         TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create(base_dir, "q", WP_REGION,
             mmapq_min_ring_size(WP_REGION), ahead, WP_FILE, 0, WP_TIMEOUT, 0, rt, rt, &bq));
+        mmapq_test_hook_set_wpe_reserve_enospc_at(MMAPQI_WPE_PAYLOAD, WP_REGION);
         TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_batch_queue_create_appender(bq, (MmapqIndexedBatchAppender **)&app));
     }
-    mmapq_test_hook_set_wpe_reserve_enospc(1);
     int64_t i = 0, rc = 0, t0 = 0;
     for (; i < 100000; i++) {
         t0 = wp_ms();
@@ -418,7 +424,7 @@ static void wp_full_disk(WpLane lane, int async, int64_t expect_at)
         if (rc != i) break;
     }
     int64_t ms = wp_ms() - t0;
-    mmapq_test_hook_set_wpe_reserve_enospc(0);
+    mmapq_test_hook_set_wpe_reserve_enospc_at(0, 0);
     printf("full disk %s %s: rc=%lld at=%lld %lldms\n", lane == WP_SINGLE ? "single" : "batch",
            async ? "async" : "sync", (long long)rc, (long long)i, (long long)ms);
     TEST_ASSERT_EQUAL_INT64(MMAPQ_EIO, rc);

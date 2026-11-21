@@ -97,10 +97,11 @@ unchanged.)
 
 ### file_mapper_single_rw.c — 7 (all I)
 
-Lines 48, 204-205, 259-261, 273. Internal dispatch null checks. (CAND-59:
+Lines 48, 214-215, 269-271, 283. Internal dispatch null checks. (CAND-59:
 shifted by the no_create field and the rw_init/rw_map rework; CAND-41:
 shifted by the errno-classifying rw_fail, the block reservation
-rw_reserve and its test hook, sites unchanged.)
+rw_reserve and its test hook, sites unchanged; WPE-ASYNC-ARM-RACE-01:
+shifted by that hook's kind-and-position form, sites unchanged.)
 
 ### fixed_size_region.c — 3 (all I)
 

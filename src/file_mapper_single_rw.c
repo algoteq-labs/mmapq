@@ -101,17 +101,27 @@ static void rw_pretouch(uintptr_t addr, int32_t region_length,
 
 /* CAND-41 test hook — see internal/test_hooks.h. Atomic: it is armed on
  * the test's thread and taken on the async mapper thread (rw_map runs
- * there with asynchronous mapping). */
+ * there with asynchronous mapping). WPE-ASYNC-ARM-RACE-01: it fails ONE
+ * reservation, chosen by file kind and position, so a premap of another
+ * file (the header file's next region) cannot take it first. */
 #ifdef MMAPQ_TEST_HOOKS
-static _Atomic int wpe_reserve_enospc_remaining;
-void mmapq_test_hook_set_wpe_reserve_enospc(int n) { atomic_store(&wpe_reserve_enospc_remaining, n); }
-int mmapqi_wpe_reserve_enospc_take(void)
+static _Atomic int     wpe_reserve_enospc_kind;       /* 0 = disarmed */
+static _Atomic int64_t wpe_reserve_enospc_position;
+void mmapq_test_hook_set_wpe_reserve_enospc_at(int kind, int64_t position)
 {
-    int n = atomic_load(&wpe_reserve_enospc_remaining);
-    while (n > 0) {
-        if (atomic_compare_exchange_weak(&wpe_reserve_enospc_remaining, &n, n - 1)) return 1;
-    }
-    return 0;
+    atomic_store(&wpe_reserve_enospc_kind, 0);
+    atomic_store(&wpe_reserve_enospc_position, position);
+    atomic_store(&wpe_reserve_enospc_kind, kind);
+}
+int mmapqi_wpe_reserve_enospc_take(const char *file_path, int64_t position)
+{
+    int kind = atomic_load(&wpe_reserve_enospc_kind);
+    if (kind == 0 || position != atomic_load(&wpe_reserve_enospc_position)) return 0;
+    const char *base = strrchr(file_path, '/');
+    base = base != NULL ? base + 1 : file_path;
+    const char *want = kind == MMAPQI_WPE_HEADER ? "header_" : "payload_";
+    if (strncmp(base, want, strlen(want)) != 0) return 0;
+    return atomic_compare_exchange_strong(&wpe_reserve_enospc_kind, &kind, 0);
 }
 #endif
 
@@ -133,7 +143,7 @@ int mmapqi_wpe_reserve_enospc_take(void)
 static int rw_reserve(SingleFileRwImpl *impl, int64_t position, int32_t length)
 {
 #ifdef MMAPQ_TEST_HOOKS
-    if (mmapqi_wpe_reserve_enospc_take()) return ENOSPC;
+    if (mmapqi_wpe_reserve_enospc_take(impl->file_path, position)) return ENOSPC;
 #endif
     if (fallocate(impl->fd, 0, (off_t)position, (off_t)length) == 0) return 0;
     int err = errno;

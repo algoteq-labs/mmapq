@@ -143,6 +143,17 @@ is_hook_only() {
     return 1
 }
 
+# print_failure — TESTSH-FAIL-TAIL-01: a failing suite's Unity verdicts
+# (":FAIL" lines and the summary) and any MMAP_ASSERT line first, then the
+# last 20 lines. A sanitizer report printed at exit can be longer than 20
+# lines and used to push the failing assertion out of the tail.
+print_failure() {
+    echo "  --- failed assertions ---"
+    echo "$1" | grep -E ':FAIL|^[0-9]+ Tests [0-9]+ Failures [0-9]+ Ignored|ASSERTION FAILED' | head -20 || true
+    echo "  --- last 20 lines ---"
+    echo "$1" | tail -20
+}
+
 # classify_tests — TEST-01: a run that exits 0 is a PASS only if it actually
 # ran tests. Parse the Unity summary; decide 0-test handling from the BUILD
 # FLAGS (not the loop label), so the release loop is judged on what it
@@ -219,7 +230,7 @@ run_test() {
         "FAIL|ASSERTION FAILED|Aborted|AddressSanitizer|LeakSanitizer|ThreadSanitizer|DATA RACE|heap-use-after-free|heap-buffer-overflow"; then
         echo "FAIL ($label): $test (exit=$STATUS)"
         [ "$STATUS" -eq 124 ] && echo "  (killed by the 300 s timeout; the test after the last line below did not finish)"
-        echo "$OUT" | tail -20
+        print_failure "$OUT"
         rm -f "$bin"
         return 1
     fi
@@ -251,7 +262,7 @@ run_ids_integration() {
     if [ "$STATUS" -ne 0 ] || echo "$OUT" | grep -qE \
         "FAIL|ASSERTION FAILED|Aborted|AddressSanitizer|LeakSanitizer|ThreadSanitizer|DATA RACE|heap-use-after-free|heap-buffer-overflow"; then
         echo "FAIL ($label): test_ids_integration (exit=$STATUS)"
-        echo "$OUT" | tail -20
+        print_failure "$OUT"
         rm -f "$bin"
         return 1
     fi
