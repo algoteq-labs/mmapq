@@ -79,7 +79,9 @@ struct MmapqMutableBatch {
  * max_file_size: maximum rolled file size
  * timeout_ns:  region-mapping timeout in nanoseconds
  * archivable:  1 to create archivable (applies at creation only; 0 default, performant)
- * start_index: logical start index for the queue (0 for fresh, preserved on import/copy)
+ * start_index: logical start index for the queue (0 for fresh, preserved on import/copy).
+ *              Used ONLY if this call creates the queue; an existing queue
+ *              keeps its stored start_index and appends after its last entry.
  * out:         on success, set to the new appender
  * Returns: 0 on success, or an MMAPQ_* error code. Recovery refuses a
  *          corrupted end-of-stream scan with MMAPQ_ECORRUPT and a

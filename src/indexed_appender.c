@@ -507,6 +507,8 @@ static int walk_payload_to_end(MmapqIndexedAppender *a, int64_t from,
         }
         if (wr == WRAP_MAP_TIMED_OUT)
             return MMAPQ_ETIMEDOUT;
+        if (wr == WRAP_IO_ERROR)     /* READ-PERM-EOS-01: unreadable, not damage */
+            return MMAPQ_EIO;
         if (wr != WRAP_SUCCESS)
             return MMAPQ_ECORRUPT;
         int64_t msg_off = PAYLOAD_ITERATOR_NOT_SET;
@@ -554,6 +556,14 @@ static int initialise_append_position(MmapqIndexedAppender *a, int64_t start_ind
     RegionAccessor *ro_header = a->ro_header;
     Buffer         *ro_buf   = &a->ro_buf;
 
+    /* START-INDEX-REOPEN-01: the caller's start_index seeds the queue meta
+     * of a NEW queue and nothing else ("used ONLY if creating new",
+     * indexed_queue.h). The join works from the stored value: searching
+     * from a larger argument read as "queue empty" and put current_index
+     * there, so the next commit landed above empty header slots, out of
+     * pollers' and last_index's reach. For a new queue the two are equal. */
+    start_index = queue_meta_start_index(a->queue_meta);
+
     int64_t last_index = mmapqi_header_search_last_index(
         start_index,
         appender_start_index_from_meta, a->queue_meta,
@@ -566,7 +576,7 @@ static int initialise_append_position(MmapqIndexedAppender *a, int64_t start_ind
     int64_t scan_floor = queue_meta_start_index(a->queue_meta);
 
     if (last_index == HEADER_NULL_INDEX) {
-        /* Queue is empty — start at the requested start_index; walk from
+        /* Queue is empty — start at the stored start_index; walk from
          * the join anchor to the end of stream (no file yet = the
          * offset). */
         a->current_index = start_index;

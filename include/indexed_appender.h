@@ -65,7 +65,9 @@ typedef struct MmapqIndexedAppender MmapqIndexedAppender;
  * archivable:  1 to create the queue archivable (applies at creation only;
  *              existing queues keep their on-disk value). 0 is performant mode.
  * runtime:     region mapper runtime
- * start_index: logical start index for the queue (0 for fresh, preserved on import/copy)
+ * start_index: logical start index for the queue (0 for fresh, preserved on import/copy).
+ *              Used ONLY if this call creates the queue; an existing queue
+ *              keeps its stored start_index and appends after its last entry.
  *
  * Acquires an appender ID from the pool, initialises append position
  * (including recovery scan), and eager-wraps RW regions.

@@ -282,6 +282,7 @@ static int skip_to_end_of_stream(MmapqIndexedBatchAppender *a, int64_t offset,
                       * everything this walk knows written) */
         }
         if (wr == WRAP_MAP_TIMED_OUT) return MMAPQ_ETIMEDOUT;
+        if (wr == WRAP_IO_ERROR) return MMAPQ_EIO;   /* READ-PERM-EOS-01 */
         if (wr != WRAP_SUCCESS) return MMAPQ_ECORRUPT;
 
         int32_t cap = a->payload_buf.capacity;
@@ -392,6 +393,10 @@ static int initialise_append_position(MmapqIndexedBatchAppender *a, int64_t star
 
     RegionAccessor *ro_header = a->ro_header;
     Buffer         *ro_buf   = &a->ro_buf;
+
+    /* START-INDEX-REOPEN-01: the stored start_index, not the caller's (see
+     * the single-message twin in indexed_appender.c). */
+    start_index = queue_meta_start_index(a->queue_meta);
 
     int64_t last_index = mmapqi_header_search_last_index(
         start_index,

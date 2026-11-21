@@ -40,6 +40,7 @@ TESTS=(
     test_permanent_errors
     test_write_path_errors
     test_read_perm_errors
+    test_start_index_reopen
 )
 
 # Hook-only suites (TEST-01): main() wraps every RUN_TEST in
