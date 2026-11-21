@@ -54,6 +54,11 @@
  *   -1 disarms. appender_walk_fired returns how many times the armed site
  *   fired since the last setter call — the liveness assertion against
  *   vacuous pin geometries.
+ * frontier_pre_create (HDR-RECREATE-01): invoked in the commit path's
+ *   explicit header create (both appenders), after the caller's
+ *   start_index check and before the O_CREAT|O_EXCL — lets a pin archive
+ *   and reclaim that file in between, so the create re-creates it empty
+ *   below start_index (the residual window). NULL disarms.
  * batch_recover_walk_step: invoked in recover_open_batch's walk loop
  *   after each walked message (argument = count walked so far) — lets a
  *   pin kill -9 the process mid-join-completion, before the count store
@@ -184,6 +189,7 @@ int  mmapqi_c59_force_floor_reject_take(void);
  * small filesystem. 0 disarms. mmapqi_wpe_reserve_enospc_take is the
  * internal fire entry point (returns 1 while armed, decrementing). */
 void mmapq_test_hook_set_wpe_reserve_enospc(int n);
+void mmapq_test_hook_set_frontier_pre_create(void (*fn)(void));
 int  mmapqi_wpe_reserve_enospc_take(void);
 #define C59_HOOK_HEADER_NOT_FOUND_NOTE() mmapqi_c59_header_not_found_note()
 /* POLL-ARCH-01 archive-race pins. The seam setter installs a

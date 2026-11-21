@@ -41,6 +41,7 @@ TESTS=(
     test_write_path_errors
     test_read_perm_errors
     test_start_index_reopen
+    test_hdr_recreate_pins
 )
 
 # Hook-only suites (TEST-01): main() wraps every RUN_TEST in
@@ -52,6 +53,7 @@ HOOK_ONLY_SUITES=(
     test_c58_walk_pins
     test_c59_commit_floor_pins
     test_poll_arch_pins
+    test_hdr_recreate_pins
 )
 
 # MMAPQ_TEST_HOOKS enables the deterministic race/failure-injection hooks

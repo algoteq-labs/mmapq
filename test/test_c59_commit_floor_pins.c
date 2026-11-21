@@ -585,7 +585,8 @@ static void p5_sync(void)
     wait_parked(2);
 
     /* si2 = 8193 behind the clamped lane; reclaim header_1; plant the
-     * residual-window stray (post-fix code cannot create it) */
+     * residual-window stray (planted here; test_hdr_recreate_pins.c
+     * creates it through the real window) */
     TEST_ASSERT_EQUAL_INT(0, mmapq_indexed_archiver_archive_up_to_index(arch, 8193));
     TEST_ASSERT_EQUAL_INT64(8193, meta_si(name, QUEUE_TYPE_NORMAL));
     char *paths[64];

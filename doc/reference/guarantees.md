@@ -54,14 +54,18 @@ granularity" argument in `../design/archiving-design.md`.
 | `archivable_files()` lists files no live entry can need at the time of the call; `reclaim_files()` is always safe; hand deletion is safe provided no undo runs between the listing and the last unlink | M + P | The NoLiveLoss rows above; the deletion protocol in `../design/archiving-design.md`; the X5 wording in `../reference/persistence-contract.md` |
 
 **The commit floor.** A successful commit never returns an index below the
-`start_index` it observed. The commit path never re-creates a header file
-that reclaim has deleted, and it re-checks `start_index` whenever it maps a
-new header region, so a stale writer can only ever be rejected — never
-committed below the floor. Operator-visible effect: a rare, empty header
-file may appear in an `archivable_files()` listing. Skip it when copying
+`start_index` it observed. The commit path checks `start_index` before it
+creates a header file, and re-checks it whenever it maps a new header
+region, so a stale writer can only ever be rejected — never committed below
+the floor. One window remains: a writer that stalls between that check and
+the create, while the file is archived and reclaimed, re-creates it empty
+below `start_index`; it then rejects the file and commits at or above the
+floor. Operator-visible effect: a rare, empty header file may appear in an
+`archivable_files()` listing. Skip it when copying
 files aside; `reclaim_files()` deletes it from the live directory. Pins:
 `test_c59_p1`–`p8` (`test/test_c59_commit_floor_pins.c`, both runtimes;
-P5/P6 cover the stray file). Code: `src/indexed_appender.c` /
+P5/P6 cover the stray file; `test/test_hdr_recreate_pins.c` drives the
+window itself). Code: `src/indexed_appender.c` /
 `src/indexed_batch_appender.c` (`header_wrap_frontier`),
 `src/file_mapper_single_rw.c` (`no_create`), `src/queue_region_accessor.c`
 (the explicit frontier create).

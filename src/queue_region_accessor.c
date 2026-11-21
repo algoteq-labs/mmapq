@@ -198,11 +198,21 @@ int mmapqi_queue_region_accessor_create_rw(
 
 /* ── mmapqi_queue_region_accessor_header_create (CAND-59) ────────────────── */
 
+#ifdef MMAPQ_TEST_HOOKS
+/* HDR-RECREATE-01: fires after the caller's start_index check and before
+ * the create, so a pin can archive and reclaim the file in between. */
+static void (*frontier_pre_create_hook)(void) = NULL;
+void mmapq_test_hook_set_frontier_pre_create(void (*fn)(void)) { frontier_pre_create_hook = fn; }
+#endif
+
 int mmapqi_queue_region_accessor_header_create(QueueRegionAccessor *acc,
                                                int64_t position)
 {
     if (acc == NULL || acc->read_only || acc->header_mapper == NULL)
         return MMAPQ_EINVAL;
+#ifdef MMAPQ_TEST_HOOKS
+    if (frontier_pre_create_hook) frontier_pre_create_hook();
+#endif
     return mmapqi_file_mapper_rolled_create_file(acc->header_mapper, position);
 }
 
