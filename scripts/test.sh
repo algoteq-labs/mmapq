@@ -42,6 +42,7 @@ TESTS=(
     test_read_perm_errors
     test_start_index_reopen
     test_hdr_recreate_pins
+    test_move_status
 )
 
 # Hook-only suites (TEST-01): main() wraps every RUN_TEST in

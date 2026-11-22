@@ -253,9 +253,13 @@ per repo:
 
 - `include/mmap_platform.h`: `MMAPQ_VERSION_STR` (and the
   `MMAPQ_VERSION_MAJOR/MINOR/PATCH` defines above it).
-- `mmapq-rs/Cargo.toml`: `version`; then refresh `mmapq-rs/Cargo.lock` with
-  `cargo update -p mmapq --offline`. The `Package (crate)` CI job runs
-  `--locked`, so a stale lock fails CI on the bump commit itself.
+- `mmapq-rs/Cargo.toml`: `version`; then edit the one `version` line of
+  the `mmapq` package in `mmapq-rs/Cargo.lock` by hand and prove it with
+  `cargo metadata --locked --offline`. Do not use `cargo update -p mmapq`:
+  with cargo 1.97 or later it also rewrites the lock file from format v3
+  to v4 (if that move is wanted, make it deliberately, in its own commit).
+  The `Package (crate)` CI job runs `--locked`, so a stale lock fails CI on
+  the bump commit itself.
 - `mmapq-py/src/mmapq/_version.py`: `__version__` — the single source; the
   Python manifest reads it statically.
 

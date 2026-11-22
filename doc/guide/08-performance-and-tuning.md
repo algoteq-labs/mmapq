@@ -24,11 +24,12 @@ mapper thread. (Why: the Anti-Pattern Ledger in the
 
 ## Benchmarks
 
-*Measured 2026-11-11 (0.2.0, commit `800a0b4`), Intel i7-11800H,
+*Measured 2026-11-11 (0.2.0, commit `800a0b4` — code-identical to the
+release apart from the version string), Intel i7-11800H,
 isolcpus 5,7,9 + THP as below. Each figure is the median of 6 runs.*
 
-Single-message queue — roundtrip to echo server in external process, 20M
-iterations:
+Single-message queue — roundtrip to echo server in external process,
+async mapping, 20M iterations:
 
 | Percentile | C (this library) |
 |:-----------|------------------:|
@@ -41,8 +42,8 @@ iterations:
 | p99.999    |      **16457 ns** |
 | round trips/sec (closed loop) | **3.2 M** |
 
-Batch queue — roundtrip to echo server in external process, 20M
-iterations:
+Batch queue — roundtrip to echo server in external process, async
+mapping, 20M iterations:
 
 | Percentile |  C (this library) |
 |:-----------|------------------:|

@@ -220,8 +220,14 @@ BatchPollResult mmapq_indexed_batch_poller_poll(MmapqIndexedBatchPoller *p, Mmap
 
 static int64_t poller_start_index_fn(void *ctx) { return mmapq_indexed_batch_poller_start_index((MmapqIndexedBatchPoller *)ctx); }
 
+/* MOVE-STATUS-01: the NULL guards of the single-message poller
+ * (indexed_poller.c); a NULL handle used to be dereferenced. The closed
+ * checks match the single poller only: close frees the handle, so they
+ * cannot protect a call made after it (the bindings refuse closed
+ * handles themselves). */
 int mmapq_indexed_batch_poller_move_to_index(MmapqIndexedBatchPoller *p, int64_t index)
 {
+    if (p == NULL || p->closed) return 0;
     if (!header_index_in_range(index)) return 0;
     if (!poller_init(p)) {
         if (index == 0) { p->current_batch_index = 0; return 1; }
@@ -242,6 +248,7 @@ int mmapq_indexed_batch_poller_move_to_index(MmapqIndexedBatchPoller *p, int64_t
 
 int mmapq_indexed_batch_poller_move_to_end(MmapqIndexedBatchPoller *p)
 {
+    if (p == NULL || p->closed) return 0;
     if (!poller_init(p)) return 1;
     long from = p->current_batch_index > queue_meta_start_index(p->queue_meta) ? p->current_batch_index : queue_meta_start_index(p->queue_meta);
     int64_t last = mmapqi_header_search_last_index(from, poller_start_index_fn, p, p->header_acc, &p->header_buf, p->queue_name);
@@ -251,6 +258,7 @@ int mmapq_indexed_batch_poller_move_to_end(MmapqIndexedBatchPoller *p)
 
 int mmapq_indexed_batch_poller_move_to_last_existing_batch(MmapqIndexedBatchPoller *p)
 {
+    if (p == NULL || p->closed) return 0;
     if (!poller_init(p)) return 0;
     long from = p->current_batch_index > 0 ? p->current_batch_index - 1 : 0;
     from = from > queue_meta_start_index(p->queue_meta) ? from : queue_meta_start_index(p->queue_meta);
@@ -262,15 +270,17 @@ int mmapq_indexed_batch_poller_move_to_last_existing_batch(MmapqIndexedBatchPoll
 
 int mmapq_indexed_batch_poller_move_to_start(MmapqIndexedBatchPoller *p)
 {
+    if (p == NULL || p->closed) return 0;
     p->current_batch_index = mmapq_indexed_batch_poller_start_index(p);
     return 1;
 }
 
-int64_t mmapq_indexed_batch_poller_current_batch_index(const MmapqIndexedBatchPoller *p) { return p->current_batch_index; }
-int64_t mmapq_indexed_batch_poller_start_index(MmapqIndexedBatchPoller *p) { if (!poller_init(p)) return 0; return queue_meta_start_index(p->queue_meta); }
+int64_t mmapq_indexed_batch_poller_current_batch_index(const MmapqIndexedBatchPoller *p) { if (p == NULL) return 0; return p->current_batch_index; }
+int64_t mmapq_indexed_batch_poller_start_index(MmapqIndexedBatchPoller *p) { if (p == NULL) return 0; if (!poller_init(p)) return 0; return queue_meta_start_index(p->queue_meta); }
 
 int mmapq_indexed_batch_poller_exists(MmapqIndexedBatchPoller *p, int64_t batch_index)
 {
+    if (p == NULL) return 0;
     if (!header_index_in_range(batch_index)) return 0;
     if (!poller_init(p)) return 0;
     if (batch_index < queue_meta_start_index(p->queue_meta)) return 0;

@@ -68,6 +68,12 @@ replay-based testing and debugging.
   see the references in the [event-sourcing guide](event-sourcing.md).
 - **You need guaranteed durability through power loss.**
 - **You need Windows or macOS.**
+- **Your queue directory is on a network filesystem**, or on any
+  filesystem without shared writable memory mappings backed by the page
+  cache (some FUSE and sandbox filesystems). mmapq writes through
+  `MAP_SHARED` mappings; where they are not supported, a typical symptom
+  is `MMAPQ_EIO` (Rust `Eio`, Python `MmapqError`) on the first write.
+  CI tests on ext4.
 
 What you give up relative to the alternatives is scope. What you gain is a
 system small enough to audit end-to-end: ~10k lines of dependency-free C11,

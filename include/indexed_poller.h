@@ -121,9 +121,13 @@ MmapqPollResult mmapq_indexed_poller_poll(
  *   - index >= startIndex, AND
  *   - index <= lastIndex + 1 (one past end is valid — will wait for message)
  * Returns 0 if index is archived (< startIndex), too far ahead, or outside
- * [0, 2^56 - 1] (indices beyond 2^56 - 1 would alias already-written slots).
+ * [0, 2^56 - 1] (indices beyond 2^56 - 1 would alias already-written slots),
+ * or if p is NULL.
  *
- * Aborts on mapping timeout (MMAP_ASSERT).
+ * A mapping timeout does not abort and is not reported: these header reads
+ * have no error channel and treat a slot they cannot map as unwritten. So
+ * move_to_index returns 0 (except for index == start_index, which needs no
+ * read), and move_to_end / move_to_last can stop short of the true end.
  */
 int mmapq_indexed_poller_move_to_index(MmapqIndexedPoller *p, int64_t index);
 
@@ -133,22 +137,23 @@ int mmapq_indexed_poller_move_to_index(MmapqIndexedPoller *p, int64_t index);
  * After this call, poll() will return MMAPQ_POLL_END_OF_STREAM until a new
  * message is appended.
  *
- * Always returns 1. Aborts on mapping timeout.
+ * Returns 1; 0 if p is NULL. A mapping timeout does not abort:
+ * see move_to_index.
  */
 int mmapq_indexed_poller_move_to_end(MmapqIndexedPoller *p);
 
 /**
  * mmapq_indexed_poller_move_to_last — move cursor to the last committed entry.
  *
- * Returns 1 if a committed entry exists, 0 if the queue is empty.
- * Aborts on mapping timeout.
+ * Returns 1 if a committed entry exists, 0 if the queue is empty or p is
+ * NULL. A mapping timeout does not abort: see move_to_index.
  */
 int mmapq_indexed_poller_move_to_last(MmapqIndexedPoller *p);
 
 /**
  * mmapq_indexed_poller_move_to_start — move cursor to the earliest valid entry.
  *
- * Always returns 1.
+ * Returns 1; 0 if p is NULL.
  */
 int mmapq_indexed_poller_move_to_start(MmapqIndexedPoller *p);
 
@@ -195,7 +200,9 @@ int mmapq_indexed_poller_last_error(const MmapqIndexedPoller *p);
 
 /**
  * mmapq_indexed_poller_close — close and free the poller.
- * Idempotent.
+ *
+ * After this call the pointer must not be used: every call on it, a move
+ * or a second close included, reads freed memory. close(NULL) is a no-op.
  */
 void mmapq_indexed_poller_close(MmapqIndexedPoller *p);
 

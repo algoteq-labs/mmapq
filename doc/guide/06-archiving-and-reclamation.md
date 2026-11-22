@@ -87,7 +87,22 @@ The production loop:
    archived — a rare empty header file (see The commit floor in
    [guarantees](../reference/guarantees.md)) — is skipped loudly;
    `reclaim_files()` then deletes it from the live directory.
-3. Delete the local copies with `reclaim_files()`.
+3. Delete the local copies with `reclaim_files()`, passing the marks
+   from step 1.
+
+In Python and Rust the two calls are:
+
+```python
+marked = archiver.archivable_files()
+# ... copy the marked files aside (step 2) ...
+deleted = archiver.reclaim_files(marked)
+```
+
+```rust
+let marked = archiver.archivable_files()?;
+// ... copy the marked files aside (step 2) ...
+let deleted = archiver.reclaim_files(&marked)?;
+```
 
 `reclaim_files()` re-lists — completely — and unlinks the overlap in one
 shared hold of `archive.lock`, so an undo cannot slip between the re-list
@@ -144,13 +159,15 @@ provides what makes this work, under three rules:
    snapshot. (An undo, if you use one, goes back only to an earlier
    snapshot's N.) Keep the previous snapshot until no consumer can still be
    loading it.
-3. **Load, then position explicitly.** On start and on ARCHIVED — the
-   snapshotter too, when it restarts: read `start_index()` as S, load
-   snapshot S, call `move_to_index(S)`, then poll. Do not rely on the
-   first poll to position the cursor: an unpositioned poller starts at
-   whatever `start_index` is at its first poll, which is later than S if
-   an archive ran in between — the entries from S to there would be
-   skipped without an ARCHIVED.
+3. **Position, then load.** On start and on ARCHIVED — the snapshotter
+   too, when it restarts: read `start_index()` as S, call
+   `move_to_index(S)`; if it returns false, another archive moved
+   `start_index` past S — read it again. Then load snapshot S and poll.
+   Moving first means a snapshot is loaded only once the cursor is known
+   to stand at its N. Do not rely on the first poll to position the
+   cursor: an unpositioned poller starts at whatever `start_index` is at
+   its first poll, which is later than S if an archive ran in between —
+   the entries from S to there would be skipped without an ARCHIVED.
 
 A snapshot whose N is below the current `start_index` is useless after
 reclamation unless you kept the copies (step 2 of the production loop).
@@ -174,12 +191,12 @@ the application when a checkpoint has fallen behind:
 - **To skip the gap**, call `move_to_start()`: the cursor moves to
   `start_index`, the first entry that is not archived, and the archived
   entries are not delivered.
-- **To recover**, follow rule 3: read `start_index()` as S, load snapshot
-  S, call `move_to_index(S)`. `move_to_index()` refuses an archived index
-  (it returns false — 0 in C — and leaves the cursor where it was): if
-  another archive moved `start_index` past S in the meantime, start again
-  from reading `start_index()`. The retry ends because every archive point
-  is a durable snapshot (rule 2).
+- **To recover**, follow rule 3: read `start_index()` as S, call
+  `move_to_index(S)`, then load snapshot S. `move_to_index()` refuses an
+  archived index (it returns false — 0 in C — and leaves the cursor where
+  it was): if another archive moved `start_index` past S in the meantime,
+  start again from reading `start_index()`. The retry ends because every
+  archive point is a durable snapshot (rule 2).
 - **`start_index` is one ID for the whole queue.** Every consumer state that
   recovers this way must have a snapshot at each N the snapshotter
   archives to. A consumer with a state of its own and no snapshot at N

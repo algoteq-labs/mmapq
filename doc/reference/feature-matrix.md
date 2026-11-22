@@ -156,22 +156,22 @@ Regression: `../mmapq-py/tests/test_reader_borrowing.py`
 
 | C header | Rust (ffi.rs) | Python (cdef) |
 |---|---|---|
-| `batch_payload_iterator.h` | 7/11 | 6/11 |
-| `batch_queue_transfer.h` | 7/7 | 6/7 |
-| `indexed_appender.h` | 11/17 | 8/17 |
-| `indexed_archiver.h` | 8/14 | 8/14 |
-| `indexed_batch_appender.h` | 17/22 | 12/22 |
-| `indexed_batch_archiver.h` | 6/11 | 7/11 |
-| `indexed_batch_poller.h` | 14/20 | 14/20 |
-| `indexed_batch_queue.h` | 12/12 | 12/12 |
-| `indexed_batch_reader.h` | 10/14 | 10/14 |
-| `indexed_poller.h` | 11/18 | 11/18 |
-| `indexed_queue.h` | 13/17 | 13/17 |
-| `indexed_reader.h` | 9/13 | 9/13 |
-| `mmap_platform.h` | 1/15 | 1/15 |
-| `mmapq.h` | 0/1 | 0/1 |
-| `poller.h` | 0/1 | 0/1 |
+| `batch_payload_iterator.h` | 7/10 | 6/10 |
+| `batch_queue_transfer.h` | 6/6 | 5/6 |
+| `indexed_appender.h` | 11/11 | 8/11 |
+| `indexed_archiver.h` | 8/9 | 8/9 |
+| `indexed_batch_appender.h` | 17/19 | 12/19 |
+| `indexed_batch_archiver.h` | 6/8 | 7/8 |
+| `indexed_batch_poller.h` | 11/11 | 11/11 |
+| `indexed_batch_queue.h` | 8/8 | 8/8 |
+| `indexed_batch_reader.h` | 9/10 | 9/10 |
+| `indexed_poller.h` | 11/11 | 11/11 |
+| `indexed_queue.h` | 8/9 | 8/9 |
+| `indexed_reader.h` | 9/10 | 9/10 |
+| `mmap_platform.h` | 1/7 | 1/7 |
+| `mmapq.h` | 0/0 | 0/0 |
+| `poller.h` | 0/0 | 0/0 |
 | `queue_transfer.h` | 6/6 | 5/6 |
-| `runtime.h` | 15/27 | 3/27 |
+| `runtime.h` | 15/19 | 3/19 |
 
 <!-- /GENERATED -->

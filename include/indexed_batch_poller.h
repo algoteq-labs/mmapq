@@ -131,7 +131,14 @@ BatchPollResult mmapq_indexed_batch_poller_poll(
  *
  * Returns 1 if the index is valid (>= start_index and not too far ahead).
  * Returns 0 if the index is archived, unreachable, or outside
- * [0, 2^56 - 1] (indices beyond 2^56 - 1 would alias already-written slots).
+ * [0, 2^56 - 1] (indices beyond 2^56 - 1 would alias already-written slots),
+ * or if p is NULL.
+ *
+ * A mapping timeout does not abort and is not reported: these header reads
+ * have no error channel and treat a slot they cannot map as unwritten. So
+ * move_to_index returns 0 (except for index == start_index or the current
+ * cursor, which need no read), and move_to_end /
+ * move_to_last_existing_batch can stop short of the true end.
  */
 int mmapq_indexed_batch_poller_move_to_index(MmapqIndexedBatchPoller *p, int64_t batch_index);
 
@@ -141,7 +148,8 @@ int mmapq_indexed_batch_poller_move_to_index(MmapqIndexedBatchPoller *p, int64_t
  * Subsequent poll() calls will return MMAPQ_POLL_END_OF_STREAM until a new
  * batch is appended.
  *
- * Returns: 1 always
+ * Returns: 1; 0 if p is NULL. A mapping timeout does not abort:
+ * see move_to_index.
  */
 int mmapq_indexed_batch_poller_move_to_end(MmapqIndexedBatchPoller *p);
 
@@ -151,7 +159,8 @@ int mmapq_indexed_batch_poller_move_to_end(MmapqIndexedBatchPoller *p);
  * Unlike move_to_end(), which positions past the last batch, this positions
  * AT the last valid batch so it can be polled immediately.
  *
- * Returns: 1 if a committed batch exists; 0 if the queue is empty
+ * Returns: 1 if a committed batch exists; 0 if the queue is empty or p is
+ * NULL. A mapping timeout does not abort: see move_to_index.
  */
 int mmapq_indexed_batch_poller_move_to_last_existing_batch(MmapqIndexedBatchPoller *p);
 
@@ -160,7 +169,7 @@ int mmapq_indexed_batch_poller_move_to_last_existing_batch(MmapqIndexedBatchPoll
  *
  * This is the lowest index still available for reading.
  *
- * Returns: 1 always
+ * Returns: 1; 0 if p is NULL.
  */
 int mmapq_indexed_batch_poller_move_to_start(MmapqIndexedBatchPoller *p);
 
@@ -200,7 +209,8 @@ int mmapq_indexed_batch_poller_last_error(const MmapqIndexedBatchPoller *p);
 /**
  * Close the poller and release all associated resources.
  *
- * After this call the pointer must not be used. Idempotent.
+ * After this call the pointer must not be used: every call on it, a move
+ * or a second close included, reads freed memory. close(NULL) is a no-op.
  */
 void mmapq_indexed_batch_poller_close(MmapqIndexedBatchPoller *p);
 
